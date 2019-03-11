@@ -421,7 +421,7 @@ SCardBeginTransaction(SCARDHANDLE arg)
 	}
 
 	/*
-	 * The semantics of pcsc are taht this operation does not block, but
+	 * The semantics of pcsc are that this operation does not block, but
 	 * instead fails if we cannot grab it immediately.
 	 */
 	bzero(&txn, sizeof (uccid_cmd_txn_begin_t));

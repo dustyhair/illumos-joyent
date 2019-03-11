@@ -859,10 +859,10 @@ t1_reply_rblock(t1_state_t *t1, const t1_hdr_t *hdr)
  *  		from the card, then we will issue a warm reset and fail the
  *  		command.
  *
- *  o WTX -	This is usd by the card to indicate that it is still processing;
- *  		however it requires additional time. When this is received, we
- *  		must acknowledge it. However, we must also increase the default
- *  		waiting time here and in the command.
+ *  o WTX -	This is used by the card to indicate that it is still
+ *		processing; however it requires additional time. When this
+ *		is received, we must acknowledge it. However, we must also
+ *		increase the default waiting time here and in the command.
  */
 t1_validate_t
 t1_reply_sblock(t1_state_t *t1, const t1_hdr_t *hdr)

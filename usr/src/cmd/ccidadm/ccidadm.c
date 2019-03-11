@@ -59,7 +59,7 @@ typedef struct ccid_list_ofmt_arg {
 } ccid_list_ofmt_arg_t;
 
 /*
- * Attempt to open a CCID slot specified by a user. In general, we exepect that
+ * Attempt to open a CCID slot specified by a user. In general, we expect that
  * users will use a path like "ccid0/slot0". However, they may also specify a
  * full path. If the card boolean is set to true, that means that they may have
  * just specified "ccid0", so we need to try to open up the default slot.
@@ -632,7 +632,7 @@ static ccidadm_pair_t ccidadm_p_protocols[] = {
 };
 
 static ccidadm_pair_t ccidadm_p_voltages[] = {
-	{ CCID_CLASS_VOLT_5_0,	"5.0 V" },
+	{ CCID_CLASS_VOLT_5_0, "5.0 V" },
 	{ CCID_CLASS_VOLT_3_0, "3.0 V" },
 	{ CCID_CLASS_VOLT_1_8, "1.8 V" },
 	{ 0x0, NULL }

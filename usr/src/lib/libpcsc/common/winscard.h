@@ -35,7 +35,7 @@ extern "C" {
 
 /*
  * This is a departure from the PCSC system which treats this as a LONG. We
- * don't, because we'd like a single value that makes sense across j
+ * don't, because we'd like a single value that makes sense across j XXX?
  */
 typedef void *SCARDCONTEXT;
 typedef void **PSCARDCONTEXT;
@@ -45,7 +45,7 @@ typedef void **PSCARDHANDLE;
 typedef void **LPSCARDHANDLE;
 
 /*
- * Convenentionally this is suppsoed to be packed.
+ * Conventionally this is supposed to be packed.
  */
 #pragma pack(1)
 typedef struct {

@@ -74,7 +74,7 @@
  * generated as a series of one or more messages on a Bulk-IN pipe. To correlate
  * these commands a sequence number is used. This sequence number is one byte
  * and can be in the range [ CCID_SEQ_MIN, CCID_SEQ_MAX ]. To keep track of the
- * allocatd IDs we leverage an ID space.
+ * allocated IDs we leverage an ID space.
  *
  * A CCID reader contains a number of slots. Each slot can be addressed
  * separately as each slot represents a separate place that a card may be
@@ -144,13 +144,13 @@
  * negotiating this information. If the hardware does not support negotiation,
  * then it likely does not support a PPS and in which case we need to program
  * the hardware with the parameters indicated by the ATR through a
- * CCID_REQUEST_SET_PARAMS command and do not need to negotiation a PPS.
+ * CCID_REQUEST_SET_PARAMS command and do not need to negotiate a PPS.
  * 
  * Many ICC devices support negotiation. When an ICC supporting negotiation is
  * first turned on then it enters into a default mode and uses the default
  * values while in that mode. The PPS may be used to change the protocol as well
  * as several parameters. Once the PPS has been agreed upon, this driver just
- * send a CCID_REQUEST_SET_PARAMS command to inform the reader what is going on.
+ * sends a CCID_REQUEST_SET_PARAMS command to inform the reader what is going on.
  *
  * If the CCID reader supports neither of the hardware related mechanisms for a
  * PPS exchange, then we must do both of these. If hardware supports automatic
@@ -261,8 +261,8 @@
  *   While the user I/O thread is a somewhat straightforward, the kernel
  *   protocol level is a bit more complicated. The core problem is that when a
  *   user issues a logical I/O through an APDU, that may result in a series of
- *   one or protocol level, physical commands. The core crux of the issue with
- *   cleaning up this state is twofold:
+ *   one or more protocol level physical commands. The core crux of the issue
+ *   with cleaning up this state is twofold:
  *
  *     1. We don't want to block a user thread while I/O is outstanding
  *     2. We need to take one of several steps to clean up the aforementioned
@@ -463,8 +463,10 @@
  * class descriptor's dwMaxCCIDMessageLength member. We got to 64 bytes based on
  * the required size of a bulk transfer packet size. Especially as many CCID
  * devices are these class of speeds. The specification does require that the
- * minimu size of the dwMaxCCIDMessageLength member is at least the size of its
+ * minimum size of the dwMaxCCIDMessageLength member is at least the size of its
  * bulk endpoint packet size.
+ *
+ * XXX: clarification re: class of speeds?
  */
 #define	CCID_MIN_MESSAGE_LENGTH	64
 
@@ -498,7 +500,7 @@ typedef enum ccid_minor_flags {
 } ccid_minor_flags_t;
 
 typedef struct ccid_minor {
-	ccid_minor_idx_t	cm_idx;		/* WO */
+	ccid_minor_idx_t	cm_idx;		/* WO */ /* XXX: Whats 'WO'? */
 	cred_t			*cm_opener;	/* WO */
 	struct ccid_slot	*cm_slot;	/* WO */
 	list_node_t		cm_minor_list;
@@ -579,7 +581,7 @@ typedef enum ccid_io_flags {
 	 * again. 
 	 *
 	 * XXX Should this really be set? I'm now starting to wonder if this
-	 * would make more sent to have like we have the resetting flag.
+	 * would make more sense to have like we have the resetting flag.
 	 * Especially if for T=1 we issue an abort.
 	 */
 	CCID_IO_F_ABANDONED	= 1 << 3
@@ -1139,7 +1141,7 @@ ccid_command_resp_param2(ccid_command_t *cc)
 
 /*
  * Complete a single command. The way that a command completes depends on the
- * kind of command that occurs. If this is commad is flagged as a user command,
+ * kind of command that occurs. If this command is flagged as a user command,
  * that implies that it must be handled in a different way from administrative
  * commands. User commands are placed into the minor to consume via a read(9E).
  * Non-user commands are placed into a completion queue and must be picked up
@@ -2479,6 +2481,7 @@ ccid_slot_setup_functions(ccid_t *ccid, ccid_slot_t *slot)
 				ccid_error(ccid, "!ICC uses unsupported T=1 CRC "
 				    "checksum. Please report this so support "
 				    "can be added");
+				/* XXX: icc_init, icc_fini? */
 				slot->cs_icc.icc_tx = NULL;
 				slot->cs_icc.icc_complete = NULL;
 				slot->cs_icc.icc_teardown = NULL;
@@ -2493,6 +2496,7 @@ ccid_slot_setup_functions(ccid_t *ccid, ccid_slot_t *slot)
 			break;
 		case ATR_P_T0:
 		default:
+			/* XXX: icc_init, icc_fini? */
 			slot->cs_icc.icc_tx = NULL;
 			slot->cs_icc.icc_complete = NULL;
 			slot->cs_icc.icc_teardown = NULL;
@@ -2500,6 +2504,7 @@ ccid_slot_setup_functions(ccid_t *ccid, ccid_slot_t *slot)
 		}
 		break;
 	default:
+		/* XXX: icc_init, icc_fini? */
 		slot->cs_icc.icc_tx = NULL;
 		slot->cs_icc.icc_complete = NULL;
 		slot->cs_icc.icc_teardown = NULL;
@@ -2524,7 +2529,7 @@ ccid_slot_setup_functions(ccid_t *ccid, ccid_slot_t *slot)
  * - Negotiate and send the PPS (CCID_F_NEEDS_PPS)
  * - Set the CCID reader's parameters (CCID_F_NEEDS_PARAMS)
  * - Set the CCID reader's clock and data rate (CCID_F_NEEDS_DATAFREQ)
- * - Snapshot the current paramters being used for userland
+ * - Snapshot the current parameters being used for userland
  * - Set the IFSD for T=1 (CCID_F_NEEDS_IFSD)
  */
 static boolean_t
@@ -2664,6 +2669,7 @@ ccid_slot_params_init(ccid_t *ccid, ccid_slot_t *slot, mblk_t *atr)
 		changeprot = prot != def;
 
 		/*
+		 * XXX: clarify
 		 * Determine whether or not we need to send a PPS. We need to if
 		 * we're going to change the protocol, if we need to change the
 		 * Di/Fi values or we need to change the protocol, and if the
@@ -2681,6 +2687,7 @@ ccid_slot_params_init(ccid_t *ccid, ccid_slot_t *slot, mblk_t *atr)
 			} else {
 				fip = dip = NULL;
 			}
+			/* XXX: ignoring failure? */
 			ccid_slot_send_pps(ccid, slot, data, fip, dip, prot);
 		}
 
@@ -3074,6 +3081,7 @@ ccid_parse_class_desc(ccid_t *ccid)
 	usb_client_dev_data_t *dp;
 	usb_alt_if_data_t *alt;
 
+	/* XXX: clarify: why not sizeof? */
 	/*
 	 * Establish the target length we're looking for from usb_parse_data().
 	 * Note that we cannot use the sizeof (ccid_class_descr_t) for this
@@ -3149,7 +3157,7 @@ ccid_supported(ccid_t *ccid)
 	/*
 	 * Try and determine the appropriate buffer size. This can be a little
 	 * tricky. The class descriptor tells us the maximum size that the
-	 * reader excepts. While it may be tempting to try and use a larger
+	 * reader accepts. While it may be tempting to try and use a larger
 	 * value such as the maximum size, the readers really don't like
 	 * receiving bulk transfers that large. However, there are also reports
 	 * of readers that will overwrite to a fixed minimum size. XXX which
@@ -3226,7 +3234,7 @@ ccid_supported(ccid_t *ccid)
 		 */
 		if (ccid->ccid_class.ccd_dwMaxIFSD < T1_IFSD_DEFAULT) {
 			ccid_error(ccid, "CCID reader max IFSD (%d) is less "
-			    "T=1 default", ccid->ccid_class.ccd_dwMaxIFSD,
+			    "than T=1 default", ccid->ccid_class.ccd_dwMaxIFSD,
 			    T1_IFSD_DEFAULT);
 			return (B_FALSE);
 		}
@@ -3298,7 +3306,7 @@ ccid_open_pipes(ccid_t *ccid)
 
 	/*
 	 * First determine the maximum number of asynchronous requests. This
-	 * determines the maximum 
+	 * determines the maximum XXX: of what?
 	 */
 	bzero(&policy, sizeof (policy));
 	policy.pp_max_async_reqs = CCID_NUM_ASYNC_REQS;
@@ -3824,7 +3832,7 @@ ccid_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 
 cleanup:
 	ccid_cleanup(dip);
-	return (DDI_SUCCESS);
+	return (DDI_FAILURE);
 }
 
 static int
@@ -4822,7 +4830,7 @@ ccid_ioctl_txn_end(ccid_slot_t *slot, ccid_minor_t *cmp, intptr_t arg, int mode)
 	}
 
 	/*
-	 * Require at least one of these flags to be set.
+	 * Require exactly one of these flags to be set.
 	 */
 	if ((((uct.uct_flags & UCCID_TXN_END_RESET) != 0) ^
 	    ((uct.uct_flags & UCCID_TXN_END_RELEASE) != 0)) == 0) {

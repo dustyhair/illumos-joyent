@@ -23,7 +23,7 @@ extern "C" {
 /*
  * While we don't want to, this expects that we have Win32 style type names.
  * Deal with conversions between Win32 and reality. Remember that Windows is an
- * ILP32 system, but it is a LLP64 system.
+ * ILP32 system, but it is a LLP64 system. XXX?
  */
 
 typedef uint8_t BYTE;

@@ -259,7 +259,7 @@ typedef enum {
 
 /*
  * These three functions are used to advance the T=1 state machine. The
- * t1_reply() functino should be used when we receive a reply from the ICC.
+ * t1_reply() function should be used when we receive a reply from the ICC.
  *
  * The t1_step() function is used to basically figure out what to do next. This
  * may mean preparing another command or realizing that we're done with

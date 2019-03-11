@@ -65,7 +65,7 @@ typedef struct uccid_cmd_txn_end {
 } uccid_cmd_txn_end_t;
 
 /*
- * Reliquish exclusive access. Takes a uccid_cmd_txn_end_t. The callers should
+ * Relinquish exclusive access. Takes a uccid_cmd_txn_end_t. The callers should
  * specify one of UCCID_TXN_END_RESET or UCCID_TXN_END_RELEASE. These indicate
  * what behavior should be taken when we release the transaction. It is
  * considered an error if neither is specified. If the caller exits without
