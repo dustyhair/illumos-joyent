@@ -22,6 +22,7 @@
 .In sys/usb/clients/ccid/uccid.h
 .Sh INTERFACE LEVEL
 .Sy Volatile
+.Pp
 The interfaces provided by this driver are private at this time and
 subject to change.
 It should not be relied upon.
@@ -50,9 +51,9 @@ and
 .Xr port_get 3C .
 .Ss Supported Devices
 The CCID specification allows for readers to come in different flavors.
-These different flavors supprot different communciation protocols and
+These different flavors support different communication protocols and
 have different levels of automation for determining the protocol and
-transfers that are requierd.
+transfers that are required.
 At this time, the following protcols are supported:
 .Bl -bullet -offset indent
 .It
@@ -80,8 +81,9 @@ A slot exists regardless of whether or not an ICC is inserted into it.
 As long as a CCID device is present in the system, its device nodes will
 be present.
 .Pp
-Slots are enumerated using the pattern:
+Slots are enumerated using this pattern:
 .Pa /dev/ccid/ccid%instance/slot%slot .
+.Pp
 For example, all the slots that belong to CCID instance 5 will be
 enumerated under the directory
 .Pa /dev/ccid/ccid5 .
@@ -96,7 +98,7 @@ To enumerate all of the ccid devices present on the system, one could
 read all of the directories under
 .Pa /dev/ccid .
 To enumerate all of the slots on a device, one could read all of the
-direcotires under a particular CCID device, such as:
+device nodes under a particular CCID device, such as:
 .Pa /dev/ccid/ccid0 .
 The number of slots is also obtainable through various ioctls that will
 be discussed later on.
@@ -151,6 +153,7 @@ Similarly, if a command has not been submitted, one cannot issue a
 .Xr read 2
 system call to obtain results.
 Only a single thread may be blocked waiting to submit a command or
+read a response.
 .Pp
 To facilitate non-blocking operation, the underlying file descriptor may
 be opened with
@@ -254,7 +257,7 @@ There are a number of different classes of events that can be watched
 for.
 Watching for events is performed on a per-slot basis and uses event
 ports to allow for a richer set of events than the traditional usage of
-.Xr poll 2.
+.Xr poll 2 .
 The following events can be watched for:
 .Bl -tag -offset indent -width "Ready to retrieve command results"
 .It ICC insertion
@@ -308,12 +311,168 @@ To ensure that level triggered events are not missed, a generation
 number is associated with each event.
 For more information on the detailed event ports structures, please see
 the section
-.Sx IOCTLS .
+.Sx EVENTS .
 .Sh IOCTLS
 This section lists the different commands that may be issued to a CCID
 device through the
 .Xr ioctl 2
 system call.
+.Ss Ic UCCID_CMD_STATUS
+This command is used to obtain the status of the slot.
+It may be used regardless of whether or not the caller has exclusive access.
+.Pp
+The
+.Ic UCCID_CMD_STATUS
+command uses the structure
+.Vt uccid_cmd_status_t ,
+the fields of which have the following meanings:
+.Bl -tag -width Fa
+.It Fa uint32_t ucs_version
+Indicates the current version of the structure.
+Should be set to
+.Dv UCCID_CURRENT_VERSION .
+.It Fa uint32_t ucs_status
+This value is ignored when issuing the command.
+On return, it will be filled in with various flags that describe the
+current status of the slot and the contents returned in the
+.Vt uccid_cmd_status_t .
+The following flags are defined:
+.Bl -tag -width Dv
+.It Dv UCCID_STATUS_F_CARD_PRESENT
+A card has been inserted into the slot of the CCID class device.
+.It Dv UCCID_STATUS_F_CARD_ACTIVE
+The inserted card has been successfully activated.
+This will only be set if the
+.Dv UCCID_STATUS_F_CARD_PRESENT
+flag is also set.
+.It Dv UCCID_STATUS_F_PRODUCT_VALID
+The contents of
+.Fa ucs_product
+are valid.
+.It Dv UCCID_STATUS_F_SERIAL_VALID
+The contents of
+.Fa ucs_serial
+are valid.
+.It Dv UCCID_STATUS_F_PARAMS_VALID
+The parameters returned in
+.Fa ucs_params
+are valid.
+.El
+.It Fa int32_t ucs_instance
+The instance number of the CCID device.
+.It Fa uint32_t ucs_slot
+The slot number currently in use.
+.It Fa uint8_t ucs_atr[UCCID_ATR_MAX]
+The ATR (answer to reset) of the card.
+.It Fa uint8_t ucs_atrlen
+The actual length of the ATR data.
+A length of 0 indicates that there is no ATR data.
+.It Fa int8_t ucs_product[256]
+The product string of the CCID device.
+.It Fa int8_t ucs_serial[256]
+The serial number of the CCID device.
+.It Fa ccid_class_descr_t ucs_class
+The CCID class descriptor of the CCID device.
+.It Fa uccid_prot_t ucs_prot
+The protocol in use by the ICC.
+This can be either
+.Dv UCCID_PROT_T0
+for the TPDU T=0 protocol or
+.Dv UCCID_PROT_T1
+for the TPDU T=1 protocol.
+.It Fa ccid_params_t ucs_params
+The CCID parameters available on the card.
+.El
+.Ss UCCID_CMD_TXN_BEGIN
+This command is used to begin a transaction.
+The command will block until exclusive access is available to the
+caller.
+If the caller does not wish to block, it should set the
+.Dv UCCID_TXN_DONT_BLOCK
+flag.
+.Pp
+The command uses the structure
+.Vt uccid_cmd_txn_begin_t
+with the following members:
+.Bl -tag -width Fa
+.It Fa uint32_t ucs_version
+Indicates the current version of the structure.
+Should be set to
+.Dv UCCID_CURRENT_VERSION .
+.It Fa uint32_t uct_flags
+Flags that impact the behavior of the command.
+The following flags are
+defined:
+.Bl -tag -width Dv
+.It Dv UCCID_TXN_F_DONT_BLOCK
+The command should not block for exclusive access.
+If exclusive access is not available, then the command will fail
+immediately.
+.El
+.Pp
+If an unknown flag is specified, an error will be returned.
+.El
+.Ss UCCID_CMD_TXN_END
+The
+.Dv UCCID_CMD_TXN_END
+command is used to end a transaction and relinquish exclusive access
+to the ICC.
+.Pp
+The command uses the structure
+.Vt uccid_cmd_txn_end_t
+with the following members:
+.Bl -tag -width Fa
+.It Fa uint32_t uct_version
+Indicates the current version of the structure.
+Should be set to
+.Dv UCCID_CURRENT_VERSION .
+.It Fa uint32_t uct_flags
+.Bl -tag -width Dv
+.It Dv UCCID_TXN_END_RESET
+The ICC should be reset at the end of the transaction.
+.It Dv UCCID_TXN_END_RELEASE
+The ICC should be released without being reset at the end of the
+transaction.
+.El
+.Pp
+Exactly one of these two flags must be specified.
+It is an error if neither flag or both flags are specified at the same
+time.
+If the device is closed without ending a transaction first, then the ICC
+will be reset.
+.El
+.Ss UCCID_CMD_ERROR_INFO
+XXX needs to be documented
+.Ss UCCID_CMD_ICC_MODIFY
+This command can be used to change the state of an ICC, if present.
+.Pp
+The command uses the structure
+.Vt uccid_cmd_icc_modify_t
+with the following members:
+.Bl -tag -width Fa
+.It Fa uint32_t uci_version
+Indicates the current version of the structure.
+Should be set to
+.Dv UCCID_CURRENT_VERSION .
+.It Fa uint32_t uci_action
+The action to be taken on the ICC.
+The following actions are defined:
+.Bl -tag -width Dv
+.It Dv UCCID_ICC_POWER_ON
+Power on the ICC.
+.It Dv UCCID_ICC_POWER_OFF
+Power off the ICC.
+.It Dv UCCID_ICC_WARM_RESET
+Perform a warm reset of the ICC.
+.El
+.El
+.Ss FIONREAD
+This command returns the size in bytes of a command response available
+for reading with
+.Xr read 2 .
+The size is returned in an
+.Vt int
+pointed to by the argument.
 .Sh SYSTEM CALLS
 This section lists the different system calls that may be issued to a
 CCID device.
