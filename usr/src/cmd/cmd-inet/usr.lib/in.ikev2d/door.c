@@ -114,4 +114,6 @@ ikev2_door_init(const char *path)
 		    fattach(door_fd, path) < 0)
 			err(EXIT_FAILURE, "Cannot attach door server");
 	}
+
+	(void) close(fd);
 }

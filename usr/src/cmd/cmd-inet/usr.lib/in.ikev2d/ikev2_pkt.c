@@ -11,7 +11,7 @@
 
 /*
  * Copyright 2017 Jason King.
- * Copyright 2018, Joyent, Inc.
+ * Copyright 2019 Joyent, Inc.
  */
 
 #include <stddef.h>
@@ -21,7 +21,7 @@
 #include <string.h>
 #include <strings.h>
 #include <errno.h>
-#include <libcmdutils.h> /* for custr_ */
+#include <libcustr.h>
 #include <netinet/in.h>
 #include <security/cryptoki.h>
 #include <errno.h>
