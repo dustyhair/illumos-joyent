@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright (c) 2017 Joyent, Inc.
+ * Copyright 2019 Joyent, Inc.
  */
 
 #ifndef _WINSCARD_H
@@ -90,8 +90,8 @@ extern SCARD_IO_REQUEST g_rgSCardT0Pci, g_rgSCardT1Pci, g_rgSCardRawPci;
 
 #define	SCARD_SCOPE_USER		0x0000
 #define	SCARD_SCOPE_TERMINAL		0x0001
-#define	SCARD_SCOPE_GLOBAL		0x0002
-#define	SCARD_SCOPE_SYSTEM		0x0003
+#define	SCARD_SCOPE_SYSTEM		0x0002
+#define	SCARD_SCOPE_GLOBAL		0x0003
 
 #define	SCARD_SHARE_EXCLUSIVE	0x0001
 #define	SCARD_SHARE_SHARED	0x0002
