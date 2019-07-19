@@ -758,10 +758,13 @@ vtd_create_domain(vm_paddr_t maxaddr)
 	for (i = 0; i < drhd_num; i++) {
 		vtdmap = vtdmaps[i];
 		/* take most compatible value */
+		
 		tmp &= VTD_CAP_SAGAW(vtdmap->cap);
+		warn("i = %d SAGAW 0x%x  TMP = %x", i, VTD_CAP_SAGAW(vtdmap->cap), tmp )
 	}
 
 		for (i = 0; i < 5; i++) {
+			
 		if ((tmp & (1 << i)) != 0 && sagaw >= agaw)
 			break;
 		pt_levels++;
@@ -772,8 +775,8 @@ vtd_create_domain(vm_paddr_t maxaddr)
 	}
 
 	if (i >= 5) {
-			panic("vtd_create_domain: SAGAW 0x%x does not support AGAW %d",
-		      tmp, agaw);
+			panic("vtd_create_domain: SAGAW 0x%x does not support AGAW %d DRHD_NUM %d",
+		      tmp, agaw, drhd_num);
 	}
 
 	dom = malloc(sizeof(struct domain), M_VTD, M_ZERO | M_WAITOK);
