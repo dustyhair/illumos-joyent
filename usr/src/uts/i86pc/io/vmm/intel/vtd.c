@@ -1,4 +1,4 @@
-/*-
+/*
  * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
  *
  * Copyright (c) 2011 NetApp, Inc.
@@ -464,6 +464,7 @@ skip_dmar:
 #ifndef __FreeBSD__
 fail:
 	for (i = 0; i <= units; i++)
+		cmn_err(CE_WARN,"unmapping unit = %x",i);
 		vtd_unmap(vtddips[i]);
 	return (ENXIO);
 #endif
