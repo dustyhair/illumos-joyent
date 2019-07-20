@@ -202,6 +202,7 @@ vtd_device_scope(uint16_t rid)
 			 * for a Segment, it must be enumerated by BIOS after all other
 			 * DRHD structures for the same Segment.
 			 */
+			cmn_err(CE_WARN,"made it to vtd_device_scope if return" );
 			vtdmap = vtdmaps[i];
 			return(vtdmap);
 		}
@@ -226,6 +227,9 @@ vtd_device_scope(uint16_t rid)
 
 			pathend = (char *)device_scope + device_scope->Length;
 			pathremaining = device_scope->Length - sizeof(ACPI_DMAR_DEVICE_SCOPE);
+
+			cmn_err(CE_WARN,"made it to while loop in vtd_device_scope" );
+
 			while (pathremaining >= sizeof(ACPI_DMAR_PCI_PATH)) {
 				path = (ACPI_DMAR_PCI_PATH *)(pathend - pathremaining);
 				pathremaining -= sizeof(ACPI_DMAR_PCI_PATH);
@@ -242,6 +246,7 @@ vtd_device_scope(uint16_t rid)
 	}
 
 	/* No matching scope */
+	cmn_err(CE_WARN,"NULL in vtd_device_scope" );
 	return (NULL);
 }
 
@@ -720,6 +725,7 @@ vtd_invalidate_tlb(void *dom)
 static void *
 vtd_create_domain(vm_paddr_t maxaddr)
 {
+	cmn_err(CE_WARN,"made it to vtd_create_domain" );
 	struct domain *dom;
 	vm_paddr_t addr;
 	int tmp, i, gaw, agaw, sagaw, res, pt_levels, addrwidth;
