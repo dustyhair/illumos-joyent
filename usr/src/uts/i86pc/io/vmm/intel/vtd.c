@@ -415,6 +415,8 @@ vtd_init(void)
 #ifdef __FreeBSD__
 		vtdmaps[units++] = (struct vtdmap *)PHYS_TO_DMAP(drhd->Address);
 #else
+	    cmn_err(CE_WARN,"units found = %x",units);
+		
 		vtddips[units] = vtd_get_dip(drhd, units);
 		vtdmaps[units] = (struct vtdmap *)vtd_map(vtddips[units]);
 		if (vtdmaps[units] == NULL)
@@ -759,6 +761,7 @@ vtd_create_domain(vm_paddr_t maxaddr)
 	sagaw = 30;
 	addrwidth = 0;
 
+	cmn_err(CE_WARN,"drhd_num = %x",drhd_num);
 	tmp = ~0;
 	for (i = 0; i < drhd_num; i++) {
 		vtdmap = vtdmaps[i];
@@ -769,6 +772,8 @@ vtd_create_domain(vm_paddr_t maxaddr)
 			    
 		cmn_err(CE_WARN,"i = %d SAGAW 0x%x  TMP = %x", i, VTD_CAP_SAGAW(vtdmap->cap), tmp );
 	}
+
+		cmn_err(CE_WARN,"made it past for loop X1 ");
 
 		for (i = 0; i < 5; i++) {
 			
@@ -786,6 +791,7 @@ vtd_create_domain(vm_paddr_t maxaddr)
 		      tmp, agaw, drhd_num);
 	}
 
+	cmn_err(CE_WARN,"made it past for loop X2 ");
 	dom = malloc(sizeof(struct domain), M_VTD, M_ZERO | M_WAITOK);
 	dom->pt_levels = pt_levels;
 	dom->addrwidth = addrwidth;
@@ -839,6 +845,8 @@ vtd_create_domain(vm_paddr_t maxaddr)
 #endif
 
 	SLIST_INSERT_HEAD(&domhead, dom, next);
+
+	cmn_err(CE_WARN,"made it past for loop X3 ");
 
 	return (dom);
 }
