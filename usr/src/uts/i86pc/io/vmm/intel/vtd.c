@@ -27,7 +27,6 @@
  *
  * $FreeBSD$
  */
-#include <sys/acctctl.h>
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
@@ -760,7 +759,9 @@ vtd_create_domain(vm_paddr_t maxaddr)
 		/* take most compatible value */
 		
 		tmp &= VTD_CAP_SAGAW(vtdmap->cap);
-		warn("i = %d SAGAW 0x%x  TMP = %x", i, VTD_CAP_SAGAW(vtdmap->cap), tmp );
+		 
+			    
+		cmn_err(CE_WARN,"i = %d SAGAW 0x%x  TMP = %x", i, VTD_CAP_SAGAW(vtdmap->cap), tmp );
 	}
 
 		for (i = 0; i < 5; i++) {
