@@ -1,4 +1,4 @@
-/*-
+/*
  * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
  *
  * Copyright (c) 2011 NetApp, Inc.
@@ -66,7 +66,7 @@ struct vtdmap {
 	volatile uint64_t	ccr;
 };
 
-#define	VTD_CAP_SAGAW(cap)	(((cap) >> 8) & 0x1F)
+#define	VTD_CAP_SAGAW(cap)	(((cap) >> 8) & 0xE) /* bits 0 and 5 are reserved  so only use 1-3 */
 #define	VTD_CAP_ND(cap)		((cap) & 0x7)
 #define	VTD_CAP_CM(cap)		(((cap) >> 7) & 0x1)
 #define	VTD_CAP_SPS(cap)	(((cap) >> 34) & 0xF)
@@ -75,6 +75,8 @@ struct vtdmap {
 #define	VTD_ECAP_DI(ecap)	(((ecap) >> 2) & 0x1)
 #define	VTD_ECAP_COHERENCY(ecap) ((ecap) & 0x1)
 #define	VTD_ECAP_IRO(ecap)	(((ecap) >> 8) & 0x3FF)
+
+#define VTD_ECAP_PT(ecap)  (((ecap) >> 6) & 0x1)
 
 #define	VTD_GCR_WBF		(1 << 27)
 #define	VTD_GCR_SRTP		(1 << 30)
@@ -464,6 +466,7 @@ skip_dmar:
 #ifndef __FreeBSD__
 fail:
 	for (i = 0; i <= units; i++)
+		cmn_err(CE_WARN,"unmapping unit = %x",i);
 		vtd_unmap(vtddips[i]);
 	return (ENXIO);
 #endif
@@ -479,7 +482,7 @@ vtd_cleanup(void)
 
 	bzero(root_table, sizeof (root_table));
 
-	for (i = 0; i <= drhd_num; i++) {
+	for (i = 0; i < drhd_num; i++) {
 		vtdmaps[i] = NULL;
 		/*
 		 * Unmap the vtd registers. Note that the devinfo nodes
@@ -761,16 +764,18 @@ vtd_create_domain(vm_paddr_t maxaddr)
 	sagaw = 30;
 	addrwidth = 0;
 
+	int pt = 0; 
+
 	cmn_err(CE_WARN,"drhd_num = %x",drhd_num);
 	tmp = ~0;
 	for (i = 0; i < drhd_num; i++) {
 		vtdmap = vtdmaps[i];
 		/* take most compatible value */
-		
-		tmp &= VTD_CAP_SAGAW(vtdmap->cap);
+		pt = VTD_ECAP_PT(vtdmap->ext_cap);
+		tmp |= VTD_CAP_SAGAW(vtdmap->cap);
 		 
 			    
-		cmn_err(CE_WARN,"i = %d SAGAW 0x%x  TMP = %x", i, VTD_CAP_SAGAW(vtdmap->cap), tmp );
+		cmn_err(CE_WARN,"PT = %d i = %d SAGAW 0x%x  TMP = %x",pt, i, VTD_CAP_SAGAW(vtdmap->cap), tmp );
 	}
 
 		cmn_err(CE_WARN,"made it past for loop X1 ");
