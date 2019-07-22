@@ -204,7 +204,7 @@ vtd_device_scope(uint16_t rid)
 			 * for a Segment, it must be enumerated by BIOS after all other
 			 * DRHD structures for the same Segment.
 			 */
-			cmn_err(CE_WARN,"made it to vtd_device_scope if return" );
+			cmn_err(CE_WARN,"vtd_device_scope if return device %x", i);
 			vtdmap = vtdmaps[i];
 			return(vtdmap);
 		}
@@ -236,11 +236,16 @@ vtd_device_scope(uint16_t rid)
 				path = (ACPI_DMAR_PCI_PATH *)(pathend - pathremaining);
 				pathremaining -= sizeof(ACPI_DMAR_PCI_PATH);
 
-				if (PCI_RID2SLOT(rid) != path->Device)
+				if (PCI_RID2SLOT(rid) != path->Device){
+					cmn_err(CE_WARN,"PCI_RID2SLOT %x", path->Device);
 					continue;
-				if (PCI_RID2FUNC(rid) != path->Function)
+				}
+				if (PCI_RID2FUNC(rid) != path->Function){
+					cmn_err(CE_WARN,"PCI_RID2FUNC %x", path->Device);
 					continue;
+				}
 
+				cmn_err(CE_WARN,"pathremaining %x vtdmap %x" pathremaining, i);
 				vtdmap = vtdmaps[i];
 				return (vtdmap);
 			}
