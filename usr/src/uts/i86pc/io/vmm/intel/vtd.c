@@ -248,6 +248,7 @@ vtd_device_scope(uint16_t rid)
 	}
 
 	/* No matching scope */
+	panic("PANIC because no match in vtd_device_scope")
 	cmn_err(CE_WARN,"NULL in vtd_device_scope" );
 	return (NULL);
 }
@@ -463,7 +464,7 @@ skip_dmar:
 		root_table[i * 2] = ctx_paddr | VTD_ROOT_PRESENT;
 	}
 
-	panic("INIT ENDS BEFORE CRASH");
+	
 	return (0);
 
 #ifndef __FreeBSD__
