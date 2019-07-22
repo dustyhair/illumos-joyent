@@ -194,7 +194,7 @@ vtd_device_scope(uint16_t rid)
 	ACPI_DMAR_DEVICE_SCOPE *device_scope;
 	ACPI_DMAR_PCI_PATH *path;
 
-	for (i = 0; i <= drhd_num; i++) {
+	for (i = 0; i < drhd_num; i++) {
 		drhd = drhds[i];
 
 		if (VTD_DRHD_INCLUDE_PCI_ALL(drhd->Flags)) {
@@ -439,7 +439,7 @@ skip_dmar:
 	drhd_num = units;
 
 	max_domains = 64 * 1024; /* maximum valid value */
-	for (i = 0; i <= drhd_num; i++){
+	for (i = 0; i < drhd_num; i++){
 		vtdmap = vtdmaps[i];
 
 	if (VTD_CAP_CM(vtdmap->cap) != 0)
@@ -465,7 +465,7 @@ skip_dmar:
 
 #ifndef __FreeBSD__
 fail:
-	for (i = 0; i <= units; i++)
+	for (i = 0; i < units; i++)
 		cmn_err(CE_WARN,"unmapping unit = %x",i);
 		vtd_unmap(vtddips[i]);
 	return (ENXIO);
@@ -501,7 +501,7 @@ vtd_enable(void)
 	int i;
 	struct vtdmap *vtdmap;
 
-	for (i = 0; i <= drhd_num; i++) {
+	for (i = 0; i < drhd_num; i++) {
 		vtdmap = vtdmaps[i];
 		vtd_wbflush(vtdmap);
 
@@ -524,7 +524,7 @@ vtd_disable(void)
 	int i;
 	struct vtdmap *vtdmap;
 
-	for (i = 0; i <= drhd_num; i++) {
+	for (i = 0; i < drhd_num; i++) {
 		vtdmap = vtdmaps[i];
 		vtd_translation_disable(vtdmap);
 	}
@@ -598,7 +598,7 @@ vtd_remove_device(void *arg, uint16_t rid)
 	 * XXX use device-selective invalidation for Context Cache
 	 * XXX use domain-selective invalidation for IOTLB
 	 */
-	for (i = 0; i <= drhd_num; i++) {
+	for (i = 0; i < drhd_num; i++) {
 		vtdmap = vtdmaps[i];
 		vtd_ctx_global_invalidate(vtdmap);
 		vtd_iotlb_global_invalidate(vtdmap);
@@ -721,7 +721,7 @@ vtd_invalidate_tlb(void *dom)
 	 * Invalidate the IOTLB.
 	 * XXX use domain-selective invalidation for IOTLB
 	 */
-	for (i = 0; i <= drhd_num; i++) {
+	for (i = 0; i < drhd_num; i++) {
 		vtdmap = vtdmaps[i];
 		vtd_iotlb_global_invalidate(vtdmap);
 	}
@@ -768,7 +768,7 @@ vtd_create_domain(vm_paddr_t maxaddr)
 
 	cmn_err(CE_WARN,"drhd_num = %x",drhd_num);
 	tmp = ~0;
-	for (i = 0; i <= drhd_num; i++) {
+	for (i = 0; i < drhd_num; i++) {
 		vtdmap = vtdmaps[i];
 		/* take most compatible value */
 		pt = VTD_ECAP_PT(vtdmap->ext_cap);
@@ -841,7 +841,7 @@ vtd_create_domain(vm_paddr_t maxaddr)
 	 * limited to the host_domain.
 	 */
 	dom->spsmask = ~0;
-	for (i = 0; i <= drhd_num; i++) {
+	for (i = 0; i < drhd_num; i++) {
 		vtdmap = vtdmaps[i];
 		/* take most compatible value */
 		dom->spsmask &= VTD_CAP_SPS(vtdmap->cap);
