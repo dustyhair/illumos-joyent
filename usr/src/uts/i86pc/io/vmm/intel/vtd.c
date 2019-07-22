@@ -415,7 +415,7 @@ vtd_init(void)
 
 		drhd = (ACPI_DMAR_HARDWARE_UNIT *)hdr;
 		drhds[units] = drhd;
-		
+
 #ifdef __FreeBSD__
 		vtdmaps[units++] = (struct vtdmap *)PHYS_TO_DMAP(drhd->Address);
 #else
@@ -463,6 +463,7 @@ skip_dmar:
 		root_table[i * 2] = ctx_paddr | VTD_ROOT_PRESENT;
 	}
 
+	panic("INIT ENDS BEFORE CRASH");
 	return (0);
 
 #ifndef __FreeBSD__
