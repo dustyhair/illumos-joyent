@@ -414,6 +414,8 @@ vtd_init(void)
 			break;
 
 		drhd = (ACPI_DMAR_HARDWARE_UNIT *)hdr;
+		drhds[units] = drhd;
+		
 #ifdef __FreeBSD__
 		vtdmaps[units++] = (struct vtdmap *)PHYS_TO_DMAP(drhd->Address);
 #else
@@ -465,7 +467,7 @@ skip_dmar:
 
 #ifndef __FreeBSD__
 fail:
-	for (i = 0; i < units; i++)
+	for (i = 0; i <= units; i++)
 		cmn_err(CE_WARN,"unmapping unit = %x",i);
 		vtd_unmap(vtddips[i]);
 	return (ENXIO);
