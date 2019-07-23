@@ -849,12 +849,16 @@ vtd_create_domain(vm_paddr_t maxaddr)
 	 * the VM domain page by page, the use of large pages is essentially
 	 * limited to the host_domain.
 	 */
+	 
 	dom->spsmask = ~0;
 	for (i = 0; i < drhd_num; i++) {
 		vtdmap = vtdmaps[i];
 		/* take most compatible value */
+		cmn_err(CE_WARN,"SLPS %x", VTD_CAP_SPS(vtdmap->cap));
 		dom->spsmask &= VTD_CAP_SPS(vtdmap->cap);
 	}
+	dom->spsmask = VTD_CAP_SPS(vtdmap->cap)
+
 
 #endif
 
