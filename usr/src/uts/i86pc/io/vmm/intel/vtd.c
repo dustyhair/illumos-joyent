@@ -781,8 +781,8 @@ vtd_create_domain(vm_paddr_t maxaddr)
 		vtdmap = vtdmaps[i];
 		/* take most compatible value */
 		pt = VTD_ECAP_PT(vtdmap->ext_cap);
-		tmp |= VTD_CAP_SAGAW(vtdmap->cap);
-
+		/* tmp &= VTD_CAP_SAGAW(vtdmap->cap); */
+		tmp = 4;
 			    
 		cmn_err(CE_WARN,"PT = %d i = %d SAGAW 0x%x  TMP = %x",pt, i, VTD_CAP_SAGAW(vtdmap->cap), tmp );
 	}
