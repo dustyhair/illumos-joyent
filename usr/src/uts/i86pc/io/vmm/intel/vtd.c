@@ -253,7 +253,7 @@ vtd_device_scope(uint16_t rid)
 	}
 
 	/* No matching scope */
-	panic("PANIC because no match in vtd_device_scope")
+	panic("PANIC because no match in vtd_device_scope");
 	cmn_err(CE_WARN,"NULL in vtd_device_scope" );
 	return (NULL);
 }
