@@ -850,6 +850,7 @@ vtd_create_domain(vm_paddr_t maxaddr)
 	 * limited to the host_domain.
 	 */
 	 
+	vtdmap = vtdmaps[0];
 	dom->spsmask = ~0;
 	for (i = 0; i < drhd_num; i++) {
 		vtdmap = vtdmaps[i];
