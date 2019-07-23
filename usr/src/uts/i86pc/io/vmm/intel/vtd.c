@@ -245,7 +245,7 @@ vtd_device_scope(uint16_t rid)
 					continue;
 				}
 
-				cmn_err(CE_WARN,"pathremaining %x vtdmap %x" pathremaining, i);
+				cmn_err(CE_WARN,"pathremaining %x vtdmap %x", pathremaining, i);
 				vtdmap = vtdmaps[i];
 				return (vtdmap);
 			}
