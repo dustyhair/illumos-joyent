@@ -857,7 +857,7 @@ vtd_create_domain(vm_paddr_t maxaddr)
 		cmn_err(CE_WARN,"SLPS %x", VTD_CAP_SPS(vtdmap->cap));
 		dom->spsmask &= VTD_CAP_SPS(vtdmap->cap);
 	}
-	dom->spsmask = VTD_CAP_SPS(vtdmap->cap)
+	dom->spsmask = VTD_CAP_SPS(vtdmap->cap);
 
 
 #endif
