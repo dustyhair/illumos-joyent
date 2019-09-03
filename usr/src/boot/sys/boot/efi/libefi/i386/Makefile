@@ -12,6 +12,7 @@
 #
 # Copyright 2016 Toomas Soome <tsoome@me.com>
 # Copyright 2016 RackTop Systems.
+# Copyright 2019 Joyent, Inc.
 #
 
 MACHINE=	$(MACH)
