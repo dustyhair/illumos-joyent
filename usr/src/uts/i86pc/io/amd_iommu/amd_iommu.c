@@ -215,6 +215,7 @@ _fini(void)
 static int
 amd_iommu_getinfo(dev_info_t *dip, ddi_info_cmd_t cmd, void *arg, void **result)
 {
+	cmn_err(CE_WARN, "AMD_IOMMU get info getinfo called");
 	struct amd_iommu_state *statep;
 
 	ASSERT(result);
@@ -242,6 +243,7 @@ amd_iommu_getinfo(dev_info_t *dip, ddi_info_cmd_t cmd, void *arg, void **result)
 static int
 amd_iommu_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 {
+	cmn_err(CE_WARN, "AMD_IOMMU Attach called");
 	int instance = ddi_get_instance(dip);
 	const char *driver = ddi_driver_name(dip);
 	struct amd_iommu_state *statep;
@@ -312,6 +314,7 @@ amd_iommu_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 static int
 amd_iommu_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 {
+	cmn_err(CE_WARN, "AMD_IOMMU detach called");
 	int instance = ddi_get_instance(dip);
 	const char *driver = ddi_driver_name(dip);
 	struct amd_iommu_state *statep;
@@ -339,6 +342,8 @@ amd_iommu_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 static int
 amd_iommu_open(dev_t *devp, int flag, int otyp, cred_t *credp)
 {
+	cmn_err(CE_WARN, "AMD_IOMMU Open called");
+	
 	int instance = AMD_IOMMU_MINOR2INST(getminor(*devp));
 	struct amd_iommu_state *statep;
 	const char *f = "amd_iommu_open";
