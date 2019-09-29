@@ -55,7 +55,8 @@ static int
 amd_iommu_init(void)
 {
 
-	printf("amd_iommu_init: not implemented\n");
+    
+	cmn_err(CE_WARN, "amd_iommu_init: not implemented\n");
 	return (ENXIO);
 }
 
@@ -63,14 +64,14 @@ static void
 amd_iommu_cleanup(void)
 {
 
-	printf("amd_iommu_cleanup: not implemented\n");
+	cmn_err(CE_WARN, "amd_iommu_cleanup: not implemented\n");
 }
 
 static void
 amd_iommu_enable(void)
 {
 
-	printf("amd_iommu_enable: not implemented\n");
+	cmn_err(CE_WARN, "amd_iommu_enable: not implemented\n");
 }
 
 static void
@@ -84,7 +85,7 @@ static void *
 amd_iommu_create_domain(vm_paddr_t maxaddr)
 {
 
-	printf("amd_iommu_create_domain: not implemented\n");
+	cmn_err(CE_WARN, "amd_iommu_create_domain: not implemented\n");
 	return (NULL);
 }
 
