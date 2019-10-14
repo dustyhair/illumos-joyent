@@ -50,6 +50,7 @@ __FBSDID("$FreeBSD$");
 
 #include <machine/vmm.h>
 #include "io/iommu.h"
+#include <contrib/dev/acpica/include/acpi.h>
 
 
 #ifndef __FreeBSD__
