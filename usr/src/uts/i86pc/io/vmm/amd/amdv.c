@@ -51,10 +51,39 @@ __FBSDID("$FreeBSD$");
 #include <machine/vmm.h>
 #include "io/iommu.h"
 
+
+#ifndef __FreeBSD__
+/*
+ * This lives in amdv_sol.c for license reasons.
+ */
+extern dev_info_t *ivrs_get_dip(ACPI_IVRS_HARDWARE *, int);
+#endif
+
 static int
 amd_iommu_init(void)
 {
-
+	/*
+	System firmware must program any implementation-defined registers to prepare for software use of the guest virtual APIC.
+	•  If not previously set, initialize the SMI filter registers (see Section 2.1.5 [System Management Interrupt (SMI) Controls]).
+	•  If not previously set, initialize the following registers:
+		•  the Device Table Base Address Register [MMIO Offset 0000h],
+		•  the Command Buffer Base Address Register [MMIO Offset 0008h],
+		•  the Command Buffer Head Pointer Register [MMIO Offset 2000h],
+		•  the Command Buffer Tail Pointer Register [MMIO Offset 2008h],
+		•  the IOMMU Exclusion Base Register [MMIO Offset 0020h] and the IOMMU 
+			Exclusion Range Limit Register [MMIO Offset 0028h], if used,
+		•  the Event Log Base Address Register [MMIO Offset 0010h],
+		   the Event Log Head Pointer Register [MMIO Offset 2010h] and the Event Log Tail Pointer Register [MMIO Offset 2018h], if used.
+	•  Write the IOMMU Control Register [MMIO Offset 0018h] with EventLogEn=1b (if used), CmdBufEn=1b, and IommuEn=1b. Other IOMMU Control Register [MMIO Offset 0018h] bits should be set as necessary.
+	•  If using peripheral page requests, software must initialize the PPR Log registers in addition to the other registers before setting IommuEn=1b:
+	•  PPR Log Base Address Register [MMIO Offset 0038h],
+	•  IOMMU PPR Log Head Pointer Register [MMIO Offset 2030h], and
+	•  IOMMU PPR Log Tail Pointer Register [MMIO Offset 2038h].
+	•  Software must write the IOMMU Control Register [MMIO Offset 0018h] with PPREn = 1b, PPRLogEn = 1b; and, if using interrupts, PprIntEn = 1b.
+Architecture111AMD I/O Virtualization Technology (IOMMU) Specification48882—Rev 3.00—December 2016
+•  Enable virtual interrupt request logging.
+•  Software should not access the IOMMU Reserved Register [MMIO Offset 1FF8h].The IOMMU is now operational; it processes device transactions and fetches command buffer entries. When enabled, the IOMMU creates event log entries as events oc
+*/
     
 	cmn_err(CE_WARN, "amd_iommu_init: not implemented\n");
 	return (ENXIO);
