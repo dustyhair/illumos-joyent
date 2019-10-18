@@ -40,6 +40,7 @@
 #include <sys/tem_impl.h>
 #include <sys/font.h>
 #include <sys/sha1.h>
+#include <libcrypto.h>
 
 #include "bootstrap.h"
 
@@ -263,7 +264,7 @@ command_lsmod(int argc, char *argv[])
 				break;
 			if (strcmp(fp->f_type, "hash") == 0) {
 				pager_output("    contents: ");
-				strncpy(lbuf, PTOV(fp->f_addr), fp->f_size);
+				strlcpy(lbuf, PTOV(fp->f_addr), sizeof (lbuf));
 				if (pager_output(lbuf))
 					break;
 			}

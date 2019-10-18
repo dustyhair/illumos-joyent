@@ -106,6 +106,7 @@
  */
 
 static bool	write_mbr = false;
+static bool	write_vbr = false;
 static bool	force_mbr = false;
 static bool	force_update = false;
 static bool	do_getinfo = false;
@@ -220,7 +221,7 @@ install_stage1_cb(void *data, struct partlist *plist)
 		perror("write");
 	} else {
 		(void) fprintf(stdout, gettext("stage1 written to "
-		    "%s %d sector 0 (abs %d)\n"),
+		    "%s %d sector 0 (abs %d)\n\n"),
 		    device->devtype == IB_DEV_MBR? "partition" : "slice",
 		    device->stage.id, device->stage.start);
 	}
@@ -260,7 +261,7 @@ install_stage2_cb(void *data, struct partlist *plist)
 		return;
 	}
 	(void) fprintf(stdout, gettext("bootblock written for %s,"
-	    " %d sectors starting at %d (abs %lld)\n"), plist->pl_devname,
+	    " %d sectors starting at %d (abs %lld)\n\n"), plist->pl_devname,
 	    (bblock->buf_size / SECTOR_SIZE) + 1, offset / SECTOR_SIZE, abs);
 }
 
@@ -411,7 +412,7 @@ install_esp_cb(void *data, struct partlist *plist)
 		ret = write_out(fd, bblock->buf, bblock->buf_size, 0);
 		if (ret == BC_SUCCESS) {
 			(void) fprintf(stdout,
-			    gettext("bootblock written to %s\n"), file);
+			    gettext("bootblock written to %s\n\n"), file);
 		} else {
 			(void) fprintf(stdout,
 			    gettext("error while writing %s\n"), file);
@@ -446,14 +447,16 @@ compare_mbr_cb(struct partlist *plist)
 }
 
 /*
- * VBR setup is always done.
+ * VBR setup is done in pair with stage2.
  */
 static bool
 compare_stage1_cb(struct partlist *plist)
 {
-	(void) printf("%s will be written to %s\n", plist->pl_src_name,
-	    plist->pl_devname);
-	return (true);
+	if (write_vbr) {
+		(void) printf("%s will be written to %s\n", plist->pl_src_name,
+		    plist->pl_devname);
+	}
+	return (write_vbr);
 }
 
 /*
@@ -467,17 +470,27 @@ compare_einfo_cb(struct partlist *plist)
 	bblk_hs_t bblock_hs;
 	bool rv;
 
+	bblock_file = plist->pl_src_data;
+	if (bblock_file == NULL)
+		return (false);	/* source is missing, cannot update */
+
 	bblock = plist->pl_stage;
-	if (bblock == NULL || bblock->extra == NULL || bblock->extra_size == 0)
+	if (bblock == NULL ||
+	    bblock->extra == NULL ||
+	    bblock->extra_size == 0) {
+		if (plist->pl_type == IB_BBLK_STAGE2)
+			write_vbr = true;
 		return (true);
+	}
 
 	einfo = find_einfo(bblock->extra, bblock->extra_size);
 	if (einfo == NULL) {
 		BOOT_DEBUG("No extended information available on disk\n");
+		if (plist->pl_type == IB_BBLK_STAGE2)
+			write_vbr = true;
 		return (true);
 	}
 
-	bblock_file = plist->pl_src_data;
 	einfo_file = find_einfo(bblock_file->extra, bblock_file->extra_size);
 	if (einfo_file == NULL) {
 		/*
@@ -500,12 +513,16 @@ compare_einfo_cb(struct partlist *plist)
 		    gettext("WARNING: target device %s has a "
 		    "versioned bootblock that is going to be overwritten by a "
 		    "non versioned one\n"), plist->pl_devname);
+		if (plist->pl_type == IB_BBLK_STAGE2)
+			write_vbr = true;
 		return (true);
 	}
 
 	if (force_update) {
 		BOOT_DEBUG("Forcing update of %s bootblock\n",
 		    plist->pl_devname);
+		if (plist->pl_type == IB_BBLK_STAGE2)
+			write_vbr = true;
 		return (true);
 	}
 
@@ -516,13 +533,15 @@ compare_einfo_cb(struct partlist *plist)
 
 	rv = einfo_should_update(einfo, &bblock_hs, update_str);
 	if (rv == false) {
-		(void) fprintf(stderr, gettext("\nBootblock version installed "
+		(void) fprintf(stderr, gettext("Bootblock version installed "
 		    "on %s is more recent or identical to\n%s\n"
-		    "Use -F to override or install without the -u option.\n"),
+		    "Use -F to override or install without the -u option.\n\n"),
 		    plist->pl_devname, plist->pl_src_name);
 	} else {
 		(void) printf("%s is newer than one in %s\n",
 		    plist->pl_src_name, plist->pl_devname);
+		if (plist->pl_type == IB_BBLK_STAGE2)
+			write_vbr = true;
 	}
 	return (rv);
 }
@@ -592,6 +611,7 @@ read_stage2_cb(struct partlist *plist)
 	uint32_t		buf_size;
 	uint32_t		mboot_off;
 	multiboot_header_t	*mboot;
+	size_t			scan_size;
 
 	bblock = calloc(1, sizeof (ib_bootblock_t));
 	if (bblock == NULL)
@@ -605,8 +625,10 @@ read_stage2_cb(struct partlist *plist)
 	device = plist->pl_device;
 	plist->pl_stage = bblock;
 	offset = device->stage.offset * SECTOR_SIZE;
+	scan_size = MIN(sizeof (mboot_scan),
+	    (device->stage.size - device->stage.offset) * sector_size);
 
-	if (read_in(fd, mboot_scan, sizeof (mboot_scan), offset)
+	if (read_in(fd, mboot_scan, scan_size, offset)
 	    != BC_SUCCESS) {
 		BOOT_DEBUG("Error reading bootblock area\n");
 		perror("read");
@@ -615,7 +637,7 @@ read_stage2_cb(struct partlist *plist)
 	}
 
 	/* No multiboot means no chance of knowing bootblock size */
-	if (find_multiboot(mboot_scan, sizeof (mboot_scan), &mboot_off)
+	if (find_multiboot(mboot_scan, scan_size, &mboot_off)
 	    != BC_SUCCESS) {
 		BOOT_DEBUG("Unable to find multiboot header\n");
 		(void) close(fd);
@@ -676,23 +698,39 @@ read_stage2_cb(struct partlist *plist)
 static bool
 read_einfo_file_cb(struct partlist *plist)
 {
-	plist->pl_stage = calloc(1, sizeof (ib_bootblock_t));
-	if (plist->pl_stage == NULL)
+	int rc;
+	void *stage;
+
+	stage = calloc(1, sizeof (ib_bootblock_t));
+	if (stage == NULL)
 		return (false);
 
-	return (read_bootblock_from_file(plist->pl_devname,
-	    plist->pl_stage) == BC_SUCCESS);
+	rc =  read_bootblock_from_file(plist->pl_devname, stage);
+	if (rc != BC_SUCCESS) {
+		free(stage);
+		stage = NULL;
+	}
+	plist->pl_stage = stage;
+	return (rc == BC_SUCCESS);
 }
 
 static bool
 read_stage2_file_cb(struct partlist *plist)
 {
-	plist->pl_src_data = calloc(1, sizeof (ib_bootblock_t));
-	if (plist->pl_src_data == NULL)
+	int rc;
+	void *data;
+
+	data = calloc(1, sizeof (ib_bootblock_t));
+	if (data == NULL)
 		return (false);
 
-	return (read_bootblock_from_file(plist->pl_src_name,
-	    plist->pl_src_data) == BC_SUCCESS);
+	rc = read_bootblock_from_file(plist->pl_src_name, data);
+	if (rc != BC_SUCCESS) {
+		free(data);
+		data = NULL;
+	}
+	plist->pl_src_data = data;
+	return (rc == BC_SUCCESS);
 }
 
 /*
@@ -1013,6 +1051,9 @@ probe_fstyp(ib_data_t *data)
 		data->target.fstype = IB_FS_UFS;
 	} else if (strcmp(fident, MNTTYPE_PCFS) == 0) {
 		data->target.fstype = IB_FS_PCFS;
+		/* with pcfs we always write MBR */
+		force_mbr = true;
+		write_mbr = true;
 	} else {
 		(void) fprintf(stderr, gettext("File system %s is not "
 		    "supported by loader\n"), fident);
@@ -1123,8 +1164,8 @@ probe_gpt(ib_data_t *data)
 	data->target.size = vtoc->efi_parts[slice].p_size;
 
 	/* Always update PMBR. */
-	force_mbr = 1;
-	write_mbr = 1;
+	force_mbr = true;
+	write_mbr = true;
 
 	/*
 	 * With GPT we can have boot partition and ESP.
@@ -1537,12 +1578,6 @@ probe_mbr(ib_data_t *data)
 	 * partition.
 	 */
 	if (i == FD_NUMPART) {
-		/* with pcfs we always write MBR */
-		if (data->target.fstype == IB_FS_PCFS) {
-			force_mbr = true;
-			write_mbr = true;
-		}
-
 		pl->pl_devname = strdup(path);
 		if (pl->pl_devname == NULL) {
 			perror(gettext("Memory allocation failure"));
@@ -1755,6 +1790,8 @@ read_bootblock_from_file(const char *file, ib_bootblock_t *bblock)
 
 	/* loader bootblock has version built in */
 	buf_size = sb.st_size;
+	if (buf_size == 0)
+		goto outfd;
 
 	bblock->buf_size = buf_size;
 	BOOT_DEBUG("bootblock in-memory buffer size is %d\n",
@@ -1897,6 +1934,8 @@ prepare_bootblock(ib_data_t *data, struct partlist *pl, char *updt_str)
 	assert(pl != NULL);
 
 	bblock = pl->pl_src_data;
+	if (bblock == NULL)
+		return;
 
 	ptr = (uint64_t *)(&bblock->mboot->bss_end_addr);
 	*ptr = data->target.start;
@@ -2094,10 +2133,13 @@ handle_install(char *progname, int argc, char **argv)
 				printf("\n");
 			}
 			if (!pl->pl_cb.read_bbl(pl)) {
-				(void) fprintf(stderr,
-				    gettext("Error reading %s\n"),
-				    pl->pl_src_name);
-				goto cleanup;
+				/*
+				 * We will ignore ESP updates in case of
+				 * older system where we are missing
+				 * loader64.efi and loader32.efi.
+				 */
+				if (pl->pl_type != IB_BBLK_EFI)
+					goto cleanup;
 			}
 		}
 
@@ -2111,8 +2153,6 @@ handle_install(char *progname, int argc, char **argv)
 			    pl->pl_cb.compare(pl)) {
 				if (pl->pl_cb.install != NULL)
 					pl->pl_cb.install(&data, pl);
-			} else {
-				printf("\n");
 			}
 			STAILQ_REMOVE(data.plist, pl, partlist, pl_next);
 			partlist_free(pl);
@@ -2249,6 +2289,7 @@ handle_mirror(char *progname, int argc, char **argv)
 		goto cleanup_src;
 	}
 
+	write_vbr = true;
 	write_mbr = true;
 	force_mbr = true;
 
