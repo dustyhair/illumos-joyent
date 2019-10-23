@@ -86,6 +86,11 @@ SRCS =	acpi.c			\
 	#ctl_scsi_all.c		\
 	#pci_virtio_scsi.c	\
 
+video_bios.o: video_bios.h video_bios.t splash.S
+video_bios.bin: video_bios.o
+	$(LD) --script=${.CURDIR}/video_bios.lds ${.ALLSRC} -o ${.TARGET}
+	printf "\001" | dd of=${.TARGET} bs=1 seek=16 conv=notrunc 2> /dev/null
+	$(OBJCOPY) --strip-symbol=_start ${.TARGET}
 
 OBJS = $(SRCS:.c=.o)
 

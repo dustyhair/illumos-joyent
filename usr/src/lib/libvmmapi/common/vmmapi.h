@@ -51,7 +51,7 @@
  * API version for out-of-tree consumers like grub-bhyve for making compile
  * time decisions.
  */
-#define	VMMAPI_VERSION	0103	/* 2 digit major followed by 2 digit minor */
+#define	VMMAPI_VERSION	0104	/* 2 digit major followed by 2 digit minor */
 
 struct iovec;
 struct vmctx;
@@ -87,6 +87,8 @@ enum {
 #endif
 	VM_BOOTROM,
 	VM_FRAMEBUFFER,
+	VM_VIDEOBIOS,
+	VM_NOTHING /* Last entry */
 };
 
 /*
@@ -128,6 +130,11 @@ int	vm_get_devmem_offset(struct vmctx *ctx, int segid, off_t *mapoff);
 int	vm_mmap_memseg(struct vmctx *ctx, vm_paddr_t gpa, int segid,
 	    vm_ooffset_t segoff, size_t len, int prot);
 
+/*
+ * Unmap a memory segment previously mapped with the given parameters.
+ */
+int	vm_munmap_memseg(struct vmctx *ctx, vm_paddr_t gpa,
+	    int segid, vm_ooffset_t segoff);
 int	vm_create(const char *name);
 int	vm_get_device_fd(struct vmctx *ctx);
 struct vmctx *vm_open(const char *name);

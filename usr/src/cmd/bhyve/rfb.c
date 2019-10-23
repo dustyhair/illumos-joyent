@@ -108,7 +108,9 @@ struct rfb_softc {
 	int		zbuflen;
 
 	int		conn_wait;
+	int		pending;
 	int		sending;
+	int		invalid;
 	pthread_mutex_t mtx;
 	pthread_cond_t  cond;
 
@@ -250,6 +252,8 @@ rfb_send_resize_update_msg(struct rfb_softc *rc, int cfd)
 	srect_hdr.height = htons(rc->height);
 	srect_hdr.encoding = htonl(RFB_ENCODING_RESIZE);
 	stream_write(cfd, &srect_hdr, sizeof(struct rfb_srvr_rect_hdr));
+
+	rc->pending = 0;
 }
 
 static void
@@ -309,12 +313,23 @@ fast_crc32(void *buf, int len, uint32_t crcval)
 	return (crcval);
 }
 
+static int
+rfb_send_update_header(struct rfb_softc *rc, int cfd, int numrects)
+{
+	struct rfb_srvr_updt_msg supdt_msg;
+
+	supdt_msg.type = 0;
+	supdt_msg.pad = 0;
+	supdt_msg.numrects = htons(numrects);
+
+	return stream_write(cfd, &supdt_msg,
+	    sizeof(struct rfb_srvr_updt_msg));
+}
 
 static int
 rfb_send_rect(struct rfb_softc *rc, int cfd, struct bhyvegc_image *gc,
               int x, int y, int w, int h)
 {
-	struct rfb_srvr_updt_msg supdt_msg;
 	struct rfb_srvr_rect_hdr srect_hdr;
 	unsigned long zlen;
 	ssize_t nwrite, total;
@@ -325,15 +340,6 @@ rfb_send_rect(struct rfb_softc *rc, int cfd, struct bhyvegc_image *gc,
 	/*
 	 * Send a single rectangle of the given x, y, w h dimensions.
 	 */
-
-	/* Number of rectangles: 1 */
-	supdt_msg.type = 0;
-	supdt_msg.pad = 0;
-	supdt_msg.numrects = htons(1);
-	nwrite = stream_write(cfd, &supdt_msg,
-	                      sizeof(struct rfb_srvr_updt_msg));
-	if (nwrite <= 0)
-		return (nwrite);
 
 
 	/* Rectangle header */
@@ -423,6 +429,8 @@ rfb_send_all(struct rfb_softc *rc, int cfd, struct bhyvegc_image *gc)
 	                      sizeof(struct rfb_srvr_updt_msg));
 	if (nwrite <= 0)
 		return (nwrite);
+	
+	rc->pending = 0;
 
 	/* Rectangle header */
 	srect_hdr.x = 0;
@@ -494,9 +502,6 @@ rfb_send_screen(struct rfb_softc *rc, int cfd, int all)
 	uint32_t *crc_p, *orig_crc;
 	int changes;
 
-	console_refresh();
-	gc_image = console_get_image();
-
 	pthread_mutex_lock(&rc->mtx);
 	if (rc->sending) {
 		pthread_mutex_unlock(&rc->mtx);
@@ -505,10 +510,40 @@ rfb_send_screen(struct rfb_softc *rc, int cfd, int all)
 	rc->sending = 1;
 	pthread_mutex_unlock(&rc->mtx);
 
-	retval = 0;
+	retval = 1;
 
-	if (all) {
-		retval = rfb_send_all(rc, cfd, gc_image);
+		/* Updates require a preceding update request */
+	if (!rc->pending)
+		goto done;
+
+	console_refresh();
+	gc_image = console_get_image();
+
+	/* Clear old CRC values when the size changes */
+	if (rc->crc_width != gc_image->width ||
+	    rc->crc_height != gc_image->height) {
+		memset(rc->crc, 0, sizeof(uint32_t) * 
+		    howmany(RFB_MAX_WIDTH, PIX_PER_CELL) *
+		    howmany(RFB_MAX_HEIGHT, PIX_PER_CELL));
+		rc->crc_width = gc_image->width;
+		rc->crc_height = gc_image->height;
+	}
+
+	/* A size update counts as an update in itself */
+	if (rc->width != gc_image->width ||
+	    rc->height != gc_image->height) {
+		rc->width = gc_image->width;
+		rc->height = gc_image->height;
+		if (rc->enc_resize_ok) {
+			rfb_send_resize_update_msg(rc, cfd);
+			rc->invalid = 1;
+			goto done;
+		}
+	}
+
+	if (all || rc->invalid) {
+ 		retval = rfb_send_all(rc, cfd, gc_image);
+		rc->invalid = 0;
 		goto done;
 	}
 
@@ -517,10 +552,6 @@ rfb_send_screen(struct rfb_softc *rc, int cfd, int all)
 	 * has changed since the last scan.
 	 */
 
-	/* Resolution changed */
-
-	rc->crc_width = gc_image->width;
-	rc->crc_height = gc_image->height;
 
 	w = rc->crc_width;
 	h = rc->crc_height;
@@ -581,12 +612,18 @@ rfb_send_screen(struct rfb_softc *rc, int cfd, int all)
 		}
 	}
 
+	/* We only send the update if there are changes */
+	if (changes)
+		rc->pending = 0;
+
 	/* If number of changes is > THRESH percent, send the whole screen */
 	if (((changes * 100) / (xcells * ycells)) >= RFB_SEND_ALL_THRESH) {
 		retval = rfb_send_all(rc, cfd, gc_image);
 		goto done;
 	}
 	
+	rfb_send_update_header(rc, cfd, changes);
+
 	/* Go through all cells, and send only changed ones */
 	crc_p = rc->crc_tmp;
 	for (y = 0; y < h; y += PIX_PER_CELL) {
@@ -614,7 +651,6 @@ rfb_send_screen(struct rfb_softc *rc, int cfd, int all)
 			}
 		}
 	}
-	retval = 1;
 
 done:
 	pthread_mutex_lock(&rc->mtx);
@@ -626,33 +662,20 @@ done:
 
 
 static void
-rfb_recv_update_msg(struct rfb_softc *rc, int cfd, int discardonly)
+rfb_recv_update_msg(struct rfb_softc *rc, int cfd)
 {
 	struct rfb_updt_msg updt_msg;
-	struct bhyvegc_image *gc_image;
 
 	(void)stream_read(cfd, ((void *)&updt_msg) + 1 , sizeof(updt_msg) - 1);
+	rc->pending = 1;
 
-	console_refresh();
-	gc_image = console_get_image();
+	#ifdef USE_MAXIMUM_FRAME_RATE
+    rfb_send_screen(rc, cfd, !updt_msg.incremental);
+	#else
+	if (!updt_msg.incremental)
+		rc->invalid = 1;
+	#endif
 
-	updt_msg.x = htons(updt_msg.x);
-	updt_msg.y = htons(updt_msg.y);
-	updt_msg.width = htons(updt_msg.width);
-	updt_msg.height = htons(updt_msg.height);
-
-	if (updt_msg.width != gc_image->width ||
-	    updt_msg.height != gc_image->height) {
-		rc->width = gc_image->width;
-		rc->height = gc_image->height;
-		if (rc->enc_resize_ok)
-			rfb_send_resize_update_msg(rc, cfd);
-	}
-
-	if (discardonly)
-		return;
-
-	rfb_send_screen(rc, cfd, 1);
 }
 
 static void
@@ -877,8 +900,6 @@ rfb_handle(struct rfb_softc *rc, int cfd)
 		assert(rc->zbuf != NULL);
 	}
 
-	rfb_send_screen(rc, cfd, 1);
-
 	perror = pthread_create(&tid, NULL, rfb_wr_thr, rc);
 	if (perror == 0)
 		pthread_set_name_np(tid, "rfbout");
@@ -899,7 +920,7 @@ rfb_handle(struct rfb_softc *rc, int cfd)
 			rfb_recv_set_encodings_msg(rc, cfd);
 			break;
 		case 3:
-			rfb_recv_update_msg(rc, cfd, 1);
+			rfb_recv_update_msg(rc, cfd);
 			break;
 		case 4:
 			rfb_recv_key_msg(rc, cfd);

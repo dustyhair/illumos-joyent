@@ -46,6 +46,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/linker_set.h>
+#include <sys/mman.h>
 
 #include <ctype.h>
 #include <errno.h>
@@ -591,6 +592,76 @@ update_bar_address(struct pci_devinst *pi, uint64_t addr, int idx, int type)
 
 	if (decode)
 		register_bar(pi, idx);
+}
+
+int
+pci_emul_alloc_rom(struct pci_devinst *pdi, int segid,
+    uint32_t addr, uint32_t size)
+{
+	/* The segment ID must be valid */
+	if (segid <= VM_SYSMEM || segid >= VM_NOTHING)
+		return (-1);
+
+	/* The size must be a power of two >= 4 KiB */
+	if ((size & (size - 1)) != 0 || size < 4096)
+		return (-2);
+
+	/* The address must be at a multiple of size */
+	if ((addr & (size - 1)) != 0)
+		return (-3);
+
+	pdi->pi_rom_segment  = segid;
+	pdi->pi_rom_bar.type = PCIBAR_ROM;
+	pdi->pi_rom_bar.addr = addr;
+	pdi->pi_rom_bar.size = size;
+	pdi->pi_rom_enabled  = 0;
+
+	pci_set_cfgdata32(pdi, PCIR_BIOS, addr);
+
+	return (0);
+}
+
+static int
+update_rom_address(struct pci_devinst *pdi)
+{
+	uint32_t bar, addr;
+	int enable;
+
+	/* Grab info directly from the config data */
+	bar = pci_get_cfgdata32(pdi, PCIR_BIOS);
+	enable = (bar & PCIM_BIOS_ENABLE)? 1 : 0;
+	addr = bar & PCIM_BIOS_ADDR_MASK;
+
+	/* Ignore the mapping if we don't have a ROM segment to map */
+	if (!pdi->pi_rom_segment) {
+		pdi->pi_rom_bar.addr = addr;
+		return (0);
+	}
+
+	/* Something has changed; unmap the segment if it's mapped */
+	if (pdi->pi_rom_enabled) {
+		vm_munmap_memseg(pdi->pi_vmctx, pdi->pi_rom_bar.addr,
+		    pdi->pi_rom_segment, 0);
+	}
+
+	pdi->pi_rom_enabled = enable && memen(pdi);
+	pdi->pi_rom_bar.addr = addr;
+
+	/* Map the segment only if both ROM and global Memory Space are on */
+	if (pdi->pi_rom_enabled) {
+		int error;
+
+		error = vm_mmap_memseg(pdi->pi_vmctx, pdi->pi_rom_bar.addr,
+		    pdi->pi_rom_segment, 0, pdi->pi_rom_bar.size,
+		    PROT_READ | PROT_EXEC);
+
+		if (error) {
+			perror("ROM mapping failed");
+			return (-1);
+		}
+	}
+
+	return (0);
 }
 
 int
@@ -1756,6 +1827,9 @@ pci_emul_cmdsts_write(struct pci_devinst *pi, int coff, uint32_t new, int bytes)
 		}
 	}
 
+	if ((changed & PCIM_CMD_MEMEN))
+		update_rom_address(pi);
+
 	/*
 	 * If INTx has been unmasked and is pending, assert the
 	 * interrupt.
@@ -1893,6 +1967,26 @@ pci_cfgrw(struct vmctx *ctx, int vcpu, int in, int bus, int slot, int func,
 				assert(0);
 			}
 			pci_set_cfgdata32(pi, coff, bar);
+
+			
+		/*
+		 * The BAR register for an Expansion ROM is slightly different.
+		 */
+		} else if (coff >= PCIR_BIOS && coff < PCIR_BIOS + 4) {
+
+			/* Well, it's ignored for ordinary BAR registers... */
+			if (bytes != 4 || (coff & 0x3) != 0)
+				return;
+
+			/* Refuse to enable unless we have a BIOS */
+			mask = ~(pi->pi_rom_bar.size - 1);
+			if (pi->pi_rom_bar.size > 0)
+				mask |= PCIM_BIOS_ENABLE;
+
+			/* Make the change and update ROM location */
+			bar = *eax & mask;
+			pci_set_cfgdata32(pi, coff, bar);
+			update_rom_address(pi);
 
 		} else if (pci_emul_iscap(pi, coff)) {
 			pci_emul_capwrite(pi, coff, bytes, *eax);

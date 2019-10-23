@@ -86,7 +86,8 @@ enum pcibar_type {
 	PCIBAR_IO,
 	PCIBAR_MEM32,
 	PCIBAR_MEM64,
-	PCIBAR_MEMHI64
+	PCIBAR_MEMHI64,
+	PCIBAR_ROM,
 };
 
 struct pcibar {
@@ -159,6 +160,9 @@ struct pci_devinst {
 
 	u_char	  pi_cfgdata[PCI_REGMAX + 1];
 	struct pcibar pi_bar[PCI_BARMAX + 1];
+	struct pcibar pi_rom_bar;
+	int	  pi_rom_segment;
+	int	  pi_rom_enabled;
 };
 
 struct msicap {
@@ -228,6 +232,8 @@ int	pci_emul_alloc_bar(struct pci_devinst *pdi, int idx,
 	    enum pcibar_type type, uint64_t size);
 int	pci_emul_alloc_pbar(struct pci_devinst *pdi, int idx,
 	    uint64_t hostbase, enum pcibar_type type, uint64_t size);
+int	pci_emul_alloc_rom(struct pci_devinst *pdi, int segid,
+	    uint32_t addr, uint32_t size);
 int	pci_emul_add_msicap(struct pci_devinst *pi, int msgnum);
 int	pci_emul_add_pciecap(struct pci_devinst *pi, int pcie_device_type);
 void	pci_generate_msi(struct pci_devinst *pi, int msgnum);

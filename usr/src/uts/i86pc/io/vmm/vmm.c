@@ -164,8 +164,8 @@ struct mem_map {
 	int		prot;
 	int		flags;
 };
-#define	VM_MAX_MEMMAPS	4
-
+/*#define	VM_MAX_MEMMAPS	4 */
+#define	VM_MAX_MEMMAPS	6
 /*
  * Initialization:
  * (o) initialized the first time the VM is created
@@ -266,6 +266,8 @@ SYSCTL_INT(_hw_vmm, OID_AUTO, trace_guest_exceptions, CTLFLAG_RDTUN,
 static void vm_free_memmap(struct vm *vm, int ident);
 static bool sysmem_mapping(struct vm *vm, struct mem_map *mm);
 static void vcpu_notify_event_locked(struct vcpu *vcpu, bool lapic_intr);
+static int vm_munmap_memseg(struct vm *vm, vm_paddr_t gpa,
+    int segid, vm_ooffset_t segoff);
 
 #ifndef __FreeBSD__
 static void vm_clear_memseg(struct vm *, int);
@@ -871,7 +873,7 @@ vm_mmap_memseg(struct vm *vm, vm_paddr_t gpa, int segid, vm_ooffset_t first,
 	vm_ooffset_t last;
 	int i, error;
 
-	if (prot == 0 || (prot & ~(VM_PROT_ALL)) != 0)
+	if ((len != 0 && prot == 0) || (prot & ~(VM_PROT_ALL)) != 0)
 		return (EINVAL);
 
 	if (flags & ~VM_MEMMAP_F_WIRED)
@@ -885,11 +887,15 @@ vm_mmap_memseg(struct vm *vm, vm_paddr_t gpa, int segid, vm_ooffset_t first,
 		return (EINVAL);
 
 	last = first + len;
-	if (first < 0 || first >= last || last > seg->len)
+	if (first < 0 || first > last || last > seg->len)
 		return (EINVAL);
 
 	if ((gpa | first | last) & PAGE_MASK)
 		return (EINVAL);
+	
+	/* The same thing at the same place but with zero length means unmap */
+	if (len == 0)
+		return vm_munmap_memseg(vm, gpa, segid, first);
 
 	map = NULL;
 	for (i = 0; i < VM_MAX_MEMMAPS; i++) {
@@ -928,6 +934,26 @@ vm_mmap_memseg(struct vm *vm, vm_paddr_t gpa, int segid, vm_ooffset_t first,
 	map->flags = flags;
 	return (0);
 }
+
+static int
+vm_munmap_memseg(struct vm *vm, vm_paddr_t gpa, int segid, vm_ooffset_t segoff)
+{
+	struct mem_map *m;
+	int i;
+
+	for (i = 0; i < VM_MAX_MEMMAPS; i++) {
+		m = &vm->mem_maps[i];
+		if (m->gpa == gpa && m->segid == segid && m->segoff == segoff)
+			break;
+	}
+
+	if (i >= VM_MAX_MEMMAPS)
+		return (ENOENT);
+
+	vm_free_memmap(vm, i);
+
+ 	return (0);
+ }
 
 int
 vm_mmap_getnext(struct vm *vm, vm_paddr_t *gpa, int *segid,
