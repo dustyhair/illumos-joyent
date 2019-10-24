@@ -92,7 +92,7 @@ video_bios.bin: video_bios.o
 	printf "\001" | dd of=${.TARGET} bs=1 seek=16 conv=notrunc 2> /dev/null
 	$(OBJCOPY) --strip-symbol=_start ${.TARGET}
 
-OBJS = $(SRCS:.c=.o)
+OBJS = $(SRCS:.c=.o) video_bios.bin
 
 CLOBBERFILES =	$(ROOTUSRSBINPROG) $(ZHYVE)
 
