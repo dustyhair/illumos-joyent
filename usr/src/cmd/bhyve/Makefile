@@ -106,6 +106,7 @@ MEVENT_TEST_OBJS = $(MEVENT_TEST_SRCS:.c=.o)
 
 CLEANFILES =	$(PROG) $(ZHYVE_PROG) $(MEVENT_TEST_PROG) $(MEVENT_TEST_OBJS)
 
+CFLAGS += -no-integrated-as
 CFLAGS +=	$(CCVERBOSE) -_gcc=-Wimplicit-function-declaration -_gcc=-Wno-parentheses
 CPPFLAGS =	-I$(COMPAT)/freebsd -I$(CONTRIB)/freebsd \
 		-I$(COMPAT)/freebsd/amd64 -I$(CONTRIB)/freebsd/amd64 \
