@@ -303,10 +303,17 @@ vm_mmap_memseg(struct vmctx *ctx, vm_paddr_t gpa, int segid, vm_ooffset_t off,
 	error = vm_mmap_getnext(ctx, &gpa, &segid, &off, &len, &prot, &flags);
 	if (error == 0 && gpa == memmap.gpa) {
 		/* Allow other segments to align with SYSMEM borders */
+	#ifdef __FreeBSD__
 		if ((segid != VM_SYSMEM || memmap.segid == VM_SYSMEM) &&
-		    (segid != memmap.segid || off != memmap.segoff ||
-		    prot != memmap.prot || flags != memmap.flags)) {			errno = EEXIST;
+				(segid != memmap.segid || off != memmap.segoff ||
+		    	prot != memmap.prot || flags != memmap.flags)) 
+	#else
+		if(segid != memmap.segid || off != memmap.segoff ||
+		    	prot != memmap.prot || flags != memmap.flags) 
+	#endif
+			{			errno = EEXIST;
 			return (-1);
+
 		} else {
 			return (0);
 		}

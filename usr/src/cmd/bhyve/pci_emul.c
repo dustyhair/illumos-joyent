@@ -599,7 +599,11 @@ pci_emul_alloc_rom(struct pci_devinst *pdi, int segid,
     uint32_t addr, uint32_t size)
 {
 	/* The segment ID must be valid */
+	#ifdef __FreeBSD__
 	if (segid <= VM_SYSMEM || segid >= VM_NOTHING)
+	#else 
+	if (segid >= VM_NOTHING)
+	#endif 
 		return (-1);
 
 	/* The size must be a power of two >= 4 KiB */

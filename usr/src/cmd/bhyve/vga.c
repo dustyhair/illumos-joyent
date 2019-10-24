@@ -270,12 +270,14 @@ vga_get_text_pixel(struct vga_softc *sc, int x, int y)
 
 	offset = 2 * sc->vga_crtc.crtc_start_addr;
 	offset += (y / 16 * sc->gc_width / dots) * 2 + (x / dots) * 2;
+    
+	ch = sc->vga_ram[offset + 0 * 64*KB];
 
 	elg = (sc->vga_atc.atc_mode & ATC_MC_ELG) && ch >= 0xc0 && ch <= 0xdf;
 	bit = 7 - (x % dots);
 	if (bit < 0) bit = elg ? 0 : 8;
 
-	ch = sc->vga_ram[offset + 0 * 64*KB];
+	/*ch = sc->vga_ram[offset + 0 * 64*KB];*/
 	attr = sc->vga_ram[offset + 1 * 64*KB];
 	cursor = 0x00;
 
