@@ -10,7 +10,8 @@
  */
 
 /*
- * Copyright 2017 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2019 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2019 RackTop Systems.
  */
 
 
@@ -822,18 +823,21 @@ cmd_start:
 	 */
 	if ((sdd->sdt_flags & SDDF_SUPPRESS_UID) == 0 &&
 	    !sr->encrypted && sr->uid_user != NULL &&
-	    (sr->uid_user->u_sign_flags & SMB_SIGNING_CHECK) != 0) {
+	    (sr->uid_user->u_sign_flags & SMB_SIGNING_ENABLED) != 0) {
 		/*
-		 * This request type should be signed, and
-		 * we're configured to require signatures.
+		 * If the request is signed, check the signature.
+		 * Otherwise, if signing is required, deny access.
 		 */
-		if ((sr->smb2_hdr_flags & SMB2_FLAGS_SIGNED) == 0) {
-			smb2sr_put_error(sr, NT_STATUS_ACCESS_DENIED);
-			goto cmd_done;
-		}
-		rc = smb2_sign_check_request(sr);
-		if (rc != 0) {
-			DTRACE_PROBE1(smb2__sign__check, smb_request_t *, sr);
+		if ((sr->smb2_hdr_flags & SMB2_FLAGS_SIGNED) != 0) {
+			rc = smb2_sign_check_request(sr);
+			if (rc != 0) {
+				DTRACE_PROBE1(smb2__sign__check,
+				    smb_request_t *, sr);
+				smb2sr_put_error(sr, NT_STATUS_ACCESS_DENIED);
+				goto cmd_done;
+			}
+		} else if (
+		    (sr->uid_user->u_sign_flags & SMB_SIGNING_CHECK) != 0) {
 			smb2sr_put_error(sr, NT_STATUS_ACCESS_DENIED);
 			goto cmd_done;
 		}
@@ -910,7 +914,7 @@ cmd_done:
 		cmn_err(CE_NOTE, "handler for %u returned 0x%x",
 		    sr->smb2_cmd_code, rc);
 #endif
-		sr->smb2_status = NT_STATUS_INTERNAL_ERROR;
+		smb2sr_put_error(sr, NT_STATUS_INTERNAL_ERROR);
 		break;
 	case SDRC_ERROR:
 		/*
@@ -921,6 +925,7 @@ cmd_done:
 		 */
 		if (sr->smb2_status == 0)
 			sr->smb2_status = NT_STATUS_INVALID_PARAMETER;
+		smb2sr_put_error(sr, sr->smb2_status);
 		break;
 	case SDRC_DROP_VC:
 		disconnect = B_TRUE;

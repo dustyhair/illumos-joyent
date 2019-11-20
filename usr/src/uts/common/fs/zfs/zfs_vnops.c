@@ -1915,7 +1915,7 @@ top:
 	txtype = TX_REMOVE;
 	if (flags & FIGNORECASE)
 		txtype |= TX_CI;
-	zfs_log_remove(zilog, tx, txtype, dzp, name, obj);
+	zfs_log_remove(zilog, tx, txtype, dzp, name, obj, unlinked);
 
 	dmu_tx_commit(tx);
 out:
@@ -2231,7 +2231,8 @@ top:
 		uint64_t txtype = TX_RMDIR;
 		if (flags & FIGNORECASE)
 			txtype |= TX_CI;
-		zfs_log_remove(zilog, tx, txtype, dzp, name, ZFS_NO_OBJECT);
+		zfs_log_remove(zilog, tx, txtype, dzp, name, ZFS_NO_OBJECT,
+		    B_FALSE);
 	}
 
 	dmu_tx_commit(tx);
@@ -2808,11 +2809,12 @@ zfs_setattr_dir(znode_t *dzp)
 	znode_t		*zp = NULL;
 	dmu_tx_t	*tx = NULL;
 	sa_bulk_attr_t	bulk[4];
-	int		count = 0;
+	int		count;
 	int		err;
 
 	zap_cursor_init(&zc, os, dzp->z_id);
 	while ((err = zap_cursor_retrieve(&zc, &zap)) == 0) {
+		count = 0;
 		if (zap.za_integer_length != 8 || zap.za_num_integers != 1) {
 			err = ENXIO;
 			break;
