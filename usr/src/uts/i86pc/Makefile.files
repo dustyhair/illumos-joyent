@@ -276,7 +276,8 @@ VMM_OBJS += vmm.o \
 	npt.o \
 	vmcb.o \
 	svm_support.o \
-	amdv.o \
+	amdvhw.o \
+	ivrs_drv_sol.o \
 	gipt.o \
 	vmm_sol_vm.o \
 	vmm_sol_glue.o \
