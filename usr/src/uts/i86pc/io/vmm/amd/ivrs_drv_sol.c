@@ -36,6 +36,8 @@ __FBSDID("$FreeBSD$");
 #include <sys/module.h>
 #include <sys/malloc.h>
 
+#include <sys/conf.h>
+
 #include <machine/vmparam.h>
 
 #include <vm/vm.h>
@@ -433,7 +435,7 @@ ivhd_identify(driver_t *driver, device_t parent)
 static int
 ivhd_probe(device_t dev)
 {
-	ACPI_IVRS_HARDWARE *ivhd;
+	//ACPI_IVRS_HARDWARE *ivhd;
 	//int unit;
 	
 	#ifdef XXX
@@ -448,6 +450,7 @@ ivhd_probe(device_t dev)
 	KASSERT(ivhd, ("ivhd is NULL"));
 	#endif
 
+    #ifdef XXX
 	switch (ivhd->Header.Type) {
 	case IVRS_TYPE_HARDWARE_EFR:
 		#ifdef XXX
@@ -468,7 +471,7 @@ ivhd_probe(device_t dev)
 		#endif
 		break;
 	}
-
+	#endif 
 	//return (BUS_PROBE_NOWILDCARD);
 	return 0;
 }
@@ -666,10 +669,10 @@ static int
 ivhd_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 {
 	ACPI_IVRS_HARDWARE *ivhd;
-	ACPI_IVRS_HARDWARE_EFRSUP *ivhd_efr;
+	//ACPI_IVRS_HARDWARE_EFRSUP *ivhd_efr;
 	struct amdvi_softc *softc;
 	softc = NULL; //XXX remove
-	
+	int unit = 0; //XXX remove 
 	int status = 0; //XXXX remove at some point
 	//int status, unit;
 
@@ -713,17 +716,20 @@ ivhd_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	}
 #ifdef XXX
 	softc->ctrl = (struct amdvi_ctrl *) PHYS_TO_DMAP(ivhd->BaseAddress);
+#endif 
 	status = ivhd_dev_parse(ivhd, softc);
+	#ifdef XXX
 	if (status != 0) {
 		device_printf(dev,
 		    "endpoint device parsing error=%d\n", status);
+	
 	}
-
+#endif
 	status = ivhd_print_cap(softc, ivhd);
 	if (status != 0) {
 		return (status);
 	}
-	#endif 
+	
 
 	status = amdvi_setup_hw(softc);
 	if (status != 0) {
@@ -800,7 +806,7 @@ static struct cb_ops ivhd_cb_ops = {
 	nochpoll,		/* cb_chpoll */
 	ddi_prop_op,		/* cb_prop_op XXX?*/
 	NULL,			/* cb_str */
-	NULL,		/* cb_flag XXX?*/
+	D_NEW | D_MP,		/* cb_flag XXX?*/
 	CB_REV,			/* cb_rev XXX?*/
 	nodev,			/* cb_aread */
 	nodev			/* cb_awrite */
