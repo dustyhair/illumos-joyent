@@ -350,7 +350,7 @@ ivhd_is_newer(ACPI_IVRS_HEADER *old, ACPI_IVRS_HEADER  *new)
 
 #ifdef XXX
 static void
-ivhd_identify(driver_t *driver, device_t parent)
+ivhd_identify(dev_info_t *driver, device_t parent)
 {
 	ACPI_TABLE_IVRS *ivrs;
 	ACPI_IVRS_HARDWARE *ivhd;
@@ -477,7 +477,7 @@ ivhd_probe(device_t dev)
 }
 
 static void
-ivhd_print_flag(device_t dev, enum IvrsType ivhd_type, uint8_t flag)
+ivhd_print_flag(dev_info_t dev, enum IvrsType ivhd_type, uint8_t flag)
 {
 	/*
 	 * IVHD lgeacy type has two extra high bits in flag which has
@@ -526,7 +526,7 @@ ivhd_print_flag(device_t dev, enum IvrsType ivhd_type, uint8_t flag)
  * Feature in legacy IVHD type(0x10) and attribute in newer type(0x11 and 0x40).
  */
 static void
-ivhd_print_feature(device_t dev, enum IvrsType ivhd_type, uint32_t feature) 
+ivhd_print_feature(dev_info_t dev, enum IvrsType ivhd_type, uint32_t feature) 
 {
 	switch (ivhd_type) {
 	case IVRS_TYPE_HARDWARE_LEGACY:
@@ -575,7 +575,7 @@ ivhd_print_feature(device_t dev, enum IvrsType ivhd_type, uint32_t feature)
 
 /* Print extended features of IOMMU. */
 static void
-ivhd_print_ext_feature(device_t dev, uint64_t ext_feature)
+ivhd_print_ext_feature(dev_info_t dev, uint64_t ext_feature)
 {
 //	uint32_t ext_low; // ext_high;
 
@@ -636,7 +636,7 @@ ivhd_print_ext_feature(device_t dev, uint64_t ext_feature)
 static int
 ivhd_print_cap(struct amdvi_softc *softc, ACPI_IVRS_HARDWARE * ivhd)
 {
-	device_t dev;
+	dev_info_t dev;
 	int max_ptp_level;
 
 	dev = softc->dev;
