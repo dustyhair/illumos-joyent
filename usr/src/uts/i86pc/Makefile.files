@@ -243,6 +243,7 @@ ROOTNEX_OBJS += rootnex.o immu.o immu_dmar.o immu_dvma.o \
 TZMON_OBJS	+= tzmon.o
 UPPC_OBJS += uppc.o psm_common.o
 XSVC_OBJS += xsvc.o
+AMD_IVRS_OBJS += amd_ivrs.o
 AMD_IOMMU_OBJS +=	amd_iommu.o amd_iommu_impl.o amd_iommu_acpi.o \
 			amd_iommu_cmd.o amd_iommu_log.o amd_iommu_page_tables.o
 VMM_OBJS += vmm.o \
@@ -276,8 +277,7 @@ VMM_OBJS += vmm.o \
 	npt.o \
 	vmcb.o \
 	svm_support.o \
-	amdvi_hw.o \
-	ivrs_drv_sol.o \
+	amdvi.o \
 	gipt.o \
 	vmm_sol_vm.o \
 	vmm_sol_glue.o \

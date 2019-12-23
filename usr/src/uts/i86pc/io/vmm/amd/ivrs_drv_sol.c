@@ -50,12 +50,14 @@ __FBSDID("$FreeBSD$");
 #include "io/iommu.h"
 #include "amdvi_priv.h"
 
+#ifdef XXX
 static int ivhd_getinfo(dev_info_t *dip, ddi_info_cmd_t cmd, void *arg, void **result);
 static int ivhd_attach(dev_info_t *dip, ddi_attach_cmd_t cmd);
 static int ivhd_detach(dev_info_t *dip, ddi_detach_cmd_t cmd);
 //static int ivhd_detach(dev_info_t *dip, ddi_detach_cmd_t cmd);
 static int ivhd_open(dev_t *devp, int flag, int otyp, cred_t *credp);
 static int ivhd_close(dev_t dev, int flag, int otyp, cred_t *credp);
+#endif 
 
 device_t *ivhd_devs;			/* IVHD or AMD-Vi device list. */
 int	ivhd_count;			/* Number of IVHD header. */
@@ -665,6 +667,7 @@ ivhd_print_cap(struct amdvi_softc *softc, ACPI_IVRS_HARDWARE * ivhd)
 	return (0);
 }
 
+#ifdef XXX
 static int 
 ivhd_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 {
@@ -743,7 +746,7 @@ ivhd_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 
 	return (0);
 }
-
+#endif
 static int
 ivhd_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 {
@@ -790,7 +793,7 @@ static driver_t ivhd_driver = {
 //		      SI_ORDER_ANY);
 //MODULE_DEPEND(ivhd, acpi, 1, 1, 1);
 //MODULE_DEPEND(ivhd, pci, 1, 1, 1);
-
+#ifdef XXX
 static struct cb_ops ivhd_cb_ops = {
 	ivhd_open,		/* cb_open */
 	ivhd_close,	/* cb_close */
@@ -812,6 +815,7 @@ static struct cb_ops ivhd_cb_ops = {
 	nodev			/* cb_awrite */
 };
 
+
 static struct dev_ops ivhd_dev_ops = {
 	DEVO_REV,		/* devo_rev */
 	0,			/* devo_refcnt */
@@ -826,48 +830,10 @@ static struct dev_ops ivhd_dev_ops = {
 	nulldev,		/* devo_power */
 	nulldev,	/* devo_quiesce */
 };
+#endif
 
-static struct modldrv modldrv = {
-	&mod_driverops,
-	"AMD IVRS/IVHD 0.1",
-	&ivhd_dev_ops
-};
 
-static struct modlinkage modlinkage = {
-	MODREV_1,
-	(void *)&modldrv,
-	NULL
-};
-
-int _init(void)
-{
-
-return 0;
-}
-
-int
-_info(struct modinfo *modinfop)
-{
-	return (mod_info(&modlinkage, modinfop));
-}
-
-int
-_fini(void)
-{
-	int error;
-
-	error = mod_remove(&modlinkage);
-	if (error)
-		return (error);
-
-	//page table has fini? 
-		//kmem_free
-	//acpi fini
-	//stat_fini 
-
-	return (0);
-}
-
+#ifdef XXX
 static int
 ivhd_getinfo(dev_info_t *dip, ddi_info_cmd_t cmd, void *arg, void **result)
 {
@@ -884,3 +850,5 @@ ivhd_close(dev_t dev, int flag, int otyp, cred_t *credp)
 {
 return 0;
 }
+
+#endif

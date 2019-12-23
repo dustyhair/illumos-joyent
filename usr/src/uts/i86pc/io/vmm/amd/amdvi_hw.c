@@ -591,7 +591,7 @@ amdvi_decode_evt_flag(uint16_t flag)
 static inline void
 amdvi_decode_evt_flag_type(uint8_t type)
 {
-
+	#ifdef XXX
 	switch (AMDVI_EVENT_FLAG_TYPE(type)) {
 	case 0:
 		printf("RSVD\n");
@@ -608,6 +608,7 @@ amdvi_decode_evt_flag_type(uint8_t type)
 	default:
 		break;
 	}
+	#endif 
 }
 
 #ifdef XXX

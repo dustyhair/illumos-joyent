@@ -40,6 +40,7 @@ FILEMODE = 644
 CHKHDRS=  \
 	acpidev.h	\
 	amd_iommu.h	\
+	amd_ivrs.h  \ 
 	asm_misc.h	\
 	clock.h		\
 	cram.h		\
