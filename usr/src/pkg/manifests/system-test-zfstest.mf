@@ -13,7 +13,7 @@
 # Copyright (c) 2012, 2017 by Delphix. All rights reserved.
 # Copyright 2015, 2016 Nexenta Systems, Inc.  All rights reserved.
 # Copyright 2016, OmniTI Computer Consulting, Inc. All rights reserved.
-# Copyright 2019 Joyent, Inc.
+# Copyright 2020 Joyent, Inc.
 # Copyright (c) 2018 Datto Inc.
 #
 
@@ -112,6 +112,7 @@ dir path=opt/zfs-tests/tests/functional/ctime
 dir path=opt/zfs-tests/tests/functional/delegate
 dir path=opt/zfs-tests/tests/functional/devices
 dir path=opt/zfs-tests/tests/functional/exec
+dir path=opt/zfs-tests/tests/functional/fault
 dir path=opt/zfs-tests/tests/functional/features
 dir path=opt/zfs-tests/tests/functional/features/async_destroy
 dir path=opt/zfs-tests/tests/functional/grow_pool
@@ -149,6 +150,7 @@ dir path=opt/zfs-tests/tests/functional/removal
 dir path=opt/zfs-tests/tests/functional/rename_dirs
 dir path=opt/zfs-tests/tests/functional/replacement
 dir path=opt/zfs-tests/tests/functional/reservation
+dir path=opt/zfs-tests/tests/functional/resilver
 dir path=opt/zfs-tests/tests/functional/rootpool
 dir path=opt/zfs-tests/tests/functional/rsend
 dir path=opt/zfs-tests/tests/functional/scrub_mirror
@@ -209,6 +211,7 @@ file path=opt/zfs-tests/include/default.cfg mode=0444
 file path=opt/zfs-tests/include/libtest.shlib mode=0444
 file path=opt/zfs-tests/include/math.shlib mode=0444
 file path=opt/zfs-tests/include/properties.shlib mode=0444
+file path=opt/zfs-tests/include/zpool_script.shlib mode=0444
 file path=opt/zfs-tests/runfiles/delphix.run mode=0444
 file path=opt/zfs-tests/runfiles/longevity.run mode=0444
 file path=opt/zfs-tests/runfiles/omnios.run mode=0444
@@ -600,6 +603,9 @@ file \
     path=opt/zfs-tests/tests/functional/channel_program/synctask_core/tst.get_written \
     mode=0555
 file \
+    path=opt/zfs-tests/tests/functional/channel_program/synctask_core/tst.inherit \
+    mode=0555
+file \
     path=opt/zfs-tests/tests/functional/channel_program/synctask_core/tst.list_children \
     mode=0555
 file \
@@ -632,6 +638,12 @@ file \
 file \
     path=opt/zfs-tests/tests/functional/channel_program/synctask_core/tst.rollback_one \
     mode=0555
+file \
+    path=opt/zfs-tests/tests/functional/channel_program/synctask_core/tst.set_props \
+    mode=0555
+file \
+    path=opt/zfs-tests/tests/functional/channel_program/synctask_core/tst.set_props.zcp \
+    mode=0444
 file \
     path=opt/zfs-tests/tests/functional/channel_program/synctask_core/tst.snapshot_destroy \
     mode=0555
@@ -1622,6 +1634,9 @@ file \
     path=opt/zfs-tests/tests/functional/cli_root/zpool_create/zpool_create_features_004_neg \
     mode=0555
 file \
+    path=opt/zfs-tests/tests/functional/cli_root/zpool_create/zpool_create_features_005_pos \
+    mode=0555
+file \
     path=opt/zfs-tests/tests/functional/cli_root/zpool_create/zpool_create_tempname \
     mode=0555
 file \
@@ -1942,6 +1957,9 @@ file path=opt/zfs-tests/tests/functional/cli_root/zpool_replace/setup \
     mode=0555
 file \
     path=opt/zfs-tests/tests/functional/cli_root/zpool_replace/zpool_replace_001_neg \
+    mode=0555
+file \
+    path=opt/zfs-tests/tests/functional/cli_root/zpool_replace/zpool_replace_002_neg \
     mode=0555
 file path=opt/zfs-tests/tests/functional/cli_root/zpool_resilver/cleanup \
     mode=0555
@@ -2371,6 +2389,9 @@ file \
 file \
     path=opt/zfs-tests/tests/functional/cli_user/zpool_iostat/zpool_iostat_003_neg \
     mode=0555
+file \
+    path=opt/zfs-tests/tests/functional/cli_user/zpool_iostat/zpool_iostat_004_pos \
+    mode=0555
 file path=opt/zfs-tests/tests/functional/cli_user/zpool_list/cleanup mode=0555
 file path=opt/zfs-tests/tests/functional/cli_user/zpool_list/setup mode=0555
 file \
@@ -2439,6 +2460,10 @@ file path=opt/zfs-tests/tests/functional/exec/exec_001_pos mode=0555
 file path=opt/zfs-tests/tests/functional/exec/exec_002_neg mode=0555
 file path=opt/zfs-tests/tests/functional/exec/mmap_exec mode=0555
 file path=opt/zfs-tests/tests/functional/exec/setup mode=0555
+file path=opt/zfs-tests/tests/functional/fault/cleanup mode=0555
+file path=opt/zfs-tests/tests/functional/fault/fault.cfg mode=0444
+file path=opt/zfs-tests/tests/functional/fault/setup mode=0555
+file path=opt/zfs-tests/tests/functional/fault/zpool_status_-s mode=0555
 file \
     path=opt/zfs-tests/tests/functional/features/async_destroy/async_destroy_001_pos \
     mode=0555
@@ -2906,6 +2931,12 @@ file path=opt/zfs-tests/tests/functional/reservation/reservation_021_neg \
 file path=opt/zfs-tests/tests/functional/reservation/reservation_022_pos \
     mode=0555
 file path=opt/zfs-tests/tests/functional/reservation/setup mode=0555
+file path=opt/zfs-tests/tests/functional/resilver/cleanup mode=0555
+file path=opt/zfs-tests/tests/functional/resilver/resilver.cfg mode=0444
+file path=opt/zfs-tests/tests/functional/resilver/resilver_restart_001 \
+    mode=0555
+file path=opt/zfs-tests/tests/functional/resilver/setup mode=0555
+file path=opt/zfs-tests/tests/functional/resilver/sysevent mode=0555
 file path=opt/zfs-tests/tests/functional/rootpool/cleanup mode=0555
 file path=opt/zfs-tests/tests/functional/rootpool/rootpool_002_neg mode=0555
 file path=opt/zfs-tests/tests/functional/rootpool/rootpool_003_neg mode=0555

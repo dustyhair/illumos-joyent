@@ -686,6 +686,7 @@ PORTSTDIO=			\
 	_filbuf.o		\
 	_findbuf.o		\
 	_flsbuf.o		\
+	_stdio_flags.o		\
 	_wrtchk.o		\
 	clearerr.o		\
 	ctermid.o		\
@@ -701,6 +702,7 @@ PORTSTDIO=			\
 	fileno.o		\
 	flockf.o		\
 	flush.o			\
+	fmemopen.o		\
 	fopen.o			\
 	fpos.o			\
 	fputc.o			\
@@ -718,6 +720,8 @@ PORTSTDIO=			\
 	gets.o			\
 	getw.o			\
 	mse.o			\
+	open_memstream.o	\
+	open_wmemstream.o	\
 	popen.o			\
 	putc.o			\
 	putchar.o		\
@@ -1279,8 +1283,8 @@ $(LIB_PIC): pics $$(PICS)
 	$(POST_PROCESS_A)
 
 $(LIBCBASE)/crt/_rtbootld.s: $(LIBCBASE)/crt/_rtboot.s $(LIBCBASE)/crt/_rtld.c
-	$(CC) $(CPPFLAGS) -_smatch=off $(CTF_FLAGS) -O -S $(C_PICFLAGS) \
-	    $(LIBCBASE)/crt/_rtld.c -o $(LIBCBASE)/crt/_rtld.s
+	$(CC) $($(MACH)_XARCH) $(CPPFLAGS) -_smatch=off $(CTF_FLAGS) -O -S \
+	    $(C_PICFLAGS) $(LIBCBASE)/crt/_rtld.c -o $(LIBCBASE)/crt/_rtld.s
 	$(CAT) $(LIBCBASE)/crt/_rtboot.s $(LIBCBASE)/crt/_rtld.s > $@
 	$(RM) $(LIBCBASE)/crt/_rtld.s
 

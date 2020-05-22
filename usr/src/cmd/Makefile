@@ -83,6 +83,7 @@ COMMON_SUBDIRS=		\
 	cal		\
 	captoinfo	\
 	cat		\
+	ccidadm		\
 	cdrw		\
 	cfgadm		\
 	checkeq		\
@@ -118,6 +119,7 @@ COMMON_SUBDIRS=		\
 	date		\
 	dc		\
 	dd		\
+	demangle	\
 	deroff		\
 	devfsadm	\
 	syseventd	\
@@ -249,6 +251,7 @@ COMMON_SUBDIRS=		\
 	logger		\
 	login		\
 	logins		\
+	logname		\
 	look		\
 	ls		\
 	luxadm		\
@@ -377,6 +380,7 @@ COMMON_SUBDIRS=		\
 	sgs		\
 	sh		\
 	shcomp		\
+	sleep		\
 	smbios		\
 	smbsrv		\
 	smserverd	\

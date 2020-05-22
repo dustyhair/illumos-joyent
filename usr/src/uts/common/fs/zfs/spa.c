@@ -27,10 +27,11 @@
  * Copyright 2013 Saso Kiselkov. All rights reserved.
  * Copyright (c) 2014 Integros [integros.com]
  * Copyright 2016 Toomas Soome <tsoome@me.com>
+ * Copyright (c) 2017, 2019, Datto Inc. All rights reserved.
  * Copyright 2019 Joyent, Inc.
  * Copyright (c) 2017, Intel Corporation.
- * Copyright (c) 2017 Datto Inc.
  * Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2020 Joshua M. Clulow <josh@sysmgr.org>
  */
 
 /*
@@ -917,7 +918,7 @@ spa_error_entry_compare(const void *a, const void *b)
 	ret = memcmp(&sa->se_bookmark, &sb->se_bookmark,
 	    sizeof (zbookmark_phys_t));
 
-	return (AVL_ISIGN(ret));
+	return (TREE_ISIGN(ret));
 }
 
 /*
@@ -1428,6 +1429,7 @@ spa_unload(spa_t *spa)
 	ASSERT(MUTEX_HELD(&spa_namespace_lock));
 	ASSERT(spa_state(spa) != POOL_STATE_UNINITIALIZED);
 
+	spa_import_progress_remove(spa);
 	spa_load_note(spa, "UNLOADING");
 
 	/*
@@ -2389,6 +2391,7 @@ spa_load(spa_t *spa, spa_load_state_t state, spa_import_type_t type)
 	int error;
 
 	spa->spa_load_state = state;
+	(void) spa_import_progress_set_state(spa, spa_load_state(spa));
 
 	gethrestime(&spa->spa_loaded_ts);
 	error = spa_load_impl(spa, type, &ereport);
@@ -2410,6 +2413,8 @@ spa_load(spa_t *spa, spa_load_state_t state, spa_import_type_t type)
 	}
 	spa->spa_load_state = error ? SPA_LOAD_ERROR : SPA_LOAD_NONE;
 	spa->spa_ena = 0;
+
+	(void) spa_import_progress_set_state(spa, spa_load_state(spa));
 
 	return (error);
 }
@@ -2634,6 +2639,9 @@ spa_activity_check(spa_t *spa, uberblock_t *ub, nvlist_t *config)
 	import_expire = gethrtime() + import_delay;
 
 	while (gethrtime() < import_expire) {
+		(void) spa_import_progress_set_mmp_check(spa,
+		    NSEC2SEC(import_expire - gethrtime()));
+
 		vdev_uberblock_load(rvd, ub, &mmp_label);
 
 		if (txg != ub->ub_txg || timestamp != ub->ub_timestamp ||
@@ -3000,6 +3008,10 @@ spa_ld_select_uberblock(spa_t *spa, spa_import_type_t type)
 		return (spa_vdev_err(rvd, VDEV_AUX_CORRUPT_DATA, ENXIO));
 	}
 
+	if (spa->spa_load_max_txg != UINT64_MAX) {
+		(void) spa_import_progress_set_max_txg(spa,
+		    (u_longlong_t)spa->spa_load_max_txg);
+	}
 	spa_load_note(spa, "using uberblock with txg=%llu",
 	    (u_longlong_t)ub->ub_txg);
 
@@ -3935,6 +3947,8 @@ spa_ld_mos_init(spa_t *spa, spa_import_type_t type)
 	if (error != 0)
 		return (error);
 
+	spa_import_progress_add(spa);
+
 	/*
 	 * Now that we have the vdev tree, try to open each vdev. This involves
 	 * opening the underlying physical device, retrieving its geometry and
@@ -4365,6 +4379,7 @@ spa_load_impl(spa_t *spa, spa_import_type_t type, char **ereport)
 		spa_config_exit(spa, SCL_CONFIG, FTAG);
 	}
 
+	spa_import_progress_remove(spa);
 	spa_load_note(spa, "LOADED");
 
 	return (0);
@@ -4425,6 +4440,7 @@ spa_load_best(spa_t *spa, spa_load_state_t state, uint64_t max_request,
 		 * from previous txgs when spa_load fails.
 		 */
 		ASSERT(spa->spa_import_flags & ZFS_IMPORT_CHECKPOINT);
+		spa_import_progress_remove(spa);
 		return (load_error);
 	}
 
@@ -4436,6 +4452,7 @@ spa_load_best(spa_t *spa, spa_load_state_t state, uint64_t max_request,
 
 	if (rewind_flags & ZPOOL_NEVER_REWIND) {
 		nvlist_free(config);
+		spa_import_progress_remove(spa);
 		return (load_error);
 	}
 
@@ -4478,6 +4495,7 @@ spa_load_best(spa_t *spa, spa_load_state_t state, uint64_t max_request,
 
 	if (state == SPA_LOAD_RECOVER) {
 		ASSERT3P(loadinfo, ==, NULL);
+		spa_import_progress_remove(spa);
 		return (rewind_error);
 	} else {
 		/* Store the rewind info as part of the initial load info */
@@ -4488,6 +4506,7 @@ spa_load_best(spa_t *spa, spa_load_state_t state, uint64_t max_request,
 		fnvlist_free(spa->spa_load_info);
 		spa->spa_load_info = loadinfo;
 
+		spa_import_progress_remove(spa);
 		return (load_error);
 	}
 }
@@ -4757,6 +4776,8 @@ spa_add_l2cache(spa_t *spa, nvlist_t *config)
 			    ZPOOL_CONFIG_VDEV_STATS, (uint64_t **)&vs, &vsc)
 			    == 0);
 			vdev_get_stats(vd, vs);
+			vdev_config_generate_stats(vd, l2cache[i]);
+
 		}
 	}
 }
@@ -5355,10 +5376,9 @@ spa_create(const char *pool, nvlist_t *nvroot, nvlist_t *props,
  * Get the root pool information from the root disk, then import the root pool
  * during the system boot up time.
  */
-extern int vdev_disk_read_rootlabel(char *, char *, nvlist_t **);
-
 static nvlist_t *
-spa_generate_rootconf(char *devpath, char *devid, uint64_t *guid)
+spa_generate_rootconf(const char *devpath, const char *devid, uint64_t *guid,
+    uint64_t pool_guid)
 {
 	nvlist_t *config;
 	nvlist_t *nvtop, *nvroot;
@@ -5375,6 +5395,19 @@ spa_generate_rootconf(char *devpath, char *devid, uint64_t *guid)
 	VERIFY(nvlist_lookup_uint64(config, ZPOOL_CONFIG_POOL_GUID,
 	    &pgid) == 0);
 	VERIFY(nvlist_lookup_uint64(config, ZPOOL_CONFIG_GUID, guid) == 0);
+
+	if (pool_guid != 0 && pool_guid != pgid) {
+		/*
+		 * The boot loader provided a pool GUID, but it does not match
+		 * the one we found in the label.  Return failure so that we
+		 * can fall back to the full device scan.
+		 */
+		zfs_dbgmsg("spa_generate_rootconf: loader pool guid %llu != "
+		    "label pool guid %llu", (u_longlong_t)pool_guid,
+		    (u_longlong_t)pgid);
+		nvlist_free(config);
+		return (NULL);
+	}
 
 	/*
 	 * Put this pool's top-level vdevs into a root vdev.
@@ -5442,7 +5475,8 @@ spa_alt_rootvdev(vdev_t *vd, vdev_t **avd, uint64_t *txg)
  *	"/pci@1f,0/ide@d/disk@0,0:a"
  */
 int
-spa_import_rootpool(char *devpath, char *devid)
+spa_import_rootpool(char *devpath, char *devid, uint64_t pool_guid,
+    uint64_t vdev_guid)
 {
 	spa_t *spa;
 	vdev_t *rvd, *bvd, *avd = NULL;
@@ -5450,20 +5484,43 @@ spa_import_rootpool(char *devpath, char *devid)
 	uint64_t guid, txg;
 	char *pname;
 	int error;
+	const char *altdevpath = NULL;
 
 	/*
 	 * Read the label from the boot device and generate a configuration.
 	 */
-	config = spa_generate_rootconf(devpath, devid, &guid);
+	config = spa_generate_rootconf(devpath, devid, &guid, pool_guid);
 #if defined(_OBP) && defined(_KERNEL)
 	if (config == NULL) {
 		if (strstr(devpath, "/iscsi/ssd") != NULL) {
 			/* iscsi boot */
 			get_iscsi_bootpath_phy(devpath);
-			config = spa_generate_rootconf(devpath, devid, &guid);
+			config = spa_generate_rootconf(devpath, devid, &guid,
+			    pool_guid);
 		}
 	}
 #endif
+
+	/*
+	 * We were unable to import the pool using the /devices path or devid
+	 * provided by the boot loader.  This may be the case if the boot
+	 * device has been connected to a different location in the system, or
+	 * if a new boot environment has changed the driver used to access the
+	 * boot device.
+	 *
+	 * Attempt an exhaustive scan of all visible block devices to see if we
+	 * can locate an alternative /devices path with a label that matches
+	 * the expected pool and vdev GUID.
+	 */
+	if (config == NULL && (altdevpath =
+	    vdev_disk_preroot_lookup(pool_guid, vdev_guid)) != NULL) {
+		cmn_err(CE_NOTE, "Original /devices path (%s) not available; "
+		    "ZFS is trying an alternate path (%s)", devpath,
+		    altdevpath);
+		config = spa_generate_rootconf(altdevpath, NULL, &guid,
+		    pool_guid);
+	}
+
 	if (config == NULL) {
 		cmn_err(CE_NOTE, "Cannot read the pool label from '%s'",
 		    devpath);
@@ -6340,9 +6397,9 @@ spa_vdev_attach(spa_t *spa, uint64_t guid, nvlist_t *nvroot, int replacing)
 	 */
 	if (dsl_scan_resilvering(spa_get_dsl(spa)) &&
 	    spa_feature_is_enabled(spa, SPA_FEATURE_RESILVER_DEFER))
-		vdev_set_deferred_resilver(spa, newvd);
+		vdev_defer_resilver(newvd);
 	else
-		dsl_resilver_restart(spa->spa_dsl_pool, dtl_max_txg);
+		dsl_scan_restart_resilver(spa->spa_dsl_pool, dtl_max_txg);
 
 	if (spa->spa_bootfs)
 		spa_event_notify(spa, newvd, NULL, ESC_ZFS_BOOTFS_VDEV_ATTACH);
@@ -7580,7 +7637,7 @@ spa_async_thread(void *arg)
 	if (tasks & SPA_ASYNC_RESILVER &&
 	    (!dsl_scan_resilvering(dp) ||
 	    !spa_feature_is_enabled(dp->dp_spa, SPA_FEATURE_RESILVER_DEFER)))
-		dsl_resilver_restart(dp, 0);
+		dsl_scan_restart_resilver(dp, 0);
 
 	if (tasks & SPA_ASYNC_INITIALIZE_RESTART) {
 		mutex_enter(&spa_namespace_lock);
@@ -7694,6 +7751,12 @@ spa_async_request(spa_t *spa, int task)
 	mutex_enter(&spa->spa_async_lock);
 	spa->spa_async_tasks |= task;
 	mutex_exit(&spa->spa_async_lock);
+}
+
+int
+spa_async_tasks(spa_t *spa)
+{
+	return (spa->spa_async_tasks);
 }
 
 /*

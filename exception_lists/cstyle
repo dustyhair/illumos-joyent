@@ -18,6 +18,7 @@ usr/src/cmd/acpi/common/utmath.c
 usr/src/cmd/acpi/common/utnonansi.c
 usr/src/cmd/acpi/common/utprint.c
 usr/src/cmd/acpi/common/utxferror.c
+usr/src/cmd/cxgbetool/*
 usr/src/cmd/hal/tools/hal_set_property.c
 usr/src/cmd/krb5/kadmin/cli/kadmin_ct.c
 usr/src/cmd/krb5/kadmin/cli/kadmin.c
@@ -643,6 +644,7 @@ usr/src/lib/krb5/ss/ss_internal.h
 usr/src/lib/krb5/ss/ss.h
 usr/src/lib/krb5/ss/std_rqs.c
 usr/src/lib/krb5/ss/utils.c
+usr/src/lib/libast/common/tm/tvsleep.c
 usr/src/lib/libgss/g_glue.c
 usr/src/lib/libresolv2/common
 usr/src/lib/libresolv2_joy/common
@@ -685,6 +687,7 @@ usr/src/lib/librstp/common/transmit.h
 usr/src/lib/librstp/common/uid_stp.h
 usr/src/lib/librstp/common/vector.c
 usr/src/lib/librstp/common/vector.h
+usr/src/lib/libshell/common/bltins/sleep.c
 usr/src/lib/libsmbfs/smb/derparse.c
 usr/src/lib/libsmbfs/smb/derparse.h
 usr/src/lib/libsmbfs/smb/spnego.c
@@ -695,6 +698,9 @@ usr/src/test/os-tests/tests/sockfs/conn.c
 usr/src/test/os-tests/tests/sockfs/dgram.c
 usr/src/test/os-tests/tests/sockfs/drop_priv.c
 usr/src/test/os-tests/tests/sockfs/sockpair.c
+usr/src/test/libc-tests/tests/stdio/fmemopentest.c
+usr/src/test/libc-tests/tests/stdio/open_memstreamtest.c
+usr/src/test/libc-tests/tests/stdio/orientation_test.c
 usr/src/tools/btxld/btx.h
 usr/src/tools/btxld/btxld.c
 usr/src/tools/btxld/elfh.c
@@ -1369,6 +1375,7 @@ usr/src/cmd/bhyve/fwctl.[ch]
 usr/src/cmd/bhyve/gdb.[ch]
 usr/src/cmd/bhyve/inout.[ch]
 usr/src/cmd/bhyve/ioapic.[ch]
+usr/src/cmd/bhyve/iov.[ch]
 usr/src/cmd/bhyve/mem.[ch]
 usr/src/cmd/bhyve/mevent.[ch]
 usr/src/cmd/bhyve/mevent_test.c
@@ -1414,7 +1421,6 @@ usr/src/compat/freebsd/amd64/machine/*.h
 usr/contrib/freebsd/*/*.h
 usr/contrib/freebsd/*/*/*.h
 usr/contrib/freebsd/lib/libutil/*.c
-usr/src/head/bhyve.h
 usr/src/lib/libvmmapi/common/vmmapi.[ch]
 usr/src/uts/i86pc/io/vmm/amd/*.[ch]
 usr/src/uts/i86pc/io/vmm/intel/*.[chs]

@@ -63,7 +63,7 @@ size_t	spt_used;
  * See spt_setminfree().
  */
 pgcnt_t segspt_minfree = 0;
-size_t segspt_minfree_clamp = (1UL << 30); /* 1Gb in bytes */
+size_t segspt_minfree_clamp = (1UL << 30); /* 1GB in bytes */
 
 static int segspt_create(struct seg **segpp, void *argsp);
 static int segspt_unmap(struct seg *seg, caddr_t raddr, size_t ssize);
@@ -317,7 +317,7 @@ static int spt_anon_getpages(struct seg *seg, caddr_t addr, size_t len,
  *
  * The traditional default value of 5% of total memory is used, except on
  * systems where that quickly gets ridiculous: in that case we clamp at a rather
- * arbitrary value of 1Gb.
+ * arbitrary value of 1GB.
  *
  * Note that since this is called lazily on the first sptcreate(), in theory,
  * this could represent a very small value if the system is heavily loaded
@@ -566,6 +566,7 @@ segspt_create(struct seg **segpp, void *argsp)
 	if ((sptd = kmem_zalloc(sizeof (*sptd), KM_NOSLEEP)) == NULL)
 		goto out1;
 
+	ppa = NULL;
 	if ((sptcargs->flags & SHM_PAGEABLE) == 0) {
 		if ((ppa = kmem_zalloc(((sizeof (page_t *)) * npages),
 		    KM_NOSLEEP)) == NULL)
@@ -806,6 +807,9 @@ segspt_free_pages(struct seg *seg, caddr_t addr, size_t len)
 
 	ASSERT(amp != NULL);
 
+	proj = NULL;
+	rootpp = NULL;
+	sp = NULL;
 	if ((sptd->spt_flags & SHM_PAGEABLE) == 0) {
 		sp = amp->a_sp;
 		proj = sp->shm_perm.ipc_proj;
