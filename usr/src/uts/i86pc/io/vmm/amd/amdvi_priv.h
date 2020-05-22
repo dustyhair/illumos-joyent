@@ -33,6 +33,11 @@
 
 #include <contrib/dev/acpica/include/acpi.h>
 
+
+#define	IVHD_IOMMU_MINOR2INST(x)	(x)
+#define	IVHD_IOMMU_INST2MINOR(x)	(x)
+
+
 #define	BIT(n)			(1ULL << (n))
 /* Return value of bits[n:m] where n and (n >= ) m are bit positions. */
 #define REG_BITS(x, n, m)	(((x) >> (m)) & 		\
@@ -260,6 +265,8 @@ CTASSERT(offsetof(struct amdvi_ctrl, pad3)== 0x2040);
 CTASSERT(sizeof(struct amdvi_ctrl) == 0x4000);
 CTASSERT(sizeof(struct amdvi_ctrl) == AMDVI_MMIO_V1_SIZE);
 
+#define	AMD_IOMMU_REG_SIZE	(0x2028) //XXX this might get changed or removed aat some point
+
 /* IVHD flag */
 #define IVHD_FLAG_HTT		BIT(0)	/* Hypertransport Tunnel. */
 #define IVHD_FLAG_PPW		BIT(1)	/* Pass posted write. */
@@ -387,16 +394,34 @@ enum IvrsType
 	IVRS_TYPE_HARDWARE_MIXED  = 0x40, /* Mixed with EFR support. */
 };
 
+typedef enum {
+	AMD_IOMMU_INTR_INVALID = 0,
+	AMD_IOMMU_INTR_TABLE,
+	AMD_IOMMU_INTR_ALLOCED,
+	AMD_IOMMU_INTR_HANDLER,
+	AMD_IOMMU_INTR_ENABLED
+} amd_iommu_intr_state_t;
+
 /*
  * AMD IOMMU softc.
  */
 struct amdvi_softc {
 	struct amdvi_ctrl *ctrl;	/* Control area. */
-	#ifndef __FreeBSD__
-	dev_info_t  dev; 
-	#else
+	uint8_t aiomt_reg_pages;
+	uint32_t aiomt_reg_size;
+	uint64_t aiomt_reg_pa;
+	uint64_t aiomt_va;
+	uint64_t aiomt_reg_va;
+
+	uint32_t aiomt_actual_intrs;
+	uint32_t aiomt_intr_cap;
+	//#ifndef __FreeBSD__
+	//dev_info_t  *dev; 
+	//#else
 	device_t 	dev;		/* IOMMU device. */
-	#endif
+	ddi_acc_handle_t hdl;
+	kmutex_t lock;
+	//#endif
 	enum IvrsType   ivhd_type;	/* IOMMU IVHD type. */
 	bool		iotlb;		/* IOTLB supported by IOMMU */
 	struct amdvi_cmd *cmd;		/* Command descriptor area. */
@@ -408,6 +433,10 @@ struct amdvi_softc {
 	int		event_max;	/* Max number of events. */
 	int		event_irq;
 	int		event_rid;
+	
+	ddi_intr_handle_t *aiomt_intr_htable;
+	uint32_t aiomt_intr_htable_sz;
+	amd_iommu_intr_state_t aiomt_intr_state;
 	/* ACPI various flags. */
 	uint32_t 	ivhd_flag;	/* ACPI IVHD flag. */
 	uint32_t 	ivhd_feature;	/* ACPI v1 Reserved or v2 attribute. */
@@ -430,6 +459,10 @@ struct amdvi_softc {
 	uint64_t 	total_cmd;	/* Total number of commands. */
 };
 
-int	amdvi_setup_hw(struct amdvi_softc *softc);
+int amdvi_setup_hw(dev_info_t *dip,struct amdvi_softc *softc, device_t *ivhddevs, int ivhdcount);
 int	amdvi_teardown_hw(struct amdvi_softc *softc);
+
+
+
+
 #endif /* _AMDVI_PRIV_H_ */

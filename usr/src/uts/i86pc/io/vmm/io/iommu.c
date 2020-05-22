@@ -216,6 +216,7 @@ iommu_init(void)
 	if (vmm_is_intel())
 		ops = &iommu_ops_intel;
 	else if (vmm_is_amd())
+		//ops = &iommu_ops_amd_iommu;
 		ops = &iommu_ops_amd;
 	else
 		ops = NULL;

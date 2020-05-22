@@ -41,6 +41,10 @@ OBJECTS		= $(AMD_IOMMU_OBJS:%=$(OBJS_DIR)/%)
 ROOTMODULE	= $(ROOT_PSM_DRV_DIR)/$(MODULE)
 CONF_SRCDIR     = $(UTSBASE)/i86pc/io/amd_iommu
 
+PRE_INC_PATH	= -I$(COMPAT)/freebsd -I$(COMPAT)/freebsd/amd64 \
+	-I$(CONTRIB)/freebsd -I$(CONTRIB)/freebsd/amd64
+INC_PATH	+= -I$(UTSBASE)/i86pc/io/vmm -I$(UTSBASE)/i86pc/io/vmm/io
+
 #
 #	Include common rules.
 #

@@ -236,10 +236,10 @@ ivhd_dev_parse(ACPI_IVRS_HARDWARE* ivhd, struct amdvi_softc *softc)
 			break;
 
 		default:
-#ifdef XXX
+//#ifdef XXX
 			device_printf(softc->dev, 
 				"unknown type: 0x%x\n", ivhd->Header.Type);
-#endif
+//#endif
 			return (-1);
 	}
 
@@ -721,13 +721,13 @@ ivhd_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	softc->ctrl = (struct amdvi_ctrl *) PHYS_TO_DMAP(ivhd->BaseAddress);
 #endif 
 	status = ivhd_dev_parse(ivhd, softc);
-	#ifdef XXX
+
 	if (status != 0) {
 		device_printf(dev,
 		    "endpoint device parsing error=%d\n", status);
 	
 	}
-#endif
+
 	status = ivhd_print_cap(softc, ivhd);
 	if (status != 0) {
 		return (status);
@@ -736,10 +736,10 @@ ivhd_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 
 	status = amdvi_setup_hw(softc);
 	if (status != 0) {
-		#ifdef XXX
+
 		device_printf(dev, "couldn't be initialised, error=%d\n", 
 		    status);
-		#endif
+		
 		return (status);
 	}
 

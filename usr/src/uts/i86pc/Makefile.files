@@ -243,9 +243,8 @@ ROOTNEX_OBJS += rootnex.o immu.o immu_dmar.o immu_dvma.o \
 TZMON_OBJS	+= tzmon.o
 UPPC_OBJS += uppc.o psm_common.o
 XSVC_OBJS += xsvc.o
-AMD_IVRS_OBJS += amd_ivrs.o
 AMD_IOMMU_OBJS +=	amd_iommu.o amd_iommu_impl.o amd_iommu_acpi.o \
-			amd_iommu_cmd.o amd_iommu_log.o amd_iommu_page_tables.o
+			amd_iommu_cmd.o amd_iommu_log.o amd_iommu_page_tables.o amd_iommu_bhyve.o
 VMM_OBJS += vmm.o \
 	vmm_sol_dev.o \
 	vmm_host.o \
@@ -277,14 +276,15 @@ VMM_OBJS += vmm.o \
 	npt.o \
 	vmcb.o \
 	svm_support.o \
-	amdvi.o \
+	amdvi_hw.o \
+	amdvi_hw_sol.o \
 	gipt.o \
 	vmm_sol_vm.o \
 	vmm_sol_glue.o \
 	vmm_sol_ept.o \
 	vmm_sol_rvi.o \
 	vmm_support.o \
-	vmm_zsd.o
+	vmm_zsd.o \
 
 VIONA_OBJS += viona_main.o \
 	viona_ring.o \
@@ -294,6 +294,7 @@ VIONA_OBJS += viona_main.o \
 
 PPT_OBJS += ppt.o
 
+AMD_IVRS_OBJS += amd_ivrs.o amd_ivrs_sol.o
 #
 #	Build up defines and paths.
 #
