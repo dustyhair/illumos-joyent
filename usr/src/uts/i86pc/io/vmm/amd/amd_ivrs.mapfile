@@ -36,28 +36,6 @@ SYMBOL_VERSION ILLUMOSprivate {
 	_init;
 	_info;
 
-	amdvi_setup_hw;
-	# bhyve driver API
-	vmm_drv_hold;
-	vmm_drv_rele;
-	vmm_drv_release_reqd;
-	vmm_drv_lease_sign;
-	vmm_drv_lease_break;
-	vmm_drv_lease_expired;
-	vmm_drv_gpa2kva;
-	vmm_drv_ioport_hook;
-	vmm_drv_ioport_unhook;
-	vmm_drv_msi;
-
-	# IOMMU API for PCI pass-thru
-	iommu_add_device;
-	iommu_host_domain;
-	iommu_remove_device;
-	lapic_intr_msi;
-	vm_iommu_domain;
-	vm_map_mmio;
-	vm_unmap_mmio;
-
     local:
 	*;
 };

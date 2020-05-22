@@ -1673,6 +1673,7 @@ file path=usr/include/zone.h
 file path=usr/include/zonestat.h
 $(i386_ONLY)file path=usr/platform/i86pc/include/sys/acpidev.h
 $(i386_ONLY)file path=usr/platform/i86pc/include/sys/amd_iommu.h
+$(i386_ONLY)file path=usr/platform/i86pc/include/sys/amd_ivrs.h
 $(i386_ONLY)file path=usr/platform/i86pc/include/sys/asm_misc.h
 $(i386_ONLY)file path=usr/platform/i86pc/include/sys/clock.h
 $(i386_ONLY)file path=usr/platform/i86pc/include/sys/cram.h

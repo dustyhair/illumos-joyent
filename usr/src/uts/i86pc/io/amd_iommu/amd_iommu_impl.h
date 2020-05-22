@@ -436,6 +436,7 @@ typedef enum {
 	AMD_IOMMU_LOG_DISCARD
 } amd_iommu_log_op_t;
 
+
 typedef enum {
 	AMD_IOMMU_DEBUG_NONE = 0,
 	AMD_IOMMU_DEBUG_ALLOCHDL = 0x1,

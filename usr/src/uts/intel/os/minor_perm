@@ -113,6 +113,7 @@ clone:iwk 0666 root sys
 iwh:* 0666 root sys
 clone:iwh 0666 root sys
 amd_iommu:* 0644 root sys
+amd_ivrs:* 0644 root sys
 balloon:* 0444 root sys
 domcaps:* 0444 root sys
 evtchn:* 0666 root sys

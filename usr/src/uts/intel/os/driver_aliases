@@ -67,7 +67,11 @@ amd64_gart "pci1022,1103"
 amd8111s "pci1022,7462"
 amd_iommu "pci1002,5a23"
 amd_iommu "pci1022,11ff"
+<<<<<<< HEAD
 amdf17nbdf "pci1022,1440,p"
+=======
+amd_ivrs "pci1022,15d1"
+>>>>>>> amd_test_dev
 amdf17nbdf "pci1022,1450,p"
 amdf17nbdf "pci1022,1460,p"
 amdf17nbdf "pci1022,1480,p"

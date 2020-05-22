@@ -22,12 +22,12 @@ UTSBASE	= ../..
 #
 #	Define the module and object file sets.
 #
-MODULE		= vmm
-OBJECTS		= $(VMM_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(VMM_OBJS:%.o=$(LINTS_DIR)/%.ln)
+MODULE		= amd_ivrs
+OBJECTS		= $(AMD_IVRS_OBJS:%=$(OBJS_DIR)/%)
+LINTS		= $(AMD_IVRS_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(USR_DRV_DIR)/$(MODULE)
-CONF_SRCDIR	= $(UTSBASE)/i86pc/io/vmm
-MAPFILE		= $(UTSBASE)/i86pc/io/vmm/vmm.mapfile
+CONF_SRCDIR	= $(UTSBASE)/i86pc/io/vmm/amd
+MAPFILE		= $(UTSBASE)/i86pc/io/vmm/amd/amd_ivrs.mapfile
 
 #
 #	Include common rules.
@@ -37,7 +37,7 @@ include $(UTSBASE)/i86pc/Makefile.i86pc
 #
 #	Define targets
 #
-ALL_TARGET	= $(BINARY)
+ALL_TARGET	= $(BINARY) $(SRC_CONFILE)
 LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 
@@ -77,48 +77,37 @@ LINTTAGS	+= -erroff=E_ZERO_OR_NEGATIVE_SUBSCRIPT
 
 CERRWARN	+= -_gcc=-Wno-empty-body
 
-# 3rd party code
-SMOFF += all_func_returns
-
-# needs work
-$(OBJS_DIR)/vmm_sol_dev.o := SMOFF += signed_integer_overflow_check
 
 # a can't happen: vmx_setcap() warn: variable dereferenced before check 'pptr'
-$(OBJS_DIR)/vmx.o := SMOFF += deref_check
-
-# These sources only compile with gcc.  Workaround a confluence of cruft
-# regarding dmake and shadow compilation by neutering the sun compiler.
-#amd64_CC	= $(ONBLD_TOOLS)/bin/$(MACH)/cw -_gcc
-#CFLAGS		+= -_cc=-xdryrun
-
+$(OBJS_DIR)/amd_ivrs_sol.o := SMOFF += deref_check
+# 3rd party code
+#SMOFF += all_func_return
+#
+#	Overrides and additions
+#
 ALL_BUILDS	= $(ALL_BUILDSONLY64)
 DEF_BUILDS	= $(DEF_BUILDSONLY64)
 PRE_INC_PATH	= -I$(COMPAT)/freebsd -I$(COMPAT)/freebsd/amd64 \
 	-I$(CONTRIB)/freebsd -I$(CONTRIB)/freebsd/amd64
-INC_PATH	+= -I$(UTSBASE)/i86pc/io/vmm -I$(UTSBASE)/i86pc/io/vmm/io
+INC_PATH	+= -I$(UTSBASE)/i86pc/io/vmm -I$(UTSBASE)/i86pc/io/vmm/io -I$(UTSBASE)/i86pc/io/vmm/amd
 AS_INC_PATH	+= -I$(UTSBASE)/i86pc/io/vmm -I$(OBJS_DIR)
 
 CFLAGS		+= -_gcc=-Wimplicit-function-declaration
 # The FreeBSD %# notation makes gcc gripe
 CFLAGS		+= -_gcc=-Wno-format
-# enable collection of VMM statistics
-CFLAGS		+= -DVMM_KEEP_STATS
 
-$(OBJS_DIR)/vmm.o := CERRWARN += -_gcc=-Wno-pointer-sign -_gcc=-Wno-type-limits
-$(OBJS_DIR)/svm.o := CERRWARN += -_gcc=-Wno-pointer-sign -_gcc=-Wno-type-limits
-$(OBJS_DIR)/vmx.o := CERRWARN += -_gcc=-Wno-unused-variable
-$(OBJS_DIR)/iommu.o := CERRWARN += -_gcc=-Wno-unused-variable
-$(OBJS_DIR)/amdvi_hw.o := CERRWARN += -_gcc=-Wno-unused-variable -_gcc=-Wno-unused-but-set-variable 
-LDFLAGS         += -N misc/acpica -N misc/pcie -N fs/dev -z type=kmod
+#LDFLAGS         += -dy 
+#LDFLAGS         += -M $(MAPFILE)
+#LDFLAGS         += -dy -Nmisc/acpica
+#LDFLAGS         += -N misc/acpica -N misc/pcie -N fs/dev -N drv/vmm -z type=kmod
+LDFLAGS         += -dy -N misc/acpica -N misc/pcie -N fs/dev -N drv/vmm -N misc/pci
 LDFLAGS         += -M $(MAPFILE)
 
-OFFSETS_VMX	= $(CONF_SRCDIR)/intel/offsets.in
-OFFSETS_SVM	= $(CONF_SRCDIR)/amd/offsets.in
-ASSYM_VMX	= $(OBJS_DIR)/vmx_assym.h
-ASSYM_SVM	= $(OBJS_DIR)/svm_assym.h
-ASSYM_H		= $(ASSYM_VMX) $(ASSYM_SVM)
+$(OBJS_DIR)/amd_ivrs_sol.o := CERRWARN	+= -_gcc=-Wno-unused-function
+$(OBJS_DIR)/amd_ivrs.o := CERRWARN	+= -_gcc=-Wno-pointer-sign -_gcc=-Wno-type-limits -_gcc=-Wno-unused-function -_gcc=-Wno-unused-variable
 
-CLEANFILES	+= $(ASSYM_H)
+# needs work
+SMOFF += all_func_returns
 
 #
 #	Default build targets.
@@ -145,11 +134,3 @@ install:	$(INSTALL_DEPS)
 #	Include common targets.
 #
 include $(UTSBASE)/i86pc/Makefile.targ
-
-$(ASSYM_VMX): $(OFFSETS_VMX) $(GENASSYM)
-	$(OFFSETS_CREATE) -I../../i86pc/io/vmm < $(OFFSETS_VMX) >$@
-$(ASSYM_SVM): $(OFFSETS_SVM) $(GENASSYM)
-	$(OFFSETS_CREATE) -I../../i86pc/io/vmm < $(OFFSETS_SVM) >$@
-
-$(OBJS_DIR)/vmx_support.o:  $(ASSYM_VMX)
-$(OBJS_DIR)/svm_support.o:  $(ASSYM_SVM)

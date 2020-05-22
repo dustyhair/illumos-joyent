@@ -36,7 +36,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/module.h>
 #include <sys/malloc.h>
 #include <sys/pcpu.h>
-#include <sys/rman.h>
+//#include <sys/rman.h>//XXX
 #include <sys/smp.h>
 #include <sys/sysctl.h>
 
@@ -46,17 +46,20 @@ __FBSDID("$FreeBSD$");
 #include <dev/pci/pcivar.h>
 #include <dev/pci/pcireg.h>
 
-#include <machine/resource.h>
+//#include <machine/resource.h>//XXX
 #include <machine/vmm.h>
 #include <machine/pmap.h>
 #include <machine/vmparam.h>
-#include <machine/pci_cfgreg.h>
-
-#include "pcib_if.h"
+//#include <machine/pci_cfgreg.h>//XXX
+#include <sys/pci_cap.h>
+//#include "pcib_if.h"//XXX
 
 #include "io/iommu.h"
 #include "amdvi_priv.h"
 
+
+#define	PML4SHIFT	39		/* LOG2(NBPML4) XXX*/ 
+#define device_printf(device_t ,char, ...)//XXX
 SYSCTL_DECL(_hw_vmm);
 SYSCTL_NODE(_hw_vmm, OID_AUTO, amdvi, CTLFLAG_RW, NULL, NULL);
 
@@ -71,41 +74,41 @@ static void amdvi_print_dev_cap(struct amdvi_softc *softc);
 
 MALLOC_DEFINE(M_AMDVI, "amdvi", "amdvi");
 
-extern device_t *ivhd_devs;
+device_t  *ivhd_devs;
 
-extern int ivhd_count;
+int ivhd_count;
 SYSCTL_INT(_hw_vmm_amdvi, OID_AUTO, count, CTLFLAG_RDTUN, &ivhd_count,
     0, NULL);
 
-static int amdvi_enable_user = 0;
+static int amdvi_enable_user = 1; //XXX this should be an option or something enaables passthrough
 SYSCTL_INT(_hw_vmm_amdvi, OID_AUTO, enable, CTLFLAG_RDTUN,
     &amdvi_enable_user, 0, NULL);
-TUNABLE_INT("hw.vmm.amdvi_enable", &amdvi_enable_user);
+//TUNABLE_INT("hw.vmm.amdvi_enable", &amdvi_enable_user);
 
 #ifdef AMDVI_ATS_ENABLE
 /* XXX: ATS is not tested. */
 static int amdvi_enable_iotlb = 1;
 SYSCTL_INT(_hw_vmm_amdvi, OID_AUTO, iotlb_enabled, CTLFLAG_RDTUN,
     &amdvi_enable_iotlb, 0, NULL);
-TUNABLE_INT("hw.vmm.enable_iotlb", &amdvi_enable_iotlb);
+//TUNABLE_INT("hw.vmm.enable_iotlb", &amdvi_enable_iotlb);
 #endif
 
 static int amdvi_host_ptp = 1;	/* Use page tables for host. */
 SYSCTL_INT(_hw_vmm_amdvi, OID_AUTO, host_ptp, CTLFLAG_RDTUN,
     &amdvi_host_ptp, 0, NULL);
-TUNABLE_INT("hw.vmm.amdvi.host_ptp", &amdvi_host_ptp);
+//TUNABLE_INT("hw.vmm.amdvi.host_ptp", &amdvi_host_ptp);
 
 /* Page table level used <= supported by h/w[v1=7]. */
-static int amdvi_ptp_level = 4;
+ int amdvi_ptp_level = 4;
 SYSCTL_INT(_hw_vmm_amdvi, OID_AUTO, ptp_level, CTLFLAG_RDTUN,
     &amdvi_ptp_level, 0, NULL);
-TUNABLE_INT("hw.vmm.amdvi.ptp_level", &amdvi_ptp_level);
+//TUNABLE_INT("hw.vmm.amdvi.ptp_level", &amdvi_ptp_level);
 
 /* Disable fault event reporting. */
 static int amdvi_disable_io_fault = 0;
 SYSCTL_INT(_hw_vmm_amdvi, OID_AUTO, disable_io_fault, CTLFLAG_RDTUN,
     &amdvi_disable_io_fault, 0, NULL);
-TUNABLE_INT("hw.vmm.amdvi.disable_io_fault", &amdvi_disable_io_fault);
+//TUNABLE_INT("hw.vmm.amdvi.disable_io_fault", &amdvi_disable_io_fault);
 
 static uint32_t amdvi_dom_id = 0;	/* 0 is reserved for host. */
 SYSCTL_UINT(_hw_vmm_amdvi, OID_AUTO, domain_id, CTLFLAG_RD,
@@ -121,13 +124,49 @@ CTASSERT(sizeof(amdvi_dte) == 0x200000);
 
 static SLIST_HEAD (, amdvi_domain) dom_head;
 
+extern uint32_t amdvi_pci_read_sol(dev_info_t *, int,uint16_t);
+/*
+static void *
+ivhd_map(dev_info_t *dip )
+{
+	caddr_t regs;
+	struct amdvi_softc *softc;
+
+	softc = device_get_softc(dip);
+	int error;
+	//ddi_acc_handle_t hdl;
+	static ddi_device_acc_attr_t regs_attr = {
+		DDI_DEVICE_ATTR_V0,
+		DDI_NEVERSWAP_ACC,
+		DDI_STRICTORDER_ACC,
+	};
+
+	error = ddi_regs_map_setup(dip, 0, &regs, 0, 0, &regs_attr,
+	    &softc->hdl);
+
+	if (error != DDI_SUCCESS)
+		return (NULL);
+	
+	//ddi_set_driver_private(dip, hdl);
+	printf("IVRS ivhd base address %x",regs);
+	return (regs);
+}
+*/
+
 static inline uint32_t
 amdvi_pci_read(struct amdvi_softc *softc, int off)
 {
 
+//softc->ctrl = (struct amdvi_ctrl *)ivhd_map(softc->dev);
+
+return amdvi_pci_read_sol(softc->dev, off,softc->cap_off);
+
+#ifdef XXX 
 	return (pci_cfgregread(PCI_RID2BUS(softc->pci_rid),
 	    PCI_RID2SLOT(softc->pci_rid), PCI_RID2FUNC(softc->pci_rid),
 	    off, 4));
+#endif 
+
 }
 
 #ifdef AMDVI_ATS_ENABLE
@@ -140,7 +179,7 @@ amdvi_pci_read(struct amdvi_softc *softc, int off)
 static int
 amdvi_find_ats_qlen(uint16_t devid)
 {
-	device_t dev;
+	device_t  dev;
 	uint32_t off, cap;
 	int qlen = -1;
 
@@ -233,25 +272,45 @@ amdvi_hw_enable_iotlb(struct amdvi_softc *softc)
 static int
 amdvi_init_cmd(struct amdvi_softc *softc)
 {
+	static ddi_umem_cookie_t	cmd_cookie;
+	printf("OK\n");
 	struct amdvi_ctrl *ctrl = softc->ctrl;
-
+	printf("Still OK\n");
+	
+	//mutex_init(&softc->lock, NULL, MUTEX_DRIVER, NULL);
+	//mutex_enter(&softc->lock);
+	
 	ctrl->cmd.len = 8;	/* Use 256 command buffer entries. */
+	printf("Still ok 1\n");
 	softc->cmd_max = 1 << ctrl->cmd.len;
+	printf("Still ok 2\n");
+	softc->cmd = (struct amdvi_cmd *)ddi_umem_alloc(sizeof(struct amdvi_cmd) * softc->cmd_max,
+	    DDI_UMEM_SLEEP, &cmd_cookie);
+	ddi_set_parent_data(softc->dev, softc->cmd);
+	//softc->cmd = kmem_zalloc(sizeof(struct amdvi_cmd) * softc->cmd_max, KM_SLEEP);
+	//softc->cmd = malloc(sizeof(struct amdvi_cmd) *
+	//    softc->cmd_max, M_AMDVI, M_WAITOK | M_ZERO);
+	printf("Still ok 3  %x", (uintptr_t)softc->cmd);
 
-	softc->cmd = malloc(sizeof(struct amdvi_cmd) *
-	    softc->cmd_max, M_AMDVI, M_WAITOK | M_ZERO);
-
+	printf("Still ok 3  %x", PAGE_MASK);
+	
 	if ((uintptr_t)softc->cmd & PAGE_MASK)
 		panic("AMDVi: Command buffer not aligned on page boundary.");
 
+	printf("Still .... %x", softc->ctrl);
+	printf("Still .... %x", softc->cmd);
+	printf("Still ... %x", vtophys(softc->cmd));
 	ctrl->cmd.base = vtophys(softc->cmd) / PAGE_SIZE;
+	printf("Still ok 4\n");
+	
 	/*
 	 * XXX: Reset the h/w pointers in case IOMMU is restarting,
 	 * h/w doesn't clear these pointers based on empirical data.
 	 */
 	ctrl->cmd_tail = 0;
 	ctrl->cmd_head = 0;
-
+	printf("Still ok 5\n");
+	//mutex_exit(&softc->lock);
 	return (0);
 }
 
@@ -272,10 +331,10 @@ amdvi_get_cmd_tail(struct amdvi_softc *softc)
 
 	ctrl = softc->ctrl;
 	KASSERT(ctrl != NULL, ("ctrl is NULL"));
-
+	printf("vmm amdvi_get_cmd_tail chec before assignment"); //XXX
 	tail = (struct amdvi_cmd *)((uint8_t *)softc->cmd +
 	    ctrl->cmd_tail);
-
+	printf("vmm amdvi_get_cmd_tail chec before after assignment"); //XXX
 	return (tail);
 }
 
@@ -297,11 +356,11 @@ amdvi_update_cmd_tail(struct amdvi_softc *softc)
 	ctrl->cmd_tail = MOD_INC(ctrl->cmd_tail, size, softc->cmd_max);
 	softc->total_cmd++;
 
-#ifdef AMDVI_DEBUG_CMD
-	device_printf(softc->dev, "cmd_tail: %s Tail:0x%x, Head:0x%x.\n",
+//#ifdef AMDVI_DEBUG_CMD
+	device_printf(softc->dev, "vmm cmd_tail: %s Tail:0x%x, Head:0x%x.\n",
 	    ctrl->cmd_tail,
 	    ctrl->cmd_head);
-#endif
+//#endif
 
 }
 
@@ -347,6 +406,7 @@ amdvi_cmd_inv_dte(struct amdvi_softc *softc, uint16_t devid)
 }
 
 /* Invalidate IOMMU page, use for invalidation of domain. */
+
 static void
 amdvi_cmd_inv_iommu_pages(struct amdvi_softc *softc, uint16_t domain_id,
 			  uint64_t addr, bool guest_nested,
@@ -368,7 +428,10 @@ amdvi_cmd_inv_iommu_pages(struct amdvi_softc *softc, uint16_t domain_id,
 	cmd->addr |= page ? AMDVI_INVD_PAGE_S : 0;
 
 	amdvi_update_cmd_tail(softc);
+
+
 }
+ 
 
 #ifdef AMDVI_ATS_ENABLE
 /* Invalidate device IOTLB. */
@@ -421,6 +484,7 @@ amdvi_cmd_inv_intr_map(struct amdvi_softc *softc,
 #endif
 
 /* Invalidate domain using INVALIDATE_IOMMU_PAGES command. */
+
 static void
 amdvi_inv_domain(struct amdvi_softc *softc, uint16_t domain_id)
 {
@@ -440,19 +504,27 @@ amdvi_inv_domain(struct amdvi_softc *softc, uint16_t domain_id)
 	device_printf(softc->dev, "Invalidate domain:0x%x\n", domain_id);
 
 #endif
+
+
 }
+ 
 
 static	bool
 amdvi_cmp_wait(struct amdvi_softc *softc)
 {
-	struct amdvi_ctrl *ctrl;
+
 	const uint64_t VERIFY = 0xA5A5;
 	volatile uint64_t *read;
 	int i;
 	bool status;
+//#ifdef AMDVI_DEBUG_CMD
 
-	ctrl = softc->ctrl;
+
+    //struct amdvi_ctrl *ctrl;	
+	//ctrl = softc->ctrl;
+//#endif
 	read = &softc->cmp_data;
+
 	*read = 0;
 	amdvi_cmd_cmp(softc, VERIFY);
 	/* Wait for h/w to update completion data. */
@@ -461,12 +533,15 @@ amdvi_cmp_wait(struct amdvi_softc *softc)
 	}
 	status = (VERIFY == softc->cmp_data) ? true : false;
 
-#ifdef AMDVI_DEBUG_CMD
+//#ifdef AMDVI_DEBUG_CMD
 	if (status)
+		
+		
 		device_printf(softc->dev, "CMD completion DONE Tail:0x%x, "
 			      "Head:0x%x, loop:%d.\n", ctrl->cmd_tail,
 			      ctrl->cmd_head, loop);
-#endif
+		
+//#endif
 	return (status);
 }
 
@@ -492,6 +567,7 @@ amdvi_wait(struct amdvi_softc *softc)
 	device_printf(softc->dev, "Error: completion failed"
 		      " tail:0x%x, head:0x%x.\n",
 		      ctrl->cmd_tail, ctrl->cmd_head);
+	
 	amdvi_dump_cmds(softc);
 }
 
@@ -525,12 +601,20 @@ static int
 amdvi_init_event(struct amdvi_softc *softc)
 {
 	struct amdvi_ctrl *ctrl;
-
+	static ddi_umem_cookie_t	cmd_cookie;
+	
 	ctrl = softc->ctrl;
 	ctrl->event.len = 8;
 	softc->event_max = 1 << ctrl->event.len;
-	softc->event = malloc(sizeof(struct amdvi_event) *
-	    softc->event_max, M_AMDVI, M_WAITOK | M_ZERO);
+
+	softc->event = (struct amdvi_event *)ddi_umem_alloc(sizeof(struct amdvi_event) * softc->event_max,
+	    DDI_UMEM_SLEEP, &cmd_cookie);
+	ddi_set_parent_data(softc->dev, softc->event);
+	
+
+
+	//softc->event = malloc(sizeof(struct amdvi_event) *
+	//    softc->event_max, M_AMDVI, M_WAITOK | M_ZERO);
 	if ((uintptr_t)softc->event & PAGE_MASK) {
 		device_printf(softc->dev, "Event buffer not aligned on page.");
 		return (false);
@@ -561,13 +645,15 @@ amdvi_decode_evt_flag(uint16_t flag)
 		"\010RZ"
 		"\011TR"
 		);
+
+
 }
 
 /* See section 2.5.4 of AMD IOMMU spec ver 2.62.*/
 static inline void
-amdvi_decode_evt_flag_type(uint8_t type)
+amdvi_decode_evt_flag_type(uint16_t type)
 {
-
+	
 	switch (AMDVI_EVENT_FLAG_TYPE(type)) {
 	case 0:
 		printf("RSVD\n");
@@ -584,7 +670,9 @@ amdvi_decode_evt_flag_type(uint8_t type)
 	default:
 		break;
 	}
+	//#endif 
 }
+
 
 static void
 amdvi_decode_inv_dte_evt(uint16_t devid, uint16_t domid, uint64_t addr,
@@ -596,6 +684,7 @@ amdvi_decode_inv_dte_evt(uint16_t devid, uint16_t domid, uint64_t addr,
 	    devid, domid, addr);
 	amdvi_decode_evt_flag(flag);
 }
+ 
 
 static void
 amdvi_decode_pf_evt(uint16_t devid, uint16_t domid, uint64_t addr,
@@ -607,6 +696,8 @@ amdvi_decode_pf_evt(uint16_t devid, uint16_t domid, uint64_t addr,
 	    devid, domid, addr);
 	amdvi_decode_evt_flag(flag);
 }
+ 
+
 
 static void
 amdvi_decode_dte_hwerr_evt(uint16_t devid, uint16_t domid,
@@ -618,6 +709,8 @@ amdvi_decode_dte_hwerr_evt(uint16_t devid, uint16_t domid,
 	amdvi_decode_evt_flag(flag);
 	amdvi_decode_evt_flag_type(flag);
 }
+ 
+
 
 static void
 amdvi_decode_page_hwerr_evt(uint16_t devid, uint16_t domid, uint64_t addr,
@@ -629,6 +722,8 @@ amdvi_decode_page_hwerr_evt(uint16_t devid, uint16_t domid, uint64_t addr,
 	amdvi_decode_evt_flag(flag);
 	amdvi_decode_evt_flag_type(AMDVI_EVENT_FLAG_TYPE(flag));
 }
+ 
+
 
 static void
 amdvi_decode_evt(struct amdvi_event *evt)
@@ -686,6 +781,8 @@ amdvi_decode_evt(struct amdvi_event *evt)
 		printf("Unsupported AMD-Vi event:%d\n", evt->opcode);
 	}
 }
+ 
+
 
 static void
 amdvi_print_events(struct amdvi_softc *softc)
@@ -707,7 +804,7 @@ amdvi_print_events(struct amdvi_softc *softc)
 		    softc->event_max);
 	}
 }
-
+ 
 static int
 amdvi_init_dte(struct amdvi_softc *softc)
 {
@@ -725,15 +822,24 @@ amdvi_init_dte(struct amdvi_softc *softc)
  * or EFR entry, read directly from device.
  */
 static int
-amdvi_print_pci_cap(device_t dev)
+amdvi_print_pci_cap(device_t  dev)
 {
 	struct amdvi_softc *softc;
 	uint32_t off, cap;
 
-
 	softc = device_get_softc(dev);
 	off = softc->cap_off;
 
+/*
+	ddi_acc_handle_t handle;
+
+//printf("  [cap_base 0x%lx]", cap_base);
+
+	if (pci_config_setup(softc->dev, &handle) != DDI_SUCCESS) {
+		cmn_err(CE_WARN, "PCI config setup failed 1");
+		return (DDI_FAILURE);
+	}
+*/
 	/*
 	 * Section 3.7.1 of IOMMU sepc rev 2.0.
 	 * Read capability from device.
@@ -752,8 +858,9 @@ amdvi_print_pci_cap(device_t dev)
 	return (0);
 }
 
-static void
-amdvi_event_intr(void *arg)
+
+static uint_t
+amdvi_event_intr(caddr_t arg, caddr_t arg2  )
 {
 	struct amdvi_softc *softc;
 	struct amdvi_ctrl *ctrl;
@@ -768,47 +875,246 @@ amdvi_event_intr(void *arg)
 
 	amdvi_print_events(softc);
 	ctrl->status &= AMDVI_STATUS_EV_OF | AMDVI_STATUS_EV_INTR;
+
+	return (DDI_INTR_CLAIMED);
 }
 
 static void
-amdvi_free_evt_intr_res(device_t dev)
+amdvi_free_evt_intr_res(device_t  dev)
 {
 
 	struct amdvi_softc *softc;
 
 	softc = device_get_softc(dev);
+
 	if (softc->event_tag != NULL) {
+		#ifdef XXX
 		bus_teardown_intr(dev, softc->event_res, softc->event_tag);
+		#endif
 	}
 	if (softc->event_res != NULL) {
+		#ifdef XXX
 		bus_release_resource(dev, SYS_RES_IRQ, softc->event_rid,
 		    softc->event_res);
+		#endif
 	}
+	#ifdef XXX
 	bus_delete_resource(dev, SYS_RES_IRQ, softc->event_rid);
+	
 	PCIB_RELEASE_MSI(device_get_parent(device_get_parent(dev)),
 	    dev, 1, &softc->event_irq);
+	#endif
 }
+
+device_t device_get_parent(device_t dev){
+    return ddi_get_parent(dev);//XXX who knows if this translates directly. 
+}
+
+#define RID2IDX(rid)	(((rid) & 0xff) * 2)
 
 static bool
 amdvi_alloc_intr_resources(struct amdvi_softc *softc)
 {
 	struct amdvi_ctrl *ctrl;
-	device_t dev, pcib;
-	device_t mmio_dev;
-	uint64_t msi_addr;
-	uint32_t msi_data;
+	device_t dev; 
+	dev = softc->dev;
+	int instance = ddi_get_instance(dev);
+	const char *driver = ddi_driver_name(dev);
+	dev = softc->dev;
+	int idx = RID2IDX(softc->pci_rid);
+	int type;
+	int req;
+	int err;
+	int avail;
+	int actual;
+	int p2req;
+	int intrcap0;
+	const char *f = "amd_iommu_setup_interrupts";
+
+	if (i_ddi_node_state(dev) < DS_ATTACHED){
+		device_printf(dev,
+		    "IOMMU device is not attached by another driver");
+	}
+	
+	if (ddi_intr_get_supported_types(dev, &type) != DDI_SUCCESS) {
+		cmn_err(CE_WARN, "%s: %s%d: ddi_intr_get_supported_types "
+		    "failed: idx=%d", f, driver, instance, idx);
+		return (DDI_FAILURE);
+	}
+
+	if (type & DDI_INTR_TYPE_MSI){
+		cmn_err(CE_WARN, "AMDVI -- MSI supported");
+	}
+	if (type & DDI_INTR_TYPE_MSIX){
+		cmn_err(CE_WARN, "AMDVI -- MSIX supported");
+	}
+	if (type & DDI_INTR_TYPE_FIXED){
+		cmn_err(CE_WARN, "AMDVI -- FIXED interrupts supported");
+	}
+
+	
+	
+	err = ddi_intr_get_nintrs(dev, DDI_INTR_TYPE_MSI, &req);
+	if (err != DDI_SUCCESS) {
+		cmn_err(CE_WARN, "%s: %s%d: AMD IOMMU idx=%d. "
+		    "ddi_intr_get_nintrs failed err = %d",
+		    f, driver, instance, idx, err);
+		return (DDI_FAILURE);
+	}
+
+	if (req == 0) {
+		cmn_err(CE_WARN, "%s: %s%d: AMD IOMMU idx=%d: 0 MSI "
+		    "interrupts requested. Failing init", f,
+		    driver, instance, idx);
+		return (DDI_FAILURE);
+	}
+
+	/*
+	 * Section 3.7.1 of IOMMU rev 2.0. With MSI, there is only one
+	 * interrupt. XXX: Enable MSI/X support.
+	 */
+	req = 1; 
+	err = ddi_intr_get_navail(dev, DDI_INTR_TYPE_MSI, &avail);
+	if (err != DDI_SUCCESS) {
+		cmn_err(CE_WARN, "%s: %s%d: AMD IOMMU idx=%d "
+		    "ddi_intr_get_navail failed err = %d", f,
+		    driver, instance, idx, err);
+		return (DDI_FAILURE);
+	}
+
+	if (avail == 0) {
+		cmn_err(CE_WARN, "%s: %s%d: AMD IOMMU idx=%d: 0 MSI "
+		    "interrupts available. Failing init", f,
+		    driver, instance, idx);
+		return (DDI_FAILURE);
+	}
+
+	//XXX there might be a better place for this
+	softc->event_irq = -1;
+	softc->event_rid = 0;
+
+	/* Allocate memory for DDI interrupt handles */
+	softc->aiomt_intr_htable_sz = req * sizeof (ddi_intr_handle_t);
+	softc->aiomt_intr_htable = kmem_zalloc(softc->aiomt_intr_htable_sz,
+	    KM_SLEEP);
+
+	softc->aiomt_intr_state = AMD_IOMMU_INTR_TABLE;
+
+	/* Convert req to a power of two as required by ddi_intr_alloc */
+	p2req = 0;
+	while (1<<p2req <= req)
+		p2req++;
+	p2req--;
+	req = 1<<p2req;
+
+	err = ddi_intr_alloc(dev, softc->aiomt_intr_htable,
+	    DDI_INTR_TYPE_MSI, 0, req, &actual, DDI_INTR_ALLOC_NORMAL);
+	if (err != DDI_SUCCESS) {
+		cmn_err(CE_WARN, "%s: %s%d: AMD IOMMU idx=%d: "
+		    "ddi_intr_alloc failed: err = %d",
+		    f, driver, instance, idx, err);
+		//amd_iommu_teardown_interrupts(iommu);
+		return (DDI_FAILURE);
+	}
+
+	softc->aiomt_actual_intrs = actual;
+	softc->aiomt_intr_state = AMD_IOMMU_INTR_ALLOCED;
+
+	if (ddi_intr_add_handler(softc->aiomt_intr_htable[0],
+		amdvi_event_intr, (void *)softc, NULL)
+		!= DDI_SUCCESS) {
+		cmn_err(CE_WARN, "%s: %s%d: AMD IOMMU idx=%d: "
+			"ddi_intr_add_handler failed: err = %d",
+			f, driver, instance, idx, err);
+			//(void) ddi_intr_remove_handler(
+			//	softc->aiomt_intr_htable[0]);
+		}
+
+	softc->aiomt_intr_state = AMD_IOMMU_INTR_HANDLER;
+	
+	intrcap0 = -1;
+	if (ddi_intr_get_cap(softc->aiomt_intr_htable[0], &intrcap0)
+	    != DDI_SUCCESS) {
+		cmn_err(CE_WARN, "%s: %s%d: AMD IOMMU idx=%d: "
+		    "ddi_intr_get_cap failed ",
+		    f, driver, instance, idx, intrcap0);
+		//amd_iommu_teardown_interrupts(iommu);
+		return (DDI_FAILURE);
+	}
+
+	softc->aiomt_intr_cap = intrcap0;
+
+	if (intrcap0 & DDI_INTR_FLAG_BLOCK) {
+		/* Need to call block enable */
+		//if (amd_iommu_debug & AMD_IOMMU_DEBUG_INTR) {
+		cmn_err(CE_NOTE, "%s: %s%d: AMD IOMMU idx=%d: "
+		    "Need to call block enable",
+		    f, driver, instance, idx);
+		//}
+		if (ddi_intr_block_enable(softc->aiomt_intr_htable,
+		    softc->aiomt_actual_intrs) != DDI_SUCCESS) {
+			cmn_err(CE_WARN, "%s: %s%d: AMD IOMMU idx=%d: "
+			    "ddi_intr_block enable failed ", f, driver,
+			    instance, idx);
+			(void) ddi_intr_block_disable(softc->aiomt_intr_htable,
+			    softc->aiomt_actual_intrs);
+			//amd_iommu_teardown_interrupts(iommu);
+			return (DDI_FAILURE);
+		}
+	} else {
+		//if (amd_iommu_debug & AMD_IOMMU_DEBUG_INTR) {
+		cmn_err(CE_NOTE, "%s: %s%d: AMD IOMMU idx=%d: "
+		    "Need to call individual enable",
+		    f, driver, instance, idx);
+		//}
+		if (ddi_intr_enable(softc->aiomt_intr_htable[0])
+		    != DDI_SUCCESS) {
+			cmn_err(CE_WARN, "%s: %s%d: AMD IOMMU idx=%d: "
+			    "ddi_intr_enable failed:", f, driver, instance, idx);
+			
+			(void) ddi_intr_disable(
+			    softc->aiomt_intr_htable[0]);
+				
+				//amd_iommu_teardown_interrupts(iommu);
+			return (DDI_FAILURE);
+		}
+		
+	}
+	softc->aiomt_intr_state = AMD_IOMMU_INTR_ENABLED;
+	/* Clear interrupt status bits. */
+	ctrl = softc->ctrl;
+	ctrl->status &= AMDVI_STATUS_EV_OF | AMDVI_STATUS_EV_INTR;
+
+
+	return 0;
+}
+
+#ifdef XXX
+static bool
+amdvi_alloc_intr_resources(struct amdvi_softc *softc)
+{
+	//#ifdef XXX
+	struct amdvi_ctrl *ctrl;
+	device_t  dev, pcib;
+	//device_t  mmio_dev;
+	//uint64_t msi_addr;
+	//uint32_t msi_data;
 	int err;
 
 	dev = softc->dev;
+	
+	#ifdef XXX
 	pcib = device_get_parent(device_get_parent(dev));
+	 
 	mmio_dev = pci_find_bsf(PCI_RID2BUS(softc->pci_rid),
             PCI_RID2SLOT(softc->pci_rid), PCI_RID2FUNC(softc->pci_rid));
+	
 	if (device_is_attached(mmio_dev)) {
 		device_printf(dev,
 		    "warning: IOMMU device is claimed by another driver %s\n",
 		    device_get_driver(mmio_dev)->name);
 	}
-
+	#endif
 	softc->event_irq = -1;
 	softc->event_rid = 0;
 
@@ -816,28 +1122,33 @@ amdvi_alloc_intr_resources(struct amdvi_softc *softc)
 	 * Section 3.7.1 of IOMMU rev 2.0. With MSI, there is only one
 	 * interrupt. XXX: Enable MSI/X support.
 	 */
+	#ifdef XXX
 	err = PCIB_ALLOC_MSI(pcib, dev, 1, 1, &softc->event_irq);
+	#endif
 	if (err) {
 		device_printf(dev,
 		    "Couldn't find event MSI IRQ resource.\n");
 		return (ENOENT);
 	}
-
+	#ifdef XXX
 	err = bus_set_resource(dev, SYS_RES_IRQ, softc->event_rid,
 	    softc->event_irq, 1);
+	#endif
 	if (err) {
 		device_printf(dev, "Couldn't set event MSI resource.\n");
 		return (ENXIO);
 	}
 
+	#ifdef XXX
 	softc->event_res = bus_alloc_resource_any(dev, SYS_RES_IRQ,
 	    &softc->event_rid, RF_ACTIVE);
+	#endif 
 	if (!softc->event_res) {
 		device_printf(dev,
 		    "Unable to allocate event INTR resource.\n");
 		return (ENOMEM);
 	}
-
+	#ifdef XXX
 	if (bus_setup_intr(dev, softc->event_res,
 	    INTR_TYPE_MISC | INTR_MPSAFE, NULL, amdvi_event_intr,
 	    softc, &softc->event_tag)) {
@@ -847,17 +1158,22 @@ amdvi_alloc_intr_resources(struct amdvi_softc *softc)
 		softc->event_res = NULL;
 		return (ENXIO);
 	}
+	
 
 	bus_describe_intr(dev, softc->event_res, softc->event_tag,
 	    "fault");
-
+	
+	
 	err = PCIB_MAP_MSI(pcib, dev, softc->event_irq, &msi_addr,
 	    &msi_data);
+	#endif 
 	if (err) {
 		device_printf(dev,
 		    "Event interrupt config failed, err=%d.\n",
 		    err);
+		#ifdef XXX
 		amdvi_free_evt_intr_res(softc->dev);
+		#endif
 		return (err);
 	}
 
@@ -866,10 +1182,14 @@ amdvi_alloc_intr_resources(struct amdvi_softc *softc)
 	ctrl->status &= AMDVI_STATUS_EV_OF | AMDVI_STATUS_EV_INTR;
 
 	/* Now enable MSI interrupt. */
+	#ifdef XXX
 	pci_enable_msi(mmio_dev, msi_addr, msi_data);
+	#endif
+
+	//#endif
 	return (0);
 }
-
+#endif
 
 static void
 amdvi_print_dev_cap(struct amdvi_softc *softc)
@@ -889,6 +1209,7 @@ amdvi_print_dev_cap(struct amdvi_softc *softc)
 	}
 }
 
+#ifdef XXX
 static int
 amdvi_handle_sysctl(SYSCTL_HANDLER_ARGS)
 {
@@ -926,13 +1247,15 @@ amdvi_handle_sysctl(SYSCTL_HANDLER_ARGS)
 
 	return (error);
 }
+#endif 
 
+#ifdef XXX
 static void
 amdvi_add_sysctl(struct amdvi_softc *softc)
 {
 	struct sysctl_oid_list *child;
 	struct sysctl_ctx_list *ctx;
-	device_t dev;
+	device_t  dev;
 
 	dev = softc->dev;
 	ctx = device_get_sysctl_ctx(dev);
@@ -961,14 +1284,18 @@ amdvi_add_sysctl(struct amdvi_softc *softc)
 	    CTLTYPE_UINT | CTLFLAG_RD, softc, 3,
 	    amdvi_handle_sysctl, "IU", "Command tail");
 }
+#endif
 
 int
-amdvi_setup_hw(struct amdvi_softc *softc)
+amdvi_setup_hw(dev_info_t *dip, struct amdvi_softc *softc, device_t *ivhddevs, int ivhdcount)
 {
+	ivhd_devs = ivhddevs; 
+	ivhd_count = ivhdcount;
 	device_t dev;
 	int status;
 
 	dev = softc->dev;
+
 
 	amdvi_hw_enable_iotlb(softc);
 
@@ -993,14 +1320,16 @@ amdvi_setup_hw(struct amdvi_softc *softc)
 	if ((status = amdvi_alloc_intr_resources(softc)) != 0) {
 		return (status);
 	}
-	amdvi_add_sysctl(softc);
+	//amdvi_add_sysctl(softc);
+
+	device_printf(dev, "vmm: amdvi_setup complete\n"); //XXXX
 	return (0);
 }
 
 int
 amdvi_teardown_hw(struct amdvi_softc *softc)
 {
-	device_t dev;
+	device_t  dev;
 
 	dev = softc->dev;
 
@@ -1064,6 +1393,7 @@ amdvi_do_inv_domain(uint16_t domain_id, bool create)
 	for (i = 0; i < ivhd_count; i++) {
 		softc = device_get_softc(ivhd_devs[i]);
 		KASSERT(softc, ("softc is NULL"));
+		
 		/*
 		 * If not present pages are cached, invalidate page after
 		 * creating domain.
@@ -1072,8 +1402,10 @@ amdvi_do_inv_domain(uint16_t domain_id, bool create)
 		if (create && ((softc->pci_cap & AMDVI_PCI_CAP_NPCACHE) == 0))
 			continue;
 #endif
+
 		amdvi_inv_domain(softc, domain_id);
 		amdvi_wait(softc);
+ 
 	}
 }
 
@@ -1085,9 +1417,9 @@ amdvi_create_domain(vm_paddr_t maxaddr)
 	dom = malloc(sizeof(struct amdvi_domain), M_AMDVI, M_ZERO | M_WAITOK);
 	dom->id = amdvi_domainId();
 	//dom->maxaddr = maxaddr;
-#ifdef AMDVI_DEBUG_CMD
-	printf("Created domain #%d\n", dom->id);
-#endif
+//#ifdef AMDVI_DEBUG_CMD
+	printf("vmm Created domain #%d\n", dom->id);
+//#endif
 	/*
 	 * Host domain(#0) don't create translation table.
 	 */
@@ -1099,6 +1431,7 @@ amdvi_create_domain(vm_paddr_t maxaddr)
 	amdvi_do_inv_domain(dom->id, true);
 	SLIST_INSERT_HEAD(&dom_head, dom, next);
 
+	printf("vmm End of Created domain #%d\n", dom->id);
 	return (dom);
 }
 
@@ -1135,9 +1468,9 @@ amdvi_destroy_domain(void *arg)
 
 	domain = (struct amdvi_domain *)arg;
 	KASSERT(domain, ("domain is NULL"));
-#ifdef AMDVI_DEBUG_CMD
-	printf("Destroying domain %d\n", domain->id);
-#endif
+//#ifdef AMDVI_DEBUG_CMD
+	printf("vmm Destroying domain %d\n", domain->id);
+//#endif
 	if (domain->ptp)
 		amdvi_free_ptp(domain->ptp, domain->ptp_level);
 
@@ -1278,10 +1611,13 @@ amdvi_find_iommu(uint16_t devid)
 	int i;
 
 	for (i = 0; i < ivhd_count; i++) {
+		
 		softc = device_get_softc(ivhd_devs[i]);
+		
 		if ((devid >= softc->start_dev_rid) &&
 		    (devid <= softc->end_dev_rid))
 			return (softc);
+		
 	}
 
 	/*
@@ -1289,8 +1625,9 @@ amdvi_find_iommu(uint16_t devid)
 	 */
 	printf("BIOS bug device(%d.%d.%d) doesn't have IVHD entry.\n",
 	    RID2PCI_STR(devid));
-
+	
 	return (device_get_softc(ivhd_devs[0]));
+	
 }
 
 /*
@@ -1362,10 +1699,10 @@ amdvi_add_device(void *arg, uint16_t devid)
 
 	domain = (struct amdvi_domain *)arg;
 	KASSERT(domain != NULL, ("domain is NULL"));
-#ifdef AMDVI_DEBUG_CMD
+//#ifdef AMDVI_DEBUG_CMD
 	printf("Assigning device(%d.%d.%d) to domain:%d\n",
 	    RID2PCI_STR(devid), domain->id);
-#endif
+//#endif
 	amdvi_set_dte(domain, devid, true);
 	amdvi_inv_device(devid);
 }
@@ -1376,10 +1713,10 @@ amdvi_remove_device(void *arg, uint16_t devid)
 	struct amdvi_domain *domain;
 
 	domain = (struct amdvi_domain *)arg;
-#ifdef AMDVI_DEBUG_CMD
+//#ifdef AMDVI_DEBUG_CMD
 	printf("Remove device(0x%x) from domain:%d\n",
 	       devid, domain->id);
-#endif
+//#endif
 	amdvi_set_dte(domain, devid, false);
 	amdvi_inv_device(devid);
 }
@@ -1393,11 +1730,14 @@ amdvi_enable(void)
 	int i;
 
 	for (i = 0; i < ivhd_count; i++) {
+		
 		softc = device_get_softc(ivhd_devs[i]);
 		KASSERT(softc, ("softc is NULL\n"));
 		ctrl = softc->ctrl;
+		
 		KASSERT(ctrl, ("ctrl is NULL\n"));
-
+		 
+		
 		val = (	AMDVI_CTRL_EN 		|
 			AMDVI_CTRL_CMD 		|
 		    	AMDVI_CTRL_ELOG 	|
@@ -1422,6 +1762,9 @@ amdvi_enable(void)
 static void
 amdvi_disable(void)
 {
+	
+	
+	
 	struct amdvi_ctrl *ctrl;
 	struct amdvi_softc *softc;
 	int i;
@@ -1433,7 +1776,10 @@ amdvi_disable(void)
 		KASSERT(ctrl, ("ctrl is NULL\n"));
 
 		ctrl->control = 0;
+		
 	}
+	 
+
 }
 
 static void

@@ -4971,6 +4971,8 @@ f usr/kernel/drv/amd64/pool 0755 root sys
 f usr/kernel/drv/amd64/ppt 0755 root sys
 f usr/kernel/drv/amd64/ptm 0755 root sys
 f usr/kernel/drv/amd64/pts 0755 root sys
+f usr/kernel/drv/amd64/amd_ivrs 0755 root sys
+f usr/kernel/drv/amd_ivrs.conf 0644 root sys
 f usr/kernel/drv/amd64/signalfd 0755 root sys
 f usr/kernel/drv/amd64/smbsrv 0755 root sys
 f usr/kernel/drv/amd64/sppp 0755 root sys

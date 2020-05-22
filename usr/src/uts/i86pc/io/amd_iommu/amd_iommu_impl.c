@@ -111,6 +111,8 @@ struct iommulib_ops amd_iommulib_ops = {
 
 static kmutex_t amd_iommu_pgtable_lock;
 
+extern int amd_iommu_register_bhyve(amd_iommu_t *iommu);
+
 static int
 amd_iommu_register(amd_iommu_t *iommu)
 {
@@ -1167,12 +1169,19 @@ amd_iommu_init(dev_info_t *dip, ddi_acc_handle_t handle, int idx,
 	}
 
 	/* xxx register/start race  */
+	/*
 	if (amd_iommu_register(iommu) != DDI_SUCCESS) {
 		mutex_exit(&iommu->aiomt_mutex);
 		(void) amd_iommu_fini(iommu, AMD_IOMMU_TEARDOWN);
 		return (NULL);
 	}
-
+	*/
+	/* xxx register/start race  */
+	if (amd_iommu_register_bhyve(iommu) != DDI_SUCCESS) {
+		mutex_exit(&iommu->aiomt_mutex);
+		(void) amd_iommu_fini(iommu, AMD_IOMMU_TEARDOWN);
+		return (NULL);
+	}
 	if (amd_iommu_debug) {
 		cmn_err(CE_NOTE, "%s: %s%d: IOMMU idx=%d inited.", f, driver,
 		    instance, idx);

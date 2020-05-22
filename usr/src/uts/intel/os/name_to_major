@@ -308,4 +308,8 @@ ufm 311
 ufmtest 312
 imcstub 313
 imc 314
+<<<<<<< HEAD
 ccid 315
+=======
+amd_ivrs 399
+>>>>>>> amd_test_dev
