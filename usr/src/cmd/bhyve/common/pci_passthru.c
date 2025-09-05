@@ -134,35 +134,83 @@ passthru_write_config(const struct passthru_softc *sc, long reg, int width,
 }
 
 static int
-passthru_get_bar(struct passthru_softc *sc, int bar, enum pcibar_type *type,
-    uint64_t *base, uint64_t *size)
+ppt_query_bar(int fd, int bar, uint32_t *bartype,
+    uint64_t *barbase, uint64_t *barsize)
 {
-	struct ppt_bar_query pb;
+    static int checked_caps = 0;
+    static struct ppt_caps caps;
+    static int using_new_api = -1;  /* -1 = unknown, 0 = legacy, 1 = new */
 
-	pb.pbq_baridx = bar;
+    if (!checked_caps) {
+        if (ioctl(fd, PPT_GET_CAPS, &caps) != 0) {
+            caps.version = 0;
+            caps.caps = 0;   /* old kernel, no ppt+ support */
+        }
+        checked_caps = 1;
 
-	if (ioctl(sc->pptfd, PPT_BAR_QUERY, &pb) != 0) {
-		return (-1);
-	}
+        if (caps.caps & PPT_CAP_BAR_INFO) {
+            using_new_api = 1;
+            fprintf(stderr, "ppt_query_bar: using PPT_GET_REGION_INFO (ppt+)\n");
+        } else {
+            using_new_api = 0;
+            fprintf(stderr, "ppt_query_bar: using legacy PPT_BAR_QUERY\n");
+        }
+    }
 
-	switch (pb.pbq_type) {
-	case PCI_ADDR_IO:
-		*type = PCIBAR_IO;
-		break;
-	case PCI_ADDR_MEM32:
-		*type = PCIBAR_MEM32;
-		break;
-	case PCI_ADDR_MEM64:
-		*type = PCIBAR_MEM64;
-		break;
-	default:
-		err(1, "unrecognized BAR type: %u\n", pb.pbq_type);
-		break;
-	}
+    if (using_new_api == 1) {
+        struct ppt_region_info rinfo;
+        rinfo.index = bar;
 
-	*base = pb.pbq_base;
-	*size = pb.pbq_size;
-	return (0);
+        if (ioctl(fd, PPT_GET_REGION_INFO, &rinfo) != 0)
+            return (-1);
+
+        *bartype = rinfo.flags;
+        *barbase = rinfo.phys_addr;
+        *barsize = rinfo.size;
+        return (0);
+
+    } else {
+        struct ppt_bar_query pb;
+        pb.pbq_baridx = bar;
+
+        if (ioctl(fd, PPT_BAR_QUERY, &pb) != 0)
+            return (-1);
+
+        *bartype = pb.pbq_type;
+        *barbase = pb.pbq_base;
+        *barsize = pb.pbq_size;
+        return (0);
+    }
+}
+
+static int
+passthru_get_bar(struct passthru_softc *sc, int bar,
+    enum pcibar_type *type, uint64_t *base, uint64_t *size)
+{
+    uint32_t bartype;
+    uint64_t barbase, barsize;
+
+    if (ppt_query_bar(sc->pptfd, bar, &bartype, &barbase, &barsize) != 0)
+        return (-1);
+
+    switch (bartype) {
+    case PCI_ADDR_IO:
+        *type = PCIBAR_IO;
+        break;
+    case PCI_ADDR_MEM32:
+        *type = PCIBAR_MEM32;
+        break;
+    case PCI_ADDR_MEM64:
+        *type = PCIBAR_MEM64;
+        break;
+    default:
+        err(1, "unrecognized BAR type: %u\n", bartype);
+        break;
+    }
+
+    *base = barbase;
+    *size = barsize;
+    return (0);
 }
 
 static int
@@ -861,6 +909,15 @@ msixcap_access(struct passthru_softc *sc, int coff)
 
 	return (coff >= sc->psc_msix.capoff &&
 	        coff < sc->psc_msix.capoff + MSIX_CAPLEN);
+}
+
+static int
+ppt_get_caps(int fd, struct ppt_caps *caps)
+{
+    if (ioctl(fd, PPT_GET_CAPS, caps) == 0) {
+        return 0;   /* success */
+    }
+    return -1;      /* old kernel, no ppt+ support */
 }
 
 static int

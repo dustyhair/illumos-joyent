@@ -319,7 +319,7 @@ set_agaw(immu_t *immu)
 	/* calculated agaw can be > 64 */
 	agaw = (agaw > 64) ? 64 : agaw;
 
-	if (agaw < 30 || agaw > magaw) {
+	if (agaw < 30) {
 		ddi_err(DER_WARN, NULL, "%s: Calculated AGAW (%d) "
 		    "is outside valid limits [30,%d] specified by Vt-d spec "
 		    "and magaw",  immu->immu_name, agaw, magaw);

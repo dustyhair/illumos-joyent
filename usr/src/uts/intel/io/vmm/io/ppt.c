@@ -321,6 +321,42 @@ ppt_ioctl(dev_t dev, int cmd, intptr_t arg, int md, cred_t *cr, int *rv)
 
 		return (0);
 	}
+	case PPT_GET_CAPS: {
+		struct ppt_caps caps;
+		caps.version = 1;
+		caps.caps = 0;
+
+		/*
+		* For now, we only advertise BAR_INFO since that’s what we can
+		* safely provide. Later we’ll add IOMMU, IRQ_REMAP, RESET, etc.
+		*/
+		caps.caps |= PPT_CAP_BAR_INFO;
+
+		if (ddi_copyout(&caps, data, sizeof (caps), md) != 0)
+			return (EFAULT);
+		return (0);
+	}
+	case PPT_GET_REGION_INFO: {
+		struct ppt_region_info rinfo;
+
+		if (ddi_copyin(data, &rinfo, sizeof (rinfo), md) != 0)
+			return (EFAULT);
+
+		if (rinfo.index >= PCI_BASE_NUM)
+			return (EINVAL);
+
+		struct pptbar *pbar = &ppt->pptd_bars[rinfo.index];
+		if (pbar->base == 0 || pbar->size == 0)
+			return (ENOENT);
+
+		rinfo.phys_addr = pbar->base;
+		rinfo.size      = pbar->size;
+		rinfo.flags     = pbar->type;
+
+		if (ddi_copyout(&rinfo, data, sizeof (rinfo), md) != 0)
+			return (EFAULT);
+		return (0);
+	}
 
 	default:
 		return (ENOTTY);
