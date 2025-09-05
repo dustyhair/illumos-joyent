@@ -134,6 +134,16 @@ passthru_write_config(const struct passthru_softc *sc, long reg, int width,
 }
 
 static int
+ppt_get_caps(int fd, struct ppt_caps *caps)
+{
+    if (ioctl(fd, PPT_GET_CAPS, caps) == 0) {
+        return 0;   /* success */
+    }
+    return -1;      /* old kernel, no ppt+ support */
+}
+
+
+static int
 ppt_query_bar(int fd, int bar, uint32_t *bartype,
     uint64_t *barbase, uint64_t *barsize)
 {
@@ -142,19 +152,14 @@ ppt_query_bar(int fd, int bar, uint32_t *bartype,
     static int using_new_api = -1;  /* -1 = unknown, 0 = legacy, 1 = new */
 
     if (!checked_caps) {
-        if (ioctl(fd, PPT_GET_CAPS, &caps) != 0) {
-            caps.version = 0;
-            caps.caps = 0;   /* old kernel, no ppt+ support */
-        }
-        checked_caps = 1;
-
-        if (caps.caps & PPT_CAP_BAR_INFO) {
+        if (ppt_get_caps(fd, &caps) == 0 && (caps.caps & PPT_CAP_BAR_INFO)) {
             using_new_api = 1;
             fprintf(stderr, "ppt_query_bar: using PPT_GET_REGION_INFO (ppt+)\n");
         } else {
             using_new_api = 0;
             fprintf(stderr, "ppt_query_bar: using legacy PPT_BAR_QUERY\n");
         }
+        checked_caps = 1;
     }
 
     if (using_new_api == 1) {
@@ -911,14 +916,6 @@ msixcap_access(struct passthru_softc *sc, int coff)
 	        coff < sc->psc_msix.capoff + MSIX_CAPLEN);
 }
 
-static int
-ppt_get_caps(int fd, struct ppt_caps *caps)
-{
-    if (ioctl(fd, PPT_GET_CAPS, caps) == 0) {
-        return 0;   /* success */
-    }
-    return -1;      /* old kernel, no ppt+ support */
-}
 
 static int
 passthru_cfgread_default(struct passthru_softc *sc,
