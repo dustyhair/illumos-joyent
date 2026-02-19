@@ -84,9 +84,11 @@ void iommu_remove_mapping(void *domain, vm_paddr_t gpa, size_t len);
 void iommu_add_device(void *domain, uint16_t rid);
 void iommu_remove_device(void *domain, uint16_t rid);
 void iommu_invalidate_tlb(void *domain);
-
+int iommu_domain_unmap(void *domain, uint64_t gpa, size_t len);
+int iommu_domain_map(void *domain, uint64_t gpa, uint64_t hpa, size_t len, int prot);
 /* Glue functions used by iommu provider(s) */
 void *vmm_ptp_alloc(void);
 void vmm_ptp_free(void *);
+
 
 #endif

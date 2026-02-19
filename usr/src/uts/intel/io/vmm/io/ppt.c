@@ -45,6 +45,7 @@
 
 #include <sys/cdefs.h>
 
+#include <sys/modctl.h>
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
@@ -73,7 +74,7 @@
 
 #include "vmm_lapic.h"
 
-#include "iommu.h"
+#include <io/iommu.h>
 #include "ppt.h"
 
 #define	MAX_MSIMSGS	32
@@ -131,8 +132,15 @@ struct pptdev {
 		ddi_intr_handle_t *inth;
 		struct pptintr_arg *arg;
 	} msix;
+
+	/* --- Phase 2b additions --- */
+	void	*pptd_domain;   /* iommu_domain_t *, domain context */
+	uint32_t	pptd_domainid; /* optional unique domain ID */
+	uint64_t	pptd_faults;   /* count of DMA/IOMMU faults */
 };
 
+static ddi_modhandle_t iommu_hdl = NULL;
+static const struct iommu_ops *ppt_iommu_ops = NULL;
 
 static major_t		ppt_major;
 static void		*ppt_state;
@@ -147,6 +155,8 @@ static ddi_device_acc_attr_t ppt_attr = {
 	DDI_STORECACHING_OK_ACC,
 	DDI_DEFAULT_ACC
 };
+
+static void ppt_reset_pci_power_state(dev_info_t *dip);
 
 static int
 ppt_open(dev_t *devp, int flag, int otyp, cred_t *cr)
@@ -206,6 +216,21 @@ ppt_ioctl(dev_t dev, int cmd, intptr_t arg, int md, cred_t *cr, int *rv)
 		if (ddi_copyin(data, &cio, sizeof (cio), md) != 0) {
 			return (EFAULT);
 		}
+
+		/* Log BAR writes explicitly (BAR0–BAR5) */
+		if (cio.pci_off >= PCI_CONF_BASE0 && cio.pci_off <= PCI_CONF_BASE5) {
+			int bar_idx = (cio.pci_off - PCI_CONF_BASE0) / 4;
+			cmn_err(CE_NOTE,
+				"!ppt: CFG_WRITE BDF=%x BAR%d off=0x%x width=%d data=0x%08x",
+				pci_get_bdf(ppt->pptd_dip), bar_idx,
+				(uint_t)cio.pci_off, cio.pci_width, cio.pci_data);
+		} else {
+			cmn_err(CE_CONT,
+				"!ppt: CFG_WRITE BDF=%x off=0x%x width=%d data=0x%08x",
+				pci_get_bdf(ppt->pptd_dip),
+				(uint_t)cio.pci_off, cio.pci_width, cio.pci_data);
+		}
+
 		switch (cio.pci_width) {
 		case 4:
 			pci_config_put32(cfg, cio.pci_off, cio.pci_data);
@@ -358,6 +383,118 @@ ppt_ioctl(dev_t dev, int cmd, intptr_t arg, int md, cred_t *cr, int *rv)
 		return (0);
 	}
 
+	case PPT_IOMMU_MAP: {
+		struct ppt_iommu_map map;
+		if (ddi_copyin(data, &map, sizeof(map), md) != 0)
+			return (EFAULT);
+
+		int rc = iommu_domain_map(ppt->pptd_domain,
+								map.gpa, map.hpa, map.size,
+								map.prot);
+
+		if (rc == 0) {
+			/* 🔑 ensure device domain sees the new mapping */
+			iommu_invalidate_tlb(ppt->pptd_domain);
+
+			cmn_err(CE_NOTE,
+				"!ppt: IOMMU_MAP OK BDF=%x GPA=0x%llx HPA=0x%llx sz=0x%llx",
+				pci_get_bdf(ppt->pptd_dip),
+				(u_longlong_t)map.gpa,
+				(u_longlong_t)map.hpa,
+				(u_longlong_t)map.size);
+		} else {
+			cmn_err(CE_WARN,
+				"!ppt: IOMMU_MAP FAIL BDF=%x GPA=0x%llx sz=0x%llx rc=%d",
+				pci_get_bdf(ppt->pptd_dip),
+				(u_longlong_t)map.gpa,
+				(u_longlong_t)map.size,
+				rc);
+		}
+		return rc;
+	}
+
+	case PPT_IOMMU_UNMAP: {
+		struct ppt_iommu_map map;
+
+		/* Copy request from userland */
+		if (ddi_copyin(data, &map, sizeof (map), md) != 0)
+			return (EFAULT);
+
+		/* Issue the unmap into this device's domain */
+		int rc = iommu_domain_unmap(ppt->pptd_domain, map.gpa, map.size);
+
+		if (rc == 0) {
+			/* 🔑 Always flush TLB after unmap */
+			iommu_invalidate_tlb(ppt->pptd_domain);
+
+			cmn_err(CE_NOTE,
+				"!ppt: IOMMU_UNMAP OK BDF=%x GPA=0x%llx sz=0x%llx",
+				pci_get_bdf(ppt->pptd_dip),
+				(u_longlong_t)map.gpa,
+				(u_longlong_t)map.size);
+		} else {
+			cmn_err(CE_WARN,
+				"!ppt: IOMMU_UNMAP FAIL BDF=%x GPA=0x%llx sz=0x%llx rc=%d",
+				pci_get_bdf(ppt->pptd_dip),
+				(u_longlong_t)map.gpa,
+				(u_longlong_t)map.size,
+				rc);
+		}
+
+		return rc;
+	}
+
+	case PPT_IOMMU_MAP_BATCH: {
+		struct ppt_iommu_map_batch ureq;
+		if (ddi_copyin(data, &ureq, sizeof (ureq), md) != 0)
+			return (EFAULT);
+
+		size_t totsz = offsetof(struct ppt_iommu_map_batch, maps) +
+					ureq.count * sizeof (struct ppt_iommu_map);
+
+		struct ppt_iommu_map_batch *kreq =
+			kmem_zalloc(totsz, KM_SLEEP);
+		if (ddi_copyin(data, kreq, totsz, md) != 0) {
+			kmem_free(kreq, totsz);
+			return (EFAULT);
+		}
+
+		for (uint32_t i = 0; i < kreq->count; i++) {
+			struct ppt_iommu_map *m = &kreq->maps[i];
+			iommu_domain_map(ppt->pptd_domain,
+							m->gpa, m->hpa,
+							m->size, m->prot);
+		}
+
+		kmem_free(kreq, totsz);
+		return (0);
+	}
+
+	case PPT_IOMMU_UNMAP_BATCH: {
+		struct ppt_iommu_map_batch ureq;
+		if (ddi_copyin(data, &ureq, sizeof (ureq), md) != 0)
+			return (EFAULT);
+
+		size_t totsz = offsetof(struct ppt_iommu_map_batch, maps) +
+					ureq.count * sizeof (struct ppt_iommu_map);
+
+		struct ppt_iommu_map_batch *kreq =
+			kmem_zalloc(totsz, KM_SLEEP);
+		if (ddi_copyin(data, kreq, totsz, md) != 0) {
+			kmem_free(kreq, totsz);
+			return (EFAULT);
+		}
+
+		for (uint32_t i = 0; i < kreq->count; i++) {
+			struct ppt_iommu_map *m = &kreq->maps[i];
+			iommu_domain_unmap(ppt->pptd_domain,
+							m->gpa, m->size);
+		}
+
+		kmem_free(kreq, totsz);
+		return (0);
+	}
+
 	default:
 		return (ENOTTY);
 	}
@@ -436,6 +573,16 @@ ppt_bar_wipe(struct pptdev *ppt)
 	bzero(&ppt->pptd_bars, sizeof (ppt->pptd_bars));
 }
 
+
+#define PCI_BASE_MEM_TYPE_M   0x00000006
+#define PCI_BASE_MEM_TYPE_32  0x00000000
+#define PCI_BASE_MEM_TYPE_1M  0x00000002
+#define PCI_BASE_MEM_TYPE_64  0x00000004
+
+#define PCI_BASE_MEM_TYPE_M   0x00000006
+#define PCI_BASE_MEM_TYPE_32  0x00000000
+#define PCI_BASE_MEM_TYPE_1M  0x00000002
+#define PCI_BASE_MEM_TYPE_64  0x00000004
 static int
 ppt_bar_crawl(struct pptdev *ppt)
 {
@@ -496,6 +643,123 @@ ppt_bar_crawl(struct pptdev *ppt)
 	}
 	return (err);
 }
+
+// static int
+// ppt_bar_crawl(struct pptdev *ppt)
+// {
+// 	struct pptbar *pbar;
+// 	int err = 0;
+// 	int i;
+// 
+// 	for (i = 0; i < PCI_BASE_NUM; i++) {
+// 		off_t off = PCI_CONF_BASE0 + i * 4;
+// 		uint32_t barlo, barhi = 0, szlo, szhi = 0;
+// 		uint64_t base, size;
+// 		uint_t cfg_type;
+// 
+// 		barlo = pci_config_get32(ppt->pptd_cfg, off);
+// 		if (barlo == 0 || barlo == 0xffffffff) {
+// 			/* unused BAR slot */
+// 			continue;
+// 		}
+// 
+// 		cfg_type = barlo & PCI_BASE_SPACE_M;
+// 
+// 		/* --- new: diagnostic --- */
+// 		cmn_err(CE_NOTE, "!ppt: probing BAR%d raw=0x%08x cfg_type=%s",
+// 		    i, barlo,
+// 		    (cfg_type == PCI_BASE_SPACE_IO) ? "IO" :
+// 		    ((barlo & PCI_BASE_MEM_TYPE_M) == PCI_BASE_MEM_TYPE_64 ?
+// 		    "MEM64" : "MEM32"));
+// 
+// 		if (cfg_type == PCI_BASE_SPACE_IO) {
+// 			/* ---- I/O BAR ---- */
+// 			pci_config_put32(ppt->pptd_cfg, off, 0xffffffff);
+// 			szlo = pci_config_get32(ppt->pptd_cfg, off);
+// 			pci_config_put32(ppt->pptd_cfg, off, barlo);
+// 
+// 			size = ~(szlo & PCI_BASE_IO_ADDR_M) + 1;
+// 			base = barlo & PCI_BASE_IO_ADDR_M;
+// 
+// 			/* diagnostic: catch small IO windows */
+// 			cmn_err(CE_NOTE,
+// 			    "!ppt: BAR%d IO port base=0x%llx size=0x%llx (%llu bytes)",
+// 			    i, (unsigned long long)base,
+// 			    (unsigned long long)size,
+// 			    (unsigned long long)size);
+// 
+// 		} else {
+// 			/* ---- Memory BAR (32‑bit or 64‑bit) ---- */
+// 			if ((barlo & PCI_BASE_MEM_TYPE_M) == PCI_BASE_MEM_TYPE_64) {
+// 				uint64_t szfull;
+// 
+// 				barhi = pci_config_get32(ppt->pptd_cfg, off + 4);
+// 
+// 				/* probe size */
+// 				pci_config_put32(ppt->pptd_cfg, off, 0xffffffff);
+// 				pci_config_put32(ppt->pptd_cfg, off + 4, 0xffffffff);
+// 				szlo = pci_config_get32(ppt->pptd_cfg, off);
+// 				szhi = pci_config_get32(ppt->pptd_cfg, off + 4);
+// 				pci_config_put32(ppt->pptd_cfg, off, barlo);
+// 				pci_config_put32(ppt->pptd_cfg, off + 4, barhi);
+// 
+// 				szfull = ((uint64_t)szhi << 32) |
+// 				    (szlo & PCI_BASE_M_ADDR_M);
+// 				size = (~szfull + 1);
+// 
+// 				base = ((uint64_t)barhi << 32) |
+// 				    (barlo & PCI_BASE_M_ADDR_M);
+// 
+// 				i++;	/* skip upper half */
+// 			} else {
+// 				/* 32‑bit memory BAR */
+// 				pci_config_put32(ppt->pptd_cfg, off, 0xffffffff);
+// 				szlo = pci_config_get32(ppt->pptd_cfg, off);
+// 				pci_config_put32(ppt->pptd_cfg, off, barlo);
+// 
+// 				size = ~(szlo & PCI_BASE_M_ADDR_M) + 1;
+// 				base = barlo & PCI_BASE_M_ADDR_M;
+// 			}
+// 		}
+// 
+// 		if (size == 0)
+// 			continue;
+// 
+// 		pbar = &ppt->pptd_bars[i];
+// 		pbar->base = base;
+// 		pbar->size = size;
+// 
+// 		/* classify the BAR type */
+// 		if (cfg_type == PCI_BASE_SPACE_IO)
+// 			pbar->type = PCI_ADDR_IO;
+// 		else if ((barlo & PCI_BASE_MEM_TYPE_M) == PCI_BASE_MEM_TYPE_64)
+// 			pbar->type = PCI_ADDR_MEM64;
+// 		else
+// 			pbar->type = PCI_ADDR_MEM32;
+// 
+// 		cmn_err(CE_NOTE,
+// 		    "!ppt: BAR%d confirmed: base=0x%llx size=0x%llx (%llu MB) type=%s",
+// 		    i,
+// 		    (unsigned long long)base,
+// 		    (unsigned long long)size,
+// 		    (unsigned long long)(size >> 20),
+// 		    (pbar->type == PCI_ADDR_IO)   ? "IO" :
+// 		    (pbar->type == PCI_ADDR_MEM64)? "MEM64" : "MEM32");
+// 
+// 		/* map IO BARs so ddi_get/put() works */
+// 		if (pbar->type == PCI_ADDR_IO) {
+// 			err = ddi_regs_map_setup(ppt->pptd_dip, i,
+// 			    &pbar->io_ptr, 0, 0, &ppt_attr, &pbar->io_handle);
+// 			if (err != 0)
+// 				break;
+// 		}
+// 	}
+// 
+// 	if (err != 0)
+// 		ppt_bar_wipe(ppt);
+// 
+// 	return (err);
+// }
 
 static boolean_t
 ppt_bar_verify_mmio(struct pptdev *ppt, uint64_t base, uint64_t size)
@@ -855,6 +1119,15 @@ out:
 	return (timo);
 }
 
+#ifndef PCI_PMCSR_STATE_D0
+#define PCI_PMCSR_STATE_D0     0x0000
+#endif
+
+#ifndef PCI_PMCSR_STATE_D3HOT
+#define PCI_PMCSR_STATE_D3HOT  0x0003
+#endif
+
+
 static boolean_t
 ppt_flr(dev_info_t *dip, boolean_t force)
 {
@@ -865,22 +1138,23 @@ ppt_flr(dev_info_t *dip, boolean_t force)
 	if (pci_config_setup(dip, &hdl) != DDI_SUCCESS)
 		return (B_FALSE);
 
+	/* Try to locate PCIe capability */
 	if (PCI_CAP_LOCATE(hdl, PCI_CAP_ID_PCI_E, &cap_ptr) != DDI_SUCCESS)
 		goto fail;
 
-	if ((PCI_CAP_GET32(hdl, 0, cap_ptr, PCIE_DEVCAP) & PCIE_DEVCAP_FLR)
-	    == 0)
+	/* Check if FLR is supported by this function */
+	if ((PCI_CAP_GET32(hdl, 0, cap_ptr, PCIE_DEVCAP) & PCIE_DEVCAP_FLR) == 0)
 		goto fail;
 
 	max_delay_us = MAX(ppt_max_completion_tmo_us(dip), 10000);
 
 	/*
-	 * Disable busmastering to prevent generation of new transactions while
-	 * waiting for the device to go idle.  If the idle timeout fails, the
-	 * command register is restored which will re-enable busmastering.
+	 * Disable bus mastering to prevent generation of new transactions
+	 * while waiting for pending transactions to drain.
 	 */
 	cmd = pci_config_get16(hdl, PCI_CONF_COMM);
 	pci_config_put16(hdl, PCI_CONF_COMM, cmd & ~PCI_COMM_ME);
+
 	if (!ppt_wait_for_pending_txn(dip, max_delay_us)) {
 		if (!force) {
 			pci_config_put16(hdl, PCI_CONF_COMM, cmd);
@@ -890,30 +1164,24 @@ ppt_flr(dev_info_t *dip, boolean_t force)
 		    "?Resetting with transactions pending after %u us\n",
 		    max_delay_us);
 
-		/*
-		 * Extend the post-FLR delay to cover the maximum Completion
-		 * Timeout delay of anything in flight during the FLR delay.
-		 * Enforce a minimum delay of at least 10ms.
-		 */
+		/* Add post-FLR delay to cover max completion timeout */
 		compl_delay = MAX(10, (ppt_max_completion_tmo_us(dip) / 1000));
 	}
 
-	/* Initiate the reset. */
+	/* Initiate the FLR */
 	ctl = PCI_CAP_GET16(hdl, 0, cap_ptr, PCIE_DEVCTL);
-	(void) PCI_CAP_PUT16(hdl, 0, cap_ptr, PCIE_DEVCTL,
+	(void)PCI_CAP_PUT16(hdl, 0, cap_ptr, PCIE_DEVCTL,
 	    ctl | PCIE_DEVCTL_INITIATE_FLR);
 
-	/* Wait for at least 100ms */
+	/* Wait at least 100ms (plus delay if completions were pending) */
 	delay(drv_usectohz((100 + compl_delay) * 1000));
 
 	pci_config_teardown(&hdl);
 	return (B_TRUE);
 
 fail:
-	/*
-	 * TODO: If the FLR fails for some reason, we should attempt a reset
-	 * using the PCI power management facilities (if possible).
-	 */
+	dev_err(dip, CE_NOTE, "!FLR unsupported or failed, attempting PM reset fallback");
+
 	pci_config_teardown(&hdl);
 	return (B_FALSE);
 }
@@ -1091,43 +1359,679 @@ ppt_is_mmio(struct vm *vm, vm_paddr_t gpa)
 	return (B_FALSE);
 }
 
+#ifndef PCIE_LINKSTS_NEG_WIDTH_MASK
+#define PCIE_LINKSTS_NEG_WIDTH_MASK	0x03f0
+#define PCIE_LINKSTS_NEG_WIDTH_SHIFT	4
+#endif
+
+/*
+ * Debug helper: print PCIe and PM info for a GPU after reset.
+ * Can be invoked right after FLR or bus reset to confirm device came back alive.
+ */
+static void
+ppt_trace_gpu_state(dev_info_t *dip, const char *label)
+{
+	ddi_acc_handle_t cfg;
+	uint16_t cap_ptr;
+	uint16_t pmcsr = 0xffff;
+	uint32_t linkcap = 0, linksta = 0;
+	int i;
+
+	if (pci_config_setup(dip, &cfg) != DDI_SUCCESS) {
+		cmn_err(CE_WARN, "!ppt_trace_gpu_state: cannot map cfg space");
+		return;
+	}
+
+	cmn_err(CE_NOTE, "!ppt_trace_gpu_state(%s): BDF=%x",
+	    label, pci_get_bdf(dip));
+
+	/* --- Power Management --- */
+	if (PCI_CAP_LOCATE(cfg, PCI_CAP_ID_PM, &cap_ptr) == DDI_SUCCESS) {
+		pmcsr = PCI_CAP_GET16(cfg, 0, cap_ptr, PCI_PMCSR);
+		cmn_err(CE_NOTE, "\tPMCSR=0x%04x (state=%u -> %s)",
+		    pmcsr, pmcsr & PCI_PMCSR_STATE_MASK,
+		    (pmcsr & PCI_PMCSR_STATE_MASK) == PCI_PMCSR_D0 ?
+		    "D0" :
+		    (pmcsr & PCI_PMCSR_STATE_MASK) == PCI_PMCSR_D3HOT ?
+		    "D3hot" : "other");
+	} else {
+		cmn_err(CE_NOTE, "\t(no PM capability)");
+	}
+
+	/* --- Link information --- */
+	if (PCI_CAP_LOCATE(cfg, PCI_CAP_ID_PCI_E, &cap_ptr) == DDI_SUCCESS) {
+		linkcap = PCI_CAP_GET32(cfg, 0, cap_ptr, PCIE_LINKCAP);
+		linksta = PCI_CAP_GET16(cfg, 0, cap_ptr, PCIE_LINKSTS);
+
+		/* illumos already defines the MASK but not the SHIFT */
+	#ifndef PCIE_LINKSTS_NEG_WIDTH_SHIFT
+	#define PCIE_LINKSTS_NEG_WIDTH_SHIFT 4
+	#endif
+
+		cmn_err(CE_NOTE, "\tLink: Speed x%u, Negotiated x%u",
+			linksta & PCIE_LINKSTS_SPEED_MASK,
+			(linksta & PCIE_LINKSTS_NEG_WIDTH_MASK) >>
+			PCIE_LINKSTS_NEG_WIDTH_SHIFT);
+	} else {
+		cmn_err(CE_NOTE, "\t(no PCIe capability)");
+	}
+
+	/* --- BAR snapshot --- */
+	for (i = 0; i < PCI_BASE_NUM; i++) {
+		uint32_t bar = pci_config_get32(cfg, PCI_CONF_BASE0 + i * 4);
+		if (bar == 0 || bar == 0xffffffff)
+			continue;
+
+		if ((bar & PCI_BASE_SPACE_M) == PCI_BASE_SPACE_MEM)
+			cmn_err(CE_NOTE, "\tBAR%d=0x%08x (MEM%s)",
+			    i, bar,
+			    (bar & 0x8) ? "64" : "32");
+		else
+			cmn_err(CE_NOTE, "\tBAR%d=0x%08x (IO)", i, bar);
+	}
+
+	pci_config_teardown(&cfg);
+}
+
+/*
+ * Perform a PCIe secondary-bus reset on the parent bridge of @dip.
+ * Safe fallback when a device lacks FLR (common on consumer GPUs).
+ */
+static void
+ppt_bus_reset(dev_info_t *dip)
+{
+	dev_info_t *parent;
+	uint8_t bctl;
+	ddi_acc_handle_t hdl;
+
+	parent = ddi_get_parent(dip);
+	if (parent == NULL)
+		return;
+
+	if (pci_config_setup(parent, &hdl) != DDI_SUCCESS)
+		return;
+
+	bctl = pci_config_get8(hdl, PCI_BCNF_BCNTRL);
+	bctl |= PCI_BCNF_BCNTRL_RESET;
+	pci_config_put8(hdl, PCI_BCNF_BCNTRL, bctl);
+
+	/* Hold reset for 100 ms */
+	delay(drv_usectohz(100000));
+
+	bctl &= ~PCI_BCNF_BCNTRL_RESET;
+	pci_config_put8(hdl, PCI_BCNF_BCNTRL, bctl);
+
+	pci_config_teardown(&hdl);
+	cmn_err(CE_NOTE, "!ppt_bus_reset: issued secondary‑bus reset for %s",
+	    ddi_node_name(dip));
+}
+
+//	int
+//	ppt_assign_device(struct vm *vm, int pptfd)
+//	{
+//		struct pptdev *ppt;
+//		int err = 0;
+//		uint16_t bdf;
+//	
+//		/* --- tracing --- */
+//		cmn_err(CE_NOTE, "!ppt_assign_device: enter (vm=%p, fd=%d)", (void *)vm, pptfd);
+//	
+//		mutex_enter(&pptdev_mtx);
+//	
+//		/* Lookup ppt soft‑state from fd */
+//		err = ppt_findf(NULL, pptfd, &ppt);
+//		if (err != 0) {
+//			cmn_err(CE_WARN, "!ppt_assign_device: ppt_findf failed, err=%d", err);
+//			mutex_exit(&pptdev_mtx);
+//			return (err);
+//		}
+//	
+//		/*
+//		 * 1. Save current PCI configuration space before reset
+//		 */
+//		cmn_err(CE_NOTE, "!ppt_assign_device: saving PCI config space");
+//		if (pci_save_config_regs(ppt->pptd_dip) != DDI_SUCCESS) {
+//			err = EIO;
+//			goto done;
+//		}
+//	
+//		/*
+//		 * 2. Issue a Function‑Level Reset (FLR) if available.
+//		 *    Many GPUs require a full hardware reset prior to passthrough.
+//		 *    If FLR is unsupported, attempt a secondary‑bus reset.
+//		 */
+//		bdf = pci_get_bdf(ppt->pptd_dip);
+//	
+//		for (int i = 0; i < PCI_BASE_NUM; i++) {
+//			uint32_t lo = pci_config_get32(ppt->pptd_cfg,
+//				PCI_CONF_BASE0 + i * 4);
+//			uint32_t hi = 0;
+//			if ((lo & PCI_BASE_MEM_TYPE_M) == PCI_BASE_MEM_TYPE_64)
+//				hi = pci_config_get32(ppt->pptd_cfg,
+//					PCI_CONF_BASE0 + (i + 1) * 4);
+//			cmn_err(CE_NOTE, "PPT: !before reset BAR%d lo=0x%08x hi=0x%08x", i, lo, hi);
+//		}
+//	
+//		uint32_t bar_save[PCI_BASE_NUM * 2] = {0};
+//		for (int i = 0; i < PCI_BASE_NUM; i++) {
+//			bar_save[i * 2] = pci_config_get32(ppt->pptd_cfg,
+//				PCI_CONF_BASE0 + i * 4);
+//			if ((bar_save[i * 2] & PCI_BASE_MEM_TYPE_M) == PCI_BASE_MEM_TYPE_64)
+//				bar_save[i * 2 + 1] = pci_config_get32(ppt->pptd_cfg,
+//					PCI_CONF_BASE0 + (i + 1) * 4);
+//		}
+//		
+//		if (bdf == 0x101) {
+//			cmn_err(CE_NOTE,
+//				"!ppt_assign_device: skipping reset for secondary function BDF=0x%x",
+//				bdf);
+//		} else {
+//			cmn_err(CE_NOTE, "!ppt_assign_device: attempting FLR/bus reset for BDF=0x%x",
+//				bdf);
+//			if (!ppt_flr(ppt->pptd_dip, B_TRUE)) {
+//				cmn_err(CE_WARN,
+//					"!ppt_assign_device: FLR unsupported, using bus reset fallback");
+//				(void)ppt_bus_reset(ppt->pptd_dip);
+//			}
+//			
+//			//	cmn_err(CE_NOTE, "!ppt_assign_device: attempting FLR reset");
+//		//	if (!ppt_flr(ppt->pptd_dip, B_TRUE)) {
+//		//		cmn_err(CE_WARN, "!ppt_assign_device: FLR unsupported, using bus reset fallback");
+//		//		(void) ppt_bus_reset(ppt->pptd_dip);
+//		//	}
+//			delay(drv_usectohz(500000));	/* 200 ms settle time */
+//			delay(drv_usectohz(500000));	/* 200 ms settle time */
+//	
+//			for (int i = 0; i < PCI_BASE_NUM; i++) {
+//				pci_config_put32(ppt->pptd_cfg, PCI_CONF_BASE0 + i * 4,
+//					bar_save[i * 2]);
+//				if ((bar_save[i * 2] & PCI_BASE_MEM_TYPE_M) == PCI_BASE_MEM_TYPE_64)
+//					pci_config_put32(ppt->pptd_cfg, PCI_CONF_BASE0 + (i + 1) * 4,
+//						bar_save[i * 2 + 1]);
+//			}
+//	
+//			for (int i = 0; i < PCI_BASE_NUM; i++) {
+//				uint32_t lo = pci_config_get32(ppt->pptd_cfg,
+//					PCI_CONF_BASE0 + i * 4);
+//				uint32_t hi = 0;
+//				if ((lo & PCI_BASE_MEM_TYPE_M) == PCI_BASE_MEM_TYPE_64)
+//					hi = pci_config_get32(ppt->pptd_cfg,
+//						PCI_CONF_BASE0 + (i + 1) * 4);
+//				cmn_err(CE_NOTE, "PPT: !after reset BAR%d lo=0x%08x hi=0x%08x", i, lo, hi);
+//			}
+//	
+//			ppt_trace_gpu_state(ppt->pptd_dip, "post‑reset");
+//			/*
+//			* 3. Restore the power state and re‑initialize config space.
+//			*/
+//			cmn_err(CE_NOTE, "!ppt_assign_device: restoring config state");
+//			ppt_reset_pci_power_state(ppt->pptd_dip);
+//	
+//			/* optional extra delay */
+//			delay(drv_usectohz(300000));
+//	
+//			if (pci_restore_config_regs(ppt->pptd_dip) != DDI_SUCCESS ||
+//				pci_save_config_regs(ppt->pptd_dip) != DDI_SUCCESS) {
+//				err = EIO;
+//				goto done;
+//			}
+//	
+//			/*
+//			*  Re‑enable memory, I/O and bus‑master decoding after reset.
+//			*  Some GPUs lose CMD bits while their audio function retains them.
+//			*/
+//			uint16_t cmd = pci_config_get16(ppt->pptd_cfg, PCI_CONF_COMM);
+//			cmd |= PCI_COMM_ME | PCI_COMM_MAE | PCI_COMM_IO;
+//			pci_config_put16(ppt->pptd_cfg, PCI_CONF_COMM, cmd);
+//			cmd = pci_config_get16(ppt->pptd_cfg, PCI_CONF_COMM);
+//			cmn_err(CE_NOTE, "!ppt_assign_device: PCI command register now 0x%04x (Mem/BM/I/O enable)", cmd);
+//	
+//			uint8_t pstate = pci_config_get8(ppt->pptd_cfg, PCI_PMCSR);
+//			cmn_err(CE_NOTE, "PPT: power_state reg=0x%x", pstate & 0x3);
+//			/*
+//			* 4. Enable bus‑mastering and BAR decoding so bhyve can map BARs.
+//			*/
+//			ppt_toggle_bar(ppt, B_TRUE);
+//			cmn_err(CE_NOTE, "!ppt_assign_device: BARs enabled");
+//		}
+//		/*
+//		 * 5. Create a fresh IOMMU domain for this device.
+//		 */
+//		bdf = pci_get_bdf(ppt->pptd_dip);
+//		cmn_err(CE_NOTE, "!ppt_assign_device: creating IOMMU domain for BDF %x", bdf);
+//	
+//		ppt->pptd_domain = iommu_create_domain(1ULL << 36);
+//		if (ppt->pptd_domain == NULL) {
+//			err = ENOMEM;
+//			goto done;
+//		}
+//	
+//		ppt->vm = vm;
+//		ppt->pptd_faults = 0;
+//	
+//		/*
+//		 * Detach device from host domain and attach to new VM domain.
+//		 */
+//		cmn_err(CE_NOTE, "!ppt_assign_device: moving BDF %x into new IOMMU domain", bdf);
+//		iommu_remove_device(iommu_host_domain(), bdf);
+//		iommu_add_device(ppt->pptd_domain, bdf);
+//	
+//		pf_set_passthru(ppt->pptd_dip, B_TRUE);
+//	
+//		cmn_err(CE_NOTE, "!ppt_assign_device: complete, domain=%p", ppt->pptd_domain);
+//	
+//	done:
+//		releasef(pptfd);
+//		mutex_exit(&pptdev_mtx);
+//		return (err);
+//	}
+static void
+ppt_dump_pcie_ext_caps(dev_info_t *dip)
+{
+	ddi_acc_handle_t hdl;
+	uint16_t ptr = 0x100; /* start of PCIe extended capability list */
+	uint16_t capid, next;
+
+	if (pci_config_setup(dip, &hdl) != DDI_SUCCESS)
+		return;
+
+	while (ptr) {
+		uint32_t hdr = pci_config_get32(hdl, ptr);
+		if (hdr == 0xffffffff)
+			break;
+
+		capid = hdr & 0xffff;
+		next = (hdr >> 20) & 0xfff;
+		dev_err(dip, CE_NOTE, "!extcap: id=0x%04x next=0x%03x", capid, next);
+
+		if (!next || next == ptr)
+			break;
+		ptr = next;
+	}
+	pci_config_teardown(&hdl);
+}
+
+#ifndef PCIE_LINKSTS_DLLLA
+#define PCIE_LINKSTS_DLLLA        0x0001  /* Data Link Layer Link Active */
+#endif
+#ifndef PCIE_LINKSTS_SPEED_MASK
+#define PCIE_LINKSTS_SPEED_MASK   0x000F
+#endif
+#ifndef PCIE_LINKSTS_NEG_WIDTH_MASK
+#define PCIE_LINKSTS_NEG_WIDTH_MASK   0x03F0
+#endif
+#ifndef PCIE_LINKSTS_NEG_WIDTH_SHIFT
+#define PCIE_LINKSTS_NEG_WIDTH_SHIFT  4
+#endif
+
+/*
+ * Assign a physical PCI function to a VM and prepare it for passthrough.
+ * Performs:
+ *   - Config‑space save
+ *   - FLR / NVIDIA vendor / bus reset
+ *   - PCIe link retrain polling
+ *   - D0 power restoration
+ *   - BAR + ROM re‑enable
+ *   - IOMMU domain creation and device attach
+ */
+
+#define NVIDIA_VENDOR_ID   0x10de
+#define NV_GPU_RESET_REG   0x488
+#define NV_RESET_WAIT_US   500000   /* 500 ms */
+#define LINK_POLL_INTERVAL_US 10000 /* 10 ms */
+#define LINK_POLL_TIMEOUT_US 1000000 /* 1 s */
+
+/*
+ * Poll the PCIe Link Status value until the Data Link Layer Link Active bit
+ * sets or timeout expires.
+ */
+static boolean_t
+ppt_wait_link_active(dev_info_t *dip)
+{
+	ddi_acc_handle_t hdl;
+	uint16_t cap, lstat;
+	hrtime_t start = gethrtime();
+
+	if (pci_config_setup(dip, &hdl) != DDI_SUCCESS)
+		return (B_FALSE);
+
+	if (PCI_CAP_LOCATE(hdl, PCI_CAP_ID_PCI_E, &cap) != DDI_SUCCESS) {
+		pci_config_teardown(&hdl);
+		return (B_FALSE);
+	}
+
+	do {
+		lstat = PCI_CAP_GET16(hdl, 0, cap, PCIE_LINKSTS);
+		if (lstat & PCIE_LINKSTS_DLLLA) {
+			uint16_t speed = lstat & PCIE_LINKSTS_SPEED_MASK;
+			uint16_t width =
+			    (lstat & PCIE_LINKSTS_NEG_WIDTH_MASK) >>
+			    PCIE_LINKSTS_NEG_WIDTH_SHIFT;
+
+			uint_t diff_ms = (gethrtime() - start) / (hrtime_t)1e6;
+			dev_err(dip, CE_NOTE,
+			    "!ppt_wait_link_active: DLL link active "
+			    "(Gen%d x%d) after %u ms", speed, width, diff_ms);
+
+			pci_config_teardown(&hdl);
+			return (B_TRUE);
+		}
+		delay(drv_usectohz(LINK_POLL_INTERVAL_US));
+	} while ((gethrtime() - start) < (hrtime_t)USEC2NSEC(LINK_POLL_TIMEOUT_US));
+
+	uint_t diff_ms = (gethrtime() - start) / (hrtime_t)1e6;
+	dev_err(dip, CE_WARN,
+	    "!ppt_wait_link_active: link NOT active after %u ms, lstat=0x%04x",
+	    diff_ms, lstat);
+
+	pci_config_teardown(&hdl);
+	return (B_FALSE);
+}
+/*
+ * NVIDIA vendor‑specific soft reset.
+ * Writes bit 0 at offset 0x488, waits 500 ms, and returns TRUE if bit 0 clears.
+ */
+static boolean_t
+ppt_vendor_reset(dev_info_t *dip)
+{
+	ddi_acc_handle_t hdl;
+	uint16_t vid, did;
+	uint32_t val, post;
+	boolean_t success = B_FALSE;
+
+	if (pci_config_setup(dip, &hdl) != DDI_SUCCESS)
+		return (B_FALSE);
+
+	vid = pci_config_get16(hdl, PCI_CONF_VENID);
+	did = pci_config_get16(hdl, PCI_CONF_DEVID);
+	if (vid != NVIDIA_VENDOR_ID) {
+		pci_config_teardown(&hdl);
+		return (B_FALSE);
+	}
+
+	val = pci_config_get32(hdl, NV_GPU_RESET_REG);
+	if (val == 0xffffffff || val == 0x0) {
+		dev_err(dip, CE_NOTE,
+		    "!ppt_vendor_reset: invalid register 0x%x (0x%08x)",
+		    NV_GPU_RESET_REG, val);
+		goto done;
+	}
+
+	dev_err(dip, CE_NOTE,
+	    "!ppt_vendor_reset: attempting NVIDIA soft reset VID=0x%04x DID=0x%04x "
+	    "(reg=0x%08x)", vid, did, val);
+
+	pci_config_put32(hdl, NV_GPU_RESET_REG, val | 1);
+	delay(drv_usectohz(NV_RESET_WAIT_US));  /* settle */
+
+	post = pci_config_get32(hdl, NV_GPU_RESET_REG);
+	dev_err(dip, CE_NOTE,
+	    "!ppt_vendor_reset: post‑write 0x%08x (bit0=%d)",
+	    post, post & 1);
+
+	if ((post & 1) == 0) {
+		dev_err(dip, CE_NOTE, "!ppt_vendor_reset: bit0 cleared → reset ack");
+		success = B_TRUE;
+	} else {
+		dev_err(dip, CE_WARN,
+		    "!ppt_vendor_reset: reset bit not cleared — may not support");
+	}
+
+	if (success)
+		(void)ppt_wait_link_active(dip);
+
+done:
+	pci_config_teardown(&hdl);
+	return (success);
+}
+
+/*
+ * ppt_reset_validate()
+ *
+ * Verify that a PCIe function has successfully completed a reset.
+ * Checks:
+ *   1.  Config space responds (VID/DID not 0xFFFF)
+ *   2.  Command register cleared (0x0000)
+ *   3.  Link retrained and DLLLA bit set
+ *   4.  Optionally ROM header readable
+ *   5.  BAR0 readable (MMIO space alive)
+ *
+ * Returns B_TRUE when all sanity checks passed, else B_FALSE.
+ */
+static boolean_t
+ppt_reset_validate(dev_info_t *dip)
+{
+	ddi_acc_handle_t hdl;
+	uint16_t vid, did, cmd, pciecap, lstat;
+	boolean_t ok = B_TRUE;
+
+	if (pci_config_setup(dip, &hdl) != DDI_SUCCESS)
+		return (B_FALSE);
+
+	/* 1️⃣  Config-space response */
+	vid = pci_config_get16(hdl, PCI_CONF_VENID);
+	did = pci_config_get16(hdl, PCI_CONF_DEVID);
+	if (vid == 0xffff || vid == 0x0000) {
+		dev_err(dip, CE_WARN,
+		    "!ppt_reset_validate: config space unreadable (VID=0x%04x)", vid);
+		ok = B_FALSE;
+		goto done;
+	}
+	dev_err(dip, CE_NOTE, "!ppt_reset_validate: VID=0x%04x DID=0x%04x", vid, did);
+
+	/* 2️⃣  Command register should have cleared */
+	cmd = pci_config_get16(hdl, PCI_CONF_COMM);
+	dev_err(dip, CE_NOTE, "!ppt_reset_validate: CMD=0x%04x", cmd);
+	if (cmd != 0x0000) {
+		dev_err(dip, CE_NOTE, "!ppt_reset_validate: CMD not 0 after reset");
+		/* Not fatal, but record */
+	}
+
+	/* 3️⃣  PCIe link active and retrained */
+	if (PCI_CAP_LOCATE(hdl, PCI_CAP_ID_PCI_E, &pciecap) == DDI_SUCCESS) {
+		lstat = PCI_CAP_GET16(hdl, 0, pciecap, PCIE_LINKSTS);
+		uint16_t speed = lstat & 0xF;
+		uint16_t width = (lstat & 0x3F0) >> 4;
+#ifdef PCIE_LINKSTS_DLLLA
+		boolean_t dll_active = !!(lstat & PCIE_LINKSTS_DLLLA);
+#else
+		boolean_t dll_active = !!(lstat & 0x1);
+#endif
+		dev_err(dip, CE_NOTE,
+		    "!ppt_reset_validate: LINKSTS=0x%04x (Gen%d x%d, DLLLA=%d)",
+		    lstat, speed, width, dll_active);
+		if (!dll_active) {
+			dev_err(dip, CE_WARN,
+			    "!ppt_reset_validate: link inactive after reset");
+			ok = B_FALSE;
+			goto done;
+		}
+	} else {
+		dev_err(dip, CE_WARN, "!ppt_reset_validate: no PCIe cap found?");
+	}
+
+	/* 4️⃣  Optional ROM BAR check for NVIDIA (0x1c/vend) */
+	uint32_t rom_bar = pci_config_get32(hdl, PCI_CONF_ROM);
+	pci_config_put32(hdl, PCI_CONF_ROM, rom_bar | PCI_BASE_ROM_ENABLE);
+	delay(drv_usectohz(10000)); /* 10 ms enable latency */
+	uint32_t rom_first = pci_config_get32(hdl, (uint32_t)PCI_CONF_BASE5);
+	pci_config_put32(hdl, PCI_CONF_ROM, rom_bar);
+	if (rom_first == 0xffffffff) {
+		dev_err(dip, CE_NOTE, "!ppt_reset_validate: ROM BAR unreadable (0xFFFFFFFF)");
+	} else {
+		dev_err(dip, CE_NOTE, "!ppt_reset_validate: ROM BAR responds (0x%08x)", rom_first);
+	}
+
+	/* 5️⃣  BAR0 sanity—responds with something other than 0xFFFFFFFF */
+	uint64_t bar0 = pci_config_get32(hdl, PCI_CONF_BASE0);
+	if ((bar0 & ~0xF) != 0 && bar0 != 0xffffffff)
+		dev_err(dip, CE_NOTE,
+		    "!ppt_reset_validate: BAR0=0x%08lx appears mapped", bar0);
+	else {
+		dev_err(dip, CE_WARN,
+		    "!ppt_reset_validate: BAR0 unreadable (0x%08lx)", bar0);
+		ok = B_FALSE;
+	}
+
+done:
+	pci_config_teardown(&hdl);
+	dev_err(dip, ok ? CE_NOTE : CE_WARN,
+	    ok ? "!ppt_reset_validate: device OK after reset"
+	       : "!ppt_reset_validate: device FAILED reset checks");
+	return (ok);
+}
+
+/*
+ * === Main Passthrough Assignment Routine ===
+ */
 int
 ppt_assign_device(struct vm *vm, int pptfd)
 {
 	struct pptdev *ppt;
 	int err = 0;
+	uint16_t bdf;
+
+	cmn_err(CE_NOTE, "!ppt_assign_device: enter (vm=%p, fd=%d)",
+	    (void *)vm, pptfd);
 
 	mutex_enter(&pptdev_mtx);
-	/* Passing NULL requires the device to be unowned. */
+
 	err = ppt_findf(NULL, pptfd, &ppt);
 	if (err != 0) {
+		cmn_err(CE_WARN,
+		    "!ppt_assign_device: ppt_findf failed, err=%d", err);
 		mutex_exit(&pptdev_mtx);
 		return (err);
 	}
 
+	/* 1️⃣ Save current PCI configuration */
+	cmn_err(CE_NOTE, "!ppt_assign_device: saving PCI config space");
 	if (pci_save_config_regs(ppt->pptd_dip) != DDI_SUCCESS) {
 		err = EIO;
 		goto done;
 	}
-	ppt_flr(ppt->pptd_dip, B_TRUE);
 
-	/*
-	 * Restore the device state after reset and then perform another save
-	 * so the "pristine" state can be restored when the device is removed
-	 * from the guest.
-	 */
+	/* 2️⃣ Perform reset sequence (FLR → vendor → bus) */
+	bdf = pci_get_bdf(ppt->pptd_dip);
+
+	for (int i = 0; i < PCI_BASE_NUM; i++) {
+		uint32_t lo = pci_config_get32(ppt->pptd_cfg,
+		    PCI_CONF_BASE0 + i * 4);
+		uint32_t hi = 0;
+		if ((lo & PCI_BASE_MEM_TYPE_M) == PCI_BASE_MEM_TYPE_64)
+			hi = pci_config_get32(ppt->pptd_cfg,
+			    PCI_CONF_BASE0 + (i + 1) * 4);
+		cmn_err(CE_NOTE,
+		    "PPT: BAR%d before reset lo=0x%08x hi=0x%08x", i, lo, hi);
+	}
+
+	cmn_err(CE_NOTE,
+	    "!ppt_assign_device: initiating reset for BDF=0x%x", bdf);
+
+	if (!ppt_flr(ppt->pptd_dip, B_TRUE)) {
+		cmn_err(CE_WARN,
+		    "!ppt_assign_device: FLR failed, trying NVIDIA vendor reset");
+
+		if (!ppt_vendor_reset(ppt->pptd_dip)) {
+			cmn_err(CE_WARN,
+			    "!ppt_assign_device: vendor reset unsupported, using bus reset");
+			(void)ppt_bus_reset(ppt->pptd_dip);
+			(void)ppt_wait_link_active(ppt->pptd_dip);
+		}
+	} else {
+		(void)ppt_wait_link_active(ppt->pptd_dip);
+	}
+
+	delay(drv_usectohz(500000)); /* 500 ms settle */
+
+	/* 3️⃣ Ensure device is in D0 power state */
+	uint16_t pmcap;
+	if (PCI_CAP_LOCATE(ppt->pptd_cfg, PCI_CAP_ID_PM, &pmcap) == DDI_SUCCESS) {
+		uint16_t pmcsr =
+		    PCI_CAP_GET16(ppt->pptd_cfg, 0, pmcap, PCI_PMCSR);
+		cmn_err(CE_NOTE, "PPT: power_state before=0x%x", pmcsr & 0x3);
+		pmcsr &= ~PCI_PMCSR_STATE_MASK; /* force D0 */
+		PCI_CAP_PUT16(ppt->pptd_cfg, 0, pmcap, PCI_PMCSR, pmcsr);
+		delay(drv_usectohz(300000));
+		pmcsr = PCI_CAP_GET16(ppt->pptd_cfg, 0, pmcap, PCI_PMCSR);
+		cmn_err(CE_NOTE, "PPT: power_state after=0x%x", pmcsr & 0x3);
+	}
+
+	/* 4️⃣ Verify link once more & pretty‑print status */
+	uint16_t pciecap;
+	if (PCI_CAP_LOCATE(ppt->pptd_cfg, PCI_CAP_ID_PCI_E, &pciecap) ==
+	    DDI_SUCCESS) {
+		uint16_t lstat =
+		    PCI_CAP_GET16(ppt->pptd_cfg, 0, pciecap, PCIE_LINKSTS);
+		uint16_t speed = lstat & PCIE_LINKSTS_SPEED_MASK;
+		uint16_t width =
+		    (lstat & PCIE_LINKSTS_NEG_WIDTH_MASK) >>
+		    PCIE_LINKSTS_NEG_WIDTH_SHIFT;
+		cmn_err(CE_NOTE, "PPT: PCIe link status 0x%04x (Gen%d x%d active)",
+		    lstat, speed, width);
+	}
+
+	/* 5️⃣ Restore saved config space */
 	if (pci_restore_config_regs(ppt->pptd_dip) != DDI_SUCCESS ||
 	    pci_save_config_regs(ppt->pptd_dip) != DDI_SUCCESS) {
 		err = EIO;
 		goto done;
 	}
 
-	ppt_toggle_bar(ppt, B_TRUE);
+	/* 6️⃣ Enable MEM/IO/BusMaster decode */
+	uint16_t cmd = pci_config_get16(ppt->pptd_cfg, PCI_CONF_COMM);
+	cmd |= (PCI_COMM_MAE | PCI_COMM_ME | PCI_COMM_IO);
+	pci_config_put16(ppt->pptd_cfg, PCI_CONF_COMM, cmd);
+	cmd = pci_config_get16(ppt->pptd_cfg, PCI_CONF_COMM);
+	cmn_err(CE_NOTE,
+	    "ppt_assign_device: PCI command register now 0x%04x", cmd);
+	delay(drv_usectohz(500000));
 
+	/* 7️⃣ ROM BAR re‑enable if needed */
+	uint32_t rom_bar = pci_config_get32(ppt->pptd_cfg, PCI_CONF_ROM);
+	cmn_err(CE_NOTE, "PPT: ROM BAR after reset 0x%08x", rom_bar);
+	if (!(rom_bar & PCI_BASE_ROM_ENABLE)) {
+		rom_bar = (rom_bar & PCI_BASE_ROM_ADDR_M) |
+		    PCI_BASE_ROM_ENABLE;
+		pci_config_put32(ppt->pptd_cfg, PCI_CONF_ROM, rom_bar);
+		cmn_err(CE_NOTE, "PPT: ROM BAR re‑enabled (0x%08x)", rom_bar);
+	}
+
+	cmn_err(CE_NOTE,
+	    "!ppt_assign_device: restoring config state done");
+	ppt_toggle_bar(ppt, B_TRUE);
+	cmn_err(CE_NOTE, "!ppt_assign_device: BARs enabled");
+
+	/* 9️⃣ Create new IOMMU domain and attach */
+	bdf = pci_get_bdf(ppt->pptd_dip);
+	cmn_err(CE_NOTE,
+	    "!ppt_assign_device: creating IOMMU domain for BDF 0x%x", bdf);
+	ppt->pptd_domain = iommu_create_domain(1ULL << 36);
+	if (ppt->pptd_domain == NULL) {
+		err = ENOMEM;
+		goto done;
+	}
 	ppt->vm = vm;
-	iommu_remove_device(iommu_host_domain(), pci_get_bdf(ppt->pptd_dip));
-	iommu_add_device(vm_iommu_domain(vm), pci_get_bdf(ppt->pptd_dip));
+	ppt->pptd_faults = 0;
+
+	/* Validate that the GPU really re‑initialized */
+	(void)ppt_reset_validate(ppt->pptd_dip);
+	
+	/* NEW: Ensure BusMaster for DMA */
+	cmd = pci_config_get16(ppt->pptd_cfg, PCI_CONF_COMM);
+	if ((cmd & PCI_COMM_ME) == 0) {
+		cmd |= PCI_COMM_ME;
+		pci_config_put16(ppt->pptd_cfg, PCI_CONF_COMM, cmd);
+	}
+	cmd = pci_config_get16(ppt->pptd_cfg, PCI_CONF_COMM);
+	cmn_err(CE_NOTE, "ppt_assign_device: BusMaster re‑enabled (CMD=0x%04x)", cmd);
+	
+	iommu_remove_device(iommu_host_domain(), bdf);
+	iommu_add_device(ppt->pptd_domain, bdf);
 	pf_set_passthru(ppt->pptd_dip, B_TRUE);
+	cmn_err(CE_NOTE,
+	    "!ppt_assign_device: complete, domain=%p",
+	    (void *)ppt->pptd_domain);
 
 done:
 	releasef(pptfd);
@@ -1161,28 +2065,32 @@ ppt_reset_pci_power_state(dev_info_t *dip)
 static void
 ppt_do_unassign(struct pptdev *ppt)
 {
-	struct vm *vm = ppt->vm;
-
-	ASSERT3P(vm, !=, NULL);
 	ASSERT(MUTEX_HELD(&pptdev_mtx));
+	struct vm *vm = ppt->vm;
+	uint16_t bdf = pci_get_bdf(ppt->pptd_dip);
 
 	ppt_flr(ppt->pptd_dip, B_TRUE);
-
-	/*
-	 * Restore from the state saved during device assignment.
-	 * If the device power state has been altered, that must be remedied
-	 * first, as it will reset register state during the transition.
-	 */
 	ppt_reset_pci_power_state(ppt->pptd_dip);
 	(void) pci_restore_config_regs(ppt->pptd_dip);
 
 	pf_set_passthru(ppt->pptd_dip, B_FALSE);
 
+	if (ppt->pptd_domain != NULL) {
+		cmn_err(CE_NOTE, "!ppt: unassign BDF %x from domain %p faults=%llu",
+			bdf, ppt->pptd_domain, (u_longlong_t)ppt->pptd_faults);
+
+		iommu_remove_device(ppt->pptd_domain, bdf);
+		iommu_add_device(iommu_host_domain(), bdf);
+
+		iommu_destroy_domain(ppt->pptd_domain);
+		ppt->pptd_domain = NULL;
+		ppt->pptd_faults = 0;
+	}
+
 	ppt_unmap_all_mmio(vm, ppt);
 	ppt_teardown_msi(ppt);
 	ppt_teardown_msix(ppt);
-	iommu_remove_device(vm_iommu_domain(vm), pci_get_bdf(ppt->pptd_dip));
-	iommu_add_device(iommu_host_domain(), pci_get_bdf(ppt->pptd_dip));
+
 	ppt->vm = NULL;
 }
 
@@ -1308,25 +2216,105 @@ pptintr(caddr_t arg, caddr_t unused)
 	struct pptintr_arg *pptarg = (struct pptintr_arg *)arg;
 	struct pptdev *ppt = pptarg->pptdev;
 
-	if (ppt->vm != NULL) {
-		lapic_intr_msi(ppt->vm, pptarg->addr, pptarg->msg_data);
-	} else {
-		/*
-		 * XXX
-		 * This is not expected to happen - panic?
-		 */
-	}
+	/* Don’t inject to guest yet — just log */
+	cmn_err(CE_NOTE,
+	    "PPT: got MSI interrupt from %s%d (shadow guest_msg=0x%llx)",
+	    ddi_driver_name(ppt->pptd_dip),
+	    ddi_get_instance(ppt->pptd_dip),
+	    (unsigned long long)pptarg->msg_data);
 
-	/*
-	 * For legacy interrupts give other filters a chance in case
-	 * the interrupt was not generated by the passthrough device.
-	 */
-	return (ppt->msi.is_fixed ? DDI_INTR_UNCLAIMED : DDI_INTR_CLAIMED);
+	/* Mark it claimed so the kernel doesn’t resend */
+	return (DDI_INTR_CLAIMED);
 }
 
+// static uint_t
+// pptintr(caddr_t arg, caddr_t unused)
+// {
+// 	struct pptintr_arg *pptarg = (struct pptintr_arg *)arg;
+// 	struct pptdev *ppt = pptarg->pptdev;
+// 
+// 	cmn_err(CE_NOTE,
+// 	    "PPT: ***pptintr fired*** dev=%s%d guest_msg=0x%llx",
+// 	    ddi_driver_name(ppt->pptd_dip),
+// 	    ddi_get_instance(ppt->pptd_dip),
+// 	    (unsigned long long)pptarg->msg_data);
+// 
+// 	if (ppt->vm != NULL) {
+// 		lapic_intr_msi(ppt->vm, pptarg->addr, pptarg->msg_data);
+// 	} else {
+// 		cmn_err(CE_WARN, "PPT: interrupt fired but ppt->vm == NULL");
+// 	}
+// 	return (ppt->msi.is_fixed ? DDI_INTR_UNCLAIMED : DDI_INTR_CLAIMED);
+// }
+
+/*
+ * Helper: Scan capability list to find MSI cap offset.
+ * Returns offset or 0 if none.
+ * Also returns a config handle in *cfgp which caller must teardown.
+ */
+static int
+ppt_find_msi_cap(dev_info_t *dip, ddi_acc_handle_t *cfgp)
+{
+	ddi_acc_handle_t cfg;
+	uint8_t ptr, cap;
+	int capoff = 0;
+
+	if (pci_config_setup(dip, &cfg) != DDI_SUCCESS)
+		return (0);
+
+	ptr = pci_config_get8(cfg, PCIR_CAP_PTR);
+	while (ptr != 0 && ptr != 0xff) {
+		cap = pci_config_get8(cfg, ptr + PCICAP_ID);
+		if (cap == PCIY_MSI) {
+			capoff = ptr;
+			break;
+		}
+		ptr = pci_config_get8(cfg, ptr + PCICAP_NEXTPTR);
+	}
+
+	*cfgp = cfg;
+	return (capoff);
+}
+
+// int
+// ppt_setup_msi(struct vm *vm, int vcpu, int pptfd,
+// 	uint64_t guest_addr, uint64_t guest_msg, int numvec)
+// {
+// 	struct pptdev *ppt;
+// 	int err;
+// 
+// 	if (numvec < 0 || numvec > MAX_MSIMSGS)
+// 		return (EINVAL);
+// 
+// 	mutex_enter(&pptdev_mtx);
+// 	err = ppt_findf(vm, pptfd, &ppt);
+// 	if (err != 0) {
+// 		mutex_exit(&pptdev_mtx);
+// 		return (err);
+// 	}
+// 
+// 	cmn_err(CE_NOTE, "PPT_SETUP_MSI called for dip=%p numvec=%d -- disabled in debug build",
+// 		(void*)ppt->pptd_dip, numvec);
+// 
+// 	/* For debug, do not actually allocate. Just return EBUSY/EINVAL
+// 	* or 0 if you want bhyve to think it's 'success'. */
+// 	mutex_exit(&pptdev_mtx);
+// 	return (ENOTSUP);
+// }
+
+// static uint32_t
+// expected_ir_msi_addr(uint32_t idx)
+// {
+// 	return (MSI_ADDR_HDR |
+// 	    ((idx & 0x7fff) << INTRMAP_MSI_IDX_SHIFT) |
+// 	    (1 << INTRMAP_MSI_FORMAT_SHIFT) |
+// 	    (1 << INTRMAP_MSI_SHV_SHIFT) |
+// 	    ((idx >> 15) << INTRMAP_MSI_IDX15_SHIFT));
+// }
+
 int
-ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
-    int numvec)
+ppt_setup_msi(struct vm *vm, int vcpu, int pptfd,
+	uint64_t guest_addr, uint64_t guest_msg, int numvec)
 {
 	int i, msi_count, intr_type;
 	struct pptdev *ppt;
@@ -1342,81 +2330,78 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 		return (err);
 	}
 
-	/* Reject attempts to enable MSI while MSI-X is active. */
-	if (ppt->msix.num_msgs != 0 && numvec != 0) {
-		err = EBUSY;
-		goto done;
-	}
-
-	/* Free any allocated resources */
 	ppt_teardown_msi(ppt);
 
 	if (numvec == 0) {
-		/* nothing more to do */
+		cmn_err(CE_NOTE, "PPT(%s): MSI disabled",
+			ddi_driver_name(ppt->pptd_dip));
 		goto done;
 	}
 
-	if (ddi_intr_get_navail(ppt->pptd_dip, DDI_INTR_TYPE_MSI,
-	    &msi_count) != DDI_SUCCESS) {
-		if (ddi_intr_get_navail(ppt->pptd_dip, DDI_INTR_TYPE_FIXED,
-		    &msi_count) != DDI_SUCCESS) {
-			err = EINVAL;
-			goto done;
-		}
-
+	if (ddi_intr_get_navail(ppt->pptd_dip, DDI_INTR_TYPE_MSI, &msi_count)
+		!= DDI_SUCCESS) {
 		intr_type = DDI_INTR_TYPE_FIXED;
 		ppt->msi.is_fixed = B_TRUE;
 	} else {
 		intr_type = DDI_INTR_TYPE_MSI;
+		ppt->msi.is_fixed = B_FALSE;
 	}
 
-	/*
-	 * The device must be capable of supporting the number of vectors
-	 * the guest wants to allocate.
-	 */
 	if (numvec > msi_count) {
+		cmn_err(CE_NOTE,
+			"PPT: guest requested %d MSI, only %d available",
+			numvec, msi_count);
 		err = EINVAL;
 		goto done;
 	}
 
+	cmn_err(CE_NOTE, "PPT(%s node=%s addr=%s): allocating %d MSI (PLUMBED ONLY)",
+		ddi_driver_name(ppt->pptd_dip),
+		ddi_node_name(ppt->pptd_dip),
+		ddi_get_name_addr(ppt->pptd_dip),
+		numvec);
+
 	ppt->msi.inth_sz = numvec * sizeof (ddi_intr_handle_t);
 	ppt->msi.inth = kmem_zalloc(ppt->msi.inth_sz, KM_SLEEP);
-	if (ddi_intr_alloc(ppt->pptd_dip, ppt->msi.inth, intr_type, 0,
-	    numvec, &msi_count, 0) != DDI_SUCCESS) {
+
+	if (ddi_intr_alloc(ppt->pptd_dip, ppt->msi.inth,
+		intr_type, 0, numvec, &msi_count, 0) != DDI_SUCCESS) {
+		cmn_err(CE_WARN, "PPT: ddi_intr_alloc failed");
 		kmem_free(ppt->msi.inth, ppt->msi.inth_sz);
 		err = EINVAL;
 		goto done;
 	}
 
-	/* Verify that we got as many vectors as the guest requested */
-	if (numvec != msi_count) {
-		ppt_teardown_msi(ppt);
-		err = EINVAL;
-		goto done;
-	}
-
-	/* Set up & enable interrupt handler for each vector. */
 	for (i = 0; i < numvec; i++) {
-		int res, intr_cap = 0;
+		int intr_cap = 0;
+		uint_t intr_pri = 0;
 
 		ppt->msi.num_msgs = i + 1;
-		ppt->msi.arg[i].pptdev = ppt;
-		ppt->msi.arg[i].addr = addr;
-		ppt->msi.arg[i].msg_data = msg + i;
-
-		if (ddi_intr_add_handler(ppt->msi.inth[i], pptintr,
-		    &ppt->msi.arg[i], NULL) != DDI_SUCCESS)
-			break;
+		ppt->msi.arg[i].pptdev   = ppt;
+		ppt->msi.arg[i].addr     = guest_addr;
+		ppt->msi.arg[i].msg_data = (uint32_t)(guest_msg + i);
 
 		(void) ddi_intr_get_cap(ppt->msi.inth[i], &intr_cap);
-		if (intr_cap & DDI_INTR_FLAG_BLOCK)
-			res = ddi_intr_block_enable(&ppt->msi.inth[i], 1);
-		else
-			res = ddi_intr_enable(ppt->msi.inth[i]);
+		(void) ddi_intr_get_pri(ppt->msi.inth[i], &intr_pri);
 
-		if (res != DDI_SUCCESS)
+		if (ddi_intr_add_handler(ppt->msi.inth[i],
+			pptintr, &ppt->msi.arg[i], NULL) != DDI_SUCCESS) {
+			cmn_err(CE_WARN, "PPT: ddi_intr_add_handler failed i=%d", i);
 			break;
+		}
+
+		if (intr_cap & DDI_INTR_FLAG_BLOCK)
+			err = ddi_intr_block_enable(&ppt->msi.inth[i], 1);
+		else
+			err = ddi_intr_enable(ppt->msi.inth[i]);
+
+		if (err != DDI_SUCCESS) {
+			cmn_err(CE_WARN, "PPT: ddi_intr_enable failed i=%d", i);
+			break;
+		}
+		cmn_err(CE_NOTE, "PPT: MSI[%d] handler installed & ENABLED", i);
 	}
+
 	if (i < numvec) {
 		ppt_teardown_msi(ppt);
 		err = ENXIO;
@@ -1578,4 +2563,22 @@ ppt_disable_msix(struct vm *vm, int pptfd)
 	releasef(pptfd);
 	mutex_exit(&pptdev_mtx);
 	return (err);
+}
+
+void
+ppt_dma_fault_notify(uint16_t rid)
+{
+	struct pptdev *ppt;
+
+	mutex_enter(&pptdev_mtx);
+	for (ppt = list_head(&pptdev_list);
+		ppt != NULL;
+		ppt = list_next(&pptdev_list, ppt)) {
+
+		if (pci_get_bdf(ppt->pptd_dip) == rid) {
+			ppt->pptd_faults++;
+			break;
+		}
+	}
+	mutex_exit(&pptdev_mtx);
 }

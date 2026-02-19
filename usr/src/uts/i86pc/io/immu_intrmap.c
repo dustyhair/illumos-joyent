@@ -301,8 +301,8 @@ alloc_tbl_multi_entries(intrmap_t *intrmap, uint_t cnt)
 static int
 init_unit(immu_t *immu)
 {
-	intrmap_t *intrmap;
-	size_t size;
+	intrmap_t	*intrmap;
+	size_t		size;
 
 	ddi_dma_attr_t intrmap_dma_attr = {
 		DMA_ATTR_V0,
@@ -325,31 +325,39 @@ init_unit(immu_t *immu)
 		DDI_STRICTORDER_ACC
 	};
 
-	/*
-	 * Using interrupt remapping implies using the queue
-	 * invalidation interface. According to Intel,
-	 * hardware that supports interrupt remapping should
-	 * also support QI.
-	 */
-	ASSERT(IMMU_ECAP_GET_QI(immu->immu_regs_excap));
+	/* Must support queued invalidation if using interrupt remapping */
+	if (!IMMU_ECAP_GET_QI(immu->immu_regs_excap)) {
+		cmn_err(CE_WARN,
+		    "!init_unit: immu %s has no QI support, cannot enable IR",
+		    immu->immu_name ? immu->immu_name : "<noname>");
+		return (DDI_FAILURE);
+	}
 
 	if (intrmap_apic_mode == LOCAL_X2APIC) {
 		if (!IMMU_ECAP_GET_EIM(immu->immu_regs_excap)) {
+			cmn_err(CE_WARN,
+			    "!init_unit: immu %s x2APIC but no EIM support",
+			    immu->immu_name ? immu->immu_name : "<noname>");
 			return (DDI_FAILURE);
 		}
 	}
 
 	if (intrmap_irta_s > INTRMAP_MAX_IRTA_SIZE) {
+		cmn_err(CE_WARN,
+		    "!init_unit: IRTA size %u > max %u, clamping",
+		    intrmap_irta_s, INTRMAP_MAX_IRTA_SIZE);
 		intrmap_irta_s = INTRMAP_MAX_IRTA_SIZE;
 	}
 
-	intrmap =  kmem_zalloc(sizeof (intrmap_t), KM_SLEEP);
+	intrmap = kmem_zalloc(sizeof (intrmap_t), KM_SLEEP);
 
 	if (ddi_dma_alloc_handle(immu->immu_dip,
 	    &intrmap_dma_attr,
 	    DDI_DMA_SLEEP,
 	    NULL,
 	    &(intrmap->intrmap_dma_hdl)) != DDI_SUCCESS) {
+		cmn_err(CE_WARN, "!init_unit: DMA handle alloc failed immu %s",
+		    immu->immu_name ? immu->immu_name : "<noname>");
 		kmem_free(intrmap, sizeof (intrmap_t));
 		return (DDI_FAILURE);
 	}
@@ -365,6 +373,8 @@ init_unit(immu_t *immu)
 	    &(intrmap->intrmap_vaddr),
 	    &size,
 	    &(intrmap->intrmap_acc_hdl)) != DDI_SUCCESS) {
+		cmn_err(CE_WARN, "!init_unit: DMA memory alloc failed immu %s",
+		    immu->immu_name ? immu->immu_name : "<noname>");
 		ddi_dma_free_handle(&(intrmap->intrmap_dma_hdl));
 		kmem_free(intrmap, sizeof (intrmap_t));
 		return (DDI_FAILURE);
@@ -382,8 +392,100 @@ init_unit(immu_t *immu)
 
 	immu->immu_intrmap = intrmap;
 
+	cmn_err(CE_CONT, "!init_unit: immu %s IR table initialized, size=%u",
+	    immu->immu_name ? immu->immu_name : "<noname>",
+	    intrmap->intrmap_size);
+
 	return (DDI_SUCCESS);
 }
+
+/* init interrupt remapping table */
+// static int
+// init_unit(immu_t *immu)
+// {
+// 	intrmap_t *intrmap;
+// 	size_t size;
+// 
+// 	ddi_dma_attr_t intrmap_dma_attr = {
+// 		DMA_ATTR_V0,
+// 		0U,
+// 		0xffffffffffffffffULL,
+// 		0xffffffffU,
+// 		MMU_PAGESIZE,	/* page aligned */
+// 		0x1,
+// 		0x1,
+// 		0xffffffffU,
+// 		0xffffffffffffffffULL,
+// 		1,
+// 		4,
+// 		0
+// 	};
+// 
+// 	ddi_device_acc_attr_t intrmap_acc_attr = {
+// 		DDI_DEVICE_ATTR_V0,
+// 		DDI_NEVERSWAP_ACC,
+// 		DDI_STRICTORDER_ACC
+// 	};
+// 
+// 	/*
+// 	 * Using interrupt remapping implies using the queue
+// 	 * invalidation interface. According to Intel,
+// 	 * hardware that supports interrupt remapping should
+// 	 * also support QI.
+// 	 */
+// 	ASSERT(IMMU_ECAP_GET_QI(immu->immu_regs_excap));
+// 
+// 	if (intrmap_apic_mode == LOCAL_X2APIC) {
+// 		if (!IMMU_ECAP_GET_EIM(immu->immu_regs_excap)) {
+// 			return (DDI_FAILURE);
+// 		}
+// 	}
+// 
+// 	if (intrmap_irta_s > INTRMAP_MAX_IRTA_SIZE) {
+// 		intrmap_irta_s = INTRMAP_MAX_IRTA_SIZE;
+// 	}
+// 
+// 	intrmap =  kmem_zalloc(sizeof (intrmap_t), KM_SLEEP);
+// 
+// 	if (ddi_dma_alloc_handle(immu->immu_dip,
+// 	    &intrmap_dma_attr,
+// 	    DDI_DMA_SLEEP,
+// 	    NULL,
+// 	    &(intrmap->intrmap_dma_hdl)) != DDI_SUCCESS) {
+// 		kmem_free(intrmap, sizeof (intrmap_t));
+// 		return (DDI_FAILURE);
+// 	}
+// 
+// 	intrmap->intrmap_size = 1 << (intrmap_irta_s + 1);
+// 	size = intrmap->intrmap_size * INTRMAP_RTE_SIZE;
+// 	if (ddi_dma_mem_alloc(intrmap->intrmap_dma_hdl,
+// 	    size,
+// 	    &intrmap_acc_attr,
+// 	    DDI_DMA_CONSISTENT | IOMEM_DATA_UNCACHED,
+// 	    DDI_DMA_SLEEP,
+// 	    NULL,
+// 	    &(intrmap->intrmap_vaddr),
+// 	    &size,
+// 	    &(intrmap->intrmap_acc_hdl)) != DDI_SUCCESS) {
+// 		ddi_dma_free_handle(&(intrmap->intrmap_dma_hdl));
+// 		kmem_free(intrmap, sizeof (intrmap_t));
+// 		return (DDI_FAILURE);
+// 	}
+// 
+// 	ASSERT(!((uintptr_t)intrmap->intrmap_vaddr & MMU_PAGEOFFSET));
+// 	bzero(intrmap->intrmap_vaddr, size);
+// 	intrmap->intrmap_paddr = pfn_to_pa(
+// 	    hat_getpfnum(kas.a_hat, intrmap->intrmap_vaddr));
+// 
+// 	mutex_init(&(intrmap->intrmap_lock), NULL, MUTEX_DRIVER, NULL);
+// 	bitset_init(&intrmap->intrmap_map);
+// 	bitset_resize(&intrmap->intrmap_map, intrmap->intrmap_size);
+// 	intrmap->intrmap_free = 0;
+// 
+// 	immu->immu_intrmap = intrmap;
+// 
+// 	return (DDI_SUCCESS);
+// }
 
 static immu_t *
 get_immu(dev_info_t *dip, uint16_t type, uchar_t ioapic_index)
@@ -670,9 +772,9 @@ immu_intrmap_alloc(void **intrmap_private_tbl, dev_info_t *dip,
 	immu_t	*immu;
 	intrmap_t *intrmap;
 	immu_inv_wait_t *iwp;
-	uint32_t		idx, i;
-	uint32_t		sid_svt_sq;
-	intrmap_private_t	*intrmap_private;
+	uint32_t	idx, i;
+	uint32_t	sid_svt_sq;
+	intrmap_private_t *intrmap_private;
 
 	if (intrmap_private_tbl[0] == INTRMAP_DISABLE ||
 	    intrmap_private_tbl[0] != NULL) {
@@ -687,6 +789,10 @@ immu_intrmap_alloc(void **intrmap_private_tbl, dev_info_t *dip,
 	if ((immu != NULL) && (immu->immu_intrmap_running == B_TRUE)) {
 		intrmap_private->ir_immu = immu;
 	} else {
+		prom_printf("IRMAP: alloc failed for dip=%p type=0x%x "
+		    "(immu=%p, running=%d)\n",
+		    (void *)dip, type, (void *)immu,
+		    immu ? immu->immu_intrmap_running : -1);
 		goto intrmap_disable;
 	}
 
@@ -699,6 +805,8 @@ immu_intrmap_alloc(void **intrmap_private_tbl, dev_info_t *dip,
 	}
 
 	if (idx == INTRMAP_IDX_FULL) {
+		prom_printf("IRMAP: allocation FULL for dip=%p type=0x%x count=%d\n",
+		    (void *)dip, type, count);
 		goto intrmap_disable;
 	}
 
@@ -708,6 +816,13 @@ immu_intrmap_alloc(void **intrmap_private_tbl, dev_info_t *dip,
 	    get_sid(dip, type, ioapic_index);
 	iwp = &intrmap_private->ir_inv_wait;
 	immu_init_inv_wait(iwp, "intrmaplocal", B_TRUE);
+
+	/* 🔎 Log the allocation */
+	prom_printf("IRMAP: dip=%p type=%s count=%d idx=%u (sid=0x%x) immu=%s\n",
+	    (void *)dip,
+	    (DDI_INTR_IS_MSI_OR_MSIX(type) ? "MSI/MSI-X" : "IOAPIC"),
+	    count, idx, sid_svt_sq,
+	    immu->immu_name ? immu->immu_name : "<noname>");
 
 	if (count == 1) {
 		if (IMMU_CAP_GET_CM(immu->immu_regs_cap)) {
@@ -726,6 +841,8 @@ immu_intrmap_alloc(void **intrmap_private_tbl, dev_info_t *dip,
 		INTRMAP_PRIVATE(intrmap_private_tbl[i])->ir_sid_svt_sq =
 		    sid_svt_sq;
 		INTRMAP_PRIVATE(intrmap_private_tbl[i])->ir_idx = idx + i;
+
+		prom_printf("IRMAP:   multi-idx=%u for dip=%p\n", idx+i, (void*)dip);
 	}
 
 	if (IMMU_CAP_GET_CM(immu->immu_regs_cap)) {
@@ -741,21 +858,20 @@ intrmap_disable:
 	intrmap_private_tbl[0] = INTRMAP_DISABLE;
 }
 
-
 /* remapping the interrupt */
 static void
-immu_intrmap_map(void *intrmap_private, void *intrmap_data, uint16_t type,
-    int count)
+immu_intrmap_map(void *intrmap_private, void *intrmap_data,
+	uint16_t type, int count)
 {
-	immu_t	*immu;
-	immu_inv_wait_t	*iwp;
-	intrmap_t	*intrmap;
-	ioapic_rdt_t	*irdt = (ioapic_rdt_t *)intrmap_data;
-	msi_regs_t	*mregs = (msi_regs_t *)intrmap_data;
-	intrmap_rte_t	irte;
-	uint_t		idx, i;
-	uint32_t	dst, sid_svt_sq;
-	uchar_t		vector, dlm, tm, rh, dm;
+	immu_t          *immu;
+	immu_inv_wait_t *iwp;
+	intrmap_t       *intrmap;
+	ioapic_rdt_t    *irdt = (ioapic_rdt_t *)intrmap_data;
+	msi_regs_t      *mregs = (msi_regs_t *)intrmap_data;
+	intrmap_rte_t    irte;
+	uint_t           idx, i;
+	uint32_t         dst, sid_svt_sq;
+	uchar_t          vector, dlm, tm, rh, dm;
 
 	if (intrmap_private == INTRMAP_DISABLE)
 		return;
@@ -774,14 +890,15 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data, uint16_t type,
 		dst = irdt->ir_hi;
 
 		/*
-		 * Mark the IRTE's TM as Edge to suppress broadcast EOI.
-		 */
+		* Mark the IRTE's TM as Edge to suppress broadcast EOI.
+		*/
 		if (intrmap_suppress_brdcst_eoi) {
 			tm = TRIGGER_MODE_EDGE;
 		}
 
 		vector = RDT_VECTOR(irdt->ir_lo);
 	} else {
+		/* MSI/MSI-X interrupt */
 		dm = MSI_ADDR_DM_PHYSICAL;
 		rh = MSI_ADDR_RH_FIXED;
 		tm = TRIGGER_MODE_EDGE;
@@ -789,6 +906,26 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data, uint16_t type,
 		dst = mregs->mr_addr;
 
 		vector = mregs->mr_data & 0xff;
+
+		/* Diagnostic logging before shifting dst */
+		uint64_t raw_dst = (uint64_t)mregs->mr_addr;
+		uint64_t shifted_dst = (intrmap_apic_mode == LOCAL_APIC) ?
+			((raw_dst & 0xFFULL) << 8) : raw_dst;
+
+		if (intrmap_apic_mode == LOCAL_APIC && shifted_dst > 0xFF00) {
+			cmn_err(CE_WARN,
+				"!immu_intrmap_map: suspicious APIC dest (shifted=0x%" PRIx64
+				") raw 0x%" PRIx64, shifted_dst, raw_dst);
+		}
+
+		cmn_err(CE_CONT,
+			"!immu_intrmap_map: MSI setup idx=%u vector=0x%x "
+			"raw_dst=0x%" PRIx64 " shifted_dst=0x%" PRIx64 " "
+			"msi_addr=0x%" PRIx64 " msi_data=0x%" PRIx32 " (count=%d)",
+			idx, (unsigned int)vector,
+			raw_dst, shifted_dst,
+			(uint64_t)mregs->mr_addr, (uint32_t)mregs->mr_data,
+			count);
 	}
 
 	if (intrmap_apic_mode == LOCAL_APIC)
@@ -798,10 +935,14 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data, uint16_t type,
 		irte.lo = IRTE_LOW(dst, vector, dlm, tm, rh, dm, 0, 1);
 		irte.hi = IRTE_HIGH(sid_svt_sq);
 
+		cmn_err(CE_CONT,
+			"!IRTE[%u]: lo=0x%" PRIx64 " hi=0x%" PRIx64,
+			idx, (uint64_t)irte.lo, (uint64_t)irte.hi);
+
 		/* set interrupt remapping table entry */
 		bcopy(&irte, intrmap->intrmap_vaddr +
-		    idx * INTRMAP_RTE_SIZE,
-		    INTRMAP_RTE_SIZE);
+			idx * INTRMAP_RTE_SIZE,
+			INTRMAP_RTE_SIZE);
 
 		immu_qinv_intr_one_cache(immu, idx, iwp);
 
@@ -810,17 +951,99 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data, uint16_t type,
 			irte.lo = IRTE_LOW(dst, vector, dlm, tm, rh, dm, 0, 1);
 			irte.hi = IRTE_HIGH(sid_svt_sq);
 
+			cmn_err(CE_CONT,
+				"!IRTE[%u]: lo=0x%" PRIx64 " hi=0x%" PRIx64,
+				idx + i, (uint64_t)irte.lo, (uint64_t)irte.hi);
+
 			/* set interrupt remapping table entry */
 			bcopy(&irte, intrmap->intrmap_vaddr +
-			    idx * INTRMAP_RTE_SIZE,
-			    INTRMAP_RTE_SIZE);
+				(idx + i) * INTRMAP_RTE_SIZE,
+				INTRMAP_RTE_SIZE);
 			vector++;
-			idx++;
 		}
 
 		immu_qinv_intr_caches(immu, idx, count, iwp);
 	}
 }
+/* remapping the interrupt */
+// static void
+// immu_intrmap_map(void *intrmap_private, void *intrmap_data, uint16_t type,
+//     int count)
+// {
+// 	immu_t	*immu;
+// 	immu_inv_wait_t	*iwp;
+// 	intrmap_t	*intrmap;
+// 	ioapic_rdt_t	*irdt = (ioapic_rdt_t *)intrmap_data;
+// 	msi_regs_t	*mregs = (msi_regs_t *)intrmap_data;
+// 	intrmap_rte_t	irte;
+// 	uint_t		idx, i;
+// 	uint32_t	dst, sid_svt_sq;
+// 	uchar_t		vector, dlm, tm, rh, dm;
+// 
+// 	if (intrmap_private == INTRMAP_DISABLE)
+// 		return;
+// 
+// 	idx = INTRMAP_PRIVATE(intrmap_private)->ir_idx;
+// 	immu = INTRMAP_PRIVATE(intrmap_private)->ir_immu;
+// 	iwp = &INTRMAP_PRIVATE(intrmap_private)->ir_inv_wait;
+// 	intrmap = immu->immu_intrmap;
+// 	sid_svt_sq = INTRMAP_PRIVATE(intrmap_private)->ir_sid_svt_sq;
+// 
+// 	if (!DDI_INTR_IS_MSI_OR_MSIX(type)) {
+// 		dm = RDT_DM(irdt->ir_lo);
+// 		rh = 0;
+// 		tm = RDT_TM(irdt->ir_lo);
+// 		dlm = RDT_DLM(irdt->ir_lo);
+// 		dst = irdt->ir_hi;
+// 
+// 		/*
+// 		 * Mark the IRTE's TM as Edge to suppress broadcast EOI.
+// 		 */
+// 		if (intrmap_suppress_brdcst_eoi) {
+// 			tm = TRIGGER_MODE_EDGE;
+// 		}
+// 
+// 		vector = RDT_VECTOR(irdt->ir_lo);
+// 	} else {
+// 		dm = MSI_ADDR_DM_PHYSICAL;
+// 		rh = MSI_ADDR_RH_FIXED;
+// 		tm = TRIGGER_MODE_EDGE;
+// 		dlm = 0;
+// 		dst = mregs->mr_addr;
+// 
+// 		vector = mregs->mr_data & 0xff;
+// 	}
+// 
+// 	if (intrmap_apic_mode == LOCAL_APIC)
+// 		dst = (dst & 0xFF) << 8;
+// 
+// 	if (count == 1) {
+// 		irte.lo = IRTE_LOW(dst, vector, dlm, tm, rh, dm, 0, 1);
+// 		irte.hi = IRTE_HIGH(sid_svt_sq);
+// 
+// 		/* set interrupt remapping table entry */
+// 		bcopy(&irte, intrmap->intrmap_vaddr +
+// 		    idx * INTRMAP_RTE_SIZE,
+// 		    INTRMAP_RTE_SIZE);
+// 
+// 		immu_qinv_intr_one_cache(immu, idx, iwp);
+// 
+// 	} else {
+// 		for (i = 0; i < count; i++) {
+// 			irte.lo = IRTE_LOW(dst, vector, dlm, tm, rh, dm, 0, 1);
+// 			irte.hi = IRTE_HIGH(sid_svt_sq);
+// 
+// 			/* set interrupt remapping table entry */
+// 			bcopy(&irte, intrmap->intrmap_vaddr +
+// 			    idx * INTRMAP_RTE_SIZE,
+// 			    INTRMAP_RTE_SIZE);
+// 			vector++;
+// 			idx++;
+// 		}
+// 
+// 		immu_qinv_intr_caches(immu, idx, count, iwp);
+// 	}
+// }
 
 /* free the remapping entry */
 static void
@@ -881,14 +1104,14 @@ immu_intrmap_rdt(void *intrmap_private, ioapic_rdt_t *irdt)
 	}
 }
 
-/* record the msi interrupt structure */
-/*ARGSUSED*/
+
 static void
 immu_intrmap_msi(void *intrmap_private, msi_regs_t *mregs)
 {
 	uint_t	idx;
 
 	if (intrmap_private != INTRMAP_DISABLE && intrmap_private != NULL) {
+		/* Interrupt Remapping case: use IR-format MSI address encoding */
 		idx = INTRMAP_PRIVATE(intrmap_private)->ir_idx;
 
 		mregs->mr_data = 0;
@@ -897,15 +1120,51 @@ immu_intrmap_msi(void *intrmap_private, msi_regs_t *mregs)
 		    (1 << INTRMAP_MSI_FORMAT_SHIFT) |
 		    (1 << INTRMAP_MSI_SHV_SHIFT) |
 		    ((idx >> 15) << INTRMAP_MSI_IDX15_SHIFT);
+
+		cmn_err(CE_CONT,
+		    "!immu_intrmap_msi(IR): idx=%u mr_addr=0x%" PRIx64
+		    " mr_data=0x%x (IR-format encoding)",
+		    idx, (uint64_t)mregs->mr_addr, mregs->mr_data);
 	} else {
+		/* Compatibility / non-remapped format */
 		mregs->mr_addr = MSI_ADDR_HDR |
 		    (MSI_ADDR_RH_FIXED << MSI_ADDR_RH_SHIFT) |
 		    (MSI_ADDR_DM_PHYSICAL << MSI_ADDR_DM_SHIFT) |
 		    (mregs->mr_addr << MSI_ADDR_DEST_SHIFT);
 		mregs->mr_data = (MSI_DATA_TM_EDGE << MSI_DATA_TM_SHIFT) |
 		    mregs->mr_data;
+
+		cmn_err(CE_CONT,
+		    "!immu_intrmap_msi(compat): mr_addr=0x%" PRIx64
+		    " mr_data=0x%x",
+		    (uint64_t)mregs->mr_addr, mregs->mr_data);
 	}
 }
+
+/*ARGSUSED*/
+// static void
+// immu_intrmap_msi(void *intrmap_private, msi_regs_t *mregs)
+// {
+// 	uint_t	idx;
+// 
+// 	if (intrmap_private != INTRMAP_DISABLE && intrmap_private != NULL) {
+// 		idx = INTRMAP_PRIVATE(intrmap_private)->ir_idx;
+// 
+// 		mregs->mr_data = 0;
+// 		mregs->mr_addr = MSI_ADDR_HDR |
+// 		    ((idx & 0x7fff) << INTRMAP_MSI_IDX_SHIFT) |
+// 		    (1 << INTRMAP_MSI_FORMAT_SHIFT) |
+// 		    (1 << INTRMAP_MSI_SHV_SHIFT) |
+// 		    ((idx >> 15) << INTRMAP_MSI_IDX15_SHIFT);
+// 	} else {
+// 		mregs->mr_addr = MSI_ADDR_HDR |
+// 		    (MSI_ADDR_RH_FIXED << MSI_ADDR_RH_SHIFT) |
+// 		    (MSI_ADDR_DM_PHYSICAL << MSI_ADDR_DM_SHIFT) |
+// 		    (mregs->mr_addr << MSI_ADDR_DEST_SHIFT);
+// 		mregs->mr_data = (MSI_DATA_TM_EDGE << MSI_DATA_TM_SHIFT) |
+// 		    mregs->mr_data;
+// 	}
+// }
 
 /* ######################################################################### */
 /*
@@ -1003,3 +1262,28 @@ immu_intr_register(immu_t *immu)
 
 	(void) immu_intr_handler((caddr_t)immu, NULL);
 }
+
+
+// /*
+//  * Return MSI message address/data programmed for this handle.
+//  * For passthru drivers like ppt that must reprogram hardware.
+//  */
+// int
+// ddi_intr_get_msi_info(ddi_intr_handle_t hdl, uint32_t *addrlo,
+//     uint32_t *addrhi, uint16_t *data)
+// {
+// 	ddi_intr_handle_impl_t *ihp =
+// 	    (ddi_intr_handle_impl_t *)hdl;
+// 
+// 	if (ihp == NULL || ihp->ih_type != DDI_INTR_TYPE_MSI)
+// 		return (DDI_FAILURE);
+// 
+// 	if (addrlo != NULL)
+// 		*addrlo = (uint32_t)(ihp->ih_msi_addr & 0xffffffffUL);
+// 	if (addrhi != NULL)
+// 		*addrhi = (uint32_t)(ihp->ih_msi_addr >> 32);
+// 	if (data != NULL)
+// 		*data = (uint16_t)ihp->ih_msi_data;
+// 
+// 	return (DDI_SUCCESS);
+// }

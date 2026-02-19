@@ -29,6 +29,10 @@ typedef struct vmm_hold vmm_hold_t;
 struct vmm_lease;
 typedef struct vmm_lease vmm_lease_t;
 
+struct vm;   /* forward declaration */
+struct vm_memquery_list;
+int vm_memquery(struct vm *vm, uint64_t gpa, uint64_t len, uint64_t *hpa);
+int vm_memquery_list(struct vm *vm, uint64_t gpa, uint64_t len,struct vm_memquery_list *out);
 /*
  * This is effectively a synonym for the bhyve-internal 'struct vm_page' type.
  * Use of `vmm_page_t *` instead allows us to keep those implementation details

@@ -79,6 +79,9 @@ struct pci_devemu {
 #ifndef __FreeBSD__
 	void	(*pe_lintrupdate)(struct pci_devinst *pi);
 #endif /* __FreeBSD__ */
+
+	/* New field for cleanup */
+    /*void  (*pe_cleanup)(struct pci_devinst *pi);*/
 };
 #define PCI_EMUL_SET(x)   DATA_SET(pci_devemu_set, x)
 

@@ -70,6 +70,13 @@ ddi_modhandle_t iommu_modhdl;
 static const struct iommu_ops *ops;
 static void *host_domain;
 
+struct iommu_domain {
+    void    *impl;   /* backend handle returned by ops->create_domain() */
+    uint32_t id;     /* unique domain ID assigned on create */
+};
+
+static uint32_t next_domain_id = 1;
+
 static int
 iommu_find_device(dev_info_t *dip, void *arg)
 {
@@ -120,7 +127,7 @@ iommu_init(void)
 		goto bail;
 	}
 
-	/* Initialize the backend */
+	/* Initialize the backend */	
 	error = ops->init();
 	if (error != 0) {
 		goto bail;
@@ -259,6 +266,38 @@ iommu_remove_mapping(void *domain, vm_paddr_t gpa, size_t len)
 	}
 }
 
+int
+iommu_domain_map(void *domain, uint64_t gpa, uint64_t hpa,
+                 size_t len, int prot)
+{
+    if (domain == NULL)
+        return (EINVAL);
+
+    /*
+     * For MVP: ignore prot (all mappings RW).
+     * Later we can plumb this flag into vtd_update_mapping().
+     */
+    iommu_create_mapping(domain, gpa, hpa, len);
+
+    /* Invalidate device TLB so it sees the new mapping */
+    iommu_invalidate_tlb(domain);
+
+    return (0);
+}
+
+int
+iommu_domain_unmap(void *domain, uint64_t gpa, size_t len)
+{
+    if (domain == NULL)
+        return (EINVAL);
+
+    iommu_remove_mapping(domain, gpa, len);
+
+    iommu_invalidate_tlb(domain);
+
+    return (0);
+}
+
 void *
 iommu_host_domain(void)
 {
@@ -288,3 +327,4 @@ iommu_invalidate_tlb(void *domain)
 
 	ops->invalidate_tlb(domain);
 }
+

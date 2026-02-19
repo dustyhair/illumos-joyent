@@ -611,6 +611,17 @@ modify_bar_registration(struct pci_devinst *pi, int idx, int registration)
 	struct mem_range mr;
 
 	pe = pi->pi_d;
+
+	/*
+	* Special‑case passthru devices:
+	* Let passthru_addr() handle mapping/unmapping via IOMMU,
+	* and skip core inout/mem handler registration.
+	*/
+	if (pe != NULL && strcmp(pe->pe_emu, "passthru") == 0) {
+		error = 0;
+		goto out;
+	}
+
 	switch (pi->pi_bar[idx].type) {
 	case PCIBAR_IO:
 		bzero(&iop, sizeof(struct inout_port));
@@ -622,9 +633,11 @@ modify_bar_registration(struct pci_devinst *pi, int idx, int registration)
 			iop.handler = pci_emul_io_handler;
 			iop.arg = pi;
 			error = register_inout(&iop);
-		} else
+		} else {
 			error = unregister_inout(&iop);
+		}
 		break;
+
 	case PCIBAR_MEM32:
 	case PCIBAR_MEM64:
 		bzero(&mr, sizeof(struct mem_range));
@@ -637,16 +650,21 @@ modify_bar_registration(struct pci_devinst *pi, int idx, int registration)
 			mr.arg1 = pi;
 			mr.arg2 = idx;
 			error = register_mem(&mr);
-		} else
+		} else {
 			error = unregister_mem(&mr);
+		}
 		break;
+
 	case PCIBAR_ROM:
 		error = 0;
 		break;
+
 	default:
 		error = EINVAL;
 		break;
 	}
+
+out:
 	assert(error == 0);
 
 	if (pe->pe_baraddr != NULL)

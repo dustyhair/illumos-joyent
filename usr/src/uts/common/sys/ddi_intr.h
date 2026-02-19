@@ -323,6 +323,9 @@ void	ddi_remove_softintr(ddi_softintr_t id);
 
 void	ddi_trigger_softintr(ddi_softintr_t id);
 
+//extern int ddi_intr_get_msi_info(ddi_intr_handle_t,
+//    uint32_t *addrlo, uint32_t *addrhi, uint16_t *data);
+
 #endif	/* _KERNEL */
 
 #ifdef	__cplusplus

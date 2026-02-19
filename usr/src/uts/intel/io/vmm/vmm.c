@@ -92,6 +92,9 @@
 #include "io/ppt.h"
 #include "io/iommu.h"
 
+#include <vm/page.h>   /* for PFN_INVALID, page_pptonum() */
+#include <vm/seg_kmem.h>
+
 struct vlapic;
 
 /* Flags for vtc_status */
@@ -175,6 +178,11 @@ struct mem_seg {
 	size_t	len;
 	bool	sysmem;
 	vm_object_t *object;
+
+	/* New fields for per page PFN tracking */
+    pfn_t   *pfns;        /* array of PFNs, len >> PAGESHIFT entries */
+    size_t   npages;      /* count of PFNs */
+	void        *kva_base;  /* segkmem VA mapping for this segment */
 };
 #define	VM_MAX_MEMSEGS	5
 
@@ -879,6 +887,24 @@ vm_alloc_memseg(struct vm *vm, int ident, size_t len, bool sysmem)
 	seg->len = len;
 	seg->object = obj;
 	seg->sysmem = sysmem;
+
+	seg->npages  = btop(len);
+	seg->pfns    = kmem_zalloc(sizeof(pfn_t) * seg->npages, KM_SLEEP);
+
+	/* Allocate kernel VA backing for this segment */
+	seg->kva_base = segkmem_alloc(heap_arena, len, KM_SLEEP);
+	if (seg->kva_base == NULL)
+		return (ENOMEM);
+
+	/* Touch each page, get PFN */
+	for (size_t i = 0; i < seg->npages; i++) {
+		caddr_t pageva = (caddr_t)seg->kva_base + (i << PAGESHIFT);
+		/* Fault in the page */
+		bzero(pageva, PAGESIZE);
+		pfn_t pfn = hat_getpfnum(kas.a_hat, pageva);
+		seg->pfns[i] = (pfn != PFN_INVALID) ? pfn : PFN_INVALID;
+    }
+
 	return (0);
 }
 
@@ -904,16 +930,33 @@ vm_get_memseg(struct vm *vm, int ident, size_t *len, bool *sysmem,
 void
 vm_free_memseg(struct vm *vm, int ident)
 {
-	struct mem_seg *seg;
+    struct mem_seg *seg;
 
-	KASSERT(ident >= 0 && ident < VM_MAX_MEMSEGS,
-	    ("%s: invalid memseg ident %d", __func__, ident));
+    KASSERT(ident >= 0 && ident < VM_MAX_MEMSEGS,
+        ("%s: invalid memseg ident %d", __func__, ident));
 
-	seg = &vm->mem_segs[ident];
-	if (seg->object != NULL) {
-		vm_object_release(seg->object);
-		bzero(seg, sizeof (struct mem_seg));
-	}
+    seg = &vm->mem_segs[ident];
+
+    /* Free segkmem mapping if we created one */
+    if (seg->kva_base != NULL) {
+        segkmem_free(heap_arena, seg->kva_base, seg->len);
+        seg->kva_base = NULL;
+    }
+
+    /* Free per-page PFN array if present */
+    if (seg->pfns != NULL) {
+        kmem_free(seg->pfns, seg->npages * sizeof (pfn_t));
+        seg->pfns = NULL;
+        seg->npages = 0;
+    }
+
+    if (seg->object != NULL) {
+        vm_object_release(seg->object);
+        seg->object = NULL;
+    }
+
+    /* Now clear out the struct */
+    bzero(seg, sizeof (*seg));
 }
 
 int
@@ -1155,6 +1198,7 @@ vm_unassign_pptdev(struct vm *vm, int pptfd)
 int
 vm_assign_pptdev(struct vm *vm, int pptfd)
 {
+	//return (0);
 	int error;
 	vm_paddr_t maxaddr;
 
@@ -5148,4 +5192,158 @@ vmm_data_write(struct vm *vm, const vmm_data_req_t *req)
 	}
 
 	return (err);
+}
+
+int
+vm_memquery(struct vm *vm, uint64_t gpa, uint64_t len, uint64_t *hpa)
+{
+	for (int i = 0; i < VM_MAX_MEMMAPS; i++) {
+		struct mem_map *m = &vm->mem_maps[i];
+		if (m->len == 0)
+			continue;
+
+		if (gpa >= m->gpa && (gpa + len) <= (m->gpa + m->len)) {
+			struct mem_seg *s = &vm->mem_segs[m->segid];
+			if (s->pfns == NULL)
+				return (EFAULT);
+			uint64_t offset   = (gpa - m->gpa) + m->segoff;
+			size_t   page_idx = offset >> PAGESHIFT;
+			if (page_idx >= s->npages)
+				return (EINVAL);
+			pfn_t pfn = s->pfns[page_idx];
+			if (pfn == PFN_INVALID)
+				return (EFAULT);
+			*hpa = ((uint64_t)pfn << PAGESHIFT) | (gpa & PAGEOFFSET);
+			return (0);
+		}
+	}
+	return (ENOENT);
+}
+
+int
+vm_memquery_list(struct vm *vm, uint64_t gpa, uint64_t len,
+				struct vm_memquery_list *out)
+{
+	if (len == 0)
+		return (EINVAL);
+
+	/* compute VM’s highest GPA */
+	uint64_t vm_limit = 0;
+	for (int i = 0; i < VM_MAX_MEMMAPS; i++) {
+		struct mem_map *mm = &vm->mem_maps[i];
+		if (mm->len == 0) continue;
+		uint64_t top = mm->gpa + mm->len;
+		if (top > vm_limit)
+			vm_limit = top;
+	}
+
+	if (len == ~0ULL || gpa + len > vm_limit) {
+		if (gpa >= vm_limit)
+			return (ENOENT);
+		len = vm_limit - gpa;
+	}
+
+	uint64_t start = gpa & ~PAGEOFFSET;
+	uint64_t end   = (gpa + len + PAGEOFFSET) & ~PAGEOFFSET;
+	if (end <= start)
+		return (EINVAL);
+
+	const uint32_t capacity = out->nents;
+	uint32_t filled = 0;
+	uint32_t required = 0;
+
+	/* counters for observability */
+	uint32_t cnt_4k = 0, cnt_2m = 0, cnt_1g = 0;
+
+	for (int i = 0; i < VM_MAX_MEMMAPS; i++) {
+		struct mem_map *m = &vm->mem_maps[i];
+		if (m->len == 0) continue;
+
+		uint64_t seg_start = MAX(start, m->gpa);
+		uint64_t seg_end   = MIN(end, m->gpa + m->len);
+		if (seg_start >= seg_end) continue;
+
+		struct mem_seg *s = &vm->mem_segs[m->segid];
+		if (s->pfns == NULL)
+			return (EFAULT);
+
+		uint64_t offset    = (seg_start - m->gpa) + m->segoff;
+		size_t   start_idx = offset >> PAGESHIFT;
+		size_t   npages    = (seg_end - seg_start) >> PAGESHIFT;
+
+		size_t idx = start_idx;
+		while (idx < start_idx + npages) {
+			pfn_t basepfn = s->pfns[idx];
+			if (basepfn == PFN_INVALID)
+				return (EFAULT);
+
+			/* Build a physically contiguous run */
+			size_t run_start = idx;
+			size_t run_len   = PAGESIZE;
+			idx++;
+			while (idx < start_idx + npages &&
+				s->pfns[idx] != PFN_INVALID &&
+				s->pfns[idx] == basepfn + (idx - run_start)) {
+				run_len += PAGESIZE;
+				idx++;
+			}
+
+			uint64_t run_gpa = seg_start + ((run_start - start_idx) << PAGESHIFT);
+			uint64_t run_hpa = ((uint64_t)basepfn << PAGESHIFT);
+			size_t   remaining = run_len;
+
+			/* Head / Body / Tail splitting */
+			while (remaining > 0) {
+				uint64_t chunk_len;
+
+				/* head: burn 4K until 2M‑aligned */
+				if ((run_gpa & ((1ULL<<21)-1)) || (run_hpa & ((1ULL<<21)-1))) {
+					chunk_len = PAGESIZE;
+					cnt_4k++;
+				}
+				/* body: use 1G if possible else 2M */
+				else if (remaining >= (1ULL<<30) &&
+						(run_gpa % (1ULL<<30)) == 0 &&
+						(run_hpa % (1ULL<<30)) == 0) {
+					chunk_len = 1ULL << 30;
+					cnt_1g++;
+				}
+				else if (remaining >= (1ULL<<21)) {
+					chunk_len = 1ULL << 21;
+					cnt_2m++;
+				}
+				/* tail: too little left, 4K */
+				else {
+					chunk_len = PAGESIZE;
+					cnt_4k++;
+				}
+
+				required++;
+				if (filled < capacity) {
+					out->ents[filled].gpa = run_gpa;
+					out->ents[filled].hpa = run_hpa;
+					out->ents[filled].len = chunk_len;
+					filled++;
+				}
+
+				run_gpa   += chunk_len;
+				run_hpa   += chunk_len;
+				remaining -= chunk_len;
+			}
+		}
+	}
+
+	out->nents = required;
+
+	if (required > capacity) {
+		cmn_err(CE_NOTE,
+			"vm_memquery_list: EOVERFLOW need=%u (1G=%u 2M=%u 4K=%u)",
+			required, cnt_1g, cnt_2m, cnt_4k);
+		return (EOVERFLOW);
+	}
+
+	cmn_err(CE_NOTE,
+		"vm_memquery_list: OK nents=%u (1G=%u 2M=%u 4K=%u)",
+		required, cnt_1g, cnt_2m, cnt_4k);
+	return (0);
 }

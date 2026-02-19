@@ -82,6 +82,29 @@ struct vm_memseg {
 	char		name[VM_MAX_SEG_NAMELEN];
 };
 
+
+/*
+* New ioctl for Phase 2a: query GPA..HPA mapping.
+* Initially assumes contiguous region from seg->pfn_base.
+*/
+struct vm_memquery_run {
+	uint64_t gpa;   /* [in] guest physical base */
+	uint64_t len;   /* [in] length in bytes */
+	uint64_t hpa;   /* [out] host physical base */
+};
+
+#define VM_MEMQUERY   (VMM_IOC_BASE | 0x40)
+
+struct vm_memquery_list {
+	uint64_t gpa;
+	uint64_t len;
+	uint32_t nents;
+	uint32_t pad; /* to align ents[] to 8 bytes */
+	struct vm_memquery_run ents[];
+};
+
+#define VM_MEMQUERY_LIST (VMM_IOC_BASE | 0x41)
+
 struct vm_register {
 	int		cpuid;
 	int		regnum;		/* enum vm_reg_name */

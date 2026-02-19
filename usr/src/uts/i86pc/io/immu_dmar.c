@@ -1245,6 +1245,8 @@ boolean_t
 immu_dmar_intrmap_supported(void)
 {
 	ASSERT(dmar_table);
+	cmn_err(CE_CONT, "!immu_dmar_intrmap_supported: tbl_intrmap=%d",
+		dmar_table->tbl_intrmap);
 	return (dmar_table->tbl_intrmap);
 }
 

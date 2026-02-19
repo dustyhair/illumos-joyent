@@ -82,6 +82,8 @@ struct vtdmap {
 #define	VTD_CAP_SAGAW(cap)	(((cap) >> 8) & 0x1F)
 #define	VTD_CAP_ND(cap)		((cap) & 0x7)
 #define	VTD_CAP_CM(cap)		(((cap) >> 7) & 0x1)
+//XXX this is sus
+//#define	VTD_CAP_SPS(cap)	(((cap) >> 34) & 0x7)
 #define	VTD_CAP_SPS(cap)	(((cap) >> 34) & 0xF)
 #define	VTD_CAP_RWBF(cap)	(((cap) >> 4) & 0x1)
 
@@ -200,8 +202,8 @@ vtd_device_scope(uint16_t rid)
 	ACPI_DMAR_HARDWARE_UNIT *drhd;
 	ACPI_DMAR_DEVICE_SCOPE *device_scope;
 	ACPI_DMAR_PCI_PATH *path;
-
-	for (i = 0; i < drhd_num; i++) {
+	//I only want to use the first drhd
+	for (i = 1; i < drhd_num; i++) {
 		drhd = drhds[i];
 
 		if (VTD_DRHD_INCLUDE_PCI_ALL(drhd->Flags)) {
@@ -502,7 +504,8 @@ skip_dmar:
 	drhd_num = units;
 
 	max_domains = 64 * 1024; /* maximum valid value */
-	for (i = 0; i < drhd_num; i++) {
+	//HACKING!!!!
+	for (i = 1; i < drhd_num; i++) {
 		vtdmap = vtdmaps[i];
 
 		if (VTD_CAP_CM(vtdmap->cap) != 0)
@@ -511,6 +514,7 @@ skip_dmar:
 		/* take most compatible (minimum) value */
 		if ((tmp = vtd_max_domains(vtdmap)) < max_domains)
 			max_domains = tmp;
+			
 	}
 
 	/*
@@ -524,6 +528,9 @@ skip_dmar:
 		root_table[i * 2] = ctx_paddr | VTD_ROOT_PRESENT;
 	}
 
+	cmn_err(CE_NOTE, "vtd_init: found %d DRHD units", units);
+	cmn_err(CE_NOTE, "vtd_init: max_domains=%d", max_domains);
+	
 	return (0);
 
 #ifndef __FreeBSD__
@@ -543,8 +550,8 @@ vtd_cleanup(void)
 	KASSERT(SLIST_EMPTY(&domhead), ("domain list not empty"));
 
 	bzero(root_table, sizeof (root_table));
-
-	for (i = 0; i <= drhd_num; i++) {
+	//HACKING!!!
+	for (i = 1; i <= drhd_num; i++) {
 		vtdmaps[i] = NULL;
 		/*
 		 * Unmap the vtd registers. Note that the devinfo nodes
@@ -557,17 +564,50 @@ vtd_cleanup(void)
 #endif
 }
 
+
+#ifndef VTD_ECAP_IR
+#define VTD_ECAP_IR(_ecap) (((_ecap) >> 3) & 0x1)
+#endif 
+
+static boolean_t
+vtd_ir_unit_ok(int unit, struct vtdmap *vtdmap)
+{
+	/*
+	 * Temporary policy function – in a real tree you’d probably make
+	 * this check for quirks, errata, or even a tunable to skip/force
+	 * certain units.
+	 *
+	 * For example, you might blacklist DRHD0 explicitly if you know it
+	 * storms when IR is enabled.
+	 */
+	if (unit == 0) {
+		/* Known‑bad on this platform */
+		return (B_FALSE);
+	}
+
+	/* Require that ECAP advertises IR support */
+	if (VTD_ECAP_IR(vtdmap->ext_cap) == 0)
+		return (B_FALSE);
+
+	return (B_TRUE);
+}
+
 static void
 vtd_enable(void)
 {
 	int i;
 	struct vtdmap *vtdmap;
 
+	cmn_err(CE_NOTE, "vtd_enable: enabling VT-d units");
+
 	for (i = 0; i < drhd_num; i++) {
 		vtdmap = vtdmaps[i];
+		if (vtdmap == NULL)
+			continue;
+
 		vtd_wbflush(vtdmap);
 
-		/* Update the root table address */
+		/* Set root table address */
 		vtdmap->rta = vtophys(root_table);
 		vtdmap->gcr = VTD_GCR_SRTP;
 		while ((vtdmap->gsr & VTD_GSR_RTPS) == 0)
@@ -576,21 +616,161 @@ vtd_enable(void)
 		vtd_ctx_global_invalidate(vtdmap);
 		vtd_iotlb_global_invalidate(vtdmap);
 
+		/*
+		 * Always enable translation (TE) so DMA is covered.
+		 */
 		vtd_translation_enable(vtdmap);
+
+		/*
+		 * Conditionally enable Interrupt Remapping (IR)
+		 */
+		if (vtd_ir_unit_ok(i, vtdmap)) {
+			/*
+			 * Normally we’d also set up IR table(s) here:
+			 * vtdmap->irta = vtophys(ir_table[i]) | (IRTA settings)
+			 * Then assert the IR enable bit.
+			 *
+			 * NOTE: You’ll want to have your IRTE pool initialized
+			 * before this point.
+			 */
+			vtdmap->gcr |= (1U << 25); /* imaginary VTD_GCR_IRE bit */
+			cmn_err(CE_NOTE,
+			    "vtd_enable: DRHD %d translation=ENABLED, interrupt remap=ENABLED",
+			    i);
+		} else {
+			cmn_err(CE_NOTE,
+			    "vtd_enable: DRHD %d translation=ENABLED, interrupt remap=DISABLED",
+			    i);
+		}
+
+		cmn_err(CE_NOTE,
+		    "vtd_enable: DRHD %d TE bit %s (GSR=0x%x)",
+		    i,
+		    (vtdmap->gsr & VTD_GSR_TES) ? "ENABLED" : "DISABLED",
+		    vtdmap->gsr);
 	}
 }
+
+// static void
+// vtd_enable(void)
+// {
+// 	int i;
+// 	struct vtdmap *vtdmap;
+// 	cmn_err(CE_NOTE, "vtd_enable: IN ENABLE!");
+// 	//HACKING!!!!
+// 	for (i = 1; i < drhd_num; i++) {
+// 		vtdmap = vtdmaps[i];
+// 		vtd_wbflush(vtdmap);
+// 
+// 		/* Update the root table address */
+// 		vtdmap->rta = vtophys(root_table);
+// 		vtdmap->gcr = VTD_GCR_SRTP;
+// 		while ((vtdmap->gsr & VTD_GSR_RTPS) == 0)
+// 			;
+// 
+// 		vtd_ctx_global_invalidate(vtdmap);
+// 		vtd_iotlb_global_invalidate(vtdmap);
+// 
+// 		vtd_translation_enable(vtdmap);
+// 	
+// 		cmn_err(CE_NOTE, "vtd_enable: DRHD %d TE bit now %s (GSR=0x%x)",
+// 			i,
+// 			(vtdmap->gsr & VTD_GSR_TES) ? "ENABLED" : "DISABLED",
+// 			vtdmap->gsr);
+// 	}
+// 
+// 	
+// }
 
 static void
 vtd_disable(void)
 {
 	int i;
 	struct vtdmap *vtdmap;
-
+	//HACKING!!!!
 	for (i = 0; i < drhd_num; i++) {
 		vtdmap = vtdmaps[i];
 		vtd_translation_disable(vtdmap);
 	}
 }
+
+/*
+ * Program a VT-d context table entry to associate a PCI device RID
+ * with a domain (guest or host). Each RID (bus:devfn) corresponds
+ * to two 64-bit context entry slots (low + high).
+ */
+// static void
+// vtd_add_device(void *arg, uint16_t rid)
+// {
+// 	int idx;
+// 	uint64_t *ctxp;
+// 	struct domain *dom = arg;
+// 	vm_paddr_t pt_paddr;
+// 	struct vtdmap *vtdmap;
+// 	uint8_t bus;
+// 
+// 	cmn_err(CE_NOTE, "VT-d: entering vtd_add_device for RID=0x%x (bus=%u dev=%u fn=%u) domid=%u",
+// 	    rid,
+// 	    PCI_RID2BUS(rid), PCI_RID2DEV(rid), PCI_RID2FUNC(rid),
+// 	    dom->id);
+// 
+// 	bus = PCI_RID2BUS(rid);
+// 
+// 	/* Base pointer for the context-table this bus maps to */
+// 	ctxp = ctx_tables[bus];
+// 
+// 	/* Physical addr of root of the domain’s page table */
+// 	pt_paddr = vtophys(dom->ptp);
+// 
+// 	/* Index into context table (two entries per RID) */
+// 	idx = VTD_RID2IDX(rid);
+// 
+// 	cmn_err(CE_NOTE, "VT-d: domid=%u ptp=%p ptp_phys=0x%llx addrwidth=%d pt_levels=%d",
+// 	    dom->id, dom->ptp,
+// 	    (unsigned long long)pt_paddr,
+// 	    dom->addrwidth, dom->pt_levels);
+// 
+// 	/* Sanity check: device RID already mapped? */
+// 	if (ctxp[idx] & VTD_CTX_PRESENT) {
+// 		panic("vtd_add_device: device RID=0x%x already owned by domain %d",
+// 		    rid, (uint16_t)(ctxp[idx + 1] >> 8));
+// 	}
+// 
+// 	/* Which DRHD controls this rid? */
+// 	if ((vtdmap = vtd_device_scope(rid)) == NULL)
+// 		panic("vtd_add_device: RID=0x%x not in scope of any DRHD", rid);
+// 
+// 	/*
+// 	 * Order is important:
+// 	 *  hi dword: Domain ID, AGAW bits
+// 	 *  lo dword: root page table addr + TT bits + PRESENT
+// 	 */
+// 	ctxp[idx + 1] = (uint64_t)dom->addrwidth | ((uint64_t)dom->id << 8);
+// 
+// 	if (VTD_ECAP_DI(vtdmap->ext_cap))
+// 		ctxp[idx] = VTD_CTX_TT_ALL;   /* DMA translates all addr spaces */
+// 	else
+// 		ctxp[idx] = 0;
+// 
+// 	ctxp[idx] |= pt_paddr | VTD_CTX_PRESENT;
+// 
+// 	cmn_err(CE_NOTE,
+// 	    "VT-d: wrote CTX[%d] for RID=0x%x: LO=0x%llx HI=0x%llx (domid=%u)",
+// 	    idx, rid,
+// 	    (unsigned long long)ctxp[idx],
+// 	    (unsigned long long)ctxp[idx + 1],
+// 	    dom->id);
+// 
+// 	/*
+// 	 * Normally: must flush context cache + IOTLB for this domain
+// 	 * so that hardware uses updated entries.
+// 	 */
+// 	// vtd_invalidate_context(vtdmap, rid, dom->id);
+// 	// vtd_invalidate_iotlb(vtdmap, dom->id);
+// 
+// 	cmn_err(CE_NOTE, "VT-d: completed vtd_add_device for RID=0x%x on DRHD=%p",
+// 	    rid, (void *)vtdmap);
+// }
 
 static void
 vtd_add_device(void *arg, uint16_t rid)
@@ -602,25 +782,44 @@ vtd_add_device(void *arg, uint16_t rid)
 	struct vtdmap *vtdmap;
 	uint8_t bus;
 
+	cmn_err(CE_NOTE, "vtd_add_device: entering for rid=0x%x domid=%u",
+	    rid, dom->id);
+
 	bus = PCI_RID2BUS(rid);
 	ctxp = ctx_tables[bus];
 	pt_paddr = vtophys(dom->ptp);
 	idx = VTD_RID2IDX(rid);
 
+	cmn_err(CE_NOTE, "vtd_add_device: dom->ptp=%p pt_paddr=0x%llx addrwidth=%d",
+	    dom->ptp, (unsigned long long)pt_paddr, dom->addrwidth);
+
 	if (ctxp[idx] & VTD_CTX_PRESENT) {
-		panic("vtd_add_device: device %x is already owned by "
-		    "domain %d", rid, (uint16_t)(ctxp[idx + 1] >> 8));
+		panic("vtd_add_device: device %x already owned by domain %d",
+		    rid, (uint16_t)(ctxp[idx + 1] >> 8));
 	}
 
+	/*
+	 * Which DRHD controls this RID?
+	 * This trace is the key: it tells you the DRHD index and hardware base.
+	 */
 	if ((vtdmap = vtd_device_scope(rid)) == NULL)
-		panic("vtd_add_device: device %x is not in scope for "
-		    "any DMA remapping unit", rid);
+		panic("vtd_add_device: RID=0x%x not in scope for any DRHD", rid);
+
+	/* --- Diagnostic trace for DRHD correlation --- */
+	for (int i = 0; i < drhd_num; i++) {
+		if (vtdmaps[i] == vtdmap) {
+			cmn_err(CE_NOTE,
+			    "vtd_add_device: RID=0x%x handled by DRHD %d @%p (ECAP.IR=%u)",
+			    rid, i, (void *)vtdmap,
+			    (uint_t)VTD_ECAP_IR(vtdmap->ext_cap));
+			break;
+		}
+	}
 
 	/*
-	 * Order is important. The 'present' bit is set only after all fields
-	 * of the context pointer are initialized.
+	 * Normal context‑entry programming.
 	 */
-	ctxp[idx + 1] = dom->addrwidth | (dom->id << 8);
+	ctxp[idx + 1] = ((uint64_t)dom->id << 8) | (dom->addrwidth & 0x7);
 
 	if (VTD_ECAP_DI(vtdmap->ext_cap))
 		ctxp[idx] = VTD_CTX_TT_ALL;
@@ -629,11 +828,69 @@ vtd_add_device(void *arg, uint16_t rid)
 
 	ctxp[idx] |= pt_paddr | VTD_CTX_PRESENT;
 
-	/*
-	 * 'Not Present' entries are not cached in either the Context Cache
-	 * or in the IOTLB, so there is no need to invalidate either of them.
-	 */
+	cmn_err(CE_NOTE, "vtd_add_device: wrote CTX[%d]: LO=0x%llx HI=0x%llx",
+	    idx,
+	    (unsigned long long)ctxp[idx],
+	    (unsigned long long)ctxp[idx + 1]);
+
+	cmn_err(CE_NOTE, "vtd_add_device: completed for rid=0x%x", rid);
 }
+
+// THIS WORKS GOOD!!!
+// static void
+// vtd_add_device(void *arg, uint16_t rid)
+// {
+// 	int idx;
+// 	uint64_t *ctxp;
+// 	struct domain *dom = arg;
+// 	vm_paddr_t pt_paddr;
+// 	struct vtdmap *vtdmap;
+// 	uint8_t bus;
+// 
+// 	cmn_err(CE_NOTE, "vtd_add_device: entering for rid=0x%x domid=%u", 
+// 		rid, dom->id);
+// 
+// 	bus = PCI_RID2BUS(rid);
+// 	ctxp = ctx_tables[bus];
+// 	pt_paddr = vtophys(dom->ptp);
+// 	idx = VTD_RID2IDX(rid);
+// 
+// 	cmn_err(CE_NOTE, "vtd_add_device: dom->ptp=%p pt_paddr=0x%llx addrwidth=%d",
+// 		dom->ptp, (unsigned long long)pt_paddr, dom->addrwidth);
+// 
+// 	if (ctxp[idx] & VTD_CTX_PRESENT) {
+// 		panic("vtd_add_device: device %x is already owned by "
+// 		    "domain %d", rid, (uint16_t)(ctxp[idx + 1] >> 8));
+// 	}
+// 
+// 	if ((vtdmap = vtd_device_scope(rid)) == NULL)
+// 		panic("vtd_add_device: device %x is not in scope for "
+// 		    "any DMA remapping unit", rid);
+// 
+// 	/*
+// 	 * Order is important. The 'present' bit is set only after all fields
+// 	 * of the context pointer are initialized.
+// 	 */
+// 	ctxp[idx + 1] = dom->addrwidth | (dom->id << 8);
+// 
+// 	if (VTD_ECAP_DI(vtdmap->ext_cap))
+// 		ctxp[idx] = VTD_CTX_TT_ALL;
+// 	else
+// 		ctxp[idx] = 0;
+// 
+// 	ctxp[idx] |= pt_paddr | VTD_CTX_PRESENT;
+// 
+// 	cmn_err(CE_NOTE, "vtd_add_device: wrote ctx[%d]: low=0x%llx high=0x%llx",
+// 			idx,
+// 			(unsigned long long)ctxp[idx],
+// 			(unsigned long long)ctxp[idx+1]);
+// 
+// 	cmn_err(CE_NOTE, "vtd_add_device: completed for rid=0x%x", rid);
+// 	/*
+// 	 * 'Not Present' entries are not cached in either the Context Cache
+// 	 * or in the IOTLB, so there is no need to invalidate either of them.
+// 	 */
+// }
 
 static void
 vtd_remove_device(void *arg, uint16_t rid)
@@ -659,6 +916,7 @@ vtd_remove_device(void *arg, uint16_t rid)
 	 * XXX use device-selective invalidation for Context Cache
 	 * XXX use domain-selective invalidation for IOTLB
 	 */
+	//HACKING!!! i=1 should be 0
 	for (i = 0; i < drhd_num; i++) {
 		vtdmap = vtdmaps[i];
 		vtd_ctx_global_invalidate(vtdmap);
@@ -669,95 +927,87 @@ vtd_remove_device(void *arg, uint16_t rid)
 #define	CREATE_MAPPING	0
 #define	REMOVE_MAPPING	1
 
+
+
+/*
+* Install or remove an IOMMU mapping for [gpa,hpa,len].
+* Tries to use 1G or 2M superpages if allowed and aligned,
+* falls back to 4K otherwise.
+*
+* NOTE: Partial unmap will zap an entire superpage. No demotion yet.
+*/
 static uint64_t
-vtd_update_mapping(void *arg, vm_paddr_t gpa, vm_paddr_t hpa, uint64_t len,
-    int remove)
+vtd_update_mapping(void *arg, vm_paddr_t gpa, vm_paddr_t hpa,
+				uint64_t len, int remove)
 {
-	struct domain *dom;
-	int i, spshift, ptpshift, ptpindex, nlevels;
-	uint64_t spsize, *ptp;
+	struct domain *dom = arg;
+	uint64_t mapped = 0;
 
-	dom = arg;
-	ptpindex = 0;
-	ptpshift = 0;
+	KASSERT(((gpa | hpa | len) & PAGE_MASK) == 0,
+		("%s: unaligned gpa/hpa/len", __func__));
+	KASSERT(gpa + len > gpa, ("%s: wraparound gpa", __func__));
+	KASSERT(gpa + len <= dom->maxaddr,
+		("%s: gpa range %lx/%lx beyond maxaddr %lx", __func__,
+		(u_long)gpa, (u_long)len, (u_long)dom->maxaddr));
 
-	KASSERT(gpa + len > gpa, ("%s: invalid gpa range %lx/%lx", __func__,
-	    gpa, len));
-	KASSERT(gpa + len <= dom->maxaddr, ("%s: gpa range %lx/%lx beyond "
-	    "domain maxaddr %lx", __func__, gpa, len, dom->maxaddr));
+	while (len > 0) {
+		uint64_t spsize;
+		int spshift;
 
-	if (gpa & PAGE_MASK)
-		panic("vtd_create_mapping: unaligned gpa 0x%0lx", gpa);
-
-	if (hpa & PAGE_MASK)
-		panic("vtd_create_mapping: unaligned hpa 0x%0lx", hpa);
-
-	if (len & PAGE_MASK)
-		panic("vtd_create_mapping: unaligned len 0x%0lx", len);
-
-	/*
-	 * Compute the size of the mapping that we can accommodate.
-	 *
-	 * This is based on three factors:
-	 * - supported super page size
-	 * - alignment of the region starting at 'gpa' and 'hpa'
-	 * - length of the region 'len'
-	 */
-	spshift = 48;
-	for (i = 3; i >= 0; i--) {
-		spsize = 1UL << spshift;
-		if ((dom->spsmask & (1 << i)) != 0 &&
-		    (gpa & (spsize - 1)) == 0 &&
-		    (hpa & (spsize - 1)) == 0 &&
-		    (len >= spsize)) {
-			break;
-		}
-		spshift -= 9;
-	}
-
-	ptp = dom->ptp;
-	nlevels = dom->pt_levels;
-	while (--nlevels >= 0) {
-		ptpshift = 12 + nlevels * 9;
-		ptpindex = (gpa >> ptpshift) & 0x1FF;
-
-		/* We have reached the leaf mapping */
-		if (spshift >= ptpshift) {
-			break;
+		/* Choose biggest possible page size: 1G -> 2M -> 4K */
+		if ((dom->spsmask & 0x2) &&           /* supports 1G */
+			(gpa % (1ULL<<30)) == 0 &&
+			(hpa % (1ULL<<30)) == 0 &&
+			len >= (1ULL<<30)) {
+			spshift = 30;
+			spsize  = 1ULL << 30;
+		} else if ((dom->spsmask & 0x1) &&    /* supports 2M */
+			(gpa % (1ULL<<21)) == 0 &&
+			(hpa % (1ULL<<21)) == 0 &&
+			len >= (1ULL<<21)) {
+			spshift = 21;
+			spsize  = 1ULL << 21;
+		} else {
+			spshift = 12;
+			spsize  = 1ULL << 12;
 		}
 
-		/*
-		 * We are working on a non-leaf page table page.
-		 *
-		 * Create a downstream page table page if necessary and point
-		 * to it from the current page table.
-		 */
-		if (ptp[ptpindex] == 0) {
-			void *nlp = vmm_ptp_alloc();
-			ptp[ptpindex] = vtophys(nlp)| VTD_PTE_RD | VTD_PTE_WR;
+		/* Walk down the levels until we’re at or below desired shift */
+		uint64_t *ptp = dom->ptp;
+		int nlevels   = dom->pt_levels;
+		int ptpshift = 0, ptpindex = 0;
+
+		while (--nlevels >= 0) {
+			ptpshift = 12 + nlevels * 9;
+			ptpindex = (gpa >> ptpshift) & 0x1FF;
+
+			if (spshift >= ptpshift)
+				break;
+
+			if (ptp[ptpindex] == 0) {
+				void *nlp = vmm_ptp_alloc();
+				ptp[ptpindex] = vtophys(nlp) | VTD_PTE_RD | VTD_PTE_WR;
+			}
+			ptp = (uint64_t *)PHYS_TO_DMAP(ptp[ptpindex] & VTD_PTE_ADDR_M);
 		}
 
-		ptp = (uint64_t *)PHYS_TO_DMAP(ptp[ptpindex] & VTD_PTE_ADDR_M);
+		if (remove) {
+			ptp[ptpindex] = 0;
+		} else {
+			uint64_t pte = hpa | VTD_PTE_RD | VTD_PTE_WR;
+			if (spshift > 12)
+				pte |= VTD_PTE_SUPERPAGE;
+			ptp[ptpindex] = pte;
+		}
+
+		gpa  += spsize;
+		hpa  += spsize;
+		len  -= spsize;
+		mapped += spsize;
 	}
 
-	if ((gpa & ((1UL << ptpshift) - 1)) != 0)
-		panic("gpa 0x%lx and ptpshift %d mismatch", gpa, ptpshift);
-
-	/*
-	 * Update the 'gpa' -> 'hpa' mapping
-	 */
-	if (remove) {
-		ptp[ptpindex] = 0;
-	} else {
-		ptp[ptpindex] = hpa | VTD_PTE_RD | VTD_PTE_WR;
-
-		if (nlevels > 0)
-			ptp[ptpindex] |= VTD_PTE_SUPERPAGE;
-	}
-
-	return (1UL << ptpshift);
+	return mapped;
 }
-
 static uint64_t
 vtd_create_mapping(void *arg, vm_paddr_t gpa, vm_paddr_t hpa, uint64_t len)
 {
@@ -782,27 +1032,32 @@ vtd_invalidate_tlb(void *dom)
 	 * Invalidate the IOTLB.
 	 * XXX use domain-selective invalidation for IOTLB
 	 */
+	//HACKING!!!!
 	for (i = 0; i < drhd_num; i++) {
 		vtdmap = vtdmaps[i];
 		vtd_iotlb_global_invalidate(vtdmap);
 	}
 }
 
+#define VTD_ECAP_IR(_ecap)	(((_ecap) >> 3) & 0x1)	/* Interrupt Remapping */
+#define VTD_ECAP_DEV_IOTLB(_ecap)	(((_ecap) >> 2) & 0x1)	/* DEV-IOTLB support */
+#define VTD_ECAP_MGAW(_ecap)	(((_ecap) >> 16) & 0x7f) /* Max Guest Addr Width */
+
 static void *
 vtd_create_domain(vm_paddr_t maxaddr)
 {
 	struct domain *dom;
 	vm_paddr_t addr;
-	int tmp, i, gaw, agaw, sagaw, res, pt_levels, addrwidth;
-	struct vtdmap *vtdmap;
+	int tmp, i, gaw, agaw, res, pt_levels, addrwidth;
+	uint32_t spsmask;
 
 	if (drhd_num <= 0)
 		panic("vtd_create_domain: no dma remapping hardware available");
 
 	/*
-	 * Calculate AGAW.
-	 * Section 3.4.2 "Adjusted Guest Address Width", Architecture Spec.
-	 */
+	* Calculate AGAW.
+	* Section 3.4.2 "Adjusted Guest Address Width", Architecture Spec.
+	*/
 	addr = 0;
 	for (gaw = 0; addr < maxaddr; gaw++)
 		addr = 1ULL << gaw;
@@ -817,35 +1072,19 @@ vtd_create_domain(vm_paddr_t maxaddr)
 		agaw = 64;
 
 	/*
-	 * Select the smallest Supported AGAW and the corresponding number
-	 * of page table levels.
-	 */
-	pt_levels = 2;
-	sagaw = 30;
-	addrwidth = 0;
+	* Simplest approach: force using computed AGAW and derive page table levels.
+	* Page table levels = (agaw - 12)/9 + 1, minimum 2.
+	*/
+//	pt_levels = ((agaw - 12) / 9) + 1;
+//	if (pt_levels < 2)
+//		pt_levels = 2;
+//	addrwidth = pt_levels - 2;
 
-	tmp = ~0;
-	for (i = 0; i < drhd_num; i++) {
-		vtdmap = vtdmaps[i];
-		/* take most compatible value */
-		tmp &= VTD_CAP_SAGAW(vtdmap->cap);
-	}
-
-	for (i = 0; i < 5; i++) {
-		if ((tmp & (1 << i)) != 0 && sagaw >= agaw)
-			break;
-		pt_levels++;
-		addrwidth++;
-		sagaw += 9;
-		if (sagaw > 64)
-			sagaw = 64;
-	}
-
-	if (i >= 5) {
-		panic("vtd_create_domain: SAGAW 0x%x does not support AGAW %d",
-		    tmp, agaw);
-	}
-
+	/* Force AGAW=39-bit, 3-level page tables */
+	agaw = 48;
+	pt_levels = 4;
+	addrwidth = pt_levels - 2;
+	
 	dom = kmem_zalloc(sizeof (struct domain), KM_SLEEP);
 	dom->pt_levels = pt_levels;
 	dom->addrwidth = addrwidth;
@@ -858,41 +1097,50 @@ vtd_create_domain(vm_paddr_t maxaddr)
 #ifdef __FreeBSD__
 #ifdef notyet
 	/*
-	 * XXX superpage mappings for the iommu do not work correctly.
-	 *
-	 * By default all physical memory is mapped into the host_domain.
-	 * When a VM is allocated wired memory the pages belonging to it
-	 * are removed from the host_domain and added to the vm's domain.
-	 *
-	 * If the page being removed was mapped using a superpage mapping
-	 * in the host_domain then we need to demote the mapping before
-	 * removing the page.
-	 *
-	 * There is not any code to deal with the demotion at the moment
-	 * so we disable superpage mappings altogether.
-	 */
+	* XXX superpage mappings for the iommu do not work correctly.
+	*
+	* By default all physical memory is mapped into the host_domain.
+	* ...
+	*/
 	dom->spsmask = ~0;
 	for (i = 0; i < drhd_num; i++) {
-		vtdmap = vtdmaps[i];
+		struct vtdmap *vtdmap = vtdmaps[i];
 		/* take most compatible value */
 		dom->spsmask &= VTD_CAP_SPS(vtdmap->cap);
 	}
 #endif
 #else
 	/*
-	 * On illumos we decidedly do not remove memory mapped to a VM's domain
-	 * from the host_domain, so we don't have to deal with page demotion and
-	 * can just use large pages.
-	 *
-	 * Since VM memory is currently allocated as 4k pages and mapped into
-	 * the VM domain page by page, the use of large pages is essentially
-	 * limited to the host_domain.
-	 */
-	dom->spsmask = VTD_CAP_SPS(vtdmap->cap);
+	* On illumos we decidedly do not remove memory mapped to a VM's domain
+	* from the host_domain, so we don't have to deal with page demotion and
+	* can just use large pages.
+	*
+	* Since VM memory is currently allocated as 4k pages and mapped into
+	* the VM domain page by page, the use of large pages is essentially
+	* limited to the host_domain.
+	*/
+	spsmask = ~0U;
+	//HACKING DRHD for a test
+	for (i = 0; i < drhd_num; i++) {
+		struct vtdmap *vtdmap = vtdmaps[i];
+		uint32_t cap_sps = VTD_CAP_SPS(vtdmap->cap);
+		uint64_t ecap    = vtdmap->ext_cap;
+
+		uint_t ir        = VTD_ECAP_IR(ecap);
+		uint_t devtlb    = VTD_ECAP_DEV_IOTLB(ecap);
+		uint_t mgaw      = VTD_ECAP_MGAW(ecap);
+
+		cmn_err(CE_NOTE,
+			"VT-d: DRHD %d CAP.SPS=0x%x ECAP.IR=%u ECAP.DEV-IOTLB=%u ECAP.MGAW=%u",
+			i, cap_sps, ir, devtlb, mgaw);
+
+		spsmask &= cap_sps;
+	}
+	dom->spsmask = spsmask;
 #endif
 
 	SLIST_INSERT_HEAD(&domhead, dom, next);
-
+	cmn_err(CE_NOTE, "VT-d: domain %p superpage mask=0x%x", (void*)dom, dom->spsmask);
 	return (dom);
 }
 

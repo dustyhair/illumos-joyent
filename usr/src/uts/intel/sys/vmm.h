@@ -447,6 +447,7 @@ struct vcpu_cpuid_entry {
 	uint32_t	_pad;
 };
 
+
 /*
  * Defined flags for vcpu_cpuid_entry`vce_flags are below.
  */

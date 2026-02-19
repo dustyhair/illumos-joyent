@@ -62,6 +62,11 @@ SYMBOL_VERSION ILLUMOSprivate {
 	iommu_add_device;
 	iommu_host_domain;
 	iommu_remove_device;
+	iommu_destroy_domain;
+	iommu_create_domain;
+	iommu_domain_unmap;
+	iommu_domain_map;
+	iommu_invalidate_tlb; 
 	lapic_intr_msi;
 	vm_iommu_domain;
 	vm_map_mmio;

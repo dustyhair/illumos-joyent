@@ -78,6 +78,10 @@
 #include <sys/apic_timer.h>
 #include <sys/tsc.h>
 
+//XXX DEBUG!!!
+#define DEBUG 1
+#define APIC_DEBUG_MSGBUFSIZE 5
+
 static void	apic_record_ioapic_rdt(void *intrmap_private,
 		    ioapic_rdt_t *irdt);
 static void	apic_record_msi(void *intrmap_private, msi_regs_t *mregs);
@@ -161,7 +165,7 @@ uint64_t apic_info_tsc[APIC_CALIBRATE_MEASUREMENTS];
 uint64_t apic_info_pit[APIC_CALIBRATE_MEASUREMENTS];
 
 #ifdef DEBUG
-int	apic_debug = 0;
+int	apic_debug = 1; //XXX changed this to 1 from 0
 int	apic_restrict_vector = 0;
 
 int	apic_debug_msgbuf[APIC_DEBUG_MSGBUFSIZE];
@@ -294,6 +298,9 @@ apic_ioapic_method_probe()
 /*
  * handler for APIC Error interrupt. Just print a warning and continue
  */
+
+#define APIC_ISR_BASE 0x100
+#define APIC_IRR_BASE 0x200
 int
 apic_error_intr()
 {
@@ -325,6 +332,7 @@ apic_error_intr()
 	if (lock_try(&apic_error_lock) == 0)
 		return (error ? DDI_INTR_CLAIMED : DDI_INTR_UNCLAIMED);
 	if (error) {
+
 #if	DEBUG
 		if (apic_debug)
 			debug_enter("pcplusmp: APIC Error interrupt received");
@@ -346,9 +354,12 @@ apic_error_intr()
 				 * something which is problem free from
 				 * high level/NMI type of interrupts
 				 */
-				prom_printf("APIC Error interrupt on CPU %d. "
-				    "Status 0 = %x, Status 1 = %x\n",
-				    psm_get_cpu_id(), error0, error1);
+
+					/* Direct console output, bypassing cmn_err */
+				prom_printf("APIC ERROR interrupt on CPU %d "
+					"ESR0=0x%x ESR1=0x%x\n",
+					psm_get_cpu_id(), error0, error1);
+
 				apic_error |= APIC_ERR_APIC_ERROR;
 				apic_apic_error |= error;
 				apic_num_apic_errors++;

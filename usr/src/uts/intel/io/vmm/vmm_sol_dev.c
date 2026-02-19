@@ -1950,6 +1950,49 @@ vmmdev_do_ioctl(vmm_softc_t *sc, int cmd, intptr_t arg, int md,
 		break;
 	}
 
+	case VM_MEMQUERY: {
+		struct vm_memquery_run q;
+
+		if (ddi_copyin(datap, &q, sizeof (q), md) != 0) {
+			error = EFAULT;
+			break;
+		}
+		error = vm_memquery(sc->vmm_vm, q.gpa, q.len, &q.hpa);
+		if (error == 0) {
+			if (ddi_copyout(&q, datap, sizeof (q), md) != 0)
+				error = EFAULT;
+		}
+		break;
+	}
+	case VM_MEMQUERY_LIST: {
+		struct vm_memquery_list uheader;
+		if (ddi_copyin(datap, &uheader, sizeof (uheader), md) != 0) {
+			error = EFAULT;
+			break;
+		}
+
+		size_t tot_sz = offsetof(struct vm_memquery_list, ents)
+					+ uheader.nents * sizeof(struct vm_memquery_run);
+
+		struct vm_memquery_list *klist = kmem_zalloc(tot_sz, KM_SLEEP);
+		klist->gpa   = uheader.gpa;
+		klist->len   = uheader.len;
+		klist->nents = uheader.nents;
+
+		error = vm_memquery_list(sc->vmm_vm,
+								klist->gpa, klist->len, klist);
+
+		/*
+		* Always copy header+entries back, even on EOVERFLOW,
+		* so userland can see klist->nents = required.
+		*/
+		if (ddi_copyout(klist, datap, tot_sz, md) != 0) {
+			error = EFAULT;
+		}
+
+		kmem_free(klist, tot_sz);
+		break;
+	}
 	default:
 		error = ENOTTY;
 		break;

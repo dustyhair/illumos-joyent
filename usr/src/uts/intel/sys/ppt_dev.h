@@ -76,6 +76,31 @@ struct ppt_region_info {
 
 #define PPT_GET_REGION_INFO (PPT_IOC | 0x11)
 
+struct ppt_iommu_map {
+	uint64_t gpa;
+	uint64_t hpa;
+	uint64_t size;
+	uint32_t prot;   /* future: IOMMU_PROT_READ / IOMMU_PROT_WRITE */
+};
+
+/* flexible array for batch mapping */
+struct ppt_iommu_map_batch {
+	uint32_t count;              /* number of entries in maps[] */
+	uint32_t pad;                /* explicit padding for 8-byte align */
+	struct ppt_iommu_map maps[]; /* array of maps */
+};
+
+#define PPT_IOMMU_MAP     (PPT_IOC | 0x20)
+#define PPT_IOMMU_UNMAP   (PPT_IOC | 0x21)
+#define PPT_IOMMU_MAP_BATCH   (PPT_IOC | 0x22)
+#define PPT_IOMMU_UNMAP_BATCH (PPT_IOC | 0x23)
+
+/* Define prot mask bits */
+#define IOMMU_PROT_READ   0x1
+#define IOMMU_PROT_WRITE  0x2
+#define IOMMU_PROT_RW     (IOMMU_PROT_READ|IOMMU_PROT_WRITE)
+
+
 #ifdef __cplusplus
 }
 #endif
