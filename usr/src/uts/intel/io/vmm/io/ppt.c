@@ -352,10 +352,12 @@ ppt_ioctl(dev_t dev, int cmd, intptr_t arg, int md, cred_t *cr, int *rv)
 		caps.caps = 0;
 
 		/*
-		* For now, we only advertise BAR_INFO since that’s what we can
-		* safely provide. Later we’ll add IOMMU, IRQ_REMAP, RESET, etc.
+		* Advertise only capabilities that are currently wired through
+		* ppt ioctls in this tree. Keep this conservative until each
+		* feature path is fully validated on target hardware.
 		*/
 		caps.caps |= PPT_CAP_BAR_INFO;
+		caps.caps |= PPT_CAP_IOMMU;
 
 		if (ddi_copyout(&caps, data, sizeof (caps), md) != 0)
 			return (EFAULT);
