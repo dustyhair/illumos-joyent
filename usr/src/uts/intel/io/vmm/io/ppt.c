@@ -468,6 +468,9 @@ ppt_ioctl(dev_t dev, int cmd, intptr_t arg, int md, cred_t *cr, int *rv)
 							m->size, m->prot);
 		}
 
+		if (kreq->count > 0)
+			iommu_invalidate_tlb(ppt->pptd_domain);
+
 		kmem_free(kreq, totsz);
 		return (0);
 	}
@@ -492,6 +495,9 @@ ppt_ioctl(dev_t dev, int cmd, intptr_t arg, int md, cred_t *cr, int *rv)
 			iommu_domain_unmap(ppt->pptd_domain,
 							m->gpa, m->size);
 		}
+
+		if (kreq->count > 0)
+			iommu_invalidate_tlb(ppt->pptd_domain);
 
 		kmem_free(kreq, totsz);
 		return (0);

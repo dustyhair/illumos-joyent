@@ -278,10 +278,6 @@ iommu_domain_map(void *domain, uint64_t gpa, uint64_t hpa,
      * Later we can plumb this flag into vtd_update_mapping().
      */
     iommu_create_mapping(domain, gpa, hpa, len);
-
-    /* Invalidate device TLB so it sees the new mapping */
-    iommu_invalidate_tlb(domain);
-
     return (0);
 }
 
@@ -292,9 +288,6 @@ iommu_domain_unmap(void *domain, uint64_t gpa, size_t len)
         return (EINVAL);
 
     iommu_remove_mapping(domain, gpa, len);
-
-    iommu_invalidate_tlb(domain);
-
     return (0);
 }
 
