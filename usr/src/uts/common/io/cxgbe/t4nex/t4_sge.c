@@ -2114,7 +2114,7 @@ start:	txinfo->nsegs = 0;
 	}
 	m = *fp;
 
-	if (n >= TX_SGL_SEGS || (flags & HW_LSO && MBLKL(m) < 50)) {
+	if (n >= TX_SGL_SEGS || ((flags & HW_LSO) && MBLKL(m) < 50)) {
 		txq->pullup_early++;
 		m = msgpullup(*fp, -1);
 		if (m == NULL) {
@@ -2130,20 +2130,22 @@ start:	txinfo->nsegs = 0;
 		return (0);	/* nsegs = 0 tells caller to use imm. tx */
 
 	if (txinfo->len <= txq->copy_threshold &&
-	    copy_into_txb(txq, m, txinfo->len, txinfo) == 0)
+	    copy_into_txb(txq, m, txinfo->len, txinfo) == 0) {
 		goto done;
+	}
 
 	for (; m; m = m->b_cont) {
 
 		len = MBLKL(m);
 
-		/* Use tx copy buffer if this mblk is small enough */
-		if (len <= txq->copy_threshold &&
-		    copy_into_txb(txq, m, len, txinfo) == 0)
-			continue;
-
-		/* Add DMA bindings for this mblk to the SGL */
-		rc = add_mblk(txq, txinfo, m, len);
+		/*
+		 * Use tx copy buffer if this mblk is small enough and there is
+		 * room, otherwise add DMA bindings for this mblk to the SGL.
+		 */
+		if (len > txq->copy_threshold ||
+		    (rc = copy_into_txb(txq, m, len, txinfo)) != 0) {
+			rc = add_mblk(txq, txinfo, m, len);
+		}
 
 		if (rc == E2BIG ||
 		    (txinfo->nsegs == TX_SGL_SEGS && m->b_cont)) {
@@ -2521,8 +2523,8 @@ csum_to_ctrl(const struct txinfo *txinfo, uint32_t chip_version,
 {
 	const mac_ether_offload_info_t *meoi = &txinfo->meoi;
 	const uint32_t tx_flags = txinfo->flags;
-	const boolean_t needs_l3_csum = (tx_flags & HW_LSO) != 0 ||
-	    (tx_flags & HCK_IPV4_HDRCKSUM) != 0;
+	const boolean_t needs_l3_csum = ((tx_flags & HW_LSO) != 0 || (tx_flags &
+	    HCK_IPV4_HDRCKSUM) != 0) && meoi->meoi_l3proto == ETHERTYPE_IP;
 	const boolean_t needs_l4_csum = (tx_flags & HW_LSO) != 0 ||
 	    (tx_flags & (HCK_FULLCKSUM | HCK_PARTIALCKSUM)) != 0;
 
@@ -2539,8 +2541,7 @@ csum_to_ctrl(const struct txinfo *txinfo, uint32_t chip_version,
 
 	if (needs_l3_csum) {
 		/* Only IPv4 checksums are supported (for L3) */
-		if ((meoi->meoi_flags & MEOI_L3INFO_SET) == 0 ||
-		    meoi->meoi_l3proto != ETHERTYPE_IP) {
+		if ((meoi->meoi_flags & MEOI_L3INFO_SET) == 0) {
 			*ctrlp = ctrl;
 			return (COS_FAIL);
 		}

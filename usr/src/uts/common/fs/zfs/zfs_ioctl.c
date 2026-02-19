@@ -38,7 +38,8 @@
  * Copyright 2017 RackTop Systems.
  * Copyright (c) 2017, Datto, Inc. All rights reserved.
  * Copyright 2021 The University of Queensland
- * Copyright 2024 Oxide Computer Company
+ * Copyright 2025 Edgecast Cloud LLC.
+ * Copyright 2026 Oxide Computer Company
  */
 
 /*
@@ -230,7 +231,6 @@ extern void zfs_fini(void);
 ldi_ident_t zfs_li = NULL;
 dev_info_t *zfs_dip;
 
-uint_t zfs_fsyncer_key;
 extern uint_t rrw_tsd_key;
 static uint_t zfs_allow_log_key;
 
@@ -5321,6 +5321,12 @@ zfs_ioc_send_progress(zfs_cmd_t *zc)
 }
 
 static int
+zfs_ioc_arc(zfs_cmd_t *zc)
+{
+	return (arc_dynamic_resize(zc));
+}
+
+static int
 zfs_ioc_inject_fault(zfs_cmd_t *zc)
 {
 	int id, error;
@@ -6605,7 +6611,7 @@ zfs_ioc_change_key(const char *dsname, nvlist_t *innvl, nvlist_t *outnvl)
 	int ret;
 	uint64_t cmd = DCP_CMD_NONE;
 	dsl_crypto_params_t *dcp = NULL;
-	nvlist_t *args = NULL, *hidden_args = NULL;
+	nvlist_t *props = NULL, *hidden_args = NULL;
 
 	if (strchr(dsname, '@') != NULL || strchr(dsname, '%') != NULL) {
 		ret = (SET_ERROR(EINVAL));
@@ -6613,14 +6619,20 @@ zfs_ioc_change_key(const char *dsname, nvlist_t *innvl, nvlist_t *outnvl)
 	}
 
 	(void) nvlist_lookup_uint64(innvl, "crypt_cmd", &cmd);
-	(void) nvlist_lookup_nvlist(innvl, "props", &args);
+	(void) nvlist_lookup_nvlist(innvl, "props", &props);
 	(void) nvlist_lookup_nvlist(innvl, ZPOOL_HIDDEN_ARGS, &hidden_args);
 
-	ret = dsl_crypto_params_create_nvlist(cmd, args, hidden_args, &dcp);
+	ret = dsl_crypto_params_create_nvlist(cmd, props, hidden_args, &dcp);
 	if (ret != 0)
 		goto error;
 
-	ret = spa_keystore_change_key(dsname, dcp);
+	/* The keylocation property is set from dcp->cp_keylocation. */
+	(void) nvlist_remove_all(props, zfs_prop_to_name(ZFS_PROP_KEYLOCATION));
+
+	if ((ret = zfs_check_userprops(dsname, props)) != 0)
+		goto error;
+
+	ret = spa_keystore_change_key(dsname, dcp, props);
 	if (ret != 0)
 		goto error;
 
@@ -6927,6 +6939,8 @@ zfs_ioctl_init(void)
 	    zfs_ioc_clear_fault, zfs_secpolicy_inject);
 	zfs_ioctl_register_pool_meta(ZFS_IOC_INJECT_LIST_NEXT,
 	    zfs_ioc_inject_list_next, zfs_secpolicy_inject);
+	zfs_ioctl_register_pool_meta(ZFS_IOC_ARC,
+	    zfs_ioc_arc, zfs_secpolicy_inject);
 
 	/*
 	 * pool destroy, and export don't log the history as part of
@@ -7562,7 +7576,6 @@ _init(void)
 		return (error);
 	}
 
-	tsd_create(&zfs_fsyncer_key, NULL);
 	tsd_create(&rrw_tsd_key, rrw_tsd_destroy);
 	tsd_create(&zfs_allow_log_key, zfs_allow_log_destroy);
 
@@ -7594,7 +7607,6 @@ _fini(void)
 	if (zfs_nfsshare_inited || zfs_smbshare_inited)
 		(void) ddi_modclose(sharefs_mod);
 
-	tsd_destroy(&zfs_fsyncer_key);
 	ldi_ident_release(zfs_li);
 	zfs_li = NULL;
 	mutex_destroy(&zfs_share_lock);

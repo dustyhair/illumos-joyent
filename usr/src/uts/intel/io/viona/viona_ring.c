@@ -35,51 +35,70 @@
  *
  * Copyright 2015 Pluribus Networks Inc.
  * Copyright 2019 Joyent, Inc.
- * Copyright 2024 Oxide Computer Company
+ * Copyright 2025 Oxide Computer Company
  */
 
 
 #include <sys/disp.h>
+#include <sys/sysmacros.h>
 
 #include "viona_impl.h"
 
 #define	VRING_MAX_LEN		32768
 
-/* Layout and sizing as defined in the spec for a legacy-style virtqueue */
+/*
+ * Layout and sizing as defined in the spec for a split virtqueue.
+ * Legacy, Transitional and Modern VirtIO devices all use the same split
+ * virtqueue structure, with Legacy devices having some additional layout
+ * constraints. Since userland provides us with the individual addresses for
+ * the distinct virtqueue areas, we can disregard the legacy constraints and
+ * use a common set of macros based on the provided addresses.
+ */
 
-#define	LEGACY_VQ_ALIGN		PAGESIZE
+/*
+ * Because viona is not built with MACHDEP defined, PAGESIZE and friends are not
+ * constants but rather variable references.  While viona remains x86-only, we
+ * are free to hard-code this to 4k.
+ */
+#define	VQ_PGSZ			4096UL
+#define	VQ_PGOFF		(VQ_PGSZ - 1)
+#define	VQ_PGMASK		~VQ_PGOFF
 
-#define	LEGACY_DESC_SZ(qsz)	((qsz) * sizeof (struct virtio_desc))
+#define	LEGACY_VQ_ALIGN		VQ_PGSZ
+#define	MODERN_VQ_ALIGN_DESC	16
+#define	MODERN_VQ_ALIGN_AVAIL	2
+#define	MODERN_VQ_ALIGN_USED	4
+
+#define	SPLIT_DESC_SZ(qsz)	((qsz) * sizeof (struct virtio_desc))
 /*
  * Available ring consists of avail_idx (uint16_t), flags (uint16_t), qsz avail
  * descriptors (uint16_t each), and (optional) used_event (uint16_t).
  */
-#define	LEGACY_AVAIL_SZ(qsz)	(((qsz) + 3) * sizeof (uint16_t))
+#define	SPLIT_AVAIL_SZ(qsz)	(((qsz) + 3) * sizeof (uint16_t))
 /*
  * Used ring consists of used_idx (uint16_t), flags (uint16_t), qsz used
  * descriptors (two uint32_t each), and (optional) avail_event (uint16_t).
  */
-#define	LEGACY_USED_SZ(qsz)	\
+#define	SPLIT_USED_SZ(qsz)	\
 	((qsz) * sizeof (struct virtio_used) + 3 * sizeof (uint16_t))
 
-#define	LEGACY_AVAIL_FLAGS_OFF(qsz)	LEGACY_DESC_SZ(qsz)
-#define	LEGACY_AVAIL_IDX_OFF(qsz)	\
-	(LEGACY_DESC_SZ(qsz) + sizeof (uint16_t))
-#define	LEGACY_AVAIL_ENT_OFF(qsz, idx)	\
-	(LEGACY_DESC_SZ(qsz) + (2 + (idx)) * sizeof (uint16_t))
+#define	SPLIT_DESC_ENT_OFF(ring, idx)	\
+	((ring)->vr_desc.vrp_off + idx * sizeof (struct virtio_desc))
 
-#define	LEGACY_USED_FLAGS_OFF(qsz)	\
-	P2ROUNDUP(LEGACY_DESC_SZ(qsz) + LEGACY_AVAIL_SZ(qsz), LEGACY_VQ_ALIGN)
-#define	LEGACY_USED_IDX_OFF(qsz)	\
-	(LEGACY_USED_FLAGS_OFF(qsz) + sizeof (uint16_t))
-#define	LEGACY_USED_ENT_OFF(qsz, idx)	\
-	(LEGACY_USED_FLAGS_OFF(qsz) + 2 * sizeof (uint16_t) + \
+#define	SPLIT_AVAIL_FLAGS_OFF(part)	\
+	((ring)->vr_avail.vrp_off)
+#define	SPLIT_AVAIL_IDX_OFF(ring)	\
+	((ring)->vr_avail.vrp_off + sizeof (uint16_t))
+#define	SPLIT_AVAIL_ENT_OFF(ring, idx)	\
+	((ring)->vr_avail.vrp_off + (2 + (idx)) * sizeof (uint16_t))
+
+#define	SPLIT_USED_FLAGS_OFF(ring)	\
+	((ring)->vr_used.vrp_off)
+#define	SPLIT_USED_IDX_OFF(ring)	\
+	((ring)->vr_used.vrp_off + sizeof (uint16_t))
+#define	SPLIT_USED_ENT_OFF(ring, idx)	\
+	((ring)->vr_used.vrp_off + 2 * sizeof (uint16_t) + \
 	(idx) * sizeof (struct virtio_used))
-
-#define	LEGACY_VQ_SIZE(qsz)	\
-	(LEGACY_USED_FLAGS_OFF(qsz) + \
-	P2ROUNDUP(LEGACY_USED_SZ(qsz), LEGACY_VQ_ALIGN))
-#define	LEGACY_VQ_PAGES(qsz)	(LEGACY_VQ_SIZE(qsz) / PAGESIZE)
 
 struct vq_held_region {
 	struct iovec	*vhr_iov;
@@ -122,7 +141,7 @@ vq_page_hold(viona_vring_t *ring, uint64_t gpa, bool writable)
  * stored in the iovec array supplied in `region`, along with the chain of
  * vmm_page_t entries representing the held pages.  Since guest memory
  * carries no guarantees of being physically contiguous (on the host), it is
- * assumed that an iovec entry will be required for each PAGESIZE section
+ * assumed that an iovec entry will be required for each page sized section
  * covered by the specified `gpa` and `len` range.  For each iovec entry
  * successfully populated by holding a page, `vhr_idx` will be incremented so it
  * references the next available iovec entry (or `vhr_niov`, if the iovec array
@@ -133,8 +152,8 @@ static int
 vq_region_hold(viona_vring_t *ring, uint64_t gpa, uint32_t len,
     bool writable, vq_held_region_t *region)
 {
-	const uint32_t front_offset = gpa & PAGEOFFSET;
-	const uint32_t front_len = MIN(len, PAGESIZE - front_offset);
+	const uint32_t front_offset = gpa & VQ_PGOFF;
+	const uint32_t front_len = MIN(len, VQ_PGSZ - front_offset);
 	uint_t pages = 1;
 	vmm_page_t *vmp;
 	caddr_t buf;
@@ -143,13 +162,13 @@ vq_region_hold(viona_vring_t *ring, uint64_t gpa, uint32_t len,
 
 	if (front_len < len) {
 		pages += P2ROUNDUP((uint64_t)(len - front_len),
-		    PAGESIZE) / PAGESIZE;
+		    VQ_PGSZ) / VQ_PGSZ;
 	}
 	if (pages > (region->vhr_niov - region->vhr_idx)) {
 		return (E2BIG);
 	}
 
-	vmp = vq_page_hold(ring, gpa & PAGEMASK, writable);
+	vmp = vq_page_hold(ring, gpa & VQ_PGMASK, writable);
 	if (vmp == NULL) {
 		return (EFAULT);
 	}
@@ -169,7 +188,7 @@ vq_region_hold(viona_vring_t *ring, uint64_t gpa, uint32_t len,
 	}
 
 	for (uint_t i = 1; i < pages; i++) {
-		ASSERT3U(gpa & PAGEOFFSET, ==, 0);
+		ASSERT3U(gpa & VQ_PGOFF, ==, 0);
 
 		vmp = vq_page_hold(ring, gpa, writable);
 		if (vmp == NULL) {
@@ -177,7 +196,7 @@ vq_region_hold(viona_vring_t *ring, uint64_t gpa, uint32_t len,
 		}
 		buf = (caddr_t)vmm_drv_page_readable(vmp);
 
-		const uint32_t chunk_len = MIN(len, PAGESIZE);
+		const uint32_t chunk_len = MIN(len, VQ_PGSZ);
 		region->vhr_iov[region->vhr_idx].iov_base = buf;
 		region->vhr_iov[region->vhr_idx].iov_len = chunk_len;
 		region->vhr_idx++;
@@ -242,7 +261,7 @@ viona_ring_lease_renew(viona_vring_t *ring)
 	    ring);
 	if (ring->vr_lease != NULL) {
 		/* A ring undergoing renewal will need valid guest mappings */
-		if (ring->vr_pa != 0 && ring->vr_size != 0) {
+		if (ring->vr_used.vrp_pa != 0 && ring->vr_size != 0) {
 			/*
 			 * If new mappings cannot be established, consider the
 			 * lease renewal a failure.
@@ -284,6 +303,79 @@ viona_ring_free(viona_vring_t *ring)
 	ring->vr_link = NULL;
 }
 
+static bool
+viona_ring_layout(viona_vring_t *ring, viona_vring_part_t *vrp,
+    viona_ring_part_type_t type, uint64_t pa)
+{
+	size_t len = 0;
+	uint_t malign;
+
+	vrp->vrp_pa = pa;
+	vrp->vrp_type = type;
+
+	switch (vrp->vrp_type) {
+	case VIONA_RING_PART_DESC:
+		len = SPLIT_DESC_SZ(ring->vr_size);
+		malign = MODERN_VQ_ALIGN_DESC;
+		break;
+	case VIONA_RING_PART_AVAIL:
+		len = SPLIT_AVAIL_SZ(ring->vr_size);
+		malign = MODERN_VQ_ALIGN_AVAIL;
+		break;
+	case VIONA_RING_PART_USED:
+		len = SPLIT_USED_SZ(ring->vr_size);
+		malign = MODERN_VQ_ALIGN_USED;
+		break;
+	default:
+		return (false);
+	}
+
+	if (ring->vr_link->l_modern) {
+		/*
+		 * Modern style split virtqueues have different alignment
+		 * requirements compared to legacy split virtqueues, and they
+		 * differ by queue component. We use the appropriate `malign`
+		 * value populated above.
+		 */
+		if (!IS_P2ALIGNED(vrp->vrp_pa, malign))
+			return (false);
+	} else {
+		if (!IS_P2ALIGNED(vrp->vrp_pa, LEGACY_VQ_ALIGN))
+			return (false);
+	}
+
+	const uint64_t end = vrp->vrp_pa + len;
+
+	vrp->vrp_base = vrp->vrp_pa & VQ_PGMASK;
+	vrp->vrp_off = vrp->vrp_pa - vrp->vrp_base;
+	vrp->vrp_npages = howmany(end - vrp->vrp_base, VQ_PGSZ);
+
+	return (true);
+}
+
+/*
+ * For legacy queues, calculate the addresses of the 'avail' and 'used'
+ * portions of the ring based on the provided address for the 'desc' portion.
+ */
+int
+viona_ring_legacy_addr(struct viona_ring_params *params)
+{
+	if (params->vrp_pa_desc == 0 || params->vrp_pa_avail != 0 ||
+	    params->vrp_pa_used != 0) {
+		return (EINVAL);
+	}
+
+	const uint16_t qsz = params->vrp_size;
+	const size_t desc_sz = SPLIT_DESC_SZ(qsz);
+	const size_t avail_sz = SPLIT_AVAIL_SZ(qsz);
+
+	params->vrp_pa_avail = params->vrp_pa_desc + desc_sz;
+	params->vrp_pa_used = params->vrp_pa_desc +
+	    P2ROUNDUP(desc_sz + avail_sz, LEGACY_VQ_ALIGN);
+
+	return (0);
+}
+
 int
 viona_ring_init(viona_link_t *link, uint16_t idx,
     const struct viona_ring_params *params)
@@ -292,16 +384,17 @@ viona_ring_init(viona_link_t *link, uint16_t idx,
 	kthread_t *t;
 	int err = 0;
 	const uint16_t qsz = params->vrp_size;
-	const uint64_t pa = params->vrp_pa;
 
-	if (idx >= VIONA_VQ_MAX) {
+	if (!VIONA_RING_VALID(link, idx)) {
 		return (EINVAL);
 	}
 
 	if (qsz == 0 || qsz > VRING_MAX_LEN || (1 << (ffs(qsz) - 1)) != qsz) {
 		return (EINVAL);
 	}
-	if ((pa & (LEGACY_VQ_ALIGN - 1)) != 0) {
+
+	if (params->vrp_pa_desc == 0 || params->vrp_pa_avail == 0 ||
+	    params->vrp_pa_used == 0) {
 		return (EINVAL);
 	}
 
@@ -319,9 +412,20 @@ viona_ring_init(viona_link_t *link, uint16_t idx,
 		goto fail;
 	}
 
+	ring->vr_index = idx;
 	ring->vr_size = qsz;
 	ring->vr_mask = (ring->vr_size - 1);
-	ring->vr_pa = pa;
+
+	if (!viona_ring_layout(ring, &ring->vr_desc, VIONA_RING_PART_DESC,
+	    params->vrp_pa_desc) ||
+	    !viona_ring_layout(ring, &ring->vr_avail, VIONA_RING_PART_AVAIL,
+	    params->vrp_pa_avail) ||
+	    !viona_ring_layout(ring, &ring->vr_used, VIONA_RING_PART_USED,
+	    params->vrp_pa_used)) {
+		err = EINVAL;
+		goto fail;
+	}
+
 	if (!viona_ring_map(ring, true)) {
 		err = EINVAL;
 		goto fail;
@@ -331,9 +435,8 @@ viona_ring_init(viona_link_t *link, uint16_t idx,
 	ring->vr_cur_aidx = params->vrp_avail_idx;
 	ring->vr_cur_uidx = params->vrp_used_idx;
 
-	if (idx == VIONA_VQ_TX) {
+	if (VIONA_RING_ISTX(ring))
 		viona_tx_ring_alloc(ring, qsz);
-	}
 
 	/* Zero out MSI-X configuration */
 	ring->vr_msi_addr = 0;
@@ -359,7 +462,9 @@ fail:
 	viona_ring_misc_free(ring);
 	ring->vr_size = 0;
 	ring->vr_mask = 0;
-	ring->vr_pa = 0;
+	ring->vr_desc.vrp_pa = 0;
+	ring->vr_avail.vrp_pa = 0;
+	ring->vr_used.vrp_pa = 0;
 	ring->vr_cur_aidx = 0;
 	ring->vr_cur_uidx = 0;
 	mutex_exit(&ring->vr_lock);
@@ -372,7 +477,7 @@ viona_ring_get_state(viona_link_t *link, uint16_t idx,
 {
 	viona_vring_t *ring;
 
-	if (idx >= VIONA_VQ_MAX) {
+	if (!VIONA_RING_VALID(link, idx)) {
 		return (EINVAL);
 	}
 
@@ -380,7 +485,9 @@ viona_ring_get_state(viona_link_t *link, uint16_t idx,
 	mutex_enter(&ring->vr_lock);
 
 	params->vrp_size = ring->vr_size;
-	params->vrp_pa = ring->vr_pa;
+	params->vrp_pa_desc = ring->vr_desc.vrp_pa;
+	params->vrp_pa_avail = ring->vr_avail.vrp_pa;
+	params->vrp_pa_used = ring->vr_used.vrp_pa;
 
 	if (ring->vr_state == VRS_RUN) {
 		/* On a running ring, we must heed the avail/used locks */
@@ -432,21 +539,20 @@ viona_ring_reset(viona_vring_t *ring, boolean_t heed_signals)
 }
 
 static bool
-viona_ring_map(viona_vring_t *ring, bool defer_dirty)
+viona_ring_map_part(viona_vring_t *ring, viona_vring_part_t *vrp,
+    bool defer_dirty)
 {
 	const uint16_t qsz = ring->vr_size;
-	uintptr_t pa = ring->vr_pa;
+	uintptr_t pa = vrp->vrp_base;
 
 	ASSERT3U(qsz, !=, 0);
 	ASSERT3U(qsz, <=, VRING_MAX_LEN);
 	ASSERT3U(pa, !=, 0);
-	ASSERT3U(pa & (LEGACY_VQ_ALIGN - 1), ==, 0);
-	ASSERT3U(LEGACY_VQ_ALIGN, ==, PAGESIZE);
 	ASSERT(MUTEX_HELD(&ring->vr_lock));
-	ASSERT3P(ring->vr_map_pages, ==, NULL);
+	ASSERT3P(vrp->vrp_map_pages, ==, NULL);
 
-	const uint_t npages = LEGACY_VQ_PAGES(qsz);
-	ring->vr_map_pages = kmem_zalloc(npages * sizeof (void *), KM_SLEEP);
+	vrp->vrp_map_pages = kmem_zalloc(vrp->vrp_npages * sizeof (void *),
+	    KM_SLEEP);
 
 	int page_flags = 0;
 	if (defer_dirty) {
@@ -469,7 +575,7 @@ viona_ring_map(viona_vring_t *ring, bool defer_dirty)
 	}
 
 	vmm_page_t *prev = NULL;
-	for (uint_t i = 0; i < npages; i++, pa += PAGESIZE) {
+	for (uint_t i = 0; i < vrp->vrp_npages; i++, pa += VQ_PGSZ) {
 		vmm_page_t *vmp;
 
 		vmp = vmm_drv_page_hold_ext(ring->vr_lease, pa,
@@ -484,64 +590,87 @@ viona_ring_map(viona_vring_t *ring, bool defer_dirty)
 		 * subsequent pages to the tail.
 		 */
 		if (prev == NULL) {
-			ring->vr_map_hold = vmp;
+			vrp->vrp_map_hold = vmp;
 		} else {
 			vmm_drv_page_chain(prev, vmp);
 		}
 		prev = vmp;
-		ring->vr_map_pages[i] = vmm_drv_page_writable(vmp);
+		vrp->vrp_map_pages[i] = vmm_drv_page_writable(vmp);
 	}
 
 	return (true);
 }
 
+static bool
+viona_ring_map(viona_vring_t *ring, bool defer_dirty)
+{
+	return (viona_ring_map_part(ring, &ring->vr_desc, defer_dirty) &&
+	    viona_ring_map_part(ring, &ring->vr_avail, defer_dirty) &&
+	    viona_ring_map_part(ring, &ring->vr_used, defer_dirty));
+}
+
 static void
-viona_ring_mark_dirty(viona_vring_t *ring)
+viona_ring_mark_dirty_part(viona_vring_t *ring, viona_vring_part_t *vrp)
 {
 	ASSERT(MUTEX_HELD(&ring->vr_lock));
-	ASSERT(ring->vr_map_hold != NULL);
+	ASSERT(vrp->vrp_map_hold != NULL);
 
-	for (vmm_page_t *vp = ring->vr_map_hold; vp != NULL;
+	for (vmm_page_t *vp = vrp->vrp_map_hold; vp != NULL;
 	    vp = vmm_drv_page_next(vp)) {
 		vmm_drv_page_mark_dirty(vp);
 	}
 }
 
 static void
-viona_ring_unmap(viona_vring_t *ring)
+viona_ring_mark_dirty(viona_vring_t *ring)
+{
+	viona_ring_mark_dirty_part(ring, &ring->vr_desc);
+	viona_ring_mark_dirty_part(ring, &ring->vr_avail);
+	viona_ring_mark_dirty_part(ring, &ring->vr_used);
+}
+
+static void
+viona_ring_unmap_part(viona_vring_t *ring, viona_vring_part_t *vrp)
 {
 	ASSERT(MUTEX_HELD(&ring->vr_lock));
 
-	void **map = ring->vr_map_pages;
+	void **map = vrp->vrp_map_pages;
 	if (map != NULL) {
-		const uint_t npages = LEGACY_VQ_PAGES(ring->vr_size);
-		kmem_free(map, npages * sizeof (void *));
-		ring->vr_map_pages = NULL;
+		kmem_free(map, vrp->vrp_npages * sizeof (void *));
+		vrp->vrp_map_pages = NULL;
 
-		vmm_drv_page_release_chain(ring->vr_map_hold);
-		ring->vr_map_hold = NULL;
+		vmm_drv_page_release_chain(vrp->vrp_map_hold);
+		vrp->vrp_map_hold = NULL;
 	} else {
-		ASSERT3P(ring->vr_map_hold, ==, NULL);
+		ASSERT3P(vrp->vrp_map_hold, ==, NULL);
 	}
 }
 
-static inline void *
-viona_ring_addr(viona_vring_t *ring, uint_t off)
+static void
+viona_ring_unmap(viona_vring_t *ring)
 {
-	ASSERT3P(ring->vr_map_pages, !=, NULL);
-	ASSERT3U(LEGACY_VQ_SIZE(ring->vr_size), >, off);
+	viona_ring_unmap_part(ring, &ring->vr_desc);
+	viona_ring_unmap_part(ring, &ring->vr_avail);
+	viona_ring_unmap_part(ring, &ring->vr_used);
+}
 
-	const uint_t page_num = off / PAGESIZE;
-	const uint_t page_off = off % PAGESIZE;
-	return ((caddr_t)ring->vr_map_pages[page_num] + page_off);
+static inline void *
+viona_ring_addr(const viona_vring_part_t *vrp, uint_t off)
+{
+	ASSERT3P(vrp->vrp_map_pages, !=, NULL);
+
+	const uint_t page_num = off / VQ_PGSZ;
+	const uint_t page_off = off % VQ_PGSZ;
+	return ((caddr_t)vrp->vrp_map_pages[page_num] + page_off);
 }
 
 void
 viona_intr_ring(viona_vring_t *ring, boolean_t skip_flags_check)
 {
 	if (!skip_flags_check) {
-		volatile uint16_t *avail_flags = viona_ring_addr(ring,
-		    LEGACY_AVAIL_FLAGS_OFF(ring->vr_size));
+		volatile uint16_t *avail_flags =
+		    viona_ring_addr(&ring->vr_avail,
+		    SPLIT_AVAIL_FLAGS_OFF(ring));
 
 		if ((*avail_flags & VRING_AVAIL_F_NO_INTERRUPT) != 0) {
 			return;
@@ -725,13 +854,10 @@ ring_init:
 	}
 
 	/* Process actual work */
-	if (ring == &link->l_vrings[VIONA_VQ_RX]) {
+	if (VIONA_RING_ISRX(ring))
 		viona_worker_rx(ring, link);
-	} else if (ring == &link->l_vrings[VIONA_VQ_TX]) {
+	else
 		viona_worker_tx(ring, link);
-	} else {
-		panic("unexpected ring: %p", (void *)ring);
-	}
 
 	VERIFY3U(ring->vr_state, ==, VRS_STOP);
 	VERIFY3U(ring->vr_xfer_outstanding, ==, 0);
@@ -774,7 +900,9 @@ ring_reset:
 	ring->vr_cur_aidx = 0;
 	ring->vr_size = 0;
 	ring->vr_mask = 0;
-	ring->vr_pa = 0;
+	ring->vr_desc.vrp_pa = 0;
+	ring->vr_avail.vrp_pa = 0;
+	ring->vr_used.vrp_pa = 0;
 	ring->vr_state = VRS_RESET;
 	ring->vr_state_flags = 0;
 	ring->vr_worker_thread = NULL;
@@ -812,14 +940,18 @@ viona_create_worker(viona_vring_t *ring)
 	return (t);
 }
 
-void
+static inline void
 vq_read_desc(viona_vring_t *ring, uint16_t idx, struct virtio_desc *descp)
 {
-	const uint_t entry_off = idx * sizeof (struct virtio_desc);
-
 	ASSERT3U(idx, <, ring->vr_size);
 
-	bcopy(viona_ring_addr(ring, entry_off), descp, sizeof (*descp));
+	/*
+	 * On both legacy and 1.x VirtIO, the virtqueue descriptors are required
+	 * to be aligned to at least 16 bytes (4k for legacy), and we verify
+	 * this when we set up the ring.
+	 */
+	*descp = *(const struct virtio_desc *)viona_ring_addr(&ring->vr_desc,
+	    SPLIT_DESC_ENT_OFF(ring, idx));
 }
 
 static uint16_t
@@ -828,7 +960,7 @@ vq_read_avail(viona_vring_t *ring, uint16_t idx)
 	ASSERT3U(idx, <, ring->vr_size);
 
 	volatile uint16_t *avail_ent =
-	    viona_ring_addr(ring, LEGACY_AVAIL_ENT_OFF(ring->vr_size, idx));
+	    viona_ring_addr(&ring->vr_avail, SPLIT_AVAIL_ENT_OFF(ring, idx));
 	return (*avail_ent);
 }
 
@@ -893,10 +1025,9 @@ vq_map_indir_desc_bufs(viona_vring_t *ring, const struct virtio_desc *desc,
 	int err = 0;
 
 	for (;;) {
-		uint64_t indir_gpa =
+		const uint64_t indir_gpa =
 		    desc->vd_addr + (indir_next * sizeof (struct virtio_desc));
-		uint64_t indir_page = indir_gpa & PAGEMASK;
-		struct virtio_desc vp;
+		const uint64_t indir_page = indir_gpa & VQ_PGMASK;
 
 		/*
 		 * Get a mapping for the page that the next indirect descriptor
@@ -922,8 +1053,14 @@ vq_map_indir_desc_bufs(viona_vring_t *ring, const struct virtio_desc *desc,
 		 * simply using a reference pointer.  This prevents malicious or
 		 * erroneous guest writes to the descriptor from fooling the
 		 * flags/bounds verification through a race.
+		 *
+		 * While indirect descriptors do not have the same alignment
+		 * requirements as those residing in the virtqueue itself, we
+		 * are not concerned about unaligned access while viona remains
+		 * x86-only.
 		 */
-		bcopy(buf + (indir_gpa - indir_page), &vp, sizeof (vp));
+		struct virtio_desc vp = *(const struct virtio_desc *)
+		    (buf + (indir_gpa - indir_page));
 
 		if (vp.vd_flags & VRING_DESC_F_INDIRECT) {
 			VIONA_PROBE1(indir_bad_nest, viona_vring_t *, ring);
@@ -1076,10 +1213,11 @@ vq_write_used_ent(viona_vring_t *ring, uint16_t idx, uint16_t cookie,
 	 * and length addresses separately, rather than an address for a
 	 * combined `struct virtio_used`.
 	 */
-	const uint_t used_id_off = LEGACY_USED_ENT_OFF(ring->vr_size, idx);
+	const viona_vring_part_t *vrp = &ring->vr_used;
+	const uint_t used_id_off = SPLIT_USED_ENT_OFF(ring, idx);
 	const uint_t used_len_off = used_id_off + sizeof (uint32_t);
-	volatile uint32_t *idp = viona_ring_addr(ring, used_id_off);
-	volatile uint32_t *lenp = viona_ring_addr(ring, used_len_off);
+	volatile uint32_t *idp = viona_ring_addr(vrp, used_id_off);
+	volatile uint32_t *lenp = viona_ring_addr(vrp, used_len_off);
 
 	ASSERT(MUTEX_HELD(&ring->vr_u_mutex));
 
@@ -1093,7 +1231,7 @@ vq_write_used_idx(viona_vring_t *ring, uint16_t idx)
 	ASSERT(MUTEX_HELD(&ring->vr_u_mutex));
 
 	volatile uint16_t *used_idx =
-	    viona_ring_addr(ring, LEGACY_USED_IDX_OFF(ring->vr_size));
+	    viona_ring_addr(&ring->vr_used, SPLIT_USED_IDX_OFF(ring));
 	*used_idx = idx;
 }
 
@@ -1143,7 +1281,7 @@ void
 viona_ring_disable_notify(viona_vring_t *ring)
 {
 	volatile uint16_t *used_flags =
-	    viona_ring_addr(ring, LEGACY_USED_FLAGS_OFF(ring->vr_size));
+	    viona_ring_addr(&ring->vr_used, SPLIT_USED_FLAGS_OFF(ring));
 
 	*used_flags |= VRING_USED_F_NO_NOTIFY;
 }
@@ -1155,7 +1293,7 @@ void
 viona_ring_enable_notify(viona_vring_t *ring)
 {
 	volatile uint16_t *used_flags =
-	    viona_ring_addr(ring, LEGACY_USED_FLAGS_OFF(ring->vr_size));
+	    viona_ring_addr(&ring->vr_used, SPLIT_USED_FLAGS_OFF(ring));
 
 	*used_flags &= ~VRING_USED_F_NO_NOTIFY;
 }
@@ -1172,26 +1310,26 @@ uint16_t
 viona_ring_num_avail(viona_vring_t *ring)
 {
 	volatile uint16_t *avail_idx =
-	    viona_ring_addr(ring, LEGACY_AVAIL_IDX_OFF(ring->vr_size));
+	    viona_ring_addr(&ring->vr_avail, SPLIT_AVAIL_IDX_OFF(ring));
 
 	return (*avail_idx - ring->vr_cur_aidx);
 }
 
-/* Record a successfully transferred packet for the ring stats */
+/* Record successfully transferred packet(s) for the ring stats */
 void
-viona_ring_stat_accept(viona_vring_t *ring, uint32_t len)
+viona_ring_stat_accept(viona_vring_t *ring, size_t count, size_t len)
 {
-	atomic_inc_64(&ring->vr_stats.vts_packets);
+	atomic_add_64(&ring->vr_stats.vts_packets, count);
 	atomic_add_64(&ring->vr_stats.vts_bytes, len);
 }
 
 /*
- * Record a dropped packet in the ring stats
+ * Record dropped packet(s) in the ring stats
  */
 void
-viona_ring_stat_drop(viona_vring_t *ring)
+viona_ring_stat_drop(viona_vring_t *ring, size_t count)
 {
-	atomic_inc_64(&ring->vr_stats.vts_drops);
+	atomic_add_64(&ring->vr_stats.vts_drops, count);
 }
 
 /*
@@ -1210,8 +1348,7 @@ static void
 viona_ring_consolidate_stats(viona_vring_t *ring)
 {
 	viona_link_t *link = ring->vr_link;
-	struct viona_transfer_stats *lstat =
-	    (ring == &link->l_vrings[VIONA_VQ_RX]) ?
+	struct viona_transfer_stats *lstat = VIONA_RING_ISRX(ring) ?
 	    &link->l_stats.vls_rx : &link->l_stats.vls_tx;
 
 	mutex_enter(&link->l_stats_lock);
@@ -1272,7 +1409,7 @@ iov_bunch_copy(iov_bunch_t *iob, void *dst, uint32_t sz)
 
 /*
  * Get the data pointer and length of the current head iovec, less any
- * offsetting from prior copy operations.  This will advanced the iov_bunch_t as
+ * offsetting from prior copy operations.  This will advance the iov_bunch_t as
  * if the caller had performed a copy of that chunk length.
  *
  * Returns `true` if the iov_bunch_t had at least one iovec (unconsumed bytes)

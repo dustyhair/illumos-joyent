@@ -12,6 +12,7 @@
 /*
  * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  * Copyright 2019 Joyent, Inc.
+ * Copyright 2023 RackTop Systems, Inc.
  */
 
 #ifndef _CRYPTOTEST_H
@@ -24,12 +25,20 @@ extern "C" {
 #include <inttypes.h>
 #include <sys/crypto/ioctl.h>
 
+/*
+ * A somewhat arbitrary size that should be large enough to hold the printed
+ * error and size messages.
+ */
+#define	BUFSZ 128
+
 #define	CTEST_INIT_FAILED (-1)
 #define	CTEST_NAME_RESOLVE_FAILED (-2)
 #define	CTEST_MECH_NO_PROVIDER (-3)
 
 #define	CTEST_UPDATELEN_WHOLE	SIZE_MAX
 #define	CTEST_UPDATELEN_END	0
+
+extern boolean_t cryptotest_pkcs;	/* true if PKCS */
 
 typedef struct cryptotest {
 	uint8_t *in;
@@ -112,6 +121,9 @@ extern test_fg_t cryptotest_digest_fg;
 void ccm_init_params(void *, ulong_t, uchar_t *, ulong_t, uchar_t *, ulong_t,
     ulong_t);
 size_t ccm_param_len(void);
+
+void gmac_init_params(void *, uchar_t *, uchar_t *, ulong_t);
+size_t gmac_param_len(void);
 
 #ifdef __cplusplus
 }

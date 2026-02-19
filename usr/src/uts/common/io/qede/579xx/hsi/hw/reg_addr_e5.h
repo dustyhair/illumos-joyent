@@ -8471,9 +8471,9 @@
 #define ETH_PCS10_50G_REG_STATUS1                                                                            0x000004UL //Access:R    DataWidth:0x20   // PCS Status.
   #define ETH_PCS10_50G_REG_STATUS1_LOW_POWER_ABILITY                                                        (0x1<<1) // Set to 1 to indicate that the PCS implements a low power mode.
   #define ETH_PCS10_50G_REG_STATUS1_LOW_POWER_ABILITY_SHIFT                                                  1
-  #define ETH_PCS10_50G_REG_STATUS1_PCS_RECEIVE_LINK                                                         (0x1<<2) // When 1, indicates PCS receive link up; When ‘0’, indicates PCS receive link is or was down (latching low).
+  #define ETH_PCS10_50G_REG_STATUS1_PCS_RECEIVE_LINK                                                         (0x1<<2) // When 1, indicates PCS receive link up; When '0', indicates PCS receive link is or was down (latching low).
   #define ETH_PCS10_50G_REG_STATUS1_PCS_RECEIVE_LINK_SHIFT                                                   2
-  #define ETH_PCS10_50G_REG_STATUS1_FAULT                                                                    (0x1<<7) // When 1, indicates a fault condition idetected; When ‘0’, indicates that no fault condition is detected.
+  #define ETH_PCS10_50G_REG_STATUS1_FAULT                                                                    (0x1<<7) // When 1, indicates a fault condition idetected; When '0', indicates that no fault condition is detected.
   #define ETH_PCS10_50G_REG_STATUS1_FAULT_SHIFT                                                              7
   #define ETH_PCS10_50G_REG_STATUS1_RX_LPI_ACTIVE                                                            (0x1<<8) // 1: receive is currently in LPI state;  0: normal operation.
   #define ETH_PCS10_50G_REG_STATUS1_RX_LPI_ACTIVE_SHIFT                                                      8
@@ -8746,9 +8746,9 @@
 #define ETH_PCS10_25G_REG_STATUS1                                                                            0x000004UL //Access:R    DataWidth:0x20   // PCS Status.
   #define ETH_PCS10_25G_REG_STATUS1_LOW_POWER_ABILITY                                                        (0x1<<1) // Set to 1 to indicate that the PCS implements a low power mode.
   #define ETH_PCS10_25G_REG_STATUS1_LOW_POWER_ABILITY_SHIFT                                                  1
-  #define ETH_PCS10_25G_REG_STATUS1_PCS_RECEIVE_LINK                                                         (0x1<<2) // When 1, indicates PCS receive link up; When ‘0’, indicates PCS receive link is or was down (latching low).
+  #define ETH_PCS10_25G_REG_STATUS1_PCS_RECEIVE_LINK                                                         (0x1<<2) // When 1, indicates PCS receive link up; When '0', indicates PCS receive link is or was down (latching low).
   #define ETH_PCS10_25G_REG_STATUS1_PCS_RECEIVE_LINK_SHIFT                                                   2
-  #define ETH_PCS10_25G_REG_STATUS1_FAULT                                                                    (0x1<<7) // When 1, indicates a fault condition idetected; When ‘0’, indicates that no fault condition is detected.
+  #define ETH_PCS10_25G_REG_STATUS1_FAULT                                                                    (0x1<<7) // When 1, indicates a fault condition idetected; When '0', indicates that no fault condition is detected.
   #define ETH_PCS10_25G_REG_STATUS1_FAULT_SHIFT                                                              7
   #define ETH_PCS10_25G_REG_STATUS1_RX_LPI_ACTIVE                                                            (0x1<<8) // 1: receive is currently in LPI state; 0: normal operation.
   #define ETH_PCS10_25G_REG_STATUS1_RX_LPI_ACTIVE_SHIFT                                                      8
@@ -12064,7 +12064,7 @@
   #define PHY_NW_IP_REG_CMU_R0_RPLL_AFE_INT_CTRL3_CMPLL2_CPCHOP_DIV                                          (0x7<<1) // TBD
   #define PHY_NW_IP_REG_CMU_R0_RPLL_AFE_INT_CTRL3_CMPLL2_CPCHOP_DIV_SHIFT                                    1
 #define PHY_NW_IP_REG_CMU_R0_RPLL_AFE_FRACN_CTRL0                                                            0x003448UL //Access:RW   DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_CMU_R0_RPLL_AFE_FRACN_CTRL0_CMPLL2_FRACDIV_EN                                        (0x1<<0) // Selects between FracN and integer divide modes 0 – integer mode 1 – FracN/SSC mode
+  #define PHY_NW_IP_REG_CMU_R0_RPLL_AFE_FRACN_CTRL0_CMPLL2_FRACDIV_EN                                        (0x1<<0) // Selects between FracN and integer divide modes 0 - integer mode 1 - FracN/SSC mode
   #define PHY_NW_IP_REG_CMU_R0_RPLL_AFE_FRACN_CTRL0_CMPLL2_FRACDIV_EN_SHIFT                                  0
 #define PHY_NW_IP_REG_CMU_R0_RPLL_AFE_MISC_CTRL0                                                             0x003458UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_NW_IP_REG_CMU_R0_RPLL_AFE_MISC_CTRL0_CMPLL2_BIAS_LPF                                           (0x1<<0) // TBD
@@ -14267,9 +14267,9 @@
   #define PHY_NW_IP_REG_LN0_LOS_REFCLK_RUN_LENGTH_STATUS0_EXCEED_SHIFT                                       0
   #define PHY_NW_IP_REG_LN0_LOS_REFCLK_RUN_LENGTH_STATUS0_EXCEED_STICKY                                      (0x1<<1) // Indicates that the run-length filter has, at some time, exceeded the specified run-length threshold.
   #define PHY_NW_IP_REG_LN0_LOS_REFCLK_RUN_LENGTH_STATUS0_EXCEED_STICKY_SHIFT                                1
-#define PHY_NW_IP_REG_LN0_LOS_REFCLK_FILTER_CTRL0                                                            0x007440UL //Access:RW   DataWidth:0x8    // Digital Rx LOS glitch filter assertion threshold.  Determines the number of consecutive clk_i clock cycles that the analog  LOS must remain a logic ‘1’ before the output of the filter will assert.  Can be disabled by writing a value of 0x00.
-#define PHY_NW_IP_REG_LN0_LOS_REFCLK_FILTER_CTRL1                                                            0x007444UL //Access:RW   DataWidth:0x8    // Digital Rx LOS glitch filter assertion threshold.  Determines the number of consecutive clk_i clock cycles that the analog  LOS must remain a logic ‘1’ before the output of the filter will assert.  Can be disabled by writing a value of 0x0000.
-#define PHY_NW_IP_REG_LN0_LOS_REFCLK_FILTER_CTRL2                                                            0x007448UL //Access:RW   DataWidth:0x8    // Digital Rx LOS glitch filter assertion threshold.  Determines the number of consecutive clk_i clock cycles that the raw analog  LOS must remain a logic ‘1’ before the output of the filter will assert.  Can be disabled by writing a value of 0x000000.
+#define PHY_NW_IP_REG_LN0_LOS_REFCLK_FILTER_CTRL0                                                            0x007440UL //Access:RW   DataWidth:0x8    // Digital Rx LOS glitch filter assertion threshold.  Determines the number of consecutive clk_i clock cycles that the analog  LOS must remain a logic '1' before the output of the filter will assert.  Can be disabled by writing a value of 0x00.
+#define PHY_NW_IP_REG_LN0_LOS_REFCLK_FILTER_CTRL1                                                            0x007444UL //Access:RW   DataWidth:0x8    // Digital Rx LOS glitch filter assertion threshold.  Determines the number of consecutive clk_i clock cycles that the analog  LOS must remain a logic '1' before the output of the filter will assert.  Can be disabled by writing a value of 0x0000.
+#define PHY_NW_IP_REG_LN0_LOS_REFCLK_FILTER_CTRL2                                                            0x007448UL //Access:RW   DataWidth:0x8    // Digital Rx LOS glitch filter assertion threshold.  Determines the number of consecutive clk_i clock cycles that the raw analog  LOS must remain a logic '1' before the output of the filter will assert.  Can be disabled by writing a value of 0x000000.
 #define PHY_NW_IP_REG_LN0_LOS_REFCLK_FILTER_CTRL3                                                            0x00744cUL //Access:RW   DataWidth:0x8    // Same as above.
 #define PHY_NW_IP_REG_LN0_LOS_REFCLK_FILTER_CTRL4                                                            0x007450UL //Access:RW   DataWidth:0x8    // Same as above.
 #define PHY_NW_IP_REG_LN0_LOS_REFCLK_FILTER_CTRL5                                                            0x007454UL //Access:RW   DataWidth:0x8    // Multi Field Register.
@@ -14427,14 +14427,14 @@
 #define PHY_NW_IP_REG_LN0_BIST_TX_CTRL                                                                       0x007800UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_NW_IP_REG_LN0_BIST_TX_CTRL_EN                                                                  (0x1<<0) // Enables BIST Tx data generation.
   #define PHY_NW_IP_REG_LN0_BIST_TX_CTRL_EN_SHIFT                                                            0
-  #define PHY_NW_IP_REG_LN0_BIST_TX_CTRL_PATTERN_SEL                                                         (0xf<<1) // Selects the pattern to transmitted: 0x1 – PRBS 0xC1 0x2 – PRBS 0x221 0x3 – PRBS 0xA01 0x4 – PRBS 0xC001 0x5 – PRBS 0x840001 0x6 – PRBS 0x90000001 0x7 – User defined pattern UDP 0x9 – MAC Tx data
+  #define PHY_NW_IP_REG_LN0_BIST_TX_CTRL_PATTERN_SEL                                                         (0xf<<1) // Selects the pattern to transmitted: 0x1 - PRBS 0xC1 0x2 - PRBS 0x221 0x3 - PRBS 0xA01 0x4 - PRBS 0xC001 0x5 - PRBS 0x840001 0x6 - PRBS 0x90000001 0x7 - User defined pattern UDP 0x9 - MAC Tx data
   #define PHY_NW_IP_REG_LN0_BIST_TX_CTRL_PATTERN_SEL_SHIFT                                                   1
 #define PHY_NW_IP_REG_LN0_BIST_TX_RESERVEDREGISTER1359                                                       0x007804UL //Access:RW   DataWidth:0x8    // Reserved
 #define PHY_NW_IP_REG_LN0_BIST_TX_RESERVEDREGISTER1360                                                       0x007808UL //Access:RW   DataWidth:0x8    // Reserved
 #define PHY_NW_IP_REG_LN0_BIST_TX_RESERVEDREGISTER1361                                                       0x00780cUL //Access:RW   DataWidth:0x8    // Reserved
 #define PHY_NW_IP_REG_LN0_BIST_TX_RESERVEDREGISTER1362                                                       0x007810UL //Access:RW   DataWidth:0x8    // Reserved
 #define PHY_NW_IP_REG_LN0_BIST_TX_BER_CTRL0                                                                  0x007818UL //Access:RW   DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN0_BIST_TX_BER_CTRL0_MODE                                                           (0x3<<0) // Controls what type of error injection is used: 0x0 – None 0x1 – Single cycle error 0x2 – Timer based
+  #define PHY_NW_IP_REG_LN0_BIST_TX_BER_CTRL0_MODE                                                           (0x3<<0) // Controls what type of error injection is used: 0x0 - None 0x1 - Single cycle error 0x2 - Timer based
   #define PHY_NW_IP_REG_LN0_BIST_TX_BER_CTRL0_MODE_SHIFT                                                     0
 #define PHY_NW_IP_REG_LN0_BIST_TX_BER_CTRL1                                                                  0x00781cUL //Access:RW   DataWidth:0x8    // Number of cycles between single bit-error injection
 #define PHY_NW_IP_REG_LN0_BIST_TX_BER_CTRL2                                                                  0x007820UL //Access:RW   DataWidth:0x8    // Number of cycles between single bit-error injection
@@ -14472,7 +14472,7 @@
 #define PHY_NW_IP_REG_LN0_BIST_RX_CTRL                                                                       0x007a00UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_NW_IP_REG_LN0_BIST_RX_CTRL_EN                                                                  (0x1<<0) // Enables BIST Rx data checking.
   #define PHY_NW_IP_REG_LN0_BIST_RX_CTRL_EN_SHIFT                                                            0
-  #define PHY_NW_IP_REG_LN0_BIST_RX_CTRL_PATTERN_SEL                                                         (0xf<<1) // Selects the pattern to search for: 0x1 – PRBS 0xC1 0x2 – PRBS 0x221 0x3 – PRBS 0xA01 0x4 – PRBS 0xC001 0x5 – PRBS 0x840001 0x6 – PRBS 0x90000001 0x7 – User defined pattern UDP 0x8 – Auto-detect
+  #define PHY_NW_IP_REG_LN0_BIST_RX_CTRL_PATTERN_SEL                                                         (0xf<<1) // Selects the pattern to search for: 0x1 - PRBS 0xC1 0x2 - PRBS 0x221 0x3 - PRBS 0xA01 0x4 - PRBS 0xC001 0x5 - PRBS 0x840001 0x6 - PRBS 0x90000001 0x7 - User defined pattern UDP 0x8 - Auto-detect
   #define PHY_NW_IP_REG_LN0_BIST_RX_CTRL_PATTERN_SEL_SHIFT                                                   1
   #define PHY_NW_IP_REG_LN0_BIST_RX_CTRL_CLEAR_BER                                                           (0x1<<5) // Clears the bit error counter.
   #define PHY_NW_IP_REG_LN0_BIST_RX_CTRL_CLEAR_BER_SHIFT                                                     5
@@ -14481,9 +14481,9 @@
   #define PHY_NW_IP_REG_LN0_BIST_RX_CTRL_FORCE_LFSR_WITH_RXDATA                                              (0x1<<7) // Forces the PRBS LFSR to reseed with Rx data every cycle.  This will cause the bit error counter to be inaccurate.
   #define PHY_NW_IP_REG_LN0_BIST_RX_CTRL_FORCE_LFSR_WITH_RXDATA_SHIFT                                        7
 #define PHY_NW_IP_REG_LN0_BIST_RX_STATUS                                                                     0x007a10UL //Access:R    DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN0_BIST_RX_STATUS_STATE                                                             (0x7<<0) // State of the BIST checker: 0x0 – Off 0x1 – Searching for pattern 0x2 – Waiting for pattern lock conditions 0x3 – Pattern lock acquired 0x4 – Pattern lock lost
+  #define PHY_NW_IP_REG_LN0_BIST_RX_STATUS_STATE                                                             (0x7<<0) // State of the BIST checker: 0x0 - Off 0x1 - Searching for pattern 0x2 - Waiting for pattern lock conditions 0x3 - Pattern lock acquired 0x4 - Pattern lock lost
   #define PHY_NW_IP_REG_LN0_BIST_RX_STATUS_STATE_SHIFT                                                       0
-  #define PHY_NW_IP_REG_LN0_BIST_RX_STATUS_PATTERN_DET                                                       (0xf<<3) // Indicates the pattern  detected: 0x0 – No pattern detected 0x1 – PRBS 0xC1 0x2 – PRBS 0x221 0x3 – PRBS 0xA01 0x4 – PRBS 0xC001 0x5 – PRBS 0x840001 0x6 – PRBS 0x90000001 0x7 – User defined pattern UDP
+  #define PHY_NW_IP_REG_LN0_BIST_RX_STATUS_PATTERN_DET                                                       (0xf<<3) // Indicates the pattern  detected: 0x0 - No pattern detected 0x1 - PRBS 0xC1 0x2 - PRBS 0x221 0x3 - PRBS 0xA01 0x4 - PRBS 0xC001 0x5 - PRBS 0x840001 0x6 - PRBS 0x90000001 0x7 - User defined pattern UDP
   #define PHY_NW_IP_REG_LN0_BIST_RX_STATUS_PATTERN_DET_SHIFT                                                 3
 #define PHY_NW_IP_REG_LN0_BIST_RX_BER_STATUS0                                                                0x007a20UL //Access:R    DataWidth:0x8    // Number of bit errors.
 #define PHY_NW_IP_REG_LN0_BIST_RX_BER_STATUS1                                                                0x007a24UL //Access:R    DataWidth:0x8    // Number of bit errors.
@@ -14855,14 +14855,14 @@
   #define PHY_NW_IP_REG_LN0_LT_TX_FSM_STATUS_FSM_LOCAL_RX_READY                                              (0x1<<4) // Output from LSM corresponding to 802.3 defined local_rx_ready variable. After this is asserted the corresponding frame status report field should be set.
   #define PHY_NW_IP_REG_LN0_LT_TX_FSM_STATUS_FSM_LOCAL_RX_READY_SHIFT                                        4
 #define PHY_NW_IP_REG_LN0_LT_TX_PRBS_CTRL0                                                                   0x007e4cUL //Access:RW   DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN0_LT_TX_PRBS_CTRL0_POLYNOMIAL                                                      (0x7<<0) // Selects between CL72 and CL93 PRBS pattern. 0 – CL72 1 + x^9 +x^11 1 – CL93 1 + x^5 + x^6 + x^10 + x^11 2 – CL93 1 + x^5 + x^6 + x^9 + x^11 3 – CL93 1 + x^4 + x^6 + x^8 + x^11 4 – CL93 1 + x^4 + x^6 + x^7 + x^11
+  #define PHY_NW_IP_REG_LN0_LT_TX_PRBS_CTRL0_POLYNOMIAL                                                      (0x7<<0) // Selects between CL72 and CL93 PRBS pattern. 0 - CL72 1 + x^9 +x^11 1 - CL93 1 + x^5 + x^6 + x^10 + x^11 2 - CL93 1 + x^5 + x^6 + x^9 + x^11 3 - CL93 1 + x^4 + x^6 + x^8 + x^11 4 - CL93 1 + x^4 + x^6 + x^7 + x^11
   #define PHY_NW_IP_REG_LN0_LT_TX_PRBS_CTRL0_POLYNOMIAL_SHIFT                                                0
 #define PHY_NW_IP_REG_LN0_LT_TX_PRBS_CTRL1                                                                   0x007e50UL //Access:RW   DataWidth:0x8    // Initial PRBS LFSR seed.  This needs to be set according to the requirements in 802.3 CL72 or CL93 depending on the type of link training and lane bonding being performed.
 #define PHY_NW_IP_REG_LN0_LT_TX_PRBS_CTRL2                                                                   0x007e54UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_NW_IP_REG_LN0_LT_TX_PRBS_CTRL2_SEED_10_8                                                       (0x7<<0) // Same as above.
   #define PHY_NW_IP_REG_LN0_LT_TX_PRBS_CTRL2_SEED_10_8_SHIFT                                                 0
 #define PHY_NW_IP_REG_LN0_LT_TX_COEFFICIENT_UPDATE_CTRL                                                      0x007e80UL //Access:RW   DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN0_LT_TX_COEFFICIENT_UPDATE_CTRL_C_P1                                               (0x3<<0) // Coefficient update request field for post-cursor tap. 2'b00 – hold 2'b01 – increment 2'b10 – decrement 2'b11 – reserved
+  #define PHY_NW_IP_REG_LN0_LT_TX_COEFFICIENT_UPDATE_CTRL_C_P1                                               (0x3<<0) // Coefficient update request field for post-cursor tap. 2'b00 - hold 2'b01 - increment 2'b10 - decrement 2'b11 - reserved
   #define PHY_NW_IP_REG_LN0_LT_TX_COEFFICIENT_UPDATE_CTRL_C_P1_SHIFT                                         0
   #define PHY_NW_IP_REG_LN0_LT_TX_COEFFICIENT_UPDATE_CTRL_C_0                                                (0x3<<2) // Coefficient update request field for cursor tap.
   #define PHY_NW_IP_REG_LN0_LT_TX_COEFFICIENT_UPDATE_CTRL_C_0_SHIFT                                          2
@@ -14873,7 +14873,7 @@
   #define PHY_NW_IP_REG_LN0_LT_TX_COEFFICIENT_UPDATE_CTRL_PRESET                                             (0x1<<7) // Coefficient update preset field.
   #define PHY_NW_IP_REG_LN0_LT_TX_COEFFICIENT_UPDATE_CTRL_PRESET_SHIFT                                       7
 #define PHY_NW_IP_REG_LN0_LT_TX_STATUS_REPORT_CTRL                                                           0x007e88UL //Access:RW   DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN0_LT_TX_STATUS_REPORT_CTRL_C_P1                                                    (0x3<<0) // Status report field for post-cursor tap. 2'b00 – not updated 2'b01 – minimum 2'b10 – updated 2'b11 – maximum
+  #define PHY_NW_IP_REG_LN0_LT_TX_STATUS_REPORT_CTRL_C_P1                                                    (0x3<<0) // Status report field for post-cursor tap. 2'b00 - not updated 2'b01 - minimum 2'b10 - updated 2'b11 - maximum
   #define PHY_NW_IP_REG_LN0_LT_TX_STATUS_REPORT_CTRL_C_P1_SHIFT                                              0
   #define PHY_NW_IP_REG_LN0_LT_TX_STATUS_REPORT_CTRL_C_0                                                     (0x3<<2) // Status report field for cursor tap.
   #define PHY_NW_IP_REG_LN0_LT_TX_STATUS_REPORT_CTRL_C_0_SHIFT                                               2
@@ -14882,7 +14882,7 @@
   #define PHY_NW_IP_REG_LN0_LT_TX_STATUS_REPORT_CTRL_LOCAL_RX_READY                                          (0x1<<6) // Status report field to indicate local receiver is ready.  Should be set based on LTSM output of corresponding variable.
   #define PHY_NW_IP_REG_LN0_LT_TX_STATUS_REPORT_CTRL_LOCAL_RX_READY_SHIFT                                    6
 #define PHY_NW_IP_REG_LN0_LT_TX_FSM_STATE_STATUS0                                                            0x007ec0UL //Access:R    DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN0_LT_TX_FSM_STATE_STATUS0_CURRENT                                                  (0x7<<0) // Current state of LTSM. 0x0 – INITIALIZE 0x1 – SEND_TRAINING 0x2 – TRAIN_REMOTE 0x3 – TRAIN_LOCAL 0x4 – S7 0x5 – TRAINING_FAILURE 0x6 – LINK_READY 0x7 – SEND_DATA
+  #define PHY_NW_IP_REG_LN0_LT_TX_FSM_STATE_STATUS0_CURRENT                                                  (0x7<<0) // Current state of LTSM. 0x0 - INITIALIZE 0x1 - SEND_TRAINING 0x2 - TRAIN_REMOTE 0x3 - TRAIN_LOCAL 0x4 - S7 0x5 - TRAINING_FAILURE 0x6 - LINK_READY 0x7 - SEND_DATA
   #define PHY_NW_IP_REG_LN0_LT_TX_FSM_STATE_STATUS0_CURRENT_SHIFT                                            0
   #define PHY_NW_IP_REG_LN0_LT_TX_FSM_STATE_STATUS0_PREV1                                                    (0x7<<4) // One state previous.
   #define PHY_NW_IP_REG_LN0_LT_TX_FSM_STATE_STATUS0_PREV1_SHIFT                                              4
@@ -14897,7 +14897,7 @@
   #define PHY_NW_IP_REG_LN0_LT_RX_CTRL0_TRAINING                                                             (0x1<<1) // This is the 802.3 defined training variable.  It should be set according to corresponding LTSM output.
   #define PHY_NW_IP_REG_LN0_LT_RX_CTRL0_TRAINING_SHIFT                                                       1
 #define PHY_NW_IP_REG_LN0_LT_RX_PRBS_CTRL0                                                                   0x007f08UL //Access:RW   DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN0_LT_RX_PRBS_CTRL0_POLYNOMIAL                                                      (0x7<<0) // Selects between CL72 and CL93 PRBS patterns. 0 – CL72 1 + x^9 + x^11 1 – CL93 1 + x^5 + x^6 + x^10 + x^11 2 – CL93 1 + x^5 + x^6 + x^9 + x^11 3 – CL93 1 + x^4 + x^6 + x^8 + x^11 4 – CL93 1 + x^4 + x^6 + x^7 + x^11
+  #define PHY_NW_IP_REG_LN0_LT_RX_PRBS_CTRL0_POLYNOMIAL                                                      (0x7<<0) // Selects between CL72 and CL93 PRBS patterns. 0 - CL72 1 + x^9 + x^11 1 - CL93 1 + x^5 + x^6 + x^10 + x^11 2 - CL93 1 + x^5 + x^6 + x^9 + x^11 3 - CL93 1 + x^4 + x^6 + x^8 + x^11 4 - CL93 1 + x^4 + x^6 + x^7 + x^11
   #define PHY_NW_IP_REG_LN0_LT_RX_PRBS_CTRL0_POLYNOMIAL_SHIFT                                                0
 #define PHY_NW_IP_REG_LN0_LT_RX_PRBS_CTRL1                                                                   0x007f0cUL //Access:RW   DataWidth:0x8    // Maximum number  of PRBS bit errors allowed in single LT frame for PRBS lock to be achieved.
 #define PHY_NW_IP_REG_LN0_LT_RX_PRBS_STATUS0                                                                 0x007f14UL //Access:R    DataWidth:0x8    // Multi Field Register.
@@ -14920,7 +14920,7 @@
 #define PHY_NW_IP_REG_LN0_LT_RX_FRAME_STATUS3                                                                0x007f58UL //Access:R    DataWidth:0x8    // Total number of received frames  with a PRBS, DME, or framing error since frame lock.
 #define PHY_NW_IP_REG_LN0_LT_RX_FRAME_STATUS4                                                                0x007f5cUL //Access:R    DataWidth:0x8    // Same as above.
 #define PHY_NW_IP_REG_LN0_LT_RX_COEFFICIENT_UPDATE_STATUS                                                    0x007f80UL //Access:R    DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN0_LT_RX_COEFFICIENT_UPDATE_STATUS_C_P1                                             (0x3<<0) // Received coefficient update field for post-cursor tap. 2'b00 – hold 2'b01 – increment 2'b10 – decrement 2'b11 – reserved
+  #define PHY_NW_IP_REG_LN0_LT_RX_COEFFICIENT_UPDATE_STATUS_C_P1                                             (0x3<<0) // Received coefficient update field for post-cursor tap. 2'b00 - hold 2'b01 - increment 2'b10 - decrement 2'b11 - reserved
   #define PHY_NW_IP_REG_LN0_LT_RX_COEFFICIENT_UPDATE_STATUS_C_P1_SHIFT                                       0
   #define PHY_NW_IP_REG_LN0_LT_RX_COEFFICIENT_UPDATE_STATUS_C_0                                              (0x3<<2) // Received coefficient update request field for cursor tap.
   #define PHY_NW_IP_REG_LN0_LT_RX_COEFFICIENT_UPDATE_STATUS_C_0_SHIFT                                        2
@@ -14931,7 +14931,7 @@
   #define PHY_NW_IP_REG_LN0_LT_RX_COEFFICIENT_UPDATE_STATUS_PRESET                                           (0x1<<7) // Received coefficient update preset field.
   #define PHY_NW_IP_REG_LN0_LT_RX_COEFFICIENT_UPDATE_STATUS_PRESET_SHIFT                                     7
 #define PHY_NW_IP_REG_LN0_LT_RX_REPORT_STATUS                                                                0x007f88UL //Access:R    DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN0_LT_RX_REPORT_STATUS_C_P1                                                         (0x3<<0) // Received status report field for post-cursor tap. 2'b00 – not updated 2'b01 – minimum 2'b10 – updated 2'b11 – maximum
+  #define PHY_NW_IP_REG_LN0_LT_RX_REPORT_STATUS_C_P1                                                         (0x3<<0) // Received status report field for post-cursor tap. 2'b00 - not updated 2'b01 - minimum 2'b10 - updated 2'b11 - maximum
   #define PHY_NW_IP_REG_LN0_LT_RX_REPORT_STATUS_C_P1_SHIFT                                                   0
   #define PHY_NW_IP_REG_LN0_LT_RX_REPORT_STATUS_C_0                                                          (0x3<<2) // Received status report field for cursor tap.
   #define PHY_NW_IP_REG_LN0_LT_RX_REPORT_STATUS_C_0_SHIFT                                                    2
@@ -16949,9 +16949,9 @@
   #define PHY_NW_IP_REG_LN1_LOS_REFCLK_RUN_LENGTH_STATUS0_EXCEED_SHIFT                                       0
   #define PHY_NW_IP_REG_LN1_LOS_REFCLK_RUN_LENGTH_STATUS0_EXCEED_STICKY                                      (0x1<<1) // Indicates that the run-length filter has, at some time, exceeded the specified run-length threshold.
   #define PHY_NW_IP_REG_LN1_LOS_REFCLK_RUN_LENGTH_STATUS0_EXCEED_STICKY_SHIFT                                1
-#define PHY_NW_IP_REG_LN1_LOS_REFCLK_FILTER_CTRL0                                                            0x009440UL //Access:RW   DataWidth:0x8    // Digital Rx LOS glitch filter assertion threshold.  Determines the number of consecutive clk_i clock cycles that the analog  LOS must remain a logic ‘1’ before the output of the filter will assert.  Can be disabled by writing a value of 0x00.
-#define PHY_NW_IP_REG_LN1_LOS_REFCLK_FILTER_CTRL1                                                            0x009444UL //Access:RW   DataWidth:0x8    // Digital Rx LOS glitch filter assertion threshold.  Determines the number of consecutive clk_i clock cycles that the analog  LOS must remain a logic ‘1’ before the output of the filter will assert.  Can be disabled by writing a value of 0x0000.
-#define PHY_NW_IP_REG_LN1_LOS_REFCLK_FILTER_CTRL2                                                            0x009448UL //Access:RW   DataWidth:0x8    // Digital Rx LOS glitch filter assertion threshold.  Determines the number of consecutive clk_i clock cycles that the raw analog  LOS must remain a logic ‘1’ before the output of the filter will assert.  Can be disabled by writing a value of 0x000000.
+#define PHY_NW_IP_REG_LN1_LOS_REFCLK_FILTER_CTRL0                                                            0x009440UL //Access:RW   DataWidth:0x8    // Digital Rx LOS glitch filter assertion threshold.  Determines the number of consecutive clk_i clock cycles that the analog  LOS must remain a logic '1' before the output of the filter will assert.  Can be disabled by writing a value of 0x00.
+#define PHY_NW_IP_REG_LN1_LOS_REFCLK_FILTER_CTRL1                                                            0x009444UL //Access:RW   DataWidth:0x8    // Digital Rx LOS glitch filter assertion threshold.  Determines the number of consecutive clk_i clock cycles that the analog  LOS must remain a logic '1' before the output of the filter will assert.  Can be disabled by writing a value of 0x0000.
+#define PHY_NW_IP_REG_LN1_LOS_REFCLK_FILTER_CTRL2                                                            0x009448UL //Access:RW   DataWidth:0x8    // Digital Rx LOS glitch filter assertion threshold.  Determines the number of consecutive clk_i clock cycles that the raw analog  LOS must remain a logic '1' before the output of the filter will assert.  Can be disabled by writing a value of 0x000000.
 #define PHY_NW_IP_REG_LN1_LOS_REFCLK_FILTER_CTRL3                                                            0x00944cUL //Access:RW   DataWidth:0x8    // Same as above.
 #define PHY_NW_IP_REG_LN1_LOS_REFCLK_FILTER_CTRL4                                                            0x009450UL //Access:RW   DataWidth:0x8    // Same as above.
 #define PHY_NW_IP_REG_LN1_LOS_REFCLK_FILTER_CTRL5                                                            0x009454UL //Access:RW   DataWidth:0x8    // Multi Field Register.
@@ -17109,14 +17109,14 @@
 #define PHY_NW_IP_REG_LN1_BIST_TX_CTRL                                                                       0x009800UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_NW_IP_REG_LN1_BIST_TX_CTRL_EN                                                                  (0x1<<0) // Enables BIST Tx data generation.
   #define PHY_NW_IP_REG_LN1_BIST_TX_CTRL_EN_SHIFT                                                            0
-  #define PHY_NW_IP_REG_LN1_BIST_TX_CTRL_PATTERN_SEL                                                         (0xf<<1) // Selects the pattern to transmitted: 0x1 – PRBS 0xC1 0x2 – PRBS 0x221 0x3 – PRBS 0xA01 0x4 – PRBS 0xC001 0x5 – PRBS 0x840001 0x6 – PRBS 0x90000001 0x7 – User defined pattern UDP 0x9 – MAC Tx data
+  #define PHY_NW_IP_REG_LN1_BIST_TX_CTRL_PATTERN_SEL                                                         (0xf<<1) // Selects the pattern to transmitted: 0x1 - PRBS 0xC1 0x2 - PRBS 0x221 0x3 - PRBS 0xA01 0x4 - PRBS 0xC001 0x5 - PRBS 0x840001 0x6 - PRBS 0x90000001 0x7 - User defined pattern UDP 0x9 - MAC Tx data
   #define PHY_NW_IP_REG_LN1_BIST_TX_CTRL_PATTERN_SEL_SHIFT                                                   1
 #define PHY_NW_IP_REG_LN1_BIST_TX_RESERVEDREGISTER1843                                                       0x009804UL //Access:RW   DataWidth:0x8    // Reserved
 #define PHY_NW_IP_REG_LN1_BIST_TX_RESERVEDREGISTER1844                                                       0x009808UL //Access:RW   DataWidth:0x8    // Reserved
 #define PHY_NW_IP_REG_LN1_BIST_TX_RESERVEDREGISTER1845                                                       0x00980cUL //Access:RW   DataWidth:0x8    // Reserved
 #define PHY_NW_IP_REG_LN1_BIST_TX_RESERVEDREGISTER1846                                                       0x009810UL //Access:RW   DataWidth:0x8    // Reserved
 #define PHY_NW_IP_REG_LN1_BIST_TX_BER_CTRL0                                                                  0x009818UL //Access:RW   DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN1_BIST_TX_BER_CTRL0_MODE                                                           (0x3<<0) // Controls what type of error injection is used: 0x0 – None 0x1 – Single cycle error 0x2 – Timer based
+  #define PHY_NW_IP_REG_LN1_BIST_TX_BER_CTRL0_MODE                                                           (0x3<<0) // Controls what type of error injection is used: 0x0 - None 0x1 - Single cycle error 0x2 - Timer based
   #define PHY_NW_IP_REG_LN1_BIST_TX_BER_CTRL0_MODE_SHIFT                                                     0
 #define PHY_NW_IP_REG_LN1_BIST_TX_BER_CTRL1                                                                  0x00981cUL //Access:RW   DataWidth:0x8    // Number of cycles between single bit-error injection
 #define PHY_NW_IP_REG_LN1_BIST_TX_BER_CTRL2                                                                  0x009820UL //Access:RW   DataWidth:0x8    // Number of cycles between single bit-error injection
@@ -17154,7 +17154,7 @@
 #define PHY_NW_IP_REG_LN1_BIST_RX_CTRL                                                                       0x009a00UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_NW_IP_REG_LN1_BIST_RX_CTRL_EN                                                                  (0x1<<0) // Enables BIST Rx data checking.
   #define PHY_NW_IP_REG_LN1_BIST_RX_CTRL_EN_SHIFT                                                            0
-  #define PHY_NW_IP_REG_LN1_BIST_RX_CTRL_PATTERN_SEL                                                         (0xf<<1) // Selects the pattern to search for: 0x1 – PRBS 0xC1 0x2 – PRBS 0x221 0x3 – PRBS 0xA01 0x4 – PRBS 0xC001 0x5 – PRBS 0x840001 0x6 – PRBS 0x90000001 0x7 – User defined pattern UDP 0x8 – Auto-detect
+  #define PHY_NW_IP_REG_LN1_BIST_RX_CTRL_PATTERN_SEL                                                         (0xf<<1) // Selects the pattern to search for: 0x1 - PRBS 0xC1 0x2 - PRBS 0x221 0x3 - PRBS 0xA01 0x4 - PRBS 0xC001 0x5 - PRBS 0x840001 0x6 - PRBS 0x90000001 0x7 - User defined pattern UDP 0x8 - Auto-detect
   #define PHY_NW_IP_REG_LN1_BIST_RX_CTRL_PATTERN_SEL_SHIFT                                                   1
   #define PHY_NW_IP_REG_LN1_BIST_RX_CTRL_CLEAR_BER                                                           (0x1<<5) // Clears the bit error counter.
   #define PHY_NW_IP_REG_LN1_BIST_RX_CTRL_CLEAR_BER_SHIFT                                                     5
@@ -17163,9 +17163,9 @@
   #define PHY_NW_IP_REG_LN1_BIST_RX_CTRL_FORCE_LFSR_WITH_RXDATA                                              (0x1<<7) // Forces the PRBS LFSR to reseed with Rx data every cycle.  This will cause the bit error counter to be inaccurate.
   #define PHY_NW_IP_REG_LN1_BIST_RX_CTRL_FORCE_LFSR_WITH_RXDATA_SHIFT                                        7
 #define PHY_NW_IP_REG_LN1_BIST_RX_STATUS                                                                     0x009a10UL //Access:R    DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN1_BIST_RX_STATUS_STATE                                                             (0x7<<0) // State of the BIST checker: 0x0 – Off 0x1 – Searching for pattern 0x2 – Waiting for pattern lock conditions 0x3 – Pattern lock acquired 0x4 – Pattern lock lost
+  #define PHY_NW_IP_REG_LN1_BIST_RX_STATUS_STATE                                                             (0x7<<0) // State of the BIST checker: 0x0 - Off 0x1 - Searching for pattern 0x2 - Waiting for pattern lock conditions 0x3 - Pattern lock acquired 0x4 - Pattern lock lost
   #define PHY_NW_IP_REG_LN1_BIST_RX_STATUS_STATE_SHIFT                                                       0
-  #define PHY_NW_IP_REG_LN1_BIST_RX_STATUS_PATTERN_DET                                                       (0xf<<3) // Indicates the pattern  detected: 0x0 – No pattern detected 0x1 – PRBS 0xC1 0x2 – PRBS 0x221 0x3 – PRBS 0xA01 0x4 – PRBS 0xC001 0x5 – PRBS 0x840001 0x6 – PRBS 0x90000001 0x7 – User defined pattern UDP
+  #define PHY_NW_IP_REG_LN1_BIST_RX_STATUS_PATTERN_DET                                                       (0xf<<3) // Indicates the pattern  detected: 0x0 - No pattern detected 0x1 - PRBS 0xC1 0x2 - PRBS 0x221 0x3 - PRBS 0xA01 0x4 - PRBS 0xC001 0x5 - PRBS 0x840001 0x6 - PRBS 0x90000001 0x7 - User defined pattern UDP
   #define PHY_NW_IP_REG_LN1_BIST_RX_STATUS_PATTERN_DET_SHIFT                                                 3
 #define PHY_NW_IP_REG_LN1_BIST_RX_BER_STATUS0                                                                0x009a20UL //Access:R    DataWidth:0x8    // Number of bit errors.
 #define PHY_NW_IP_REG_LN1_BIST_RX_BER_STATUS1                                                                0x009a24UL //Access:R    DataWidth:0x8    // Number of bit errors.
@@ -17537,14 +17537,14 @@
   #define PHY_NW_IP_REG_LN1_LT_TX_FSM_STATUS_FSM_LOCAL_RX_READY                                              (0x1<<4) // Output from LSM corresponding to 802.3 defined local_rx_ready variable. After this is asserted the corresponding frame status report field should be set.
   #define PHY_NW_IP_REG_LN1_LT_TX_FSM_STATUS_FSM_LOCAL_RX_READY_SHIFT                                        4
 #define PHY_NW_IP_REG_LN1_LT_TX_PRBS_CTRL0                                                                   0x009e4cUL //Access:RW   DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN1_LT_TX_PRBS_CTRL0_POLYNOMIAL                                                      (0x7<<0) // Selects between CL72 and CL93 PRBS pattern. 0 – CL72 1 + x^9 +x^11 1 – CL93 1 + x^5 + x^6 + x^10 + x^11 2 – CL93 1 + x^5 + x^6 + x^9 + x^11 3 – CL93 1 + x^4 + x^6 + x^8 + x^11 4 – CL93 1 + x^4 + x^6 + x^7 + x^11
+  #define PHY_NW_IP_REG_LN1_LT_TX_PRBS_CTRL0_POLYNOMIAL                                                      (0x7<<0) // Selects between CL72 and CL93 PRBS pattern. 0 - CL72 1 + x^9 +x^11 1 - CL93 1 + x^5 + x^6 + x^10 + x^11 2 - CL93 1 + x^5 + x^6 + x^9 + x^11 3 - CL93 1 + x^4 + x^6 + x^8 + x^11 4 - CL93 1 + x^4 + x^6 + x^7 + x^11
   #define PHY_NW_IP_REG_LN1_LT_TX_PRBS_CTRL0_POLYNOMIAL_SHIFT                                                0
 #define PHY_NW_IP_REG_LN1_LT_TX_PRBS_CTRL1                                                                   0x009e50UL //Access:RW   DataWidth:0x8    // Initial PRBS LFSR seed.  This needs to be set according to the requirements in 802.3 CL72 or CL93 depending on the type of link training and lane bonding being performed.
 #define PHY_NW_IP_REG_LN1_LT_TX_PRBS_CTRL2                                                                   0x009e54UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_NW_IP_REG_LN1_LT_TX_PRBS_CTRL2_SEED_10_8                                                       (0x7<<0) // Same as above.
   #define PHY_NW_IP_REG_LN1_LT_TX_PRBS_CTRL2_SEED_10_8_SHIFT                                                 0
 #define PHY_NW_IP_REG_LN1_LT_TX_COEFFICIENT_UPDATE_CTRL                                                      0x009e80UL //Access:RW   DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN1_LT_TX_COEFFICIENT_UPDATE_CTRL_C_P1                                               (0x3<<0) // Coefficient update request field for post-cursor tap. 2'b00 – hold 2'b01 – increment 2'b10 – decrement 2'b11 – reserved
+  #define PHY_NW_IP_REG_LN1_LT_TX_COEFFICIENT_UPDATE_CTRL_C_P1                                               (0x3<<0) // Coefficient update request field for post-cursor tap. 2'b00 - hold 2'b01 - increment 2'b10 - decrement 2'b11 - reserved
   #define PHY_NW_IP_REG_LN1_LT_TX_COEFFICIENT_UPDATE_CTRL_C_P1_SHIFT                                         0
   #define PHY_NW_IP_REG_LN1_LT_TX_COEFFICIENT_UPDATE_CTRL_C_0                                                (0x3<<2) // Coefficient update request field for cursor tap.
   #define PHY_NW_IP_REG_LN1_LT_TX_COEFFICIENT_UPDATE_CTRL_C_0_SHIFT                                          2
@@ -17555,7 +17555,7 @@
   #define PHY_NW_IP_REG_LN1_LT_TX_COEFFICIENT_UPDATE_CTRL_PRESET                                             (0x1<<7) // Coefficient update preset field.
   #define PHY_NW_IP_REG_LN1_LT_TX_COEFFICIENT_UPDATE_CTRL_PRESET_SHIFT                                       7
 #define PHY_NW_IP_REG_LN1_LT_TX_STATUS_REPORT_CTRL                                                           0x009e88UL //Access:RW   DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN1_LT_TX_STATUS_REPORT_CTRL_C_P1                                                    (0x3<<0) // Status report field for post-cursor tap. 2'b00 – not updated 2'b01 – minimum 2'b10 – updated 2'b11 – maximum
+  #define PHY_NW_IP_REG_LN1_LT_TX_STATUS_REPORT_CTRL_C_P1                                                    (0x3<<0) // Status report field for post-cursor tap. 2'b00 - not updated 2'b01 - minimum 2'b10 - updated 2'b11 - maximum
   #define PHY_NW_IP_REG_LN1_LT_TX_STATUS_REPORT_CTRL_C_P1_SHIFT                                              0
   #define PHY_NW_IP_REG_LN1_LT_TX_STATUS_REPORT_CTRL_C_0                                                     (0x3<<2) // Status report field for cursor tap.
   #define PHY_NW_IP_REG_LN1_LT_TX_STATUS_REPORT_CTRL_C_0_SHIFT                                               2
@@ -17564,7 +17564,7 @@
   #define PHY_NW_IP_REG_LN1_LT_TX_STATUS_REPORT_CTRL_LOCAL_RX_READY                                          (0x1<<6) // Status report field to indicate local receiver is ready.  Should be set based on LTSM output of corresponding variable.
   #define PHY_NW_IP_REG_LN1_LT_TX_STATUS_REPORT_CTRL_LOCAL_RX_READY_SHIFT                                    6
 #define PHY_NW_IP_REG_LN1_LT_TX_FSM_STATE_STATUS0                                                            0x009ec0UL //Access:R    DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN1_LT_TX_FSM_STATE_STATUS0_CURRENT                                                  (0x7<<0) // Current state of LTSM. 0x0 – INITIALIZE 0x1 – SEND_TRAINING 0x2 – TRAIN_REMOTE 0x3 – TRAIN_LOCAL 0x4 – S7 0x5 – TRAINING_FAILURE 0x6 – LINK_READY 0x7 – SEND_DATA
+  #define PHY_NW_IP_REG_LN1_LT_TX_FSM_STATE_STATUS0_CURRENT                                                  (0x7<<0) // Current state of LTSM. 0x0 - INITIALIZE 0x1 - SEND_TRAINING 0x2 - TRAIN_REMOTE 0x3 - TRAIN_LOCAL 0x4 - S7 0x5 - TRAINING_FAILURE 0x6 - LINK_READY 0x7 - SEND_DATA
   #define PHY_NW_IP_REG_LN1_LT_TX_FSM_STATE_STATUS0_CURRENT_SHIFT                                            0
   #define PHY_NW_IP_REG_LN1_LT_TX_FSM_STATE_STATUS0_PREV1                                                    (0x7<<4) // One state previous.
   #define PHY_NW_IP_REG_LN1_LT_TX_FSM_STATE_STATUS0_PREV1_SHIFT                                              4
@@ -17579,7 +17579,7 @@
   #define PHY_NW_IP_REG_LN1_LT_RX_CTRL0_TRAINING                                                             (0x1<<1) // This is the 802.3 defined training variable.  It should be set according to corresponding LTSM output.
   #define PHY_NW_IP_REG_LN1_LT_RX_CTRL0_TRAINING_SHIFT                                                       1
 #define PHY_NW_IP_REG_LN1_LT_RX_PRBS_CTRL0                                                                   0x009f08UL //Access:RW   DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN1_LT_RX_PRBS_CTRL0_POLYNOMIAL                                                      (0x7<<0) // Selects between CL72 and CL93 PRBS patterns. 0 – CL72 1 + x^9 + x^11 1 – CL93 1 + x^5 + x^6 + x^10 + x^11 2 – CL93 1 + x^5 + x^6 + x^9 + x^11 3 – CL93 1 + x^4 + x^6 + x^8 + x^11 4 – CL93 1 + x^4 + x^6 + x^7 + x^11
+  #define PHY_NW_IP_REG_LN1_LT_RX_PRBS_CTRL0_POLYNOMIAL                                                      (0x7<<0) // Selects between CL72 and CL93 PRBS patterns. 0 - CL72 1 + x^9 + x^11 1 - CL93 1 + x^5 + x^6 + x^10 + x^11 2 - CL93 1 + x^5 + x^6 + x^9 + x^11 3 - CL93 1 + x^4 + x^6 + x^8 + x^11 4 - CL93 1 + x^4 + x^6 + x^7 + x^11
   #define PHY_NW_IP_REG_LN1_LT_RX_PRBS_CTRL0_POLYNOMIAL_SHIFT                                                0
 #define PHY_NW_IP_REG_LN1_LT_RX_PRBS_CTRL1                                                                   0x009f0cUL //Access:RW   DataWidth:0x8    // Maximum number  of PRBS bit errors allowed in single LT frame for PRBS lock to be achieved.
 #define PHY_NW_IP_REG_LN1_LT_RX_PRBS_STATUS0                                                                 0x009f14UL //Access:R    DataWidth:0x8    // Multi Field Register.
@@ -17602,7 +17602,7 @@
 #define PHY_NW_IP_REG_LN1_LT_RX_FRAME_STATUS3                                                                0x009f58UL //Access:R    DataWidth:0x8    // Total number of received frames  with a PRBS, DME, or framing error since frame lock.
 #define PHY_NW_IP_REG_LN1_LT_RX_FRAME_STATUS4                                                                0x009f5cUL //Access:R    DataWidth:0x8    // Same as above.
 #define PHY_NW_IP_REG_LN1_LT_RX_COEFFICIENT_UPDATE_STATUS                                                    0x009f80UL //Access:R    DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN1_LT_RX_COEFFICIENT_UPDATE_STATUS_C_P1                                             (0x3<<0) // Received coefficient update field for post-cursor tap. 2'b00 – hold 2'b01 – increment 2'b10 – decrement 2'b11 – reserved
+  #define PHY_NW_IP_REG_LN1_LT_RX_COEFFICIENT_UPDATE_STATUS_C_P1                                             (0x3<<0) // Received coefficient update field for post-cursor tap. 2'b00 - hold 2'b01 - increment 2'b10 - decrement 2'b11 - reserved
   #define PHY_NW_IP_REG_LN1_LT_RX_COEFFICIENT_UPDATE_STATUS_C_P1_SHIFT                                       0
   #define PHY_NW_IP_REG_LN1_LT_RX_COEFFICIENT_UPDATE_STATUS_C_0                                              (0x3<<2) // Received coefficient update request field for cursor tap.
   #define PHY_NW_IP_REG_LN1_LT_RX_COEFFICIENT_UPDATE_STATUS_C_0_SHIFT                                        2
@@ -17613,7 +17613,7 @@
   #define PHY_NW_IP_REG_LN1_LT_RX_COEFFICIENT_UPDATE_STATUS_PRESET                                           (0x1<<7) // Received coefficient update preset field.
   #define PHY_NW_IP_REG_LN1_LT_RX_COEFFICIENT_UPDATE_STATUS_PRESET_SHIFT                                     7
 #define PHY_NW_IP_REG_LN1_LT_RX_REPORT_STATUS                                                                0x009f88UL //Access:R    DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN1_LT_RX_REPORT_STATUS_C_P1                                                         (0x3<<0) // Received status report field for post-cursor tap. 2'b00 – not updated 2'b01 – minimum 2'b10 – updated 2'b11 – maximum
+  #define PHY_NW_IP_REG_LN1_LT_RX_REPORT_STATUS_C_P1                                                         (0x3<<0) // Received status report field for post-cursor tap. 2'b00 - not updated 2'b01 - minimum 2'b10 - updated 2'b11 - maximum
   #define PHY_NW_IP_REG_LN1_LT_RX_REPORT_STATUS_C_P1_SHIFT                                                   0
   #define PHY_NW_IP_REG_LN1_LT_RX_REPORT_STATUS_C_0                                                          (0x3<<2) // Received status report field for cursor tap.
   #define PHY_NW_IP_REG_LN1_LT_RX_REPORT_STATUS_C_0_SHIFT                                                    2
@@ -19631,9 +19631,9 @@
   #define PHY_NW_IP_REG_LN2_LOS_REFCLK_RUN_LENGTH_STATUS0_EXCEED_SHIFT                                       0
   #define PHY_NW_IP_REG_LN2_LOS_REFCLK_RUN_LENGTH_STATUS0_EXCEED_STICKY                                      (0x1<<1) // Indicates that the run-length filter has, at some time, exceeded the specified run-length threshold.
   #define PHY_NW_IP_REG_LN2_LOS_REFCLK_RUN_LENGTH_STATUS0_EXCEED_STICKY_SHIFT                                1
-#define PHY_NW_IP_REG_LN2_LOS_REFCLK_FILTER_CTRL0                                                            0x00b440UL //Access:RW   DataWidth:0x8    // Digital Rx LOS glitch filter assertion threshold.  Determines the number of consecutive clk_i clock cycles that the analog  LOS must remain a logic ‘1’ before the output of the filter will assert.  Can be disabled by writing a value of 0x00.
-#define PHY_NW_IP_REG_LN2_LOS_REFCLK_FILTER_CTRL1                                                            0x00b444UL //Access:RW   DataWidth:0x8    // Digital Rx LOS glitch filter assertion threshold.  Determines the number of consecutive clk_i clock cycles that the analog  LOS must remain a logic ‘1’ before the output of the filter will assert.  Can be disabled by writing a value of 0x0000.
-#define PHY_NW_IP_REG_LN2_LOS_REFCLK_FILTER_CTRL2                                                            0x00b448UL //Access:RW   DataWidth:0x8    // Digital Rx LOS glitch filter assertion threshold.  Determines the number of consecutive clk_i clock cycles that the raw analog  LOS must remain a logic ‘1’ before the output of the filter will assert.  Can be disabled by writing a value of 0x000000.
+#define PHY_NW_IP_REG_LN2_LOS_REFCLK_FILTER_CTRL0                                                            0x00b440UL //Access:RW   DataWidth:0x8    // Digital Rx LOS glitch filter assertion threshold.  Determines the number of consecutive clk_i clock cycles that the analog  LOS must remain a logic '1' before the output of the filter will assert.  Can be disabled by writing a value of 0x00.
+#define PHY_NW_IP_REG_LN2_LOS_REFCLK_FILTER_CTRL1                                                            0x00b444UL //Access:RW   DataWidth:0x8    // Digital Rx LOS glitch filter assertion threshold.  Determines the number of consecutive clk_i clock cycles that the analog  LOS must remain a logic '1' before the output of the filter will assert.  Can be disabled by writing a value of 0x0000.
+#define PHY_NW_IP_REG_LN2_LOS_REFCLK_FILTER_CTRL2                                                            0x00b448UL //Access:RW   DataWidth:0x8    // Digital Rx LOS glitch filter assertion threshold.  Determines the number of consecutive clk_i clock cycles that the raw analog  LOS must remain a logic '1' before the output of the filter will assert.  Can be disabled by writing a value of 0x000000.
 #define PHY_NW_IP_REG_LN2_LOS_REFCLK_FILTER_CTRL3                                                            0x00b44cUL //Access:RW   DataWidth:0x8    // Same as above.
 #define PHY_NW_IP_REG_LN2_LOS_REFCLK_FILTER_CTRL4                                                            0x00b450UL //Access:RW   DataWidth:0x8    // Same as above.
 #define PHY_NW_IP_REG_LN2_LOS_REFCLK_FILTER_CTRL5                                                            0x00b454UL //Access:RW   DataWidth:0x8    // Multi Field Register.
@@ -19791,14 +19791,14 @@
 #define PHY_NW_IP_REG_LN2_BIST_TX_CTRL                                                                       0x00b800UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_NW_IP_REG_LN2_BIST_TX_CTRL_EN                                                                  (0x1<<0) // Enables BIST Tx data generation.
   #define PHY_NW_IP_REG_LN2_BIST_TX_CTRL_EN_SHIFT                                                            0
-  #define PHY_NW_IP_REG_LN2_BIST_TX_CTRL_PATTERN_SEL                                                         (0xf<<1) // Selects the pattern to transmitted: 0x1 – PRBS 0xC1 0x2 – PRBS 0x221 0x3 – PRBS 0xA01 0x4 – PRBS 0xC001 0x5 – PRBS 0x840001 0x6 – PRBS 0x90000001 0x7 – User defined pattern UDP 0x9 – MAC Tx data
+  #define PHY_NW_IP_REG_LN2_BIST_TX_CTRL_PATTERN_SEL                                                         (0xf<<1) // Selects the pattern to transmitted: 0x1 - PRBS 0xC1 0x2 - PRBS 0x221 0x3 - PRBS 0xA01 0x4 - PRBS 0xC001 0x5 - PRBS 0x840001 0x6 - PRBS 0x90000001 0x7 - User defined pattern UDP 0x9 - MAC Tx data
   #define PHY_NW_IP_REG_LN2_BIST_TX_CTRL_PATTERN_SEL_SHIFT                                                   1
 #define PHY_NW_IP_REG_LN2_BIST_TX_RESERVEDREGISTER2327                                                       0x00b804UL //Access:RW   DataWidth:0x8    // Reserved
 #define PHY_NW_IP_REG_LN2_BIST_TX_RESERVEDREGISTER2328                                                       0x00b808UL //Access:RW   DataWidth:0x8    // Reserved
 #define PHY_NW_IP_REG_LN2_BIST_TX_RESERVEDREGISTER2329                                                       0x00b80cUL //Access:RW   DataWidth:0x8    // Reserved
 #define PHY_NW_IP_REG_LN2_BIST_TX_RESERVEDREGISTER2330                                                       0x00b810UL //Access:RW   DataWidth:0x8    // Reserved
 #define PHY_NW_IP_REG_LN2_BIST_TX_BER_CTRL0                                                                  0x00b818UL //Access:RW   DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN2_BIST_TX_BER_CTRL0_MODE                                                           (0x3<<0) // Controls what type of error injection is used: 0x0 – None 0x1 – Single cycle error 0x2 – Timer based
+  #define PHY_NW_IP_REG_LN2_BIST_TX_BER_CTRL0_MODE                                                           (0x3<<0) // Controls what type of error injection is used: 0x0 - None 0x1 - Single cycle error 0x2 - Timer based
   #define PHY_NW_IP_REG_LN2_BIST_TX_BER_CTRL0_MODE_SHIFT                                                     0
 #define PHY_NW_IP_REG_LN2_BIST_TX_BER_CTRL1                                                                  0x00b81cUL //Access:RW   DataWidth:0x8    // Number of cycles between single bit-error injection
 #define PHY_NW_IP_REG_LN2_BIST_TX_BER_CTRL2                                                                  0x00b820UL //Access:RW   DataWidth:0x8    // Number of cycles between single bit-error injection
@@ -19836,7 +19836,7 @@
 #define PHY_NW_IP_REG_LN2_BIST_RX_CTRL                                                                       0x00ba00UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_NW_IP_REG_LN2_BIST_RX_CTRL_EN                                                                  (0x1<<0) // Enables BIST Rx data checking.
   #define PHY_NW_IP_REG_LN2_BIST_RX_CTRL_EN_SHIFT                                                            0
-  #define PHY_NW_IP_REG_LN2_BIST_RX_CTRL_PATTERN_SEL                                                         (0xf<<1) // Selects the pattern to search for: 0x1 – PRBS 0xC1 0x2 – PRBS 0x221 0x3 – PRBS 0xA01 0x4 – PRBS 0xC001 0x5 – PRBS 0x840001 0x6 – PRBS 0x90000001 0x7 – User defined pattern UDP 0x8 – Auto-detect
+  #define PHY_NW_IP_REG_LN2_BIST_RX_CTRL_PATTERN_SEL                                                         (0xf<<1) // Selects the pattern to search for: 0x1 - PRBS 0xC1 0x2 - PRBS 0x221 0x3 - PRBS 0xA01 0x4 - PRBS 0xC001 0x5 - PRBS 0x840001 0x6 - PRBS 0x90000001 0x7 - User defined pattern UDP 0x8 - Auto-detect
   #define PHY_NW_IP_REG_LN2_BIST_RX_CTRL_PATTERN_SEL_SHIFT                                                   1
   #define PHY_NW_IP_REG_LN2_BIST_RX_CTRL_CLEAR_BER                                                           (0x1<<5) // Clears the bit error counter.
   #define PHY_NW_IP_REG_LN2_BIST_RX_CTRL_CLEAR_BER_SHIFT                                                     5
@@ -19845,9 +19845,9 @@
   #define PHY_NW_IP_REG_LN2_BIST_RX_CTRL_FORCE_LFSR_WITH_RXDATA                                              (0x1<<7) // Forces the PRBS LFSR to reseed with Rx data every cycle.  This will cause the bit error counter to be inaccurate.
   #define PHY_NW_IP_REG_LN2_BIST_RX_CTRL_FORCE_LFSR_WITH_RXDATA_SHIFT                                        7
 #define PHY_NW_IP_REG_LN2_BIST_RX_STATUS                                                                     0x00ba10UL //Access:R    DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN2_BIST_RX_STATUS_STATE                                                             (0x7<<0) // State of the BIST checker: 0x0 – Off 0x1 – Searching for pattern 0x2 – Waiting for pattern lock conditions 0x3 – Pattern lock acquired 0x4 – Pattern lock lost
+  #define PHY_NW_IP_REG_LN2_BIST_RX_STATUS_STATE                                                             (0x7<<0) // State of the BIST checker: 0x0 - Off 0x1 - Searching for pattern 0x2 - Waiting for pattern lock conditions 0x3 - Pattern lock acquired 0x4 - Pattern lock lost
   #define PHY_NW_IP_REG_LN2_BIST_RX_STATUS_STATE_SHIFT                                                       0
-  #define PHY_NW_IP_REG_LN2_BIST_RX_STATUS_PATTERN_DET                                                       (0xf<<3) // Indicates the pattern  detected: 0x0 – No pattern detected 0x1 – PRBS 0xC1 0x2 – PRBS 0x221 0x3 – PRBS 0xA01 0x4 – PRBS 0xC001 0x5 – PRBS 0x840001 0x6 – PRBS 0x90000001 0x7 – User defined pattern UDP
+  #define PHY_NW_IP_REG_LN2_BIST_RX_STATUS_PATTERN_DET                                                       (0xf<<3) // Indicates the pattern  detected: 0x0 - No pattern detected 0x1 - PRBS 0xC1 0x2 - PRBS 0x221 0x3 - PRBS 0xA01 0x4 - PRBS 0xC001 0x5 - PRBS 0x840001 0x6 - PRBS 0x90000001 0x7 - User defined pattern UDP
   #define PHY_NW_IP_REG_LN2_BIST_RX_STATUS_PATTERN_DET_SHIFT                                                 3
 #define PHY_NW_IP_REG_LN2_BIST_RX_BER_STATUS0                                                                0x00ba20UL //Access:R    DataWidth:0x8    // Number of bit errors.
 #define PHY_NW_IP_REG_LN2_BIST_RX_BER_STATUS1                                                                0x00ba24UL //Access:R    DataWidth:0x8    // Number of bit errors.
@@ -20219,14 +20219,14 @@
   #define PHY_NW_IP_REG_LN2_LT_TX_FSM_STATUS_FSM_LOCAL_RX_READY                                              (0x1<<4) // Output from LSM corresponding to 802.3 defined local_rx_ready variable. After this is asserted the corresponding frame status report field should be set.
   #define PHY_NW_IP_REG_LN2_LT_TX_FSM_STATUS_FSM_LOCAL_RX_READY_SHIFT                                        4
 #define PHY_NW_IP_REG_LN2_LT_TX_PRBS_CTRL0                                                                   0x00be4cUL //Access:RW   DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN2_LT_TX_PRBS_CTRL0_POLYNOMIAL                                                      (0x7<<0) // Selects between CL72 and CL93 PRBS pattern. 0 – CL72 1 + x^9 +x^11 1 – CL93 1 + x^5 + x^6 + x^10 + x^11 2 – CL93 1 + x^5 + x^6 + x^9 + x^11 3 – CL93 1 + x^4 + x^6 + x^8 + x^11 4 – CL93 1 + x^4 + x^6 + x^7 + x^11
+  #define PHY_NW_IP_REG_LN2_LT_TX_PRBS_CTRL0_POLYNOMIAL                                                      (0x7<<0) // Selects between CL72 and CL93 PRBS pattern. 0 - CL72 1 + x^9 +x^11 1 - CL93 1 + x^5 + x^6 + x^10 + x^11 2 - CL93 1 + x^5 + x^6 + x^9 + x^11 3 - CL93 1 + x^4 + x^6 + x^8 + x^11 4 - CL93 1 + x^4 + x^6 + x^7 + x^11
   #define PHY_NW_IP_REG_LN2_LT_TX_PRBS_CTRL0_POLYNOMIAL_SHIFT                                                0
 #define PHY_NW_IP_REG_LN2_LT_TX_PRBS_CTRL1                                                                   0x00be50UL //Access:RW   DataWidth:0x8    // Initial PRBS LFSR seed.  This needs to be set according to the requirements in 802.3 CL72 or CL93 depending on the type of link training and lane bonding being performed.
 #define PHY_NW_IP_REG_LN2_LT_TX_PRBS_CTRL2                                                                   0x00be54UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_NW_IP_REG_LN2_LT_TX_PRBS_CTRL2_SEED_10_8                                                       (0x7<<0) // Same as above.
   #define PHY_NW_IP_REG_LN2_LT_TX_PRBS_CTRL2_SEED_10_8_SHIFT                                                 0
 #define PHY_NW_IP_REG_LN2_LT_TX_COEFFICIENT_UPDATE_CTRL                                                      0x00be80UL //Access:RW   DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN2_LT_TX_COEFFICIENT_UPDATE_CTRL_C_P1                                               (0x3<<0) // Coefficient update request field for post-cursor tap. 2'b00 – hold 2'b01 – increment 2'b10 – decrement 2'b11 – reserved
+  #define PHY_NW_IP_REG_LN2_LT_TX_COEFFICIENT_UPDATE_CTRL_C_P1                                               (0x3<<0) // Coefficient update request field for post-cursor tap. 2'b00 - hold 2'b01 - increment 2'b10 - decrement 2'b11 - reserved
   #define PHY_NW_IP_REG_LN2_LT_TX_COEFFICIENT_UPDATE_CTRL_C_P1_SHIFT                                         0
   #define PHY_NW_IP_REG_LN2_LT_TX_COEFFICIENT_UPDATE_CTRL_C_0                                                (0x3<<2) // Coefficient update request field for cursor tap.
   #define PHY_NW_IP_REG_LN2_LT_TX_COEFFICIENT_UPDATE_CTRL_C_0_SHIFT                                          2
@@ -20237,7 +20237,7 @@
   #define PHY_NW_IP_REG_LN2_LT_TX_COEFFICIENT_UPDATE_CTRL_PRESET                                             (0x1<<7) // Coefficient update preset field.
   #define PHY_NW_IP_REG_LN2_LT_TX_COEFFICIENT_UPDATE_CTRL_PRESET_SHIFT                                       7
 #define PHY_NW_IP_REG_LN2_LT_TX_STATUS_REPORT_CTRL                                                           0x00be88UL //Access:RW   DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN2_LT_TX_STATUS_REPORT_CTRL_C_P1                                                    (0x3<<0) // Status report field for post-cursor tap. 2'b00 – not updated 2'b01 – minimum 2'b10 – updated 2'b11 – maximum
+  #define PHY_NW_IP_REG_LN2_LT_TX_STATUS_REPORT_CTRL_C_P1                                                    (0x3<<0) // Status report field for post-cursor tap. 2'b00 - not updated 2'b01 - minimum 2'b10 - updated 2'b11 - maximum
   #define PHY_NW_IP_REG_LN2_LT_TX_STATUS_REPORT_CTRL_C_P1_SHIFT                                              0
   #define PHY_NW_IP_REG_LN2_LT_TX_STATUS_REPORT_CTRL_C_0                                                     (0x3<<2) // Status report field for cursor tap.
   #define PHY_NW_IP_REG_LN2_LT_TX_STATUS_REPORT_CTRL_C_0_SHIFT                                               2
@@ -20246,7 +20246,7 @@
   #define PHY_NW_IP_REG_LN2_LT_TX_STATUS_REPORT_CTRL_LOCAL_RX_READY                                          (0x1<<6) // Status report field to indicate local receiver is ready.  Should be set based on LTSM output of corresponding variable.
   #define PHY_NW_IP_REG_LN2_LT_TX_STATUS_REPORT_CTRL_LOCAL_RX_READY_SHIFT                                    6
 #define PHY_NW_IP_REG_LN2_LT_TX_FSM_STATE_STATUS0                                                            0x00bec0UL //Access:R    DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN2_LT_TX_FSM_STATE_STATUS0_CURRENT                                                  (0x7<<0) // Current state of LTSM. 0x0 – INITIALIZE 0x1 – SEND_TRAINING 0x2 – TRAIN_REMOTE 0x3 – TRAIN_LOCAL 0x4 – S7 0x5 – TRAINING_FAILURE 0x6 – LINK_READY 0x7 – SEND_DATA
+  #define PHY_NW_IP_REG_LN2_LT_TX_FSM_STATE_STATUS0_CURRENT                                                  (0x7<<0) // Current state of LTSM. 0x0 - INITIALIZE 0x1 - SEND_TRAINING 0x2 - TRAIN_REMOTE 0x3 - TRAIN_LOCAL 0x4 - S7 0x5 - TRAINING_FAILURE 0x6 - LINK_READY 0x7 - SEND_DATA
   #define PHY_NW_IP_REG_LN2_LT_TX_FSM_STATE_STATUS0_CURRENT_SHIFT                                            0
   #define PHY_NW_IP_REG_LN2_LT_TX_FSM_STATE_STATUS0_PREV1                                                    (0x7<<4) // One state previous.
   #define PHY_NW_IP_REG_LN2_LT_TX_FSM_STATE_STATUS0_PREV1_SHIFT                                              4
@@ -20261,7 +20261,7 @@
   #define PHY_NW_IP_REG_LN2_LT_RX_CTRL0_TRAINING                                                             (0x1<<1) // This is the 802.3 defined training variable.  It should be set according to corresponding LTSM output.
   #define PHY_NW_IP_REG_LN2_LT_RX_CTRL0_TRAINING_SHIFT                                                       1
 #define PHY_NW_IP_REG_LN2_LT_RX_PRBS_CTRL0                                                                   0x00bf08UL //Access:RW   DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN2_LT_RX_PRBS_CTRL0_POLYNOMIAL                                                      (0x7<<0) // Selects between CL72 and CL93 PRBS patterns. 0 – CL72 1 + x^9 + x^11 1 – CL93 1 + x^5 + x^6 + x^10 + x^11 2 – CL93 1 + x^5 + x^6 + x^9 + x^11 3 – CL93 1 + x^4 + x^6 + x^8 + x^11 4 – CL93 1 + x^4 + x^6 + x^7 + x^11
+  #define PHY_NW_IP_REG_LN2_LT_RX_PRBS_CTRL0_POLYNOMIAL                                                      (0x7<<0) // Selects between CL72 and CL93 PRBS patterns. 0 - CL72 1 + x^9 + x^11 1 - CL93 1 + x^5 + x^6 + x^10 + x^11 2 - CL93 1 + x^5 + x^6 + x^9 + x^11 3 - CL93 1 + x^4 + x^6 + x^8 + x^11 4 - CL93 1 + x^4 + x^6 + x^7 + x^11
   #define PHY_NW_IP_REG_LN2_LT_RX_PRBS_CTRL0_POLYNOMIAL_SHIFT                                                0
 #define PHY_NW_IP_REG_LN2_LT_RX_PRBS_CTRL1                                                                   0x00bf0cUL //Access:RW   DataWidth:0x8    // Maximum number  of PRBS bit errors allowed in single LT frame for PRBS lock to be achieved.
 #define PHY_NW_IP_REG_LN2_LT_RX_PRBS_STATUS0                                                                 0x00bf14UL //Access:R    DataWidth:0x8    // Multi Field Register.
@@ -20284,7 +20284,7 @@
 #define PHY_NW_IP_REG_LN2_LT_RX_FRAME_STATUS3                                                                0x00bf58UL //Access:R    DataWidth:0x8    // Total number of received frames  with a PRBS, DME, or framing error since frame lock.
 #define PHY_NW_IP_REG_LN2_LT_RX_FRAME_STATUS4                                                                0x00bf5cUL //Access:R    DataWidth:0x8    // Same as above.
 #define PHY_NW_IP_REG_LN2_LT_RX_COEFFICIENT_UPDATE_STATUS                                                    0x00bf80UL //Access:R    DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN2_LT_RX_COEFFICIENT_UPDATE_STATUS_C_P1                                             (0x3<<0) // Received coefficient update field for post-cursor tap. 2'b00 – hold 2'b01 – increment 2'b10 – decrement 2'b11 – reserved
+  #define PHY_NW_IP_REG_LN2_LT_RX_COEFFICIENT_UPDATE_STATUS_C_P1                                             (0x3<<0) // Received coefficient update field for post-cursor tap. 2'b00 - hold 2'b01 - increment 2'b10 - decrement 2'b11 - reserved
   #define PHY_NW_IP_REG_LN2_LT_RX_COEFFICIENT_UPDATE_STATUS_C_P1_SHIFT                                       0
   #define PHY_NW_IP_REG_LN2_LT_RX_COEFFICIENT_UPDATE_STATUS_C_0                                              (0x3<<2) // Received coefficient update request field for cursor tap.
   #define PHY_NW_IP_REG_LN2_LT_RX_COEFFICIENT_UPDATE_STATUS_C_0_SHIFT                                        2
@@ -20295,7 +20295,7 @@
   #define PHY_NW_IP_REG_LN2_LT_RX_COEFFICIENT_UPDATE_STATUS_PRESET                                           (0x1<<7) // Received coefficient update preset field.
   #define PHY_NW_IP_REG_LN2_LT_RX_COEFFICIENT_UPDATE_STATUS_PRESET_SHIFT                                     7
 #define PHY_NW_IP_REG_LN2_LT_RX_REPORT_STATUS                                                                0x00bf88UL //Access:R    DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN2_LT_RX_REPORT_STATUS_C_P1                                                         (0x3<<0) // Received status report field for post-cursor tap. 2'b00 – not updated 2'b01 – minimum 2'b10 – updated 2'b11 – maximum
+  #define PHY_NW_IP_REG_LN2_LT_RX_REPORT_STATUS_C_P1                                                         (0x3<<0) // Received status report field for post-cursor tap. 2'b00 - not updated 2'b01 - minimum 2'b10 - updated 2'b11 - maximum
   #define PHY_NW_IP_REG_LN2_LT_RX_REPORT_STATUS_C_P1_SHIFT                                                   0
   #define PHY_NW_IP_REG_LN2_LT_RX_REPORT_STATUS_C_0                                                          (0x3<<2) // Received status report field for cursor tap.
   #define PHY_NW_IP_REG_LN2_LT_RX_REPORT_STATUS_C_0_SHIFT                                                    2
@@ -22313,9 +22313,9 @@
   #define PHY_NW_IP_REG_LN3_LOS_REFCLK_RUN_LENGTH_STATUS0_EXCEED_SHIFT                                       0
   #define PHY_NW_IP_REG_LN3_LOS_REFCLK_RUN_LENGTH_STATUS0_EXCEED_STICKY                                      (0x1<<1) // Indicates that the run-length filter has, at some time, exceeded the specified run-length threshold.
   #define PHY_NW_IP_REG_LN3_LOS_REFCLK_RUN_LENGTH_STATUS0_EXCEED_STICKY_SHIFT                                1
-#define PHY_NW_IP_REG_LN3_LOS_REFCLK_FILTER_CTRL0                                                            0x00d440UL //Access:RW   DataWidth:0x8    // Digital Rx LOS glitch filter assertion threshold.  Determines the number of consecutive clk_i clock cycles that the analog  LOS must remain a logic ‘1’ before the output of the filter will assert.  Can be disabled by writing a value of 0x00.
-#define PHY_NW_IP_REG_LN3_LOS_REFCLK_FILTER_CTRL1                                                            0x00d444UL //Access:RW   DataWidth:0x8    // Digital Rx LOS glitch filter assertion threshold.  Determines the number of consecutive clk_i clock cycles that the analog  LOS must remain a logic ‘1’ before the output of the filter will assert.  Can be disabled by writing a value of 0x0000.
-#define PHY_NW_IP_REG_LN3_LOS_REFCLK_FILTER_CTRL2                                                            0x00d448UL //Access:RW   DataWidth:0x8    // Digital Rx LOS glitch filter assertion threshold.  Determines the number of consecutive clk_i clock cycles that the raw analog  LOS must remain a logic ‘1’ before the output of the filter will assert.  Can be disabled by writing a value of 0x000000.
+#define PHY_NW_IP_REG_LN3_LOS_REFCLK_FILTER_CTRL0                                                            0x00d440UL //Access:RW   DataWidth:0x8    // Digital Rx LOS glitch filter assertion threshold.  Determines the number of consecutive clk_i clock cycles that the analog  LOS must remain a logic '1' before the output of the filter will assert.  Can be disabled by writing a value of 0x00.
+#define PHY_NW_IP_REG_LN3_LOS_REFCLK_FILTER_CTRL1                                                            0x00d444UL //Access:RW   DataWidth:0x8    // Digital Rx LOS glitch filter assertion threshold.  Determines the number of consecutive clk_i clock cycles that the analog  LOS must remain a logic '1' before the output of the filter will assert.  Can be disabled by writing a value of 0x0000.
+#define PHY_NW_IP_REG_LN3_LOS_REFCLK_FILTER_CTRL2                                                            0x00d448UL //Access:RW   DataWidth:0x8    // Digital Rx LOS glitch filter assertion threshold.  Determines the number of consecutive clk_i clock cycles that the raw analog  LOS must remain a logic '1' before the output of the filter will assert.  Can be disabled by writing a value of 0x000000.
 #define PHY_NW_IP_REG_LN3_LOS_REFCLK_FILTER_CTRL3                                                            0x00d44cUL //Access:RW   DataWidth:0x8    // Same as above.
 #define PHY_NW_IP_REG_LN3_LOS_REFCLK_FILTER_CTRL4                                                            0x00d450UL //Access:RW   DataWidth:0x8    // Same as above.
 #define PHY_NW_IP_REG_LN3_LOS_REFCLK_FILTER_CTRL5                                                            0x00d454UL //Access:RW   DataWidth:0x8    // Multi Field Register.
@@ -22473,14 +22473,14 @@
 #define PHY_NW_IP_REG_LN3_BIST_TX_CTRL                                                                       0x00d800UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_NW_IP_REG_LN3_BIST_TX_CTRL_EN                                                                  (0x1<<0) // Enables BIST Tx data generation.
   #define PHY_NW_IP_REG_LN3_BIST_TX_CTRL_EN_SHIFT                                                            0
-  #define PHY_NW_IP_REG_LN3_BIST_TX_CTRL_PATTERN_SEL                                                         (0xf<<1) // Selects the pattern to transmitted: 0x1 – PRBS 0xC1 0x2 – PRBS 0x221 0x3 – PRBS 0xA01 0x4 – PRBS 0xC001 0x5 – PRBS 0x840001 0x6 – PRBS 0x90000001 0x7 – User defined pattern UDP 0x9 – MAC Tx data
+  #define PHY_NW_IP_REG_LN3_BIST_TX_CTRL_PATTERN_SEL                                                         (0xf<<1) // Selects the pattern to transmitted: 0x1 - PRBS 0xC1 0x2 - PRBS 0x221 0x3 - PRBS 0xA01 0x4 - PRBS 0xC001 0x5 - PRBS 0x840001 0x6 - PRBS 0x90000001 0x7 - User defined pattern UDP 0x9 - MAC Tx data
   #define PHY_NW_IP_REG_LN3_BIST_TX_CTRL_PATTERN_SEL_SHIFT                                                   1
 #define PHY_NW_IP_REG_LN3_BIST_TX_RESERVEDREGISTER2811                                                       0x00d804UL //Access:RW   DataWidth:0x8    // Reserved
 #define PHY_NW_IP_REG_LN3_BIST_TX_RESERVEDREGISTER2812                                                       0x00d808UL //Access:RW   DataWidth:0x8    // Reserved
 #define PHY_NW_IP_REG_LN3_BIST_TX_RESERVEDREGISTER2813                                                       0x00d80cUL //Access:RW   DataWidth:0x8    // Reserved
 #define PHY_NW_IP_REG_LN3_BIST_TX_RESERVEDREGISTER2814                                                       0x00d810UL //Access:RW   DataWidth:0x8    // Reserved
 #define PHY_NW_IP_REG_LN3_BIST_TX_BER_CTRL0                                                                  0x00d818UL //Access:RW   DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN3_BIST_TX_BER_CTRL0_MODE                                                           (0x3<<0) // Controls what type of error injection is used: 0x0 – None 0x1 – Single cycle error 0x2 – Timer based
+  #define PHY_NW_IP_REG_LN3_BIST_TX_BER_CTRL0_MODE                                                           (0x3<<0) // Controls what type of error injection is used: 0x0 - None 0x1 - Single cycle error 0x2 - Timer based
   #define PHY_NW_IP_REG_LN3_BIST_TX_BER_CTRL0_MODE_SHIFT                                                     0
 #define PHY_NW_IP_REG_LN3_BIST_TX_BER_CTRL1                                                                  0x00d81cUL //Access:RW   DataWidth:0x8    // Number of cycles between single bit-error injection
 #define PHY_NW_IP_REG_LN3_BIST_TX_BER_CTRL2                                                                  0x00d820UL //Access:RW   DataWidth:0x8    // Number of cycles between single bit-error injection
@@ -22518,7 +22518,7 @@
 #define PHY_NW_IP_REG_LN3_BIST_RX_CTRL                                                                       0x00da00UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_NW_IP_REG_LN3_BIST_RX_CTRL_EN                                                                  (0x1<<0) // Enables BIST Rx data checking.
   #define PHY_NW_IP_REG_LN3_BIST_RX_CTRL_EN_SHIFT                                                            0
-  #define PHY_NW_IP_REG_LN3_BIST_RX_CTRL_PATTERN_SEL                                                         (0xf<<1) // Selects the pattern to search for: 0x1 – PRBS 0xC1 0x2 – PRBS 0x221 0x3 – PRBS 0xA01 0x4 – PRBS 0xC001 0x5 – PRBS 0x840001 0x6 – PRBS 0x90000001 0x7 – User defined pattern UDP 0x8 – Auto-detect
+  #define PHY_NW_IP_REG_LN3_BIST_RX_CTRL_PATTERN_SEL                                                         (0xf<<1) // Selects the pattern to search for: 0x1 - PRBS 0xC1 0x2 - PRBS 0x221 0x3 - PRBS 0xA01 0x4 - PRBS 0xC001 0x5 - PRBS 0x840001 0x6 - PRBS 0x90000001 0x7 - User defined pattern UDP 0x8 - Auto-detect
   #define PHY_NW_IP_REG_LN3_BIST_RX_CTRL_PATTERN_SEL_SHIFT                                                   1
   #define PHY_NW_IP_REG_LN3_BIST_RX_CTRL_CLEAR_BER                                                           (0x1<<5) // Clears the bit error counter.
   #define PHY_NW_IP_REG_LN3_BIST_RX_CTRL_CLEAR_BER_SHIFT                                                     5
@@ -22527,9 +22527,9 @@
   #define PHY_NW_IP_REG_LN3_BIST_RX_CTRL_FORCE_LFSR_WITH_RXDATA                                              (0x1<<7) // Forces the PRBS LFSR to reseed with Rx data every cycle.  This will cause the bit error counter to be inaccurate.
   #define PHY_NW_IP_REG_LN3_BIST_RX_CTRL_FORCE_LFSR_WITH_RXDATA_SHIFT                                        7
 #define PHY_NW_IP_REG_LN3_BIST_RX_STATUS                                                                     0x00da10UL //Access:R    DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN3_BIST_RX_STATUS_STATE                                                             (0x7<<0) // State of the BIST checker: 0x0 – Off 0x1 – Searching for pattern 0x2 – Waiting for pattern lock conditions 0x3 – Pattern lock acquired 0x4 – Pattern lock lost
+  #define PHY_NW_IP_REG_LN3_BIST_RX_STATUS_STATE                                                             (0x7<<0) // State of the BIST checker: 0x0 - Off 0x1 - Searching for pattern 0x2 - Waiting for pattern lock conditions 0x3 - Pattern lock acquired 0x4 - Pattern lock lost
   #define PHY_NW_IP_REG_LN3_BIST_RX_STATUS_STATE_SHIFT                                                       0
-  #define PHY_NW_IP_REG_LN3_BIST_RX_STATUS_PATTERN_DET                                                       (0xf<<3) // Indicates the pattern  detected: 0x0 – No pattern detected 0x1 – PRBS 0xC1 0x2 – PRBS 0x221 0x3 – PRBS 0xA01 0x4 – PRBS 0xC001 0x5 – PRBS 0x840001 0x6 – PRBS 0x90000001 0x7 – User defined pattern UDP
+  #define PHY_NW_IP_REG_LN3_BIST_RX_STATUS_PATTERN_DET                                                       (0xf<<3) // Indicates the pattern  detected: 0x0 - No pattern detected 0x1 - PRBS 0xC1 0x2 - PRBS 0x221 0x3 - PRBS 0xA01 0x4 - PRBS 0xC001 0x5 - PRBS 0x840001 0x6 - PRBS 0x90000001 0x7 - User defined pattern UDP
   #define PHY_NW_IP_REG_LN3_BIST_RX_STATUS_PATTERN_DET_SHIFT                                                 3
 #define PHY_NW_IP_REG_LN3_BIST_RX_BER_STATUS0                                                                0x00da20UL //Access:R    DataWidth:0x8    // Number of bit errors.
 #define PHY_NW_IP_REG_LN3_BIST_RX_BER_STATUS1                                                                0x00da24UL //Access:R    DataWidth:0x8    // Number of bit errors.
@@ -22901,14 +22901,14 @@
   #define PHY_NW_IP_REG_LN3_LT_TX_FSM_STATUS_FSM_LOCAL_RX_READY                                              (0x1<<4) // Output from LSM corresponding to 802.3 defined local_rx_ready variable. After this is asserted the corresponding frame status report field should be set.
   #define PHY_NW_IP_REG_LN3_LT_TX_FSM_STATUS_FSM_LOCAL_RX_READY_SHIFT                                        4
 #define PHY_NW_IP_REG_LN3_LT_TX_PRBS_CTRL0                                                                   0x00de4cUL //Access:RW   DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN3_LT_TX_PRBS_CTRL0_POLYNOMIAL                                                      (0x7<<0) // Selects between CL72 and CL93 PRBS pattern. 0 – CL72 1 + x^9 +x^11 1 – CL93 1 + x^5 + x^6 + x^10 + x^11 2 – CL93 1 + x^5 + x^6 + x^9 + x^11 3 – CL93 1 + x^4 + x^6 + x^8 + x^11 4 – CL93 1 + x^4 + x^6 + x^7 + x^11
+  #define PHY_NW_IP_REG_LN3_LT_TX_PRBS_CTRL0_POLYNOMIAL                                                      (0x7<<0) // Selects between CL72 and CL93 PRBS pattern. 0 - CL72 1 + x^9 +x^11 1 - CL93 1 + x^5 + x^6 + x^10 + x^11 2 - CL93 1 + x^5 + x^6 + x^9 + x^11 3 - CL93 1 + x^4 + x^6 + x^8 + x^11 4 - CL93 1 + x^4 + x^6 + x^7 + x^11
   #define PHY_NW_IP_REG_LN3_LT_TX_PRBS_CTRL0_POLYNOMIAL_SHIFT                                                0
 #define PHY_NW_IP_REG_LN3_LT_TX_PRBS_CTRL1                                                                   0x00de50UL //Access:RW   DataWidth:0x8    // Initial PRBS LFSR seed.  This needs to be set according to the requirements in 802.3 CL72 or CL93 depending on the type of link training and lane bonding being performed.
 #define PHY_NW_IP_REG_LN3_LT_TX_PRBS_CTRL2                                                                   0x00de54UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_NW_IP_REG_LN3_LT_TX_PRBS_CTRL2_SEED_10_8                                                       (0x7<<0) // Same as above.
   #define PHY_NW_IP_REG_LN3_LT_TX_PRBS_CTRL2_SEED_10_8_SHIFT                                                 0
 #define PHY_NW_IP_REG_LN3_LT_TX_COEFFICIENT_UPDATE_CTRL                                                      0x00de80UL //Access:RW   DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN3_LT_TX_COEFFICIENT_UPDATE_CTRL_C_P1                                               (0x3<<0) // Coefficient update request field for post-cursor tap. 2'b00 – hold 2'b01 – increment 2'b10 – decrement 2'b11 – reserved
+  #define PHY_NW_IP_REG_LN3_LT_TX_COEFFICIENT_UPDATE_CTRL_C_P1                                               (0x3<<0) // Coefficient update request field for post-cursor tap. 2'b00 - hold 2'b01 - increment 2'b10 - decrement 2'b11 - reserved
   #define PHY_NW_IP_REG_LN3_LT_TX_COEFFICIENT_UPDATE_CTRL_C_P1_SHIFT                                         0
   #define PHY_NW_IP_REG_LN3_LT_TX_COEFFICIENT_UPDATE_CTRL_C_0                                                (0x3<<2) // Coefficient update request field for cursor tap.
   #define PHY_NW_IP_REG_LN3_LT_TX_COEFFICIENT_UPDATE_CTRL_C_0_SHIFT                                          2
@@ -22919,7 +22919,7 @@
   #define PHY_NW_IP_REG_LN3_LT_TX_COEFFICIENT_UPDATE_CTRL_PRESET                                             (0x1<<7) // Coefficient update preset field.
   #define PHY_NW_IP_REG_LN3_LT_TX_COEFFICIENT_UPDATE_CTRL_PRESET_SHIFT                                       7
 #define PHY_NW_IP_REG_LN3_LT_TX_STATUS_REPORT_CTRL                                                           0x00de88UL //Access:RW   DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN3_LT_TX_STATUS_REPORT_CTRL_C_P1                                                    (0x3<<0) // Status report field for post-cursor tap. 2'b00 – not updated 2'b01 – minimum 2'b10 – updated 2'b11 – maximum
+  #define PHY_NW_IP_REG_LN3_LT_TX_STATUS_REPORT_CTRL_C_P1                                                    (0x3<<0) // Status report field for post-cursor tap. 2'b00 - not updated 2'b01 - minimum 2'b10 - updated 2'b11 - maximum
   #define PHY_NW_IP_REG_LN3_LT_TX_STATUS_REPORT_CTRL_C_P1_SHIFT                                              0
   #define PHY_NW_IP_REG_LN3_LT_TX_STATUS_REPORT_CTRL_C_0                                                     (0x3<<2) // Status report field for cursor tap.
   #define PHY_NW_IP_REG_LN3_LT_TX_STATUS_REPORT_CTRL_C_0_SHIFT                                               2
@@ -22928,7 +22928,7 @@
   #define PHY_NW_IP_REG_LN3_LT_TX_STATUS_REPORT_CTRL_LOCAL_RX_READY                                          (0x1<<6) // Status report field to indicate local receiver is ready.  Should be set based on LTSM output of corresponding variable.
   #define PHY_NW_IP_REG_LN3_LT_TX_STATUS_REPORT_CTRL_LOCAL_RX_READY_SHIFT                                    6
 #define PHY_NW_IP_REG_LN3_LT_TX_FSM_STATE_STATUS0                                                            0x00dec0UL //Access:R    DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN3_LT_TX_FSM_STATE_STATUS0_CURRENT                                                  (0x7<<0) // Current state of LTSM. 0x0 – INITIALIZE 0x1 – SEND_TRAINING 0x2 – TRAIN_REMOTE 0x3 – TRAIN_LOCAL 0x4 – S7 0x5 – TRAINING_FAILURE 0x6 – LINK_READY 0x7 – SEND_DATA
+  #define PHY_NW_IP_REG_LN3_LT_TX_FSM_STATE_STATUS0_CURRENT                                                  (0x7<<0) // Current state of LTSM. 0x0 - INITIALIZE 0x1 - SEND_TRAINING 0x2 - TRAIN_REMOTE 0x3 - TRAIN_LOCAL 0x4 - S7 0x5 - TRAINING_FAILURE 0x6 - LINK_READY 0x7 - SEND_DATA
   #define PHY_NW_IP_REG_LN3_LT_TX_FSM_STATE_STATUS0_CURRENT_SHIFT                                            0
   #define PHY_NW_IP_REG_LN3_LT_TX_FSM_STATE_STATUS0_PREV1                                                    (0x7<<4) // One state previous.
   #define PHY_NW_IP_REG_LN3_LT_TX_FSM_STATE_STATUS0_PREV1_SHIFT                                              4
@@ -22943,7 +22943,7 @@
   #define PHY_NW_IP_REG_LN3_LT_RX_CTRL0_TRAINING                                                             (0x1<<1) // This is the 802.3 defined training variable.  It should be set according to corresponding LTSM output.
   #define PHY_NW_IP_REG_LN3_LT_RX_CTRL0_TRAINING_SHIFT                                                       1
 #define PHY_NW_IP_REG_LN3_LT_RX_PRBS_CTRL0                                                                   0x00df08UL //Access:RW   DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN3_LT_RX_PRBS_CTRL0_POLYNOMIAL                                                      (0x7<<0) // Selects between CL72 and CL93 PRBS patterns. 0 – CL72 1 + x^9 + x^11 1 – CL93 1 + x^5 + x^6 + x^10 + x^11 2 – CL93 1 + x^5 + x^6 + x^9 + x^11 3 – CL93 1 + x^4 + x^6 + x^8 + x^11 4 – CL93 1 + x^4 + x^6 + x^7 + x^11
+  #define PHY_NW_IP_REG_LN3_LT_RX_PRBS_CTRL0_POLYNOMIAL                                                      (0x7<<0) // Selects between CL72 and CL93 PRBS patterns. 0 - CL72 1 + x^9 + x^11 1 - CL93 1 + x^5 + x^6 + x^10 + x^11 2 - CL93 1 + x^5 + x^6 + x^9 + x^11 3 - CL93 1 + x^4 + x^6 + x^8 + x^11 4 - CL93 1 + x^4 + x^6 + x^7 + x^11
   #define PHY_NW_IP_REG_LN3_LT_RX_PRBS_CTRL0_POLYNOMIAL_SHIFT                                                0
 #define PHY_NW_IP_REG_LN3_LT_RX_PRBS_CTRL1                                                                   0x00df0cUL //Access:RW   DataWidth:0x8    // Maximum number  of PRBS bit errors allowed in single LT frame for PRBS lock to be achieved.
 #define PHY_NW_IP_REG_LN3_LT_RX_PRBS_STATUS0                                                                 0x00df14UL //Access:R    DataWidth:0x8    // Multi Field Register.
@@ -22966,7 +22966,7 @@
 #define PHY_NW_IP_REG_LN3_LT_RX_FRAME_STATUS3                                                                0x00df58UL //Access:R    DataWidth:0x8    // Total number of received frames  with a PRBS, DME, or framing error since frame lock.
 #define PHY_NW_IP_REG_LN3_LT_RX_FRAME_STATUS4                                                                0x00df5cUL //Access:R    DataWidth:0x8    // Same as above.
 #define PHY_NW_IP_REG_LN3_LT_RX_COEFFICIENT_UPDATE_STATUS                                                    0x00df80UL //Access:R    DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN3_LT_RX_COEFFICIENT_UPDATE_STATUS_C_P1                                             (0x3<<0) // Received coefficient update field for post-cursor tap. 2'b00 – hold 2'b01 – increment 2'b10 – decrement 2'b11 – reserved
+  #define PHY_NW_IP_REG_LN3_LT_RX_COEFFICIENT_UPDATE_STATUS_C_P1                                             (0x3<<0) // Received coefficient update field for post-cursor tap. 2'b00 - hold 2'b01 - increment 2'b10 - decrement 2'b11 - reserved
   #define PHY_NW_IP_REG_LN3_LT_RX_COEFFICIENT_UPDATE_STATUS_C_P1_SHIFT                                       0
   #define PHY_NW_IP_REG_LN3_LT_RX_COEFFICIENT_UPDATE_STATUS_C_0                                              (0x3<<2) // Received coefficient update request field for cursor tap.
   #define PHY_NW_IP_REG_LN3_LT_RX_COEFFICIENT_UPDATE_STATUS_C_0_SHIFT                                        2
@@ -22977,7 +22977,7 @@
   #define PHY_NW_IP_REG_LN3_LT_RX_COEFFICIENT_UPDATE_STATUS_PRESET                                           (0x1<<7) // Received coefficient update preset field.
   #define PHY_NW_IP_REG_LN3_LT_RX_COEFFICIENT_UPDATE_STATUS_PRESET_SHIFT                                     7
 #define PHY_NW_IP_REG_LN3_LT_RX_REPORT_STATUS                                                                0x00df88UL //Access:R    DataWidth:0x8    // Multi Field Register.
-  #define PHY_NW_IP_REG_LN3_LT_RX_REPORT_STATUS_C_P1                                                         (0x3<<0) // Received status report field for post-cursor tap. 2'b00 – not updated 2'b01 – minimum 2'b10 – updated 2'b11 – maximum
+  #define PHY_NW_IP_REG_LN3_LT_RX_REPORT_STATUS_C_P1                                                         (0x3<<0) // Received status report field for post-cursor tap. 2'b00 - not updated 2'b01 - minimum 2'b10 - updated 2'b11 - maximum
   #define PHY_NW_IP_REG_LN3_LT_RX_REPORT_STATUS_C_P1_SHIFT                                                   0
   #define PHY_NW_IP_REG_LN3_LT_RX_REPORT_STATUS_C_0                                                          (0x3<<2) // Received status report field for cursor tap.
   #define PHY_NW_IP_REG_LN3_LT_RX_REPORT_STATUS_C_0_SHIFT                                                    2
@@ -22997,12 +22997,12 @@
   #define PHY_SGMII_IP_REG_AHB_CMU_CSR_0_X1_CK_SOC_DIV_OVR_O_2_0_SHIFT                                       0
   #define PHY_SGMII_IP_REG_AHB_CMU_CSR_0_X1_PMA_CM_REF_CLK_DIV_O                                             (0x3<<3) // Divider for pma_cm_ref_clk
   #define PHY_SGMII_IP_REG_AHB_CMU_CSR_0_X1_PMA_CM_REF_CLK_DIV_O_SHIFT                                       3
-  #define PHY_SGMII_IP_REG_AHB_CMU_CSR_0_X1_GCFSM_CLK_DIV_O                                                  (0x3<<5) // Static divider control for CMU GCFSM clock The only access to this divider. Not an override 4’d0:  No division  4’d1:  /2 4’d2:  /2 4’d3:  /4:
+  #define PHY_SGMII_IP_REG_AHB_CMU_CSR_0_X1_GCFSM_CLK_DIV_O                                                  (0x3<<5) // Static divider control for CMU GCFSM clock The only access to this divider. Not an override 4'd0:  No division  4'd1:  /2 4'd2:  /2 4'd3:  /4:
   #define PHY_SGMII_IP_REG_AHB_CMU_CSR_0_X1_GCFSM_CLK_DIV_O_SHIFT                                            5
   #define PHY_SGMII_IP_REG_AHB_CMU_CSR_0_X1_BURNIN_REF_LIFE_CLK_SEL_O                                        (0x1<<7) // Reference clock select override value for burn_in mode. This override is enabled by primary input pin burn_in_i
   #define PHY_SGMII_IP_REG_AHB_CMU_CSR_0_X1_BURNIN_REF_LIFE_CLK_SEL_O_SHIFT                                  7
 #define PHY_SGMII_IP_REG_AHB_CMU_CSR_0_X2                                                                    0x000008UL //Access:RW   DataWidth:0x8    // Multi Field Register.
-  #define PHY_SGMII_IP_REG_AHB_CMU_CSR_0_X2_SSC_CLK_DIV_O                                                    (0x7<<0) // Static divider control for the SSC block The only access to this divider. Not an override 4’d0:  No division  4’d1:  /2 4’d2:  /4 4’d3:  /8:
+  #define PHY_SGMII_IP_REG_AHB_CMU_CSR_0_X2_SSC_CLK_DIV_O                                                    (0x7<<0) // Static divider control for the SSC block The only access to this divider. Not an override 4'd0:  No division  4'd1:  /2 4'd2:  /4 4'd3:  /8:
   #define PHY_SGMII_IP_REG_AHB_CMU_CSR_0_X2_SSC_CLK_DIV_O_SHIFT                                              0
   #define PHY_SGMII_IP_REG_AHB_CMU_CSR_0_X2_CDR_REFCLK_SEL_O_2_0                                             (0x7<<3) // Selects one lane's recovered byte clock of all existing lanes, which goes to refclk buffer.
   #define PHY_SGMII_IP_REG_AHB_CMU_CSR_0_X2_CDR_REFCLK_SEL_O_2_0_SHIFT                                       3
@@ -23613,7 +23613,7 @@
 #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X4                                                                   0x001010UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X4_CDRCTRL_DIV_EN_O_1_0                                            (0x3<<0) // 0 - Divide by 1 1/2 - Divide by 2 3 - Divide by 4
   #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X4_CDRCTRL_DIV_EN_O_1_0_SHIFT                                      0
-  #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X4_GCFSM_DIV_EN_O_1_0                                              (0x3<<2) // Static divider control for Lane GCFSM clock The only access to this divider. Not an override 4’d0:  No division  4’d1:  /2 4’d2:  /2 4’d3:  /4:
+  #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X4_GCFSM_DIV_EN_O_1_0                                              (0x3<<2) // Static divider control for Lane GCFSM clock The only access to this divider. Not an override 4'd0:  No division  4'd1:  /2 4'd2:  /2 4'd3:  /4:
   #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X4_GCFSM_DIV_EN_O_1_0_SHIFT                                        2
 #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X5                                                                   0x001014UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X5_REF_CLK_DIV_EN_O_1_0                                            (0x3<<0) // Clock divider for ref clock going to lane_top : 0-No division, 1- Divide by 2
@@ -23657,7 +23657,7 @@
 #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X15                                                                  0x00103cUL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X15_BCHK_SRC_O_1_0                                                 (0x3<<0) // BIST checker source. 0 - BIST uses output of initial RX polbit before Symbol Aligner 1 - BIST uses output of Symbol Aligner before Elastic Buffer 2 - BIST uses output of RX loopback mux before Decoder and Polbits 3 - BIST uses output of reg1 flop bank before Interface blocks
   #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X15_BCHK_SRC_O_1_0_SHIFT                                           0
-  #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X15_BIST_CHK_DATA_MODE_O                                           (0x1<<3) // Bist checker mode select. 0X0 – UDP pattern. 0x1 – PRBS pattern
+  #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X15_BIST_CHK_DATA_MODE_O                                           (0x1<<3) // Bist checker mode select. 0X0 - UDP pattern. 0x1 - PRBS pattern
   #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X15_BIST_CHK_DATA_MODE_O_SHIFT                                     3
   #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X15_BIST_CHK_LFSR_LENGTH_O_1_0                                     (0x3<<4) // BIST PRBS pattern selector.
   #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X15_BIST_CHK_LFSR_LENGTH_O_1_0_SHIFT                               4
@@ -24458,14 +24458,14 @@
 #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X304                                                                 0x0014c0UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X304_TXTERM_CAL_RSEL                                               (0x7<<0) // tx termination calibration comparator threshold select
   #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X304_TXTERM_CAL_RSEL_SHIFT                                         0
-  #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X304_AHB_LN_RXBIT_STRIP_O                                          (0x3<<3) // Bit stripping on rxdata from PMA to PCS 2’b00: no bit stripping 2’b01: 2x bit stripping 2’b10: reserved 2’b11: 4x bit stripping
+  #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X304_AHB_LN_RXBIT_STRIP_O                                          (0x3<<3) // Bit stripping on rxdata from PMA to PCS 2'b00: no bit stripping 2'b01: 2x bit stripping 2'b10: reserved 2'b11: 4x bit stripping
   #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X304_AHB_LN_RXBIT_STRIP_O_SHIFT                                    3
-  #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X304_AHB_MAC_WIDTH_O                                               (0x3<<5) // Data width selector for PCS/MAC interface. 2’b00: GigE or XAUI 2’b01: GigE or XAUI 2’b10: RXAUI 2’b11: XFI
+  #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X304_AHB_MAC_WIDTH_O                                               (0x3<<5) // Data width selector for PCS/MAC interface. 2'b00: GigE or XAUI 2'b01: GigE or XAUI 2'b10: RXAUI 2'b11: XFI
   #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X304_AHB_MAC_WIDTH_O_SHIFT                                         5
 #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X305                                                                 0x0014c4UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X305_AHB_TXMAC_THRESHOLD_O                                         (0x3<<0) // An internal FIFO is included to handle the communication between the external 64-bit data and the internal 20-bit data. The reading operation will begin only when the difference between the write pointer and read pointer for this FIFO reaches ahb_txmac_threshold_o.
   #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X305_AHB_TXMAC_THRESHOLD_O_SHIFT                                   0
-  #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X305_AHB_LN_TXBIT_REPEAT_O                                         (0x3<<2) // Bit stuffing on txdata from PCS to PMA, bit stripping on rxdata from PMA to PCS 2’b00: no bit stuffing nor stripping 2’b01: 2x bit stuffing and stripping 2’b10: reserved 2’b11: 4x bit stuffing and stripping
+  #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X305_AHB_LN_TXBIT_REPEAT_O                                         (0x3<<2) // Bit stuffing on txdata from PCS to PMA, bit stripping on rxdata from PMA to PCS 2'b00: no bit stuffing nor stripping 2'b01: 2x bit stuffing and stripping 2'b10: reserved 2'b11: 4x bit stuffing and stripping
   #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X305_AHB_LN_TXBIT_REPEAT_O_SHIFT                                   2
   #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X305_MODE_8B_O_1_0                                                 (0x3<<4) // 8b mode control, blocks prior AFE side of 8b/10b enc/dec 0 - Data word is 10 bits 1 - Data word 8 bits
   #define PHY_SGMII_IP_REG_AHB_LANE_CSR_1_X305_MODE_8B_O_1_0_SHIFT                                           4
@@ -24557,9 +24557,9 @@
   #define PHY_SGMII_IP_REG_AHB_COMLANE_CSR_5_X0_LN_CMUREF_EN_O                                               (0x1<<0) // Lane Reference Clock Enable.  0 - gcfsm_refmux_clk = pma_cm_ref_clk_i 1 - gcfsm_refmux_clk = lane_ref_clk
   #define PHY_SGMII_IP_REG_AHB_COMLANE_CSR_5_X0_LN_CMUREF_EN_O_SHIFT                                         0
 #define PHY_SGMII_IP_REG_AHB_COMLANE_CSR_5_X1                                                                0x002804UL //Access:RW   DataWidth:0x8    // Multi Field Register.
-  #define PHY_SGMII_IP_REG_AHB_COMLANE_CSR_5_X1_BIST_CHK_INV_PRBS_O                                          (0x1<<0) // Enable/Disable the internal PRBS data pattern inverter. 0x0 – Invert the PRBS data pattern for PRBS-31 and not invert the PRBS data pattern for the other PRBS types. 0x1 – Not invert the PRBS data pattern for PRBS-31 and invert the PRBS data pattern for the other PRBS types.
+  #define PHY_SGMII_IP_REG_AHB_COMLANE_CSR_5_X1_BIST_CHK_INV_PRBS_O                                          (0x1<<0) // Enable/Disable the internal PRBS data pattern inverter. 0x0 - Invert the PRBS data pattern for PRBS-31 and not invert the PRBS data pattern for the other PRBS types. 0x1 - Not invert the PRBS data pattern for PRBS-31 and invert the PRBS data pattern for the other PRBS types.
   #define PHY_SGMII_IP_REG_AHB_COMLANE_CSR_5_X1_BIST_CHK_INV_PRBS_O_SHIFT                                    0
-  #define PHY_SGMII_IP_REG_AHB_COMLANE_CSR_5_X1_BIST_GEN_INV_PRBS_O                                          (0x1<<1) // Enable/Disable the internal PRBS data pattern inverter. 0x0 – Invert the PRBS data pattern for PRBS-31 and not invert the PRBS data pattern for the other PRBS types. 0x1 – Not invert the PRBS data pattern for PRBS-31 and invert the PRBS data pattern for the other PRBS types.
+  #define PHY_SGMII_IP_REG_AHB_COMLANE_CSR_5_X1_BIST_GEN_INV_PRBS_O                                          (0x1<<1) // Enable/Disable the internal PRBS data pattern inverter. 0x0 - Invert the PRBS data pattern for PRBS-31 and not invert the PRBS data pattern for the other PRBS types. 0x1 - Not invert the PRBS data pattern for PRBS-31 and invert the PRBS data pattern for the other PRBS types.
   #define PHY_SGMII_IP_REG_AHB_COMLANE_CSR_5_X1_BIST_GEN_INV_PRBS_O_SHIFT                                    1
 #define PHY_SGMII_IP_REG_AHB_COMLANE_CSR_5_X4                                                                0x002810UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_SGMII_IP_REG_AHB_COMLANE_CSR_5_X4_P2S_RBUF_PTR_DIFF_O_2_0                                      (0x7<<0) // P2S ring buffer initial startup pointer difference.
@@ -24607,7 +24607,7 @@
   #define PHY_SGMII_IP_REG_AHB_COMLANE_CSR_5_X54_EYE_SCAN_WAIT_LEN_O_11_8                                    (0xf<<0) // Eye scan wait time
   #define PHY_SGMII_IP_REG_AHB_COMLANE_CSR_5_X54_EYE_SCAN_WAIT_LEN_O_11_8_SHIFT                              0
 #define PHY_SGMII_IP_REG_AHB_COMLANE_CSR_5_X55                                                               0x0028dcUL //Access:RW   DataWidth:0x8    // Multi Field Register.
-  #define PHY_SGMII_IP_REG_AHB_COMLANE_CSR_5_X55_GCFSM_DIV_EN_O_1_0                                          (0x3<<0) // Static divider control for Lane GCFSM clock The only access to this divider. Not an override 4’d0:  No division  4’d1:  /2 4’d2:  /2 4’d3:  /4:
+  #define PHY_SGMII_IP_REG_AHB_COMLANE_CSR_5_X55_GCFSM_DIV_EN_O_1_0                                          (0x3<<0) // Static divider control for Lane GCFSM clock The only access to this divider. Not an override 4'd0:  No division  4'd1:  /2 4'd2:  /2 4'd3:  /4:
   #define PHY_SGMII_IP_REG_AHB_COMLANE_CSR_5_X55_GCFSM_DIV_EN_O_1_0_SHIFT                                    0
 #define PHY_SGMII_IP_REG_AHB_COMLANE_CSR_5_X56                                                               0x0028e0UL //Access:RW   DataWidth:0x8    // GCFSM Cycle Length Input bits 7-0
 #define PHY_SGMII_IP_REG_AHB_COMLANE_CSR_5_X57                                                               0x0028e4UL //Access:RW   DataWidth:0x8    // GCFSM Cycle Length Input bits 15-8
@@ -25961,12 +25961,12 @@
   #define PHY_SGMII_IP_REG_AHB_CMU1_CSR_6_X1_CK_SOC_DIV_OVR_O_2_0_SHIFT                                      0
   #define PHY_SGMII_IP_REG_AHB_CMU1_CSR_6_X1_PMA_CM_REF_CLK_DIV_O                                            (0x3<<3) // Divider for pma_cm_ref_clk
   #define PHY_SGMII_IP_REG_AHB_CMU1_CSR_6_X1_PMA_CM_REF_CLK_DIV_O_SHIFT                                      3
-  #define PHY_SGMII_IP_REG_AHB_CMU1_CSR_6_X1_GCFSM_CLK_DIV_O                                                 (0x3<<5) // Static divider control for CMU GCFSM clock The only access to this divider. Not an override 4’d0:  No division  4’d1:  /2 4’d2:  /2 4’d3:  /4:
+  #define PHY_SGMII_IP_REG_AHB_CMU1_CSR_6_X1_GCFSM_CLK_DIV_O                                                 (0x3<<5) // Static divider control for CMU GCFSM clock The only access to this divider. Not an override 4'd0:  No division  4'd1:  /2 4'd2:  /2 4'd3:  /4:
   #define PHY_SGMII_IP_REG_AHB_CMU1_CSR_6_X1_GCFSM_CLK_DIV_O_SHIFT                                           5
   #define PHY_SGMII_IP_REG_AHB_CMU1_CSR_6_X1_BURNIN_REF_LIFE_CLK_SEL_O                                       (0x1<<7) // Reference clock select override value for burn_in mode. This override is enabled by primary input pin burn_in_i
   #define PHY_SGMII_IP_REG_AHB_CMU1_CSR_6_X1_BURNIN_REF_LIFE_CLK_SEL_O_SHIFT                                 7
 #define PHY_SGMII_IP_REG_AHB_CMU1_CSR_6_X2                                                                   0x003008UL //Access:RW   DataWidth:0x8    // Multi Field Register.
-  #define PHY_SGMII_IP_REG_AHB_CMU1_CSR_6_X2_SSC_CLK_DIV_O                                                   (0x7<<0) // Static divider control for the SSC block The only access to this divider. Not an override 4’d0:  No division  4’d1:  /2 4’d2:  /4 4’d3:  /8:
+  #define PHY_SGMII_IP_REG_AHB_CMU1_CSR_6_X2_SSC_CLK_DIV_O                                                   (0x7<<0) // Static divider control for the SSC block The only access to this divider. Not an override 4'd0:  No division  4'd1:  /2 4'd2:  /4 4'd3:  /8:
   #define PHY_SGMII_IP_REG_AHB_CMU1_CSR_6_X2_SSC_CLK_DIV_O_SHIFT                                             0
   #define PHY_SGMII_IP_REG_AHB_CMU1_CSR_6_X2_CDR_REFCLK_SEL_O_2_0                                            (0x7<<3) // Selects one lane's recovered byte clock of all existing lanes, which goes to refclk buffer.
   #define PHY_SGMII_IP_REG_AHB_CMU1_CSR_6_X2_CDR_REFCLK_SEL_O_2_0_SHIFT                                      3
@@ -26552,12 +26552,12 @@
   #define PHY_PCIE_IP_REG_AHB_CMU_CSR_0_X1_CK_SOC_DIV_OVR_O_2_0_SHIFT                                        0
   #define PHY_PCIE_IP_REG_AHB_CMU_CSR_0_X1_PMA_CM_REF_CLK_DIV_O                                              (0x3<<3) // Divider for pma_cm_ref_clk
   #define PHY_PCIE_IP_REG_AHB_CMU_CSR_0_X1_PMA_CM_REF_CLK_DIV_O_SHIFT                                        3
-  #define PHY_PCIE_IP_REG_AHB_CMU_CSR_0_X1_GCFSM_CLK_DIV_O                                                   (0x3<<5) // Static divider control for CMU GCFSM clock The only access to this divider. Not an override 4’d0:  No division  4’d1:  /2 4’d2:  /2 4’d3:  /4:
+  #define PHY_PCIE_IP_REG_AHB_CMU_CSR_0_X1_GCFSM_CLK_DIV_O                                                   (0x3<<5) // Static divider control for CMU GCFSM clock The only access to this divider. Not an override 4'd0:  No division  4'd1:  /2 4'd2:  /2 4'd3:  /4:
   #define PHY_PCIE_IP_REG_AHB_CMU_CSR_0_X1_GCFSM_CLK_DIV_O_SHIFT                                             5
   #define PHY_PCIE_IP_REG_AHB_CMU_CSR_0_X1_BURNIN_REF_LIFE_CLK_SEL_O                                         (0x1<<7) // Reference clock select override value for burn_in mode. This override is enabled by primary input pin burn_in_i
   #define PHY_PCIE_IP_REG_AHB_CMU_CSR_0_X1_BURNIN_REF_LIFE_CLK_SEL_O_SHIFT                                   7
 #define PHY_PCIE_IP_REG_AHB_CMU_CSR_0_X2                                                                     0x000008UL //Access:RW   DataWidth:0x8    // Multi Field Register.
-  #define PHY_PCIE_IP_REG_AHB_CMU_CSR_0_X2_SSC_CLK_DIV_O                                                     (0x7<<0) // Static divider control for the SSC block The only access to this divider. Not an override 4’d0:  No division  4’d1:  /2 4’d2:  /4 4’d3:  /8:
+  #define PHY_PCIE_IP_REG_AHB_CMU_CSR_0_X2_SSC_CLK_DIV_O                                                     (0x7<<0) // Static divider control for the SSC block The only access to this divider. Not an override 4'd0:  No division  4'd1:  /2 4'd2:  /4 4'd3:  /8:
   #define PHY_PCIE_IP_REG_AHB_CMU_CSR_0_X2_SSC_CLK_DIV_O_SHIFT                                               0
   #define PHY_PCIE_IP_REG_AHB_CMU_CSR_0_X2_CDR_REFCLK_SEL_O_2_0                                              (0x7<<3) // Selects one lane's recovered byte clock of all existing lanes, which goes to refclk buffer.
   #define PHY_PCIE_IP_REG_AHB_CMU_CSR_0_X2_CDR_REFCLK_SEL_O_2_0_SHIFT                                        3
@@ -26874,9 +26874,9 @@
 #define PHY_PCIE_IP_REG_AHB_CMU_CSR_0_X135                                                                   0x00021cUL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_PCIE_IP_REG_AHB_CMU_CSR_0_X135_GEN3_PMA_CM_REF_CLK_DIV_O                                       (0x3<<0) // "Divider for pma_cm_ref_clk in gen3 rate. Used only in PCIe3 1CMU config"
   #define PHY_PCIE_IP_REG_AHB_CMU_CSR_0_X135_GEN3_PMA_CM_REF_CLK_DIV_O_SHIFT                                 0
-  #define PHY_PCIE_IP_REG_AHB_CMU_CSR_0_X135_GEN3_GCFSM_CLK_DIV_O                                            (0x3<<2) // Static divider control for CMU GCFSM clock in gen3 rate The only access to this divider. Not an override 4’d0:  No division  4’d1:  /2 4’d2:  /2 4’d3:  /4: Used only in PCIe3 1CMU config
+  #define PHY_PCIE_IP_REG_AHB_CMU_CSR_0_X135_GEN3_GCFSM_CLK_DIV_O                                            (0x3<<2) // Static divider control for CMU GCFSM clock in gen3 rate The only access to this divider. Not an override 4'd0:  No division  4'd1:  /2 4'd2:  /2 4'd3:  /4: Used only in PCIe3 1CMU config
   #define PHY_PCIE_IP_REG_AHB_CMU_CSR_0_X135_GEN3_GCFSM_CLK_DIV_O_SHIFT                                      2
-  #define PHY_PCIE_IP_REG_AHB_CMU_CSR_0_X135_GEN3_SSC_CLK_DIV_O                                              (0x7<<4) // Static divider control for the SSC clock in gen3 rate. The only access to this divider. Not an override 4’d0:  No division  4’d1:  /2 4’d2:  /4 4’d3:  /8 Used only in PCIe3 1CMU config
+  #define PHY_PCIE_IP_REG_AHB_CMU_CSR_0_X135_GEN3_SSC_CLK_DIV_O                                              (0x7<<4) // Static divider control for the SSC clock in gen3 rate. The only access to this divider. Not an override 4'd0:  No division  4'd1:  /2 4'd2:  /4 4'd3:  /8 Used only in PCIe3 1CMU config
   #define PHY_PCIE_IP_REG_AHB_CMU_CSR_0_X135_GEN3_SSC_CLK_DIV_O_SHIFT                                        4
 #define PHY_PCIE_IP_REG_AHB_CMU_CSR_0_X136                                                                   0x000220UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_PCIE_IP_REG_AHB_CMU_CSR_0_X136_GEN3_PCS_RATE_O                                                 (0x3<<0) // Determines rate for PLL clock in gen3 rate pcs_rate_o[0] :      0: VCO clock untouched      1: VCO clock divided by 2                                                 pcs_rate_o[1] :      0: PMA operates in 10b/20b mode Enables %5 circuit      1: PMA operates in 8b/16b mode   Enables %4 circuit Used only in PCIe3 1CMU config
@@ -27319,7 +27319,7 @@
 #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X4                                                                    0x000810UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X4_CDRCTRL_DIV_EN_O_1_0                                             (0x3<<0) // 0 - Divide by 1 1/2 - Divide by 2 3 - Divide by 4
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X4_CDRCTRL_DIV_EN_O_1_0_SHIFT                                       0
-  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X4_GCFSM_DIV_EN_O_1_0                                               (0x3<<2) // Static divider control for Lane GCFSM clock The only access to this divider. Not an override 4’d0:  No division  4’d1:  /2 4’d2:  /2 4’d3:  /4:
+  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X4_GCFSM_DIV_EN_O_1_0                                               (0x3<<2) // Static divider control for Lane GCFSM clock The only access to this divider. Not an override 4'd0:  No division  4'd1:  /2 4'd2:  /2 4'd3:  /4:
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X4_GCFSM_DIV_EN_O_1_0_SHIFT                                         2
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X4_LN_CLK_TXB_DIV24OR1_O                                            (0x3<<4) // Divide ratio setting for lnX_ck_txb_o. When ln_common_sync_txclk_en_o is high and in NORM state:                                            2'b00: lnX_ck_txb_o is divided by 1 version of the tx byte clock from PMA.                     2'b01/2'b10: lnX_ck_txb_o is divided by 2 version of the tx byte clock from PMA.                  2'b11: lnX_ck_txb_o is divided by 4 version of the tx byte clock from PMA.
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X4_LN_CLK_TXB_DIV24OR1_O_SHIFT                                      4
@@ -27367,7 +27367,7 @@
 #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X15                                                                   0x00083cUL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X15_BCHK_SRC_O_1_0                                                  (0x3<<0) // BIST checker source. 0 - BIST uses output of initial RX polbit before Symbol Aligner 1 - BIST uses output of Symbol Aligner before Elastic Buffer 2 - BIST uses output of RX loopback mux before Decoder and Polbits 3 - BIST uses output of reg1 flop bank before Interface blocks
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X15_BCHK_SRC_O_1_0_SHIFT                                            0
-  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X15_BIST_CHK_DATA_MODE_O                                            (0x1<<3) // Bist checker mode select. 0X0 – UDP pattern. 0x1 – PRBS pattern
+  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X15_BIST_CHK_DATA_MODE_O                                            (0x1<<3) // Bist checker mode select. 0X0 - UDP pattern. 0x1 - PRBS pattern
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X15_BIST_CHK_DATA_MODE_O_SHIFT                                      3
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X15_BIST_CHK_LFSR_LENGTH_O_1_0                                      (0x3<<4) // BIST PRBS pattern selector.
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X15_BIST_CHK_LFSR_LENGTH_O_1_0_SHIFT                                4
@@ -28238,14 +28238,14 @@
 #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X304                                                                  0x000cc0UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X304_TXTERM_CAL_RSEL                                                (0x7<<0) // tx termination calibration comparator threshold select
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X304_TXTERM_CAL_RSEL_SHIFT                                          0
-  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X304_AHB_LN_RXBIT_STRIP_O                                           (0x3<<3) // Bit stripping on rxdata from PMA to PCS 2’b00: no bit stripping 2’b01: 2x bit stripping 2’b10: reserved 2’b11: 4x bit stripping
+  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X304_AHB_LN_RXBIT_STRIP_O                                           (0x3<<3) // Bit stripping on rxdata from PMA to PCS 2'b00: no bit stripping 2'b01: 2x bit stripping 2'b10: reserved 2'b11: 4x bit stripping
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X304_AHB_LN_RXBIT_STRIP_O_SHIFT                                     3
-  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X304_AHB_MAC_WIDTH_O                                                (0x3<<5) // Data width selector for PCS/MAC interface. 2’b00: GigE or XAUI 2’b01: GigE or XAUI 2’b10: RXAUI 2’b11: XFI
+  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X304_AHB_MAC_WIDTH_O                                                (0x3<<5) // Data width selector for PCS/MAC interface. 2'b00: GigE or XAUI 2'b01: GigE or XAUI 2'b10: RXAUI 2'b11: XFI
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X304_AHB_MAC_WIDTH_O_SHIFT                                          5
 #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X305                                                                  0x000cc4UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X305_AHB_TXMAC_THRESHOLD_O                                          (0x3<<0) // An internal FIFO is included to handle the communication between the external 64-bit data and the internal 20-bit data. The reading operation will begin only when the difference between the write pointer and read pointer for this FIFO reaches ahb_txmac_threshold_o.
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X305_AHB_TXMAC_THRESHOLD_O_SHIFT                                    0
-  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X305_AHB_LN_TXBIT_REPEAT_O                                          (0x3<<2) // Bit stuffing on txdata from PCS to PMA, bit stripping on rxdata from PMA to PCS 2’b00: no bit stuffing nor stripping 2’b01: 2x bit stuffing and stripping 2’b10: reserved 2’b11: 4x bit stuffing and stripping
+  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X305_AHB_LN_TXBIT_REPEAT_O                                          (0x3<<2) // Bit stuffing on txdata from PCS to PMA, bit stripping on rxdata from PMA to PCS 2'b00: no bit stuffing nor stripping 2'b01: 2x bit stuffing and stripping 2'b10: reserved 2'b11: 4x bit stuffing and stripping
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X305_AHB_LN_TXBIT_REPEAT_O_SHIFT                                    2
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X305_MODE_8B_O_1_0                                                  (0x3<<4) // 8b mode control, blocks prior AFE side of 8b/10b enc/dec 0 - Data word is 10 bits 1 - Data word 8 bits
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_1_X305_MODE_8B_O_1_0_SHIFT                                            4
@@ -28399,7 +28399,7 @@
 #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X4                                                                    0x001010UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X4_CDRCTRL_DIV_EN_O_1_0                                             (0x3<<0) // 0 - Divide by 1 1/2 - Divide by 2 3 - Divide by 4
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X4_CDRCTRL_DIV_EN_O_1_0_SHIFT                                       0
-  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X4_GCFSM_DIV_EN_O_1_0                                               (0x3<<2) // Static divider control for Lane GCFSM clock The only access to this divider. Not an override 4’d0:  No division  4’d1:  /2 4’d2:  /2 4’d3:  /4:
+  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X4_GCFSM_DIV_EN_O_1_0                                               (0x3<<2) // Static divider control for Lane GCFSM clock The only access to this divider. Not an override 4'd0:  No division  4'd1:  /2 4'd2:  /2 4'd3:  /4:
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X4_GCFSM_DIV_EN_O_1_0_SHIFT                                         2
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X4_LN_CLK_TXB_DIV24OR1_O                                            (0x3<<4) // Divide ratio setting for lnX_ck_txb_o. When ln_common_sync_txclk_en_o is high and in NORM state:                                            2'b00: lnX_ck_txb_o is divided by 1 version of the tx byte clock from PMA.                     2'b01/2'b10: lnX_ck_txb_o is divided by 2 version of the tx byte clock from PMA.                  2'b11: lnX_ck_txb_o is divided by 4 version of the tx byte clock from PMA.
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X4_LN_CLK_TXB_DIV24OR1_O_SHIFT                                      4
@@ -28447,7 +28447,7 @@
 #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X15                                                                   0x00103cUL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X15_BCHK_SRC_O_1_0                                                  (0x3<<0) // BIST checker source. 0 - BIST uses output of initial RX polbit before Symbol Aligner 1 - BIST uses output of Symbol Aligner before Elastic Buffer 2 - BIST uses output of RX loopback mux before Decoder and Polbits 3 - BIST uses output of reg1 flop bank before Interface blocks
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X15_BCHK_SRC_O_1_0_SHIFT                                            0
-  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X15_BIST_CHK_DATA_MODE_O                                            (0x1<<3) // Bist checker mode select. 0X0 – UDP pattern. 0x1 – PRBS pattern
+  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X15_BIST_CHK_DATA_MODE_O                                            (0x1<<3) // Bist checker mode select. 0X0 - UDP pattern. 0x1 - PRBS pattern
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X15_BIST_CHK_DATA_MODE_O_SHIFT                                      3
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X15_BIST_CHK_LFSR_LENGTH_O_1_0                                      (0x3<<4) // BIST PRBS pattern selector.
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X15_BIST_CHK_LFSR_LENGTH_O_1_0_SHIFT                                4
@@ -29318,14 +29318,14 @@
 #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X304                                                                  0x0014c0UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X304_TXTERM_CAL_RSEL                                                (0x7<<0) // tx termination calibration comparator threshold select
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X304_TXTERM_CAL_RSEL_SHIFT                                          0
-  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X304_AHB_LN_RXBIT_STRIP_O                                           (0x3<<3) // Bit stripping on rxdata from PMA to PCS 2’b00: no bit stripping 2’b01: 2x bit stripping 2’b10: reserved 2’b11: 4x bit stripping
+  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X304_AHB_LN_RXBIT_STRIP_O                                           (0x3<<3) // Bit stripping on rxdata from PMA to PCS 2'b00: no bit stripping 2'b01: 2x bit stripping 2'b10: reserved 2'b11: 4x bit stripping
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X304_AHB_LN_RXBIT_STRIP_O_SHIFT                                     3
-  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X304_AHB_MAC_WIDTH_O                                                (0x3<<5) // Data width selector for PCS/MAC interface. 2’b00: GigE or XAUI 2’b01: GigE or XAUI 2’b10: RXAUI 2’b11: XFI
+  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X304_AHB_MAC_WIDTH_O                                                (0x3<<5) // Data width selector for PCS/MAC interface. 2'b00: GigE or XAUI 2'b01: GigE or XAUI 2'b10: RXAUI 2'b11: XFI
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X304_AHB_MAC_WIDTH_O_SHIFT                                          5
 #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X305                                                                  0x0014c4UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X305_AHB_TXMAC_THRESHOLD_O                                          (0x3<<0) // An internal FIFO is included to handle the communication between the external 64-bit data and the internal 20-bit data. The reading operation will begin only when the difference between the write pointer and read pointer for this FIFO reaches ahb_txmac_threshold_o.
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X305_AHB_TXMAC_THRESHOLD_O_SHIFT                                    0
-  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X305_AHB_LN_TXBIT_REPEAT_O                                          (0x3<<2) // Bit stuffing on txdata from PCS to PMA, bit stripping on rxdata from PMA to PCS 2’b00: no bit stuffing nor stripping 2’b01: 2x bit stuffing and stripping 2’b10: reserved 2’b11: 4x bit stuffing and stripping
+  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X305_AHB_LN_TXBIT_REPEAT_O                                          (0x3<<2) // Bit stuffing on txdata from PCS to PMA, bit stripping on rxdata from PMA to PCS 2'b00: no bit stuffing nor stripping 2'b01: 2x bit stuffing and stripping 2'b10: reserved 2'b11: 4x bit stuffing and stripping
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X305_AHB_LN_TXBIT_REPEAT_O_SHIFT                                    2
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X305_MODE_8B_O_1_0                                                  (0x3<<4) // 8b mode control, blocks prior AFE side of 8b/10b enc/dec 0 - Data word is 10 bits 1 - Data word 8 bits
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_2_X305_MODE_8B_O_1_0_SHIFT                                            4
@@ -29479,7 +29479,7 @@
 #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X4                                                                    0x001810UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X4_CDRCTRL_DIV_EN_O_1_0                                             (0x3<<0) // 0 - Divide by 1 1/2 - Divide by 2 3 - Divide by 4
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X4_CDRCTRL_DIV_EN_O_1_0_SHIFT                                       0
-  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X4_GCFSM_DIV_EN_O_1_0                                               (0x3<<2) // Static divider control for Lane GCFSM clock The only access to this divider. Not an override 4’d0:  No division  4’d1:  /2 4’d2:  /2 4’d3:  /4:
+  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X4_GCFSM_DIV_EN_O_1_0                                               (0x3<<2) // Static divider control for Lane GCFSM clock The only access to this divider. Not an override 4'd0:  No division  4'd1:  /2 4'd2:  /2 4'd3:  /4:
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X4_GCFSM_DIV_EN_O_1_0_SHIFT                                         2
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X4_LN_CLK_TXB_DIV24OR1_O                                            (0x3<<4) // Divide ratio setting for lnX_ck_txb_o. When ln_common_sync_txclk_en_o is high and in NORM state:                                            2'b00: lnX_ck_txb_o is divided by 1 version of the tx byte clock from PMA.                     2'b01/2'b10: lnX_ck_txb_o is divided by 2 version of the tx byte clock from PMA.                  2'b11: lnX_ck_txb_o is divided by 4 version of the tx byte clock from PMA.
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X4_LN_CLK_TXB_DIV24OR1_O_SHIFT                                      4
@@ -29527,7 +29527,7 @@
 #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X15                                                                   0x00183cUL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X15_BCHK_SRC_O_1_0                                                  (0x3<<0) // BIST checker source. 0 - BIST uses output of initial RX polbit before Symbol Aligner 1 - BIST uses output of Symbol Aligner before Elastic Buffer 2 - BIST uses output of RX loopback mux before Decoder and Polbits 3 - BIST uses output of reg1 flop bank before Interface blocks
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X15_BCHK_SRC_O_1_0_SHIFT                                            0
-  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X15_BIST_CHK_DATA_MODE_O                                            (0x1<<3) // Bist checker mode select. 0X0 – UDP pattern. 0x1 – PRBS pattern
+  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X15_BIST_CHK_DATA_MODE_O                                            (0x1<<3) // Bist checker mode select. 0X0 - UDP pattern. 0x1 - PRBS pattern
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X15_BIST_CHK_DATA_MODE_O_SHIFT                                      3
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X15_BIST_CHK_LFSR_LENGTH_O_1_0                                      (0x3<<4) // BIST PRBS pattern selector.
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X15_BIST_CHK_LFSR_LENGTH_O_1_0_SHIFT                                4
@@ -30398,14 +30398,14 @@
 #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X304                                                                  0x001cc0UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X304_TXTERM_CAL_RSEL                                                (0x7<<0) // tx termination calibration comparator threshold select
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X304_TXTERM_CAL_RSEL_SHIFT                                          0
-  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X304_AHB_LN_RXBIT_STRIP_O                                           (0x3<<3) // Bit stripping on rxdata from PMA to PCS 2’b00: no bit stripping 2’b01: 2x bit stripping 2’b10: reserved 2’b11: 4x bit stripping
+  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X304_AHB_LN_RXBIT_STRIP_O                                           (0x3<<3) // Bit stripping on rxdata from PMA to PCS 2'b00: no bit stripping 2'b01: 2x bit stripping 2'b10: reserved 2'b11: 4x bit stripping
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X304_AHB_LN_RXBIT_STRIP_O_SHIFT                                     3
-  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X304_AHB_MAC_WIDTH_O                                                (0x3<<5) // Data width selector for PCS/MAC interface. 2’b00: GigE or XAUI 2’b01: GigE or XAUI 2’b10: RXAUI 2’b11: XFI
+  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X304_AHB_MAC_WIDTH_O                                                (0x3<<5) // Data width selector for PCS/MAC interface. 2'b00: GigE or XAUI 2'b01: GigE or XAUI 2'b10: RXAUI 2'b11: XFI
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X304_AHB_MAC_WIDTH_O_SHIFT                                          5
 #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X305                                                                  0x001cc4UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X305_AHB_TXMAC_THRESHOLD_O                                          (0x3<<0) // An internal FIFO is included to handle the communication between the external 64-bit data and the internal 20-bit data. The reading operation will begin only when the difference between the write pointer and read pointer for this FIFO reaches ahb_txmac_threshold_o.
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X305_AHB_TXMAC_THRESHOLD_O_SHIFT                                    0
-  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X305_AHB_LN_TXBIT_REPEAT_O                                          (0x3<<2) // Bit stuffing on txdata from PCS to PMA, bit stripping on rxdata from PMA to PCS 2’b00: no bit stuffing nor stripping 2’b01: 2x bit stuffing and stripping 2’b10: reserved 2’b11: 4x bit stuffing and stripping
+  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X305_AHB_LN_TXBIT_REPEAT_O                                          (0x3<<2) // Bit stuffing on txdata from PCS to PMA, bit stripping on rxdata from PMA to PCS 2'b00: no bit stuffing nor stripping 2'b01: 2x bit stuffing and stripping 2'b10: reserved 2'b11: 4x bit stuffing and stripping
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X305_AHB_LN_TXBIT_REPEAT_O_SHIFT                                    2
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X305_MODE_8B_O_1_0                                                  (0x3<<4) // 8b mode control, blocks prior AFE side of 8b/10b enc/dec 0 - Data word is 10 bits 1 - Data word 8 bits
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_3_X305_MODE_8B_O_1_0_SHIFT                                            4
@@ -30559,7 +30559,7 @@
 #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X4                                                                    0x002010UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X4_CDRCTRL_DIV_EN_O_1_0                                             (0x3<<0) // 0 - Divide by 1 1/2 - Divide by 2 3 - Divide by 4
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X4_CDRCTRL_DIV_EN_O_1_0_SHIFT                                       0
-  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X4_GCFSM_DIV_EN_O_1_0                                               (0x3<<2) // Static divider control for Lane GCFSM clock The only access to this divider. Not an override 4’d0:  No division  4’d1:  /2 4’d2:  /2 4’d3:  /4:
+  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X4_GCFSM_DIV_EN_O_1_0                                               (0x3<<2) // Static divider control for Lane GCFSM clock The only access to this divider. Not an override 4'd0:  No division  4'd1:  /2 4'd2:  /2 4'd3:  /4:
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X4_GCFSM_DIV_EN_O_1_0_SHIFT                                         2
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X4_LN_CLK_TXB_DIV24OR1_O                                            (0x3<<4) // Divide ratio setting for lnX_ck_txb_o. When ln_common_sync_txclk_en_o is high and in NORM state:                                            2'b00: lnX_ck_txb_o is divided by 1 version of the tx byte clock from PMA.                     2'b01/2'b10: lnX_ck_txb_o is divided by 2 version of the tx byte clock from PMA.                  2'b11: lnX_ck_txb_o is divided by 4 version of the tx byte clock from PMA.
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X4_LN_CLK_TXB_DIV24OR1_O_SHIFT                                      4
@@ -30607,7 +30607,7 @@
 #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X15                                                                   0x00203cUL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X15_BCHK_SRC_O_1_0                                                  (0x3<<0) // BIST checker source. 0 - BIST uses output of initial RX polbit before Symbol Aligner 1 - BIST uses output of Symbol Aligner before Elastic Buffer 2 - BIST uses output of RX loopback mux before Decoder and Polbits 3 - BIST uses output of reg1 flop bank before Interface blocks
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X15_BCHK_SRC_O_1_0_SHIFT                                            0
-  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X15_BIST_CHK_DATA_MODE_O                                            (0x1<<3) // Bist checker mode select. 0X0 – UDP pattern. 0x1 – PRBS pattern
+  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X15_BIST_CHK_DATA_MODE_O                                            (0x1<<3) // Bist checker mode select. 0X0 - UDP pattern. 0x1 - PRBS pattern
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X15_BIST_CHK_DATA_MODE_O_SHIFT                                      3
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X15_BIST_CHK_LFSR_LENGTH_O_1_0                                      (0x3<<4) // BIST PRBS pattern selector.
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X15_BIST_CHK_LFSR_LENGTH_O_1_0_SHIFT                                4
@@ -31478,14 +31478,14 @@
 #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X304                                                                  0x0024c0UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X304_TXTERM_CAL_RSEL                                                (0x7<<0) // tx termination calibration comparator threshold select
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X304_TXTERM_CAL_RSEL_SHIFT                                          0
-  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X304_AHB_LN_RXBIT_STRIP_O                                           (0x3<<3) // Bit stripping on rxdata from PMA to PCS 2’b00: no bit stripping 2’b01: 2x bit stripping 2’b10: reserved 2’b11: 4x bit stripping
+  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X304_AHB_LN_RXBIT_STRIP_O                                           (0x3<<3) // Bit stripping on rxdata from PMA to PCS 2'b00: no bit stripping 2'b01: 2x bit stripping 2'b10: reserved 2'b11: 4x bit stripping
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X304_AHB_LN_RXBIT_STRIP_O_SHIFT                                     3
-  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X304_AHB_MAC_WIDTH_O                                                (0x3<<5) // Data width selector for PCS/MAC interface. 2’b00: GigE or XAUI 2’b01: GigE or XAUI 2’b10: RXAUI 2’b11: XFI
+  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X304_AHB_MAC_WIDTH_O                                                (0x3<<5) // Data width selector for PCS/MAC interface. 2'b00: GigE or XAUI 2'b01: GigE or XAUI 2'b10: RXAUI 2'b11: XFI
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X304_AHB_MAC_WIDTH_O_SHIFT                                          5
 #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X305                                                                  0x0024c4UL //Access:RW   DataWidth:0x8    // Multi Field Register.
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X305_AHB_TXMAC_THRESHOLD_O                                          (0x3<<0) // An internal FIFO is included to handle the communication between the external 64-bit data and the internal 20-bit data. The reading operation will begin only when the difference between the write pointer and read pointer for this FIFO reaches ahb_txmac_threshold_o.
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X305_AHB_TXMAC_THRESHOLD_O_SHIFT                                    0
-  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X305_AHB_LN_TXBIT_REPEAT_O                                          (0x3<<2) // Bit stuffing on txdata from PCS to PMA, bit stripping on rxdata from PMA to PCS 2’b00: no bit stuffing nor stripping 2’b01: 2x bit stuffing and stripping 2’b10: reserved 2’b11: 4x bit stuffing and stripping
+  #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X305_AHB_LN_TXBIT_REPEAT_O                                          (0x3<<2) // Bit stuffing on txdata from PCS to PMA, bit stripping on rxdata from PMA to PCS 2'b00: no bit stuffing nor stripping 2'b01: 2x bit stuffing and stripping 2'b10: reserved 2'b11: 4x bit stuffing and stripping
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X305_AHB_LN_TXBIT_REPEAT_O_SHIFT                                    2
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X305_MODE_8B_O_1_0                                                  (0x3<<4) // 8b mode control, blocks prior AFE side of 8b/10b enc/dec 0 - Data word is 10 bits 1 - Data word 8 bits
   #define PHY_PCIE_IP_REG_AHB_LANE_CSR_4_X305_MODE_8B_O_1_0_SHIFT                                            4
@@ -31624,9 +31624,9 @@
   #define PHY_PCIE_IP_REG_AHB_COMLANE_CSR_5_X0_LN_CMUREF_EN_O                                                (0x1<<0) // Lane Reference Clock Enable.  0 - gcfsm_refmux_clk = pma_cm_ref_clk_i 1 - gcfsm_refmux_clk = lane_ref_clk
   #define PHY_PCIE_IP_REG_AHB_COMLANE_CSR_5_X0_LN_CMUREF_EN_O_SHIFT                                          0
 #define PHY_PCIE_IP_REG_AHB_COMLANE_CSR_5_X1                                                                 0x002804UL //Access:RW   DataWidth:0x8    // Multi Field Register.
-  #define PHY_PCIE_IP_REG_AHB_COMLANE_CSR_5_X1_BIST_CHK_INV_PRBS_O                                           (0x1<<0) // Enable/Disable the internal PRBS data pattern inverter. 0x0 – Invert the PRBS data pattern for PRBS-31 and not invert the PRBS data pattern for the other PRBS types. 0x1 – Not invert the PRBS data pattern for PRBS-31 and invert the PRBS data pattern for the other PRBS types.
+  #define PHY_PCIE_IP_REG_AHB_COMLANE_CSR_5_X1_BIST_CHK_INV_PRBS_O                                           (0x1<<0) // Enable/Disable the internal PRBS data pattern inverter. 0x0 - Invert the PRBS data pattern for PRBS-31 and not invert the PRBS data pattern for the other PRBS types. 0x1 - Not invert the PRBS data pattern for PRBS-31 and invert the PRBS data pattern for the other PRBS types.
   #define PHY_PCIE_IP_REG_AHB_COMLANE_CSR_5_X1_BIST_CHK_INV_PRBS_O_SHIFT                                     0
-  #define PHY_PCIE_IP_REG_AHB_COMLANE_CSR_5_X1_BIST_GEN_INV_PRBS_O                                           (0x1<<1) // Enable/Disable the internal PRBS data pattern inverter. 0x0 – Invert the PRBS data pattern for PRBS-31 and not invert the PRBS data pattern for the other PRBS types. 0x1 – Not invert the PRBS data pattern for PRBS-31 and invert the PRBS data pattern for the other PRBS types.
+  #define PHY_PCIE_IP_REG_AHB_COMLANE_CSR_5_X1_BIST_GEN_INV_PRBS_O                                           (0x1<<1) // Enable/Disable the internal PRBS data pattern inverter. 0x0 - Invert the PRBS data pattern for PRBS-31 and not invert the PRBS data pattern for the other PRBS types. 0x1 - Not invert the PRBS data pattern for PRBS-31 and invert the PRBS data pattern for the other PRBS types.
   #define PHY_PCIE_IP_REG_AHB_COMLANE_CSR_5_X1_BIST_GEN_INV_PRBS_O_SHIFT                                     1
 #define PHY_PCIE_IP_REG_AHB_COMLANE_CSR_5_X2                                                                 0x002808UL //Access:RW   DataWidth:0x8    // BIST alignment pattern for Gen3
 #define PHY_PCIE_IP_REG_AHB_COMLANE_CSR_5_X3                                                                 0x00280cUL //Access:RW   DataWidth:0x8    // BIST alignment pattern for Gen3
@@ -31756,7 +31756,7 @@
   #define PHY_PCIE_IP_REG_AHB_COMLANE_CSR_5_X54_EYE_SCAN_WAIT_LEN_O_11_8                                     (0xf<<0) // Eye scan wait time
   #define PHY_PCIE_IP_REG_AHB_COMLANE_CSR_5_X54_EYE_SCAN_WAIT_LEN_O_11_8_SHIFT                               0
 #define PHY_PCIE_IP_REG_AHB_COMLANE_CSR_5_X55                                                                0x0028dcUL //Access:RW   DataWidth:0x8    // Multi Field Register.
-  #define PHY_PCIE_IP_REG_AHB_COMLANE_CSR_5_X55_GCFSM_DIV_EN_O_1_0                                           (0x3<<0) // Static divider control for Lane GCFSM clock The only access to this divider. Not an override 4’d0:  No division  4’d1:  /2 4’d2:  /2 4’d3:  /4:
+  #define PHY_PCIE_IP_REG_AHB_COMLANE_CSR_5_X55_GCFSM_DIV_EN_O_1_0                                           (0x3<<0) // Static divider control for Lane GCFSM clock The only access to this divider. Not an override 4'd0:  No division  4'd1:  /2 4'd2:  /2 4'd3:  /4:
   #define PHY_PCIE_IP_REG_AHB_COMLANE_CSR_5_X55_GCFSM_DIV_EN_O_1_0_SHIFT                                     0
 #define PHY_PCIE_IP_REG_AHB_COMLANE_CSR_5_X56                                                                0x0028e0UL //Access:RW   DataWidth:0x8    // GCFSM Cycle Length Input bits 7-0
 #define PHY_PCIE_IP_REG_AHB_COMLANE_CSR_5_X57                                                                0x0028e4UL //Access:RW   DataWidth:0x8    // GCFSM Cycle Length Input bits 15-8
@@ -34103,7 +34103,7 @@
 #define MISCS_REG_DRIVER_K2_CONTROL_15_SIZE                                                                  2
 #define MISCS_REG_BSC_SDA_SEL                                                                                0x009650UL //Access:RW   DataWidth:0x2    // 00: connect SDA interface to BSC_SDA0 IO. 01: connect SDA interface to BSC_SDA1 IO. 10: connect SDA interface to BSC_SDA2 IO. 11: connect SDA interface to BSC_SDA3 IO.
 #define MISCS_REG_CHIP_CORE_RESET_SOURCE                                                                     0x009654UL //Access:RW   DataWidth:0x3    // Bit[0]: PERST# IO de-assertion. If == 1, triggers chip core reset. If == 0, doesn't trigger chip core reset. Bit[1]: PCIE HOT reset. If == 1, triggers chip core reset. If == 0, doesn't trigger chip core reset. Bit[2]: PCIE link is up. If == 1, triggers chip core reset. If == 0, doesn't trigger chip core reset. More than one bit can be set to 1. This register is reset on hard reset event.
-#define MISCS_REG_WOL_CONFIG                                                                                 0x009658UL //Access:RW   DataWidth:0x2    // Bit[0]: Out of the Box (OOB) WOL enable. Set to 1 to enable use of NIC magic packet detection to assert WAKE OOB. Reset on POR reset and PERST# de-assert. Bit[1]: WAKE control – direct MFW control of the WAKE# IO. Set to 1 to asserts WAKE# = 0. Reset on POR reset and PERST# de-assert.
+#define MISCS_REG_WOL_CONFIG                                                                                 0x009658UL //Access:RW   DataWidth:0x2    // Bit[0]: Out of the Box (OOB) WOL enable. Set to 1 to enable use of NIC magic packet detection to assert WAKE OOB. Reset on POR reset and PERST# de-assert. Bit[1]: WAKE control - direct MFW control of the WAKE# IO. Set to 1 to asserts WAKE# = 0. Reset on POR reset and PERST# de-assert.
 #define MISCS_REG_PCIE_CORE_RST_N_STATUS                                                                     0x00965cUL //Access:RW   DataWidth:0x1    // When 0, indicated PCIE EP controller is in reset, except for PMC module. Refer to PCIE EP controller databook.
 #define MISCS_REG_PCIE_PHY_RST_N_STATUS                                                                      0x009660UL //Access:RW   DataWidth:0x1    // When 0, indicated PCIE PHY is in reset Refer to PCIE PHY user manual.
 #define MISCS_REG_CORE_RST_N_STATUS                                                                          0x0096b8UL //Access:R    DataWidth:0x1    // Chip core_rst_n status. 0 - asserted; 1 - de-asserted.
@@ -37705,14 +37705,14 @@
 #define DORQ_REG_BTH_TVER                                                                                    0x1008a8UL //Access:RW   DataWidth:0x4    // TVER value in RoCE BTH header.
 #define DORQ_REG_ROCE_OPCODE_EN                                                                              0x1008acUL //Access:RW   DataWidth:0x20   // Enable bit per each RoCE Opcode 5 LSB-s. N-th bit set means corresponding opcode N is enabled, if reset the RoCE DPM with this opcode is aborted.
 #define DORQ_REG_CRC32_BSWAP                                                                                 0x1008b0UL //Access:RW   DataWidth:0x1    // If 0 - the CRC-32 final calculation result isn't byte swapped; if 1 - the CRC-32 final calculation result is byte swapped (byte [7:0] goes to location [31:24];etc).
-#define DORQ_REG_TAG1_OVRD_MODE                                                                              0x1008b4UL //Access:RW   DataWidth:0x2    // Indicates which type of override of the TAG content read from the PCM context is required. The possible values are: 0 – No override 1 – Full override (external VLAN Id + PCP) 2 – PCP (priority) only 3 – reserved Note that this mode is relevant only if size of the TAG (not including the Ethertype) is 2 bytes. Otherwise there is no override.
-#define DORQ_REG_TAG2_OVRD_MODE                                                                              0x1008b8UL //Access:RW   DataWidth:0x2    // Indicates which type of override of the TAG content read from the PCM context is required. The possible values are: 0 – No override 1 – Full override (external VLAN Id + PCP) 2 – PCP (priority) only 3 – reserved Note that this mode is relevant only if size of the TAG (not including the Ethertype) is 2 bytes. Otherwise there is no override.
-#define DORQ_REG_TAG3_OVRD_MODE                                                                              0x1008bcUL //Access:RW   DataWidth:0x2    // Indicates which type of override of the TAG content read from the PCM context is required. The possible values are: 0 – No override 1 – Full override (external VLAN Id + PCP) 2 – PCP (priority) only 3 – reserved Note that this mode is relevant only if size of the TAG (not including the Ethertype) is 2 bytes. Otherwise there is no override.
-#define DORQ_REG_TAG4_OVRD_MODE                                                                              0x1008c0UL //Access:RW   DataWidth:0x2    // Indicates which type of override of the TAG content read from the PCM context is required. The possible values are: 0 – No override 1 – Full override (external VLAN Id + PCP) 2 – PCP (priority) only 3 – reserved Note that this mode is relevant only if size of the TAG (not including the Ethertype) is 2 bytes. Otherwise there is no override.
+#define DORQ_REG_TAG1_OVRD_MODE                                                                              0x1008b4UL //Access:RW   DataWidth:0x2    // Indicates which type of override of the TAG content read from the PCM context is required. The possible values are: 0 - No override 1 - Full override (external VLAN Id + PCP) 2 - PCP (priority) only 3 - reserved Note that this mode is relevant only if size of the TAG (not including the Ethertype) is 2 bytes. Otherwise there is no override.
+#define DORQ_REG_TAG2_OVRD_MODE                                                                              0x1008b8UL //Access:RW   DataWidth:0x2    // Indicates which type of override of the TAG content read from the PCM context is required. The possible values are: 0 - No override 1 - Full override (external VLAN Id + PCP) 2 - PCP (priority) only 3 - reserved Note that this mode is relevant only if size of the TAG (not including the Ethertype) is 2 bytes. Otherwise there is no override.
+#define DORQ_REG_TAG3_OVRD_MODE                                                                              0x1008bcUL //Access:RW   DataWidth:0x2    // Indicates which type of override of the TAG content read from the PCM context is required. The possible values are: 0 - No override 1 - Full override (external VLAN Id + PCP) 2 - PCP (priority) only 3 - reserved Note that this mode is relevant only if size of the TAG (not including the Ethertype) is 2 bytes. Otherwise there is no override.
+#define DORQ_REG_TAG4_OVRD_MODE                                                                              0x1008c0UL //Access:RW   DataWidth:0x2    // Indicates which type of override of the TAG content read from the PCM context is required. The possible values are: 0 - No override 1 - Full override (external VLAN Id + PCP) 2 - PCP (priority) only 3 - reserved Note that this mode is relevant only if size of the TAG (not including the Ethertype) is 2 bytes. Otherwise there is no override.
 #define DORQ_REG_PF_PCP                                                                                      0x1008c4UL //Access:RW   DataWidth:0x4    // The priority value and DEI bit of RoCE frames per PF.
 #define DORQ_REG_PF_EXT_VID                                                                                  0x1008c8UL //Access:RW   DataWidth:0xc    // The external VLAN ID per PF.
 #define DORQ_REG_RROCE_DST_UDP_PORT                                                                          0x1008ccUL //Access:RW   DataWidth:0x10   // The content of the destination UDP port of RROCE.
-#define DORQ_REG_ROCE_ETHER_TYPE                                                                             0x1008d0UL //Access:RW   DataWidth:0x10   // RoCE Ethertype used for RoCE packet generation in EDPM mode. 0 – plain ROCE; 1 – RROCE (ROCEv2) over IPV4;  2 – RROCE (ROCEv2) over IPV6.
+#define DORQ_REG_ROCE_ETHER_TYPE                                                                             0x1008d0UL //Access:RW   DataWidth:0x10   // RoCE Ethertype used for RoCE packet generation in EDPM mode. 0 - plain ROCE; 1 - RROCE (ROCEv2) over IPV4;  2 - RROCE (ROCEv2) over IPV6.
 #define DORQ_REG_ROCE_ETHER_TYPE_SIZE                                                                        3
 #define DORQ_REG_L2_EDPM_NUM_BD_THR                                                                          0x100900UL //Access:RW   DataWidth:0x10   // L2 EDPM BDs threshold. If overcome, the L2 EDPM context check fails.
 #define DORQ_REG_L2_EDPM_EXT_HDR_SIZE                                                                        0x100904UL //Access:RW   DataWidth:0x8    // Size in Words of header extracted by PBF and sent to PSTORM in L2.
@@ -39375,9 +39375,9 @@
 #define PRS_REG_CAM_BIST_DBG_DATA                                                                            0x1f0f90UL //Access:RW   DataWidth:0x20   // For CAM bist usage.
 #define PRS_REG_CAM_BIST_DBG_DATA_VALID                                                                      0x1f0f94UL //Access:RW   DataWidth:0x1    // For CAM bist usage.
 #define PRS_REG_CAM_BIST_DBG_COMPARE_EN                                                                      0x1f0f98UL //Access:RW   DataWidth:0x1    // For CAM bist usage.
-#define PRS_REG_GFT_PROFILE_MASK_RAM                                                                         0x1f1000UL //Access:WB   DataWidth:0x2a   // Used to set the values of the GFT profile mask ram. line #31 must be configured before enabling the GFT since #31 is the default profile. 41.  Tenant ID Inner header(used also for non-encasulated packet): 40.Source MAC 39.Destination MAC 38.VLAN (12b) ) – Tag 1 37.Provider VLAN (12b) ) – Tag 0 36.Priority taken from CVLAN tag or the SVLAN tag based on GFTInnerVlanSelect global configuration 35.Source IP 34.Destination IP 33.Over IP protocol 32.DSCP (extracted form IP TOS) 31.Source port or ICMP type 30.Destination port or ICMP code 29.TCP flag - NS 28.TCP flag - CWR 27.TCP flag - ECE 26.TCP flag - URG 25.TCP flag - ACK 24.TCP flag - PSH 23.TCP flag - RST 22.TCP flag - SYN 21.TCP flag - FIN 20.reserved 19.Ethertype 18.Ttl 17.TtlEqualOne Tunnel header fields(not used for non-encasulated packet): 16.Source MAC 15.Destination MAC 14.VLAN – Tag 1 13.Provider VLAN – Tag 0 12.Priority taken from CVLAN tag or the SVLAN tag based on GFTTunnelVlanSelect global 11.Source IP 10.Destination IP 9.Over IP protocol 8.DSCP 7.Source port or ICMP type 6.Destination port or ICMP code 5.Ethertype 4.Ttl 3.TtlEqualOne 2.Entrophy : GENEVE, VXLAN – source UDP port number,  NVGRE – FlowID (key 8LBS bits)  1:0 vlan select 0: inner Provider VLAN 1: inner VLAN 2: outer Provider VLAN 3: outer  VLAN
+#define PRS_REG_GFT_PROFILE_MASK_RAM                                                                         0x1f1000UL //Access:WB   DataWidth:0x2a   // Used to set the values of the GFT profile mask ram. line #31 must be configured before enabling the GFT since #31 is the default profile. 41.  Tenant ID Inner header(used also for non-encasulated packet): 40.Source MAC 39.Destination MAC 38.VLAN (12b) ) - Tag 1 37.Provider VLAN (12b) ) - Tag 0 36.Priority taken from CVLAN tag or the SVLAN tag based on GFTInnerVlanSelect global configuration 35.Source IP 34.Destination IP 33.Over IP protocol 32.DSCP (extracted form IP TOS) 31.Source port or ICMP type 30.Destination port or ICMP code 29.TCP flag - NS 28.TCP flag - CWR 27.TCP flag - ECE 26.TCP flag - URG 25.TCP flag - ACK 24.TCP flag - PSH 23.TCP flag - RST 22.TCP flag - SYN 21.TCP flag - FIN 20.reserved 19.Ethertype 18.Ttl 17.TtlEqualOne Tunnel header fields(not used for non-encasulated packet): 16.Source MAC 15.Destination MAC 14.VLAN - Tag 1 13.Provider VLAN - Tag 0 12.Priority taken from CVLAN tag or the SVLAN tag based on GFTTunnelVlanSelect global 11.Source IP 10.Destination IP 9.Over IP protocol 8.DSCP 7.Source port or ICMP type 6.Destination port or ICMP code 5.Ethertype 4.Ttl 3.TtlEqualOne 2.Entrophy : GENEVE, VXLAN - source UDP port number,  NVGRE - FlowID (key 8LBS bits)  1:0 vlan select 0: inner Provider VLAN 1: inner VLAN 2: outer Provider VLAN 3: outer  VLAN
 #define PRS_REG_GFT_PROFILE_MASK_RAM_SIZE                                                                    64
-#define PRS_REG_GFT_CAM                                                                                      0x1f1100UL //Access:RW   DataWidth:0x1d   // Used to set the values of the GFT profile cam: 0 –valid, zero at reset 1-14 data 14-11 PF ID (3bit BB 4bit K2) 10-7 Tunnel type (4b) 0000-no tunnel 0001-vxlan 0010-GRE MAC / NVGRE 0011-GRE IP 0100-Genve MAC 0101-Genve IP 1000-1111 – reserved   6-3 upper protocol type (4b):  -  by priority 0 is highest  0000 – RoCE 0001 – RoCE v2 0010 – FCoE 0011 – ICMP 0100 – ARP 0101 – User TCP Source Port 1(inner) 0110 – User TCP Destination Port 1(inner) 0111 – TCP 1000 – User UDP Destination Port 1(inner) 1001 – User UDP Destination Port 2(outer) 1010 – UDP 1011 – User IP Protocol 1(inner) 1100 – User IP Protocol 2(outer) 1101 – User ETH Type 1 (inner) 1110 – User ETH Type 2 (outer) 1111 – RAW   - by priority  2 Tunnel IP version  0-v4 1-v6 1 IP version  0-v4 1-v6 15-28 mask of bits 1-14 resepectively , ‘1’- compare, ‘0’-don’t compare. All the CAM should be initialized in order to prevent false parity error while doing scrubbing. the init value: bits[28-1] - Don't care bit[0](valid) - 1'b0
+#define PRS_REG_GFT_CAM                                                                                      0x1f1100UL //Access:RW   DataWidth:0x1d   // Used to set the values of the GFT profile cam: 0 -valid, zero at reset 1-14 data 14-11 PF ID (3bit BB 4bit K2) 10-7 Tunnel type (4b) 0000-no tunnel 0001-vxlan 0010-GRE MAC / NVGRE 0011-GRE IP 0100-Genve MAC 0101-Genve IP 1000-1111 - reserved   6-3 upper protocol type (4b):  -  by priority 0 is highest  0000 - RoCE 0001 - RoCE v2 0010 - FCoE 0011 - ICMP 0100 - ARP 0101 - User TCP Source Port 1(inner) 0110 - User TCP Destination Port 1(inner) 0111 - TCP 1000 - User UDP Destination Port 1(inner) 1001 - User UDP Destination Port 2(outer) 1010 - UDP 1011 - User IP Protocol 1(inner) 1100 - User IP Protocol 2(outer) 1101 - User ETH Type 1 (inner) 1110 - User ETH Type 2 (outer) 1111 - RAW   - by priority  2 Tunnel IP version  0-v4 1-v6 1 IP version  0-v4 1-v6 15-28 mask of bits 1-14 resepectively , '1'- compare, '0'-don't compare. All the CAM should be initialized in order to prevent false parity error while doing scrubbing. the init value: bits[28-1] - Don't care bit[0](valid) - 1'b0
 #define PRS_REG_GFT_CAM_SIZE                                                                                 31
 #define PRS_REG_GFT_HASH_KEY_0                                                                               0x1f1180UL //Access:RW   DataWidth:0x20   // 
 #define PRS_REG_GFT_HASH_KEY_1                                                                               0x1f1184UL //Access:RW   DataWidth:0x20   // 
@@ -54239,7 +54239,7 @@
 #define NIG_REG_UP_TS_INSERT_EN                                                                              0x508854UL //Access:RW   DataWidth:0x1    // Enable for on wire timestamp insertion for user protocol packets
 #define NIG_REG_PM_TIMER_SELECT                                                                              0x508858UL //Access:RW   DataWidth:0x3    // Selector for the 48 bits timer which is sent to the port macro. 0: free running counter. [1..4]: synchronized counter for port [1..4]
 #define NIG_REG_TS_FOR_SEMI_SELECT                                                                           0x50885cUL //Access:RW   DataWidth:0x3    // Selects which timer will be sent to SEMI/MCP 0: free running counter. [1..4]: synchronized counter for port [1..4]
-#define NIG_REG_USER_ONE_STEP_TYPE                                                                           0x508860UL //Access:RW   DataWidth:0x3    // Define the required operation for user protocol packets: 0: NO_USER_ONE_STEP – no change to outgoing packet 1: ETHERTYPE – insert timestamp if EtherType filter had a hit 2: UDP – insert timestamp to UDP packet and regenerate checksum 3: TRAILER – insert timestamp to packet trailer 4: IPv4_STANDARD – insert timestamp using standard IPv4 Timestamp option. In this mode 32-bit timestamp with set_msb is used
+#define NIG_REG_USER_ONE_STEP_TYPE                                                                           0x508860UL //Access:RW   DataWidth:0x3    // Define the required operation for user protocol packets: 0: NO_USER_ONE_STEP - no change to outgoing packet 1: ETHERTYPE - insert timestamp if EtherType filter had a hit 2: UDP - insert timestamp to UDP packet and regenerate checksum 3: TRAILER - insert timestamp to packet trailer 4: IPv4_STANDARD - insert timestamp using standard IPv4 Timestamp option. In this mode 32-bit timestamp with set_msb is used
 #define NIG_REG_TXOSTS_SIGNEXT                                                                               0x508864UL //Access:RW   DataWidth:0x1    // sign extension indication for the MAC.
 #define NIG_REG_UP_TS_OFFSET                                                                                 0x508868UL //Access:RW   DataWidth:0x8    // Correction field offset for user protocol packets. the offset is relative to the configured value field in user_one_step_type.
 #define NIG_REG_TS_SHIFT                                                                                     0x50886cUL //Access:RW   DataWidth:0x5    // Global timestamp shift for the free running counter. Legal values are 0-16
@@ -54293,7 +54293,7 @@
 #define NIG_REG_CORRUPT_ETH_CRC                                                                              0x508b24UL //Access:RW   DataWidth:0x1    // This is a per-port register.  When enabled, NIG will corrupt ethernet CRC for packets which are received from BTB with error indication or are classified by the NIG as packets which should be transmitted with errors
 #define NIG_REG_NGE_IP_ENABLE                                                                                0x508b28UL //Access:RW   DataWidth:0x1    // This is a per-port register.  Enables NGE port matching during UDP header parsing when the encapsulated header is IP.
 #define NIG_REG_NGE_ETH_ENABLE                                                                               0x508b2cUL //Access:RW   DataWidth:0x1    // This is a per-port register. Enables NGE port matching during UDP header parsing when the encapsulated header is Ethernet.
-#define NIG_REG_NGE_COMP_VER                                                                                 0x508b30UL //Access:RW   DataWidth:0x1    // This is a per-port register.  Perform NGE version match to 2’b0
+#define NIG_REG_NGE_COMP_VER                                                                                 0x508b30UL //Access:RW   DataWidth:0x1    // This is a per-port register.  Perform NGE version match to 2'b0
 #define NIG_REG_NGE_ETH_TYPE                                                                                 0x508b34UL //Access:RW   DataWidth:0x10   // This is a per-port register.  Next protocol value to be used for Ethernet in NGE header
 #define NIG_REG_NGE_PORT                                                                                     0x508b38UL //Access:RW   DataWidth:0x10   // This is a per-port register. Destination port value used to designate a NGE header following the UDP header.  Matching can only occur when nge_ip_enable or nge_eth_enable are set.
 #define NIG_REG_LLH_LB_TC_REMAP                                                                              0x508b3cUL //Access:RW   DataWidth:0x18   // This is a per-port register which defines mapping of TC from the received TC to the TC sent to the BRB. bits 2:0: TC 0 bits 5:3: TC 1 ... bits 23:21: TC 7
@@ -59464,7 +59464,7 @@
   #define NWM_REG_PCS_STATUS_ALIGN_DONE_SHIFT                                                                0
   #define NWM_REG_PCS_STATUS_BLOCK_LOCK                                                                      (0xf<<4) // Combined Block synchronization indication for each PCS (not lane). When asserted (1) the block synchronization state machines could successfully lock onto 66-bit block boundaries on all virtual lanes relevant to the PCS. The signals stay asserted as long as block lock is maintained.
   #define NWM_REG_PCS_STATUS_BLOCK_LOCK_SHIFT                                                                4
-  #define NWM_REG_PCS_STATUS_HI_BER                                                                          (0xf<<8) // High Bit Error Rate indication for all lanes. Depending on mode, when asserted, at least 97 invalid synchronization headers have been found in a 1.25ms measurement period (40G) or 16 invalid headers within 125ìs (10G), indicating a high bit error rate on the Serdes side. As long as hi_ber stays asserted, local fault is signaled on XLGMII. hi_ber deasserts again, only if less than the acceptable invalid synchronization headers have been detected within the same measurement period. Note: If the short marker distance is configured (See Register VL_INTVL) the measurement period shrinks to 12.5ìs, independent of the mode. Note: the mentioned values are correct only for standard modes, which is 10G and 40G. The measurement window shrinks accordingly when operating in 25G or 50G modes.
+  #define NWM_REG_PCS_STATUS_HI_BER                                                                          (0xf<<8) // High Bit Error Rate indication for all lanes. Depending on mode, when asserted, at least 97 invalid synchronization headers have been found in a 1.25ms measurement period (40G) or 16 invalid headers within 125Î¼s (10G), indicating a high bit error rate on the Serdes side. As long as hi_ber stays asserted, local fault is signaled on XLGMII. hi_ber deasserts again, only if less than the acceptable invalid synchronization headers have been detected within the same measurement period. Note: If the short marker distance is configured (See Register VL_INTVL) the measurement period shrinks to 12.5Î¼s, independent of the mode. Note: the mentioned values are correct only for standard modes, which is 10G and 40G. The measurement window shrinks accordingly when operating in 25G or 50G modes.
   #define NWM_REG_PCS_STATUS_HI_BER_SHIFT                                                                    8
   #define NWM_REG_PCS_STATUS_LINK_STATUS                                                                     (0xf<<12) // Indicates operational status of the link, per PCS. When 1 indicates the link is in its normal operational state. It is the result of an asserted block-lock or align-done status, depending on current mode, and a cleared hi-ber status. The signal stays asserted during EEE quiet states. The signal represents the link status (802.3 variable PCS_Status) usable by Clause 73 backplane auto-negotiation according to 802.3 Clauses 49.2.16 and 82.6. Note: When a channel has its SGMII PCS enabled this link status has no meaning and instead the SGMII PCS' status (sg_rx_sync) is then relevant.
   #define NWM_REG_PCS_STATUS_LINK_STATUS_SHIFT                                                               12

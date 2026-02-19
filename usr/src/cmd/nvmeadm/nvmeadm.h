@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright 2025 Oxide Computer Company
+ * Copyright 2026 Oxide Computer Company
  * Copyright 2022 Tintri by DDN, Inc. All rights reserved.
  */
 
@@ -172,6 +172,8 @@ extern void nvme_print_feat_auto_pst(uint32_t, void *, size_t,
     const nvme_identify_ctrl_t *, const nvme_version_t *);
 extern void nvme_print_feat_progress(uint32_t, void *, size_t,
     const nvme_identify_ctrl_t *, const nvme_version_t *);
+extern void nvme_print_feat_host_behavior(uint32_t, void *, size_t,
+    const nvme_identify_ctrl_t *, const nvme_version_t *);
 
 extern void nvmeadm_dump_hex(const uint8_t *, size_t);
 
@@ -207,6 +209,11 @@ typedef struct {
 extern const char *nvmeadm_list_features_fields;
 extern const ofmt_field_t nvmeadm_list_features_ofmt[];
 
+/*
+ * Log pages that have special handling.
+ */
+extern int do_get_logpage_telemetry(const nvme_process_arg_t *,
+    const nvme_log_disc_t *, nvme_log_req_t *);
 
 /*
  * Warning and error cases. The default nvmeadm ones assume a libnvme related
@@ -239,6 +246,11 @@ extern int do_detach_ns(const nvme_process_arg_t *);
 extern void usage_detach_ns(const char *);
 
 /*
+ * Locking functions
+ */
+extern void nvmeadm_excl(const nvme_process_arg_t *, nvme_lock_level_t);
+
+/*
  * Vendor specific commands.
  *
  * All vendor commands must first call nvmeadm_vuc_validate() which will
@@ -248,6 +260,9 @@ extern void usage_detach_ns(const char *);
 extern nvme_vuc_disc_t *nvmeadm_vuc_init(const nvme_process_arg_t *,
     const char *);
 extern void nvmeadm_vuc_fini(const nvme_process_arg_t *, nvme_vuc_disc_t *);
+extern int do_vendor_cmd(const nvme_process_arg_t *);
+extern void optparse_vendor_cmd(nvme_process_arg_t *);
+extern void usage_vendor_cmd(const char *);
 
 extern int do_wdc_e6dump(const nvme_process_arg_t *);
 extern void optparse_wdc_e6dump(nvme_process_arg_t *);
@@ -262,6 +277,13 @@ extern void usage_wdc_clear_assert(const char *);
 
 extern int do_wdc_inject_assert(const nvme_process_arg_t *);
 extern void usage_wdc_inject_assert(const char *);
+
+extern int do_sandisk_hwrev(const nvme_process_arg_t *);
+extern void usage_sandisk_hwrev(const char *);
+
+extern int do_sandisk_pcieye(const nvme_process_arg_t *);
+extern void optparse_sandisk_pcieye(nvme_process_arg_t *);
+extern void usage_sandisk_pcieye(const char *);
 
 #ifdef __cplusplus
 }

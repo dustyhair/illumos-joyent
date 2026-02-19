@@ -188,6 +188,22 @@ struct mem_map {
 };
 #define	VM_MAX_MEMMAPS	8
 
+/* Arbitrary limit on entries per VM */
+static uint_t mmiohook_entry_limit = 64;
+
+typedef struct mmiohook_entry {
+	mmio_handler_t		mhe_func;
+	void			*mhe_arg;
+	uint64_t		mhe_addr;
+	uint32_t		mhe_size;
+	uint32_t		mhe_pad;
+} mmiohook_entry_t;
+
+struct mmiohook_config {
+	mmiohook_entry_t	*mhc_entries;
+	uint_t			mhc_count;
+};
+
 /*
  * Initialization:
  * (o) initialized the first time the VM is created
@@ -227,6 +243,7 @@ struct vm {
 	uint64_t	freq_multiplier;	/* (i) guest/host TSC Ratio */
 
 	struct ioport_config ioports;		/* (o) ioport handling */
+	struct mmiohook_config mmiohooks;	/* (o) MMIO hooks */
 
 	bool		mem_transient;		/* (o) alloc transient memory */
 	bool		is_paused;		/* (i) instance is paused */
@@ -245,7 +262,6 @@ nullop_panic(void)
 /* Do not allow use of an un-set `ops` to do anything but panic */
 static struct vmm_ops vmm_ops_null = {
 	.init		= (vmm_init_func_t)nullop_panic,
-	.cleanup	= (vmm_cleanup_func_t)nullop_panic,
 	.resume		= (vmm_resume_func_t)nullop_panic,
 	.vminit		= (vmi_init_func_t)nullop_panic,
 	.vmrun		= (vmi_run_func_t)nullop_panic,
@@ -269,10 +285,8 @@ static struct vmm_ops vmm_ops_null = {
 };
 
 static struct vmm_ops *ops = &vmm_ops_null;
-static vmm_pte_ops_t *pte_ops = NULL;
 
 #define	VMM_INIT()			((*ops->init)())
-#define	VMM_CLEANUP()			((*ops->cleanup)())
 #define	VMM_RESUME()			((*ops->resume)())
 
 #define	VMINIT(vm)		((*ops->vminit)(vm))
@@ -314,6 +328,8 @@ static void vcpu_notify_event_locked(struct vcpu *vcpu, vcpu_notify_t);
 static bool vcpu_sleep_bailout_checks(struct vm *vm, int vcpuid);
 static int vcpu_vector_sipi(struct vm *vm, int vcpuid, uint8_t vector);
 static bool vm_is_suspended(struct vm *, struct vm_exit *);
+static void vm_mmiohook_init(struct vm *, struct mmiohook_config *);
+static void vm_mmiohook_cleanup(struct vm *, struct mmiohook_config *);
 
 static void vmm_savectx(void *);
 static void vmm_restorectx(void *);
@@ -470,44 +486,46 @@ vmm_init(void)
 
 	if (vmm_is_intel()) {
 		ops = &vmm_ops_intel;
-		pte_ops = &ept_pte_ops;
 	} else if (vmm_is_svm()) {
 		ops = &vmm_ops_amd;
-		pte_ops = &rvi_pte_ops;
 	} else {
 		return (ENXIO);
 	}
 
-	return (VMM_INIT());
+	if (!vmm_vm_init()) {
+		return (ENXIO);
+	}
+	const int err = VMM_INIT();
+	if (err != 0) {
+		vmm_vm_fini();
+		ops = &vmm_ops_null;
+		return (err);
+	}
+
+	return (0);
 }
 
 int
 vmm_mod_load()
 {
-	int	error;
-
 	VERIFY(vmm_initialized == 0);
 
-	error = vmm_init();
-	if (error == 0)
+	const int err = vmm_init();
+	if (err == 0) {
 		vmm_initialized = 1;
+	}
 
-	return (error);
+	return (err);
 }
 
-int
+void
 vmm_mod_unload()
 {
-	int	error;
-
 	VERIFY(vmm_initialized == 1);
 
-	error = VMM_CLEANUP();
-	if (error)
-		return (error);
-	vmm_initialized = 0;
+	vmm_vm_fini();
 
-	return (0);
+	vmm_initialized = 0;
 }
 
 /*
@@ -544,6 +562,7 @@ vm_init(struct vm *vm, bool create)
 		vm->vrtc = vrtc_init(vm);
 
 	vm_inout_init(vm, &vm->ioports);
+	vm_mmiohook_init(vm, &vm->mmiohooks);
 
 	CPU_ZERO(&vm->active_cpus);
 	CPU_ZERO(&vm->debug_cpus);
@@ -605,13 +624,17 @@ vm_create(uint64_t flags, struct vm **retvm)
 	if (!vmm_initialized)
 		return (ENXIO);
 
-	bool track_dirty = (flags & VCF_TRACK_DIRTY) != 0;
-	if (track_dirty && !pte_ops->vpeo_hw_ad_supported())
-		return (ENOTSUP);
-
-	vmspace = vmspace_alloc(VM_MAXUSER_ADDRESS, pte_ops, track_dirty);
-	if (vmspace == NULL)
+	vmspace = vmspace_alloc(VM_MAXUSER_ADDRESS);
+	if (vmspace == NULL) {
 		return (ENOMEM);
+	}
+
+	if ((flags & VCF_TRACK_DIRTY) != 0) {
+		if (vmspace_set_tracking(vmspace, true) != 0) {
+			vmspace_destroy(vmspace);
+			return (ENOTSUP);
+		}
+	}
 
 	vm = kmem_zalloc(sizeof (struct vm), KM_SLEEP);
 
@@ -682,6 +705,7 @@ vm_cleanup(struct vm *vm, bool destroy)
 	vpmtmr_cleanup(vm->vpmtmr);
 
 	vm_inout_cleanup(vm, &vm->ioports);
+	vm_mmiohook_cleanup(vm, &vm->mmiohooks);
 
 	if (destroy)
 		vrtc_cleanup(vm->vrtc);
@@ -1668,6 +1692,17 @@ vm_service_mmio_read(struct vm *vm, int cpuid, uint64_t gpa, uint64_t *rval,
 		err = vioapic_mmio_read(vm, cpuid, gpa, rval, rsize);
 	} else if (gpa >= VHPET_BASE && gpa < VHPET_BASE + VHPET_SIZE) {
 		err = vhpet_mmio_read(vm, cpuid, gpa, rval, rsize);
+	} else if (vm->mmiohooks.mhc_count > 0) {
+		for (uint_t i = 0; i < vm->mmiohooks.mhc_count; i++) {
+			mmiohook_entry_t *e = &vm->mmiohooks.mhc_entries[i];
+			const uint64_t end = e->mhe_addr + e->mhe_size;
+
+			if (gpa >= e->mhe_addr && gpa < end) {
+				err = e->mhe_func(e->mhe_arg, false, gpa, rsize,
+				    rval);
+				break;
+			}
+		}
 	}
 
 	return (err);
@@ -1687,6 +1722,17 @@ vm_service_mmio_write(struct vm *vm, int cpuid, uint64_t gpa, uint64_t wval,
 		err = vioapic_mmio_write(vm, cpuid, gpa, wval, wsize);
 	} else if (gpa >= VHPET_BASE && gpa < VHPET_BASE + VHPET_SIZE) {
 		err = vhpet_mmio_write(vm, cpuid, gpa, wval, wsize);
+	} else if (vm->mmiohooks.mhc_count > 0) {
+		for (uint_t i = 0; i < vm->mmiohooks.mhc_count; i++) {
+			mmiohook_entry_t *e = &vm->mmiohooks.mhc_entries[i];
+			const uint64_t end = e->mhe_addr + e->mhe_size;
+
+			if (gpa >= e->mhe_addr && gpa < end) {
+				err = e->mhe_func(e->mhe_arg, true, gpa, wsize,
+				    &wval);
+				break;
+			}
+		}
 	}
 
 	return (err);
@@ -5148,4 +5194,114 @@ vmm_data_write(struct vm *vm, const vmm_data_req_t *req)
 	}
 
 	return (err);
+}
+
+static void
+vm_mmiohook_init(struct vm *vm, struct mmiohook_config *mh)
+{
+	VERIFY3P(mh->mhc_entries, ==, NULL);
+	VERIFY0(mh->mhc_count);
+}
+
+static void
+vm_mmiohook_cleanup(struct vm *vm, struct mmiohook_config *mh)
+{
+	if (mh->mhc_count == 0)
+		return;
+
+	kmem_free(mh->mhc_entries, sizeof (mmiohook_entry_t) * mh->mhc_count);
+	mh->mhc_entries = NULL;
+	mh->mhc_count = 0;
+}
+
+int
+vm_mmio_hook(struct vm *vm, uint64_t address, uint32_t size,
+    mmio_handler_t func, void *arg, void **cookiep)
+{
+	struct mmiohook_config *mh = &vm->mmiohooks;
+	mmiohook_entry_t *old_ents = mh->mhc_entries;
+	uint_t old_count = mh->mhc_count;
+	mmiohook_entry_t *ents;
+	uint_t count = old_count + 1;
+	const uint64_t end = address + size;
+	const size_t esz = sizeof (mmiohook_entry_t);
+
+	if (size == 0 || end < address)
+		return (EINVAL);
+
+	if (old_count >= mmiohook_entry_limit)
+		return (ENOSPC);
+
+	for (uint_t i = 0; i < old_count; i++) {
+		mmiohook_entry_t *e = &old_ents[i];
+		const uint64_t old_end = e->mhe_addr + e->mhe_size;
+
+		if (address < old_end && e->mhe_addr < end)
+			return (EEXIST);
+	}
+
+	ents = kmem_alloc(count * esz, KM_SLEEP);
+	if (old_count > 0)
+		bcopy(old_ents, ents, old_count * esz);
+
+	mmiohook_entry_t *ne = &ents[old_count];
+
+	ne->mhe_func = func;
+	ne->mhe_arg = arg;
+	ne->mhe_addr = address;
+	ne->mhe_size = size;
+	/*
+	 * Since we don't allow any overlapping hooks, the address can be used
+	 * for the cookie.
+	 */
+	*cookiep = (void *)(uintptr_t)ne->mhe_addr;
+
+	mh->mhc_entries = ents;
+	mh->mhc_count = count;
+
+	if (old_count > 0)
+		kmem_free(old_ents, old_count * esz);
+
+	return (0);
+}
+
+int
+vm_mmio_unhook(struct vm *vm, void **cookie)
+{
+	struct mmiohook_config *mh = &vm->mmiohooks;
+	mmiohook_entry_t *old_ents = mh->mhc_entries;
+	uint_t old_count = mh->mhc_count;
+	const size_t esz = sizeof (mmiohook_entry_t);
+	mmiohook_entry_t *ents;
+	uint_t i;
+
+	for (i = 0; i < old_count; i++) {
+		mmiohook_entry_t *e = &old_ents[i];
+
+		if (e->mhe_addr == (uint64_t)(uintptr_t)*cookie)
+			break;
+	}
+
+	if (i >= old_count)
+		return (ENOENT);
+
+	if (old_count == 1) {
+		mh->mhc_entries = NULL;
+		mh->mhc_count = 0;
+	} else {
+		uint_t count = old_count - 1;
+
+		ents = kmem_alloc(count * esz, KM_SLEEP);
+		if (i > 0)
+			bcopy(old_ents, ents, esz * i);
+		if (i < count)
+			bcopy(old_ents + i + 1, ents + i, (count - i) * esz);
+
+		mh->mhc_entries = ents;
+		mh->mhc_count = count;
+	}
+	kmem_free(old_ents, old_count * esz);
+	*cookie = NULL;
+
+	return (0);
 }

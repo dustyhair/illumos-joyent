@@ -79,7 +79,6 @@ typedef enum {
 } freqratio_res_t;
 
 typedef int	(*vmm_init_func_t)(void);
-typedef int	(*vmm_cleanup_func_t)(void);
 typedef void	(*vmm_resume_func_t)(void);
 typedef void *	(*vmi_init_func_t)(struct vm *vm);
 typedef int	(*vmi_run_func_t)(void *vmi, int vcpu, uint64_t rip);
@@ -109,7 +108,6 @@ typedef freqratio_res_t	(*vmi_freqratio_t)(uint64_t guest_hz,
 
 struct vmm_ops {
 	vmm_init_func_t		init;		/* module wide initialization */
-	vmm_cleanup_func_t	cleanup;
 	vmm_resume_func_t	resume;
 
 	vmi_init_func_t		vminit;		/* vm-specific initialization */
@@ -447,7 +445,7 @@ void *vmm_contig_alloc(size_t);
 void vmm_contig_free(void *, size_t);
 
 int vmm_mod_load(void);
-int vmm_mod_unload(void);
+void vmm_mod_unload(void);
 
 bool vmm_check_iommu(void);
 
@@ -460,6 +458,7 @@ uint64_t vmm_host_tsc_delta(void);
  * interface, but rather mirrored as vmm_drv_iop_cb_t in vmm_drv.h.
  */
 typedef int (*ioport_handler_t)(void *, bool, uint16_t, uint8_t, uint32_t *);
+typedef int (*mmio_handler_t)(void *, bool, uint64_t, int, uint64_t *);
 
 int vm_ioport_access(struct vm *vm, int vcpuid, bool in, uint16_t port,
     uint8_t bytes, uint32_t *val);
@@ -471,6 +470,10 @@ int vm_ioport_detach(struct vm *vm, void **cookie, ioport_handler_t *old_func,
 
 int vm_ioport_hook(struct vm *, uint16_t, ioport_handler_t, void *, void **);
 void vm_ioport_unhook(struct vm *, void **);
+
+int vm_mmio_hook(struct vm *, uint64_t, uint32_t, mmio_handler_t, void *,
+    void **);
+int vm_mmio_unhook(struct vm *, void **);
 
 enum vcpu_ustate {
 	VU_INIT = 0,	/* initialized but has not yet attempted to run */

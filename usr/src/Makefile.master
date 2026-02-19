@@ -33,7 +33,7 @@
 # Copyright 2021 OmniOS Community Edition (OmniOSce) Association.
 # Copyright 2021 Joyent, Inc.
 # Copyright 2023 MNX Cloud, Inc.
-# Copyright 2025 Edgecast Cloud LLC.
+# Copyright 2026 Edgecast Cloud LLC.
 #
 
 #
@@ -442,7 +442,6 @@ CERRWARN = -errtags=yes -errwarn=%all
 
 CERRWARN += -_gcc=-Wno-missing-braces
 CERRWARN += -_gcc=-Wno-sign-compare
-CERRWARN += -_gcc=-Wno-unknown-pragmas
 CERRWARN += -_gcc=-Wno-unused-parameter
 CERRWARN += -_gcc=-Wno-missing-field-initializers
 
@@ -460,7 +459,6 @@ CCERRWARN = -errtags=yes -errwarn=%all
 
 CCERRWARN += -_gcc=-Wno-missing-braces
 CCERRWARN += -_gcc=-Wno-sign-compare
-CCERRWARN += -_gcc=-Wno-unknown-pragmas
 CCERRWARN += -_gcc=-Wno-unused-parameter
 CCERRWARN += -_gcc=-Wno-missing-field-initializers
 
@@ -769,14 +767,18 @@ CW_LINKER=		--linker $(LD)
 CW=			$(ONBLD_TOOLS)/bin/$(MACH)/cw
 NATIVE_CW=		$(ONBLD_TOOLS)/bin/$(MACH)/cw
 
-BUILD_CC=		$(CW) --tag target $(CW_LINKER) $(CW_CC_COMPILERS) --
-BUILD_CCC=		$(CW) --tag target -C $(CW_LINKER) $(CW_CCC_COMPILERS) --
+BUILD_CC=		$(CW) $(CWOPTS) --tag target $(CW_LINKER) \
+	$(CW_CC_COMPILERS) --
+BUILD_CCC=		$(CW) $(CWOPTS) --tag target -C $(CW_LINKER) \
+	$(CW_CCC_COMPILERS) --
 BUILD_CPP=		/usr/lib/cpp
 BUILD_LD=		$(ONBLD_TOOLS)/bin/$(MACH64)/ld
 BUILD_AS=		$(BUILD_CC)
 
-NATIVEBUILD_CC=		$(NATIVE_CW) --tag native $(CW_LINKER) $(CW_CC_COMPILERS) --
-NATIVEBUILD_CCC=	$(NATIVE_CW) --tag native -C $(CW_LINKER) $(CW_CCC_COMPILERS) --
+NATIVEBUILD_CC=		$(NATIVE_CW) $(CWOPTS) --tag native $(CW_LINKER) \
+	$(CW_CC_COMPILERS) --
+NATIVEBUILD_CCC=	$(NATIVE_CW) $(CWOPTS) --tag native -C $(CW_LINKER) \
+	$(CW_CCC_COMPILERS) --
 NATIVEBUILD_CPP=	/usr/lib/cpp
 NATIVEBUILD_LD=		$(ONBLD_TOOLS)/bin/$(MACH64)/ld
 NATIVEBUILD_AS=		$(NATIVEBUILD_CC)
@@ -961,8 +963,7 @@ UTS_LABEL=	$(RELEASE)
 #
 BOOTBANNER1=	SmartOS Version ^v ^w-bit
 # XXX SmartOS: BANNER_YEAR in environment set in smartos-live's build_illumos.
-# ALSO, starting 2026 we will need to reintroduce 2025-$(BANNER_YEAR).
-BOOTBANNER2=	Copyright $(BANNER_YEAR) Edgecast Cloud LLC.
+BOOTBANNER2=	Copyright 2025-$(BANNER_YEAR) Edgecast Cloud LLC.
 BOOTBANNER3=
 BOOTBANNER4=
 BOOTBANNER5=

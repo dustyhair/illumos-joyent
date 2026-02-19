@@ -69,7 +69,6 @@ static int e1000g_suspend(dev_info_t *);
 static uint_t e1000g_intr_pciexpress(caddr_t, caddr_t);
 static uint_t e1000g_intr(caddr_t, caddr_t);
 static void e1000g_intr_work(struct e1000g *, uint32_t);
-#pragma inline(e1000g_intr_work)
 static int e1000g_init(struct e1000g *);
 static int e1000g_start(struct e1000g *, boolean_t);
 static void e1000g_stop(struct e1000g *, boolean_t);
@@ -4901,7 +4900,6 @@ arm_watchdog_timer(struct e1000g *Adapter)
 	    timeout(e1000g_local_timer,
 	    (void *)Adapter, 1 * drv_usectohz(1000000));
 }
-#pragma inline(arm_watchdog_timer)
 
 static void
 enable_watchdog_timer(struct e1000g *Adapter)
@@ -5223,7 +5221,7 @@ e1000g_pp_ioctl(struct e1000g *e1000gp, struct iocblk *iocp, mblk_t *mp)
 		peek = B_FALSE;
 		break;
 
-	deault:
+	default:
 		E1000G_DEBUGLOG_1(e1000gp, E1000G_INFO_LEVEL,
 		    "e1000g_diag_ioctl: invalid ioctl command 0x%X\n",
 		    iocp->ioc_cmd);
