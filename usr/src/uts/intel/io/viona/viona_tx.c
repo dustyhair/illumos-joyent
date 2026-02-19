@@ -35,7 +35,7 @@
  *
  * Copyright 2015 Pluribus Networks Inc.
  * Copyright 2019 Joyent, Inc.
- * Copyright 2024 Oxide Computer Company
+ * Copyright 2025 Oxide Computer Company
  */
 
 
@@ -83,7 +83,7 @@ struct viona_desb {
 	vmm_page_t		*d_pages;
 };
 
-static void viona_tx(viona_link_t *, viona_vring_t *);
+static size_t viona_tx(viona_link_t *, viona_vring_t *);
 static void viona_desb_release(viona_desb_t *);
 
 
@@ -209,7 +209,8 @@ viona_tx_done(viona_vring_t *ring, uint32_t len, uint16_t cookie)
 void
 viona_worker_tx(viona_vring_t *ring, viona_link_t *link)
 {
-	(void) thread_vsetname(curthread, "viona_tx_%p", ring);
+	(void) thread_vsetname(curthread, "viona_tx_%u_%p",
+	    ring->vr_index, ring);
 
 	ASSERT(MUTEX_HELD(&ring->vr_lock));
 	ASSERT3U(ring->vr_state, ==, VRS_RUN);
@@ -217,12 +218,17 @@ viona_worker_tx(viona_vring_t *ring, viona_link_t *link)
 	mutex_exit(&ring->vr_lock);
 
 	for (;;) {
-		uint_t ntx = 0, burst = 0;
+		size_t cnt_tx = 0, size_tx = 0;
+		uint_t burst = 0;
 
 		viona_ring_disable_notify(ring);
 		while (viona_ring_num_avail(ring) != 0) {
-			viona_tx(link, ring);
-			ntx++;
+			const size_t size_sent = viona_tx(link, ring);
+			if (size_sent != 0) {
+				/* Account for successful transmissions */
+				size_tx += size_sent;
+				cnt_tx++;
+			}
 			burst++;
 
 			/*
@@ -242,7 +248,10 @@ viona_worker_tx(viona_vring_t *ring, viona_link_t *link)
 			}
 		}
 
-		VIONA_PROBE2(tx, viona_link_t *, link, uint_t, ntx);
+		VIONA_PROBE2(tx, viona_link_t *, link, size_t, cnt_tx);
+		if (cnt_tx != 0) {
+			viona_ring_stat_accept(ring, cnt_tx, size_tx);
+		}
 
 		/*
 		 * Check for available descriptors on the ring once more in
@@ -410,10 +419,11 @@ viona_tx_offloads(viona_vring_t *ring, const struct virtio_net_mrgrxhdr *hdr,
 	const uint32_t cap_csum = link->l_cap_csum;
 
 	/*
-	 * Since viona is a "legacy device", the data stored by the driver will
-	 * be in the guest's native endian format (see sections 2.4.3 and
-	 * 5.1.6.1 of the VIRTIO 1.0 spec for more info). At this time the only
-	 * guests using viona are x86 and we can assume little-endian.
+	 * Since viona is a "transitional device", the data stored by the
+	 * driver will either be in the guest's native endian format (for the
+	 * legacy interface - see sections 2.4.3 and 5.1.6.1 of the VIRTIO 1.0
+	 * spec for more info) or little-endian. At this time the only guests
+	 * using viona are x86 and we can assume little-endian.
 	 */
 	const uint16_t gso_size = LE_16(hdr->vrh_gso_size);
 
@@ -678,7 +688,7 @@ viona_tx_copy_headers(viona_vring_t *ring, iov_bunch_t *iob, mblk_t *mp,
 	return (B_TRUE);
 }
 
-static void
+static size_t
 viona_tx(viona_link_t *link, viona_vring_t *ring)
 {
 	struct iovec		*iov = ring->vr_tx.vrt_iov;
@@ -688,8 +698,6 @@ viona_tx(viona_link_t *link, viona_vring_t *ring)
 	uint32_t		total_len;
 	mblk_t			*mp_head = NULL;
 	viona_desb_t		*dp = NULL;
-	const boolean_t merge_enabled =
-	    ((link->l_features & VIRTIO_NET_F_MRG_RXBUF) != 0);
 
 	ASSERT(iov != NULL);
 
@@ -698,23 +706,18 @@ viona_tx(viona_link_t *link, viona_vring_t *ring)
 	if (n == 0) {
 		VIONA_PROBE1(tx_absent, viona_vring_t *, ring);
 		VIONA_RING_STAT_INCR(ring, tx_absent);
-		return;
+		return (0);
 	} else if (n < 0) {
 		/*
 		 * Any error encountered in vq_popchain has already resulted in
 		 * specific probe and statistic handling.  Further action here
 		 * is unnecessary.
 		 */
-		return;
+		return (0);
 	}
 
 	/*
-	 * Get setup to copy the VirtIO header from in front of the packet.
-	 *
-	 * With an eye toward supporting VirtIO 1.0 behavior in the future, we
-	 * determine the size of the header based on the device state.  This
-	 * goes a bit beyond the expectations of legacy VirtIO, where the first
-	 * buffer must cover the header and nothing else.
+	 * Get set up to copy the VirtIO header from in front of the packet.
 	 */
 	iov_bunch_t iob = {
 		.ib_iov = iov,
@@ -722,11 +725,13 @@ viona_tx(viona_link_t *link, viona_vring_t *ring)
 	};
 	struct virtio_net_mrgrxhdr hdr;
 	uint32_t vio_hdr_len = 0;
-	if (merge_enabled) {
+	if (ring->vr_link->l_modern ||
+	    ((link->l_features & VIRTIO_NET_F_MRG_RXBUF) != 0)) {
 		/*
-		 * Presence of the "num_bufs" member is determined by the
-		 * merge-rxbuf feature on the device, despite the fact that we
-		 * are in transmission context here.
+		 * Presence of the "num_bufs" member in legacy mode is
+		 * determined by the merge-rxbuf feature on the device, despite
+		 * the fact that we are in transmission context here. In modern
+		 * mode, the field is always present.
 		 */
 		vio_hdr_len = sizeof (struct virtio_net_mrgrxhdr);
 	} else {
@@ -737,12 +742,11 @@ viona_tx(viona_link_t *link, viona_vring_t *ring)
 		 */
 		hdr.vrh_bufs = 0;
 	}
-	uint32_t pkt_len = 0;
+	const uint32_t pkt_len = total_len - vio_hdr_len;
 	if (!iov_bunch_copy(&iob, &hdr, vio_hdr_len)) {
 		goto drop_fail;
 	}
 
-	pkt_len = total_len - vio_hdr_len;
 	if (pkt_len > VIONA_MAX_PACKET_SIZE ||
 	    pkt_len < sizeof (struct ether_header)) {
 		goto drop_fail;
@@ -887,7 +891,8 @@ viona_tx(viona_link_t *link, viona_vring_t *ring)
 	 * From viona's point of view, this is a successful transmit, even if
 	 * something downstream decides to drop the packet.
 	 */
-	viona_ring_stat_accept(ring, pkt_len);
+	VIONA_PROBE3(pkt__tx, viona_vring_t *, ring, mblk_t, mp_head,
+	    size_t, pkt_len)
 
 	/*
 	 * We're potentially going deep into the networking layer; make sure the
@@ -900,7 +905,7 @@ viona_tx(viona_link_t *link, viona_vring_t *ring)
 	 */
 	(void) mac_tx(link->l_mch, mp_head, 0, MAC_DROP_ON_NO_DESC, NULL);
 	smt_end_unsafe();
-	return;
+	return (pkt_len);
 
 drop_fail:
 	/*
@@ -939,10 +944,11 @@ drop_hook:
 	}
 
 	/* Count in the stats as a drop, rather than an error */
-	viona_ring_stat_drop(ring);
+	viona_ring_stat_drop(ring, 1);
 
 	VIONA_PROBE3(tx_drop, viona_vring_t *, ring, uint32_t, pkt_len,
 	    uint16_t, cookie);
 	vmm_drv_page_release_chain(pages);
 	viona_tx_done(ring, total_len, cookie);
+	return (0);
 }

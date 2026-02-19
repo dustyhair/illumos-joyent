@@ -12,6 +12,7 @@
 /*
  * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  * Copyright 2019 Joyent, Inc.
+ * Copyright 2023 RackTop Systems, Inc.
  */
 
 #include <fcntl.h>
@@ -23,6 +24,8 @@
 #include <sys/debug.h>
 
 #include "cryptotest.h"
+
+boolean_t cryptotest_pkcs = B_FALSE;	/* true if PKCS */
 
 struct crypto_op {
 	char *in;
@@ -58,11 +61,12 @@ kcf_do_ioctl(int opcode, uint_t *arg, char *opstr)
 	}
 
 	if (ret < 0 || *arg != CRYPTO_SUCCESS) {
+		char errbuf[BUFSZ] = {0};
 		(void) fprintf(stderr,
-		    "%s: Error = %d errno=%d (%s) 0x%02x\n",
+		    "%s: Error: %s errno: %s (%d) rc: %d\n",
 		    (opstr == NULL) ? "ioctl" : opstr,
-		    ret, errno, strerror(errno), *arg);
-
+		    cryptotest_errstr(*arg, errbuf, sizeof (errbuf)),
+		    strerror(errno), errno, ret);
 	}
 
 	/*
@@ -198,8 +202,8 @@ mac_init(crypto_op_t *op)
 	init.mi_key.ck_length = op->keylen;
 
 	init.mi_mech.cm_type = op->mech;
-	init.mi_mech.cm_param = NULL;
-	init.mi_mech.cm_param_len = 0;
+	init.mi_mech.cm_param = op->param;
+	init.mi_mech.cm_param_len = op->paramlen;
 
 	return (kcf_do_ioctl(CRYPTO_MAC_INIT, (uint_t *)&init, "init"));
 }
@@ -401,8 +405,8 @@ digest_init(crypto_op_t *op)
 	init.di_session = op->hsession;
 
 	init.di_mech.cm_type = op->mech;
-	init.di_mech.cm_param = NULL;
-	init.di_mech.cm_param_len = 0;
+	init.di_mech.cm_param = op->param;
+	init.di_mech.cm_param_len = op->paramlen;
 
 	return (kcf_do_ioctl(CRYPTO_DIGEST_INIT, (uint_t *)&init, "init"));
 }
@@ -474,6 +478,33 @@ size_t
 ccm_param_len(void)
 {
 	return (sizeof (CK_AES_CCM_PARAMS));
+}
+
+/*
+ * KCF always takes CK_AES_GMAC_PARAMS, but the caller may pass
+ * either just the IV or IV plus AAD.
+ *
+ * Some tests pass ulAADLen = 0 and non-NULL pAAD, so allow that,
+ * but require ulAADLen=0 if pAAD=NULL.
+ */
+void
+gmac_init_params(void *buf, uchar_t *pIv, uchar_t *pAAD, ulong_t ulAADLen)
+{
+	CK_AES_GMAC_PARAMS *pp = buf;
+
+	if (pAAD == NULL) {
+		VERIFY0(ulAADLen);
+	}
+
+	pp->pIv = pIv;
+	pp->pAAD = pAAD;	/* may be NULL */
+	pp->ulAADLen = ulAADLen;
+}
+
+size_t
+gmac_param_len(void)
+{
+	return (sizeof (CK_AES_GMAC_PARAMS));
 }
 
 const char *

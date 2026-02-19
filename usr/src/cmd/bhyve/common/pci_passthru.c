@@ -1064,14 +1064,14 @@ passthru_cfgread_default(struct passthru_softc *sc,
 	 * MSI capability is emulated.
 	 */
 	if (msicap_access(sc, coff) || msixcap_access(sc, coff))
-		return (-1);
+		return (PE_CFGRW_DEFAULT);
 
 	/*
 	 * MSI-X is also emulated since a limit on interrupts may be imposed by
 	 * the OS, altering the perceived register state.
 	 */
 	if (msixcap_access(sc, coff))
-		return (-1);
+		return (PE_CFGRW_DEFAULT);
 
 	/*
 	 * Emulate the command register.  If a single read reads both the
@@ -1080,16 +1080,16 @@ passthru_cfgread_default(struct passthru_softc *sc,
 	 */
 	if (coff == PCIR_COMMAND) {
 		if (bytes <= 2)
-			return (-1);
+			return (PE_CFGRW_DEFAULT);
 		*rv = passthru_read_config(sc, PCIR_STATUS, 2) << 16 |
 		    pci_get_cfgdata16(pi, PCIR_COMMAND);
-		return (0);
+		return (PE_CFGRW_DROP);
 	}
 
 	/* Everything else just read from the device's config space */
 	*rv = passthru_read_config(sc, coff, bytes);
 
-	return (0);
+	return (PE_CFGRW_DROP);
 }
 
 int
@@ -1097,7 +1097,7 @@ passthru_cfgread_emulate(struct passthru_softc *sc __unused,
     struct pci_devinst *pi __unused, int coff __unused, int bytes __unused,
     uint32_t *rv __unused)
 {
-	return (-1);
+	return (PE_CFGRW_DEFAULT);
 }
 
 static int
@@ -1119,12 +1119,6 @@ passthru_cfgread(struct pci_devinst *pi, int coff, int bytes, uint32_t *rv)
  * For MSI/MSI-X, only shadow guest's programming into emulated config space.
  * Never pass those writes to the physical device, since illumos handles
  * programming of real MSI registers via ddi_intr_alloc().
- */
-/*
- * Default config-space write handler for passthru devices.
- * Intercepts MSI/MSI-X capability writes and COMMAND register.
- * For MSI/MSI-X, only shadow guest's programming into emulated config space.
- * Never pass those writes to the physical device.
  */
 static int
 passthru_cfgwrite_default(struct passthru_softc *sc,
@@ -1167,7 +1161,7 @@ passthru_cfgwrite_default(struct passthru_softc *sc,
 				"PASSTHRU/MSI: vm_setup_pptdev_msi DISABLE pptfd=%d rc=%d\n",
 				sc->pptfd, error);
 		}
-		return (0);
+		return (PE_CFGRW_DROP);
 	}
 
 	/* --- MSI-X capability --- */
@@ -1234,7 +1228,7 @@ passthru_cfgwrite_default(struct passthru_softc *sc,
 	/* --- default fall-through: forward to host --- */
 	passthru_write_config(sc, coff, bytes, val);
 
-	return (0);
+	return (PE_CFGRW_DROP);
 }
 
 int
@@ -1242,7 +1236,7 @@ passthru_cfgwrite_emulate(struct passthru_softc *sc __unused,
     struct pci_devinst *pi __unused, int coff __unused, int bytes __unused,
     uint32_t val __unused)
 {
-	return (-1);
+	return (PE_CFGRW_DEFAULT);
 }
 
 static int

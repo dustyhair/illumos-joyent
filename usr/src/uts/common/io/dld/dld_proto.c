@@ -22,6 +22,7 @@
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2012, Nexenta Systems, Inc. All rights reserved.
  * Copyright (c) 2018, Joyent, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
 /*
@@ -617,6 +618,14 @@ proto_promiscon_req(dld_str_t *dsp, mblk_t *mp)
 		new_flags |= DLS_PROMISC_FIXUPS;
 		break;
 
+	case DL_PROMISC_INCOMING:
+		new_flags |= DLS_PROMISC_INCOMING;
+		break;
+
+	case DL_PROMISC_OUTGOING:
+		new_flags |= DLS_PROMISC_OUTGOING;
+		break;
+
 	default:
 		dl_err = DL_NOTSUPPORTED;
 		goto failed2;
@@ -718,6 +727,22 @@ proto_promiscoff_req(dld_str_t *dsp, mblk_t *mp)
 			goto failed2;
 		}
 		new_flags &= ~DLS_PROMISC_FIXUPS;
+		break;
+
+	case DL_PROMISC_INCOMING:
+		if (!(dsp->ds_promisc & DLS_PROMISC_INCOMING)) {
+			dl_err = DL_NOTENAB;
+			goto failed2;
+		}
+		new_flags &= ~DLS_PROMISC_INCOMING;
+		break;
+
+	case DL_PROMISC_OUTGOING:
+		if (!(dsp->ds_promisc & DLS_PROMISC_OUTGOING)) {
+			dl_err = DL_NOTENAB;
+			goto failed2;
+		}
+		new_flags &= ~DLS_PROMISC_OUTGOING;
 		break;
 
 	default:
@@ -1375,9 +1400,6 @@ dld_capab_direct(dld_str_t *dsp, void *data, uint_t flags)
 
 	ASSERT(MAC_PERIM_HELD(dsp->ds_mh));
 
-	if (dsp->ds_sap == ETHERTYPE_IPV6)
-		return (ENOTSUP);
-
 	switch (flags) {
 	case DLD_ENABLE:
 		dls_rx_set(dsp, (dls_rx_t)direct->di_rx_cf,
@@ -1431,6 +1453,8 @@ dld_capab_direct(dld_str_t *dsp, void *data, uint_t flags)
 static int
 dld_capab_poll_enable(dld_str_t *dsp, dld_capab_poll_t *poll)
 {
+	mac_resource_cb_t rcbs = { 0 };
+
 	if (dsp->ds_polling)
 		return (EINVAL);
 
@@ -1444,7 +1468,8 @@ dld_capab_poll_enable(dld_str_t *dsp, dld_capab_poll_t *poll)
 	 * (IP) to directly poll the soft ring (since DLS processing
 	 * hasn't been done) nor can we allow DLS bypass.
 	 */
-	if (!mac_rx_bypass_set(dsp->ds_mch, dsp->ds_rx, dsp->ds_rx_arg))
+	if (!mac_rx_bypass_set(dsp->ds_mch, dsp->ds_rx, dsp->ds_rx_arg,
+	    dsp->ds_sap == ETHERTYPE_IPV6))
 		return (ENOTSUP);
 
 	/*
@@ -1452,29 +1477,28 @@ dld_capab_poll_enable(dld_str_t *dsp, dld_capab_poll_t *poll)
 	 * the user decides to modify CPU bindings to use more CPUs for the
 	 * device in which case we will switch to fanout using soft rings.
 	 */
-	mac_resource_set_common(dsp->ds_mch,
-	    (mac_resource_add_t)poll->poll_ring_add_cf,
-	    (mac_resource_remove_t)poll->poll_ring_remove_cf,
-	    (mac_resource_quiesce_t)poll->poll_ring_quiesce_cf,
-	    (mac_resource_restart_t)poll->poll_ring_restart_cf,
-	    (mac_resource_bind_t)poll->poll_ring_bind_cf,
-	    poll->poll_ring_ch);
+	rcbs.mrc_add = (mac_resource_add_t)poll->poll_ring_add_cf;
+	rcbs.mrc_remove = (mac_resource_remove_t)poll->poll_ring_remove_cf;
+	rcbs.mrc_quiesce = (mac_resource_quiesce_t)poll->poll_ring_quiesce_cf;
+	rcbs.mrc_restart = (mac_resource_restart_t)poll->poll_ring_restart_cf;
+	rcbs.mrc_bind = (mac_resource_bind_t)poll->poll_ring_bind_cf;
+	rcbs.mrc_arg = poll->poll_ring_ch;
 
-	mac_client_poll_enable(dsp->ds_mch);
+	mac_resource_set(dsp->ds_mch, &rcbs, dsp->ds_sap == ETHERTYPE_IPV6);
+	mac_client_poll_enable(dsp->ds_mch, dsp->ds_sap == ETHERTYPE_IPV6);
 
 	dsp->ds_polling = B_TRUE;
 	return (0);
 }
 
-/* ARGSUSED */
 static int
 dld_capab_poll_disable(dld_str_t *dsp, dld_capab_poll_t *poll)
 {
 	if (!dsp->ds_polling)
 		return (EINVAL);
 
-	mac_client_poll_disable(dsp->ds_mch);
-	mac_resource_set(dsp->ds_mch, NULL, NULL);
+	mac_client_poll_disable(dsp->ds_mch, dsp->ds_sap == ETHERTYPE_IPV6);
+	mac_resource_clear(dsp->ds_mch, dsp->ds_sap == ETHERTYPE_IPV6);
 
 	dsp->ds_polling = B_FALSE;
 	return (0);
@@ -1486,9 +1510,6 @@ dld_capab_poll(dld_str_t *dsp, void *data, uint_t flags)
 	dld_capab_poll_t	*poll = data;
 
 	ASSERT(MAC_PERIM_HELD(dsp->ds_mh));
-
-	if (dsp->ds_sap == ETHERTYPE_IPV6)
-		return (ENOTSUP);
 
 	switch (flags) {
 	case DLD_ENABLE:
@@ -1524,9 +1545,6 @@ dld_capab_lso(dld_str_t *dsp, void *data, uint_t flags)
 	dld_capab_lso_t		*lso = data;
 
 	ASSERT(MAC_PERIM_HELD(dsp->ds_mh));
-
-	if (dsp->ds_sap == ETHERTYPE_IPV6)
-		return (ENOTSUP);
 
 	switch (flags) {
 	case DLD_ENABLE: {
@@ -1591,18 +1609,10 @@ dld_capab(dld_str_t *dsp, uint_t type, void *data, uint_t flags)
 
 	switch (type) {
 	case DLD_CAPAB_DIRECT:
-		if (dsp->ds_sap == ETHERTYPE_IPV6) {
-			err = ENOTSUP;
-			break;
-		}
 		err = dld_capab_direct(dsp, data, flags);
 		break;
 
 	case DLD_CAPAB_POLL:
-		if (dsp->ds_sap == ETHERTYPE_IPV6) {
-			err = ENOTSUP;
-			break;
-		}
 		err =  dld_capab_poll(dsp, data, flags);
 		break;
 

@@ -20,7 +20,7 @@
  */
 
 /*
- * Copyright 2022 Oxide Computer Company
+ * Copyright 2025 Oxide Computer Company
  */
 
 /*
@@ -386,10 +386,14 @@ vio9p_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 		return (DDI_FAILURE);
 	}
 
-	if ((vio = virtio_init(dip, VIRTIO_9P_WANTED_FEATURES, B_TRUE)) ==
-	    NULL) {
+	if ((vio = virtio_init(dip)) == NULL) {
 		ddi_soft_state_free(vio9p_state, instance);
 		dev_err(dip, CE_WARN, "failed to start Virtio init");
+		return (DDI_FAILURE);
+	}
+	if (!virtio_init_features(vio, VIRTIO_9P_WANTED_FEATURES, B_TRUE)) {
+		virtio_fini(vio, B_TRUE);
+		ddi_soft_state_free(vio9p_state, instance);
 		return (DDI_FAILURE);
 	}
 
@@ -404,7 +408,7 @@ vio9p_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	list_create(&vin->vin_req_freelist, sizeof (vio9p_req_t),
 	    offsetof(vio9p_req_t, vnr_link_free));
 
-	if (virtio_feature_present(vio, VIRTIO_9P_F_MOUNT_TAG)) {
+	if (virtio_features_present(vio, VIRTIO_9P_F_MOUNT_TAG)) {
 		uint16_t len = virtio_dev_get16(vio, VIRTIO_9P_CONFIG_TAG_SZ);
 		if (len > VIRTIO_9P_TAGLEN) {
 			len = VIRTIO_9P_TAGLEN;
