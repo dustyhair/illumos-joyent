@@ -448,8 +448,12 @@ ppt_ioctl(dev_t dev, int cmd, intptr_t arg, int md, cred_t *cr, int *rv)
 
 	case PPT_IOMMU_MAP_BATCH: {
 		struct ppt_iommu_map_batch ureq;
+		int rc = 0;
+		boolean_t did_work = B_FALSE;
 		if (ddi_copyin(data, &ureq, sizeof (ureq), md) != 0)
 			return (EFAULT);
+		if (ureq.count == 0)
+			return (0);
 
 		size_t totsz = offsetof(struct ppt_iommu_map_batch, maps) +
 					ureq.count * sizeof (struct ppt_iommu_map);
@@ -463,22 +467,28 @@ ppt_ioctl(dev_t dev, int cmd, intptr_t arg, int md, cred_t *cr, int *rv)
 
 		for (uint32_t i = 0; i < kreq->count; i++) {
 			struct ppt_iommu_map *m = &kreq->maps[i];
-			iommu_domain_map(ppt->pptd_domain,
-							m->gpa, m->hpa,
-							m->size, m->prot);
+			rc = iommu_domain_map(ppt->pptd_domain,
+			    m->gpa, m->hpa, m->size, m->prot);
+			if (rc != 0)
+				break;
+			did_work = B_TRUE;
 		}
 
-		if (kreq->count > 0)
+		if (did_work)
 			iommu_invalidate_tlb(ppt->pptd_domain);
 
 		kmem_free(kreq, totsz);
-		return (0);
+		return (rc);
 	}
 
 	case PPT_IOMMU_UNMAP_BATCH: {
 		struct ppt_iommu_map_batch ureq;
+		int rc = 0;
+		boolean_t did_work = B_FALSE;
 		if (ddi_copyin(data, &ureq, sizeof (ureq), md) != 0)
 			return (EFAULT);
+		if (ureq.count == 0)
+			return (0);
 
 		size_t totsz = offsetof(struct ppt_iommu_map_batch, maps) +
 					ureq.count * sizeof (struct ppt_iommu_map);
@@ -492,15 +502,17 @@ ppt_ioctl(dev_t dev, int cmd, intptr_t arg, int md, cred_t *cr, int *rv)
 
 		for (uint32_t i = 0; i < kreq->count; i++) {
 			struct ppt_iommu_map *m = &kreq->maps[i];
-			iommu_domain_unmap(ppt->pptd_domain,
-							m->gpa, m->size);
+			rc = iommu_domain_unmap(ppt->pptd_domain, m->gpa, m->size);
+			if (rc != 0)
+				break;
+			did_work = B_TRUE;
 		}
 
-		if (kreq->count > 0)
+		if (did_work)
 			iommu_invalidate_tlb(ppt->pptd_domain);
 
 		kmem_free(kreq, totsz);
-		return (0);
+		return (rc);
 	}
 
 	default:

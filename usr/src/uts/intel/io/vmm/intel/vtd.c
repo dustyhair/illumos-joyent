@@ -140,9 +140,26 @@ static struct vtdmap		*vtdmaps[DRHD_MAX_UNITS];
 static int			max_domains;
 typedef int			(*drhd_ident_func_t)(void);
 static dev_info_t		*vtddips[DRHD_MAX_UNITS];
+/*
+ * Bitmask of DRHD units to ignore. Bit N skips DRHD index N.
+ *
+ * Example for a broken DRHD0:
+ *   set vtd_drhd_ignore_mask=0x1
+ */
+uint32_t vtd_drhd_ignore_mask = 0;
 
 static uint64_t root_table[PAGE_SIZE / sizeof (uint64_t)] __aligned(4096);
 static uint64_t ctx_tables[256][PAGE_SIZE / sizeof (uint64_t)] __aligned(4096);
+
+static boolean_t
+vtd_drhd_enabled(int idx)
+{
+	if (idx < 0 || idx >= drhd_num)
+		return (B_FALSE);
+	if ((vtd_drhd_ignore_mask & (1u << idx)) != 0)
+		return (B_FALSE);
+	return (vtdmaps[idx] != NULL);
+}
 
 static int
 vtd_max_domains(struct vtdmap *vtdmap)
@@ -202,8 +219,9 @@ vtd_device_scope(uint16_t rid)
 	ACPI_DMAR_HARDWARE_UNIT *drhd;
 	ACPI_DMAR_DEVICE_SCOPE *device_scope;
 	ACPI_DMAR_PCI_PATH *path;
-	//I only want to use the first drhd
-	for (i = 1; i < drhd_num; i++) {
+	for (i = 0; i < drhd_num; i++) {
+		if (!vtd_drhd_enabled(i))
+			continue;
 		drhd = drhds[i];
 
 		if (VTD_DRHD_INCLUDE_PCI_ALL(drhd->Flags)) {
@@ -504,8 +522,9 @@ skip_dmar:
 	drhd_num = units;
 
 	max_domains = 64 * 1024; /* maximum valid value */
-	//HACKING!!!!
-	for (i = 1; i < drhd_num; i++) {
+	for (i = 0; i < drhd_num; i++) {
+		if (!vtd_drhd_enabled(i))
+			continue;
 		vtdmap = vtdmaps[i];
 
 		if (VTD_CAP_CM(vtdmap->cap) != 0)
@@ -550,8 +569,7 @@ vtd_cleanup(void)
 	KASSERT(SLIST_EMPTY(&domhead), ("domain list not empty"));
 
 	bzero(root_table, sizeof (root_table));
-	//HACKING!!!
-	for (i = 1; i <= drhd_num; i++) {
+	for (i = 0; i < drhd_num; i++) {
 		vtdmaps[i] = NULL;
 		/*
 		 * Unmap the vtd registers. Note that the devinfo nodes
@@ -573,15 +591,15 @@ static boolean_t
 vtd_ir_unit_ok(int unit, struct vtdmap *vtdmap)
 {
 	/*
-	 * Temporary policy function – in a real tree you’d probably make
+	 * Temporary policy function in a real tree you’d probably make
 	 * this check for quirks, errata, or even a tunable to skip/force
 	 * certain units.
 	 *
 	 * For example, you might blacklist DRHD0 explicitly if you know it
 	 * storms when IR is enabled.
 	 */
-	if (unit == 0) {
-		/* Known‑bad on this platform */
+	if (!vtd_drhd_enabled(unit)) {
+		/* Explicitly skipped by policy/tunable */
 		return (B_FALSE);
 	}
 
@@ -601,9 +619,9 @@ vtd_enable(void)
 	cmn_err(CE_NOTE, "vtd_enable: enabling VT-d units");
 
 	for (i = 0; i < drhd_num; i++) {
-		vtdmap = vtdmaps[i];
-		if (vtdmap == NULL)
+		if (!vtd_drhd_enabled(i))
 			continue;
+		vtdmap = vtdmaps[i];
 
 		vtd_wbflush(vtdmap);
 
@@ -687,8 +705,9 @@ vtd_disable(void)
 {
 	int i;
 	struct vtdmap *vtdmap;
-	//HACKING!!!!
 	for (i = 0; i < drhd_num; i++) {
+		if (!vtd_drhd_enabled(i))
+			continue;
 		vtdmap = vtdmaps[i];
 		vtd_translation_disable(vtdmap);
 	}
@@ -794,8 +813,9 @@ vtd_add_device(void *arg, uint16_t rid)
 	    dom->ptp, (unsigned long long)pt_paddr, dom->addrwidth);
 
 	if (ctxp[idx] & VTD_CTX_PRESENT) {
-		panic("vtd_add_device: device %x already owned by domain %d",
+		cmn_err(CE_WARN, "vtd_add_device: RID=0x%x already owned by domain %d",
 		    rid, (uint16_t)(ctxp[idx + 1] >> 8));
+		return;
 	}
 
 	/*
@@ -803,10 +823,16 @@ vtd_add_device(void *arg, uint16_t rid)
 	 * This trace is the key: it tells you the DRHD index and hardware base.
 	 */
 	if ((vtdmap = vtd_device_scope(rid)) == NULL)
-		panic("vtd_add_device: RID=0x%x not in scope for any DRHD", rid);
+	{
+		cmn_err(CE_WARN, "vtd_add_device: RID=0x%x not in scope for any enabled DRHD (mask=0x%x)",
+		    rid, vtd_drhd_ignore_mask);
+		return;
+	}
 
 	/* --- Diagnostic trace for DRHD correlation --- */
 	for (int i = 0; i < drhd_num; i++) {
+		if (!vtd_drhd_enabled(i))
+			continue;
 		if (vtdmaps[i] == vtdmap) {
 			cmn_err(CE_NOTE,
 			    "vtd_add_device: RID=0x%x handled by DRHD %d @%p (ECAP.IR=%u)",
@@ -832,6 +858,13 @@ vtd_add_device(void *arg, uint16_t rid)
 	    idx,
 	    (unsigned long long)ctxp[idx],
 	    (unsigned long long)ctxp[idx + 1]);
+
+	/*
+	 * Ensure hardware does not retain stale context/IOTLB state from a
+	 * previous domain assignment of this RID.
+	 */
+	vtd_ctx_global_invalidate(vtdmap);
+	vtd_iotlb_global_invalidate(vtdmap);
 
 	cmn_err(CE_NOTE, "vtd_add_device: completed for rid=0x%x", rid);
 }
@@ -916,8 +949,9 @@ vtd_remove_device(void *arg, uint16_t rid)
 	 * XXX use device-selective invalidation for Context Cache
 	 * XXX use domain-selective invalidation for IOTLB
 	 */
-	//HACKING!!! i=1 should be 0
 	for (i = 0; i < drhd_num; i++) {
+		if (!vtd_drhd_enabled(i))
+			continue;
 		vtdmap = vtdmaps[i];
 		vtd_ctx_global_invalidate(vtdmap);
 		vtd_iotlb_global_invalidate(vtdmap);
@@ -1032,8 +1066,9 @@ vtd_invalidate_tlb(void *dom)
 	 * Invalidate the IOTLB.
 	 * XXX use domain-selective invalidation for IOTLB
 	 */
-	//HACKING!!!!
 	for (i = 0; i < drhd_num; i++) {
+		if (!vtd_drhd_enabled(i))
+			continue;
 		vtdmap = vtdmaps[i];
 		vtd_iotlb_global_invalidate(vtdmap);
 	}
@@ -1120,8 +1155,9 @@ vtd_create_domain(vm_paddr_t maxaddr)
 	* limited to the host_domain.
 	*/
 	spsmask = ~0U;
-	//HACKING DRHD for a test
 	for (i = 0; i < drhd_num; i++) {
+		if (!vtd_drhd_enabled(i))
+			continue;
 		struct vtdmap *vtdmap = vtdmaps[i];
 		uint32_t cap_sps = VTD_CAP_SPS(vtdmap->cap);
 		uint64_t ecap    = vtdmap->ext_cap;
