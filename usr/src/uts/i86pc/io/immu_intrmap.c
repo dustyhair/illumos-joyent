@@ -38,6 +38,7 @@
 
 typedef struct intrmap_private {
 	immu_t		*ir_immu;
+	dev_info_t	*ir_dip;
 	immu_inv_wait_t	ir_inv_wait;
 	uint16_t	ir_idx;
 	uint32_t	ir_sid_svt_sq;
@@ -97,6 +98,44 @@ static int intrmap_suppress_brdcst_eoi = 0;
  * whether verify the source id of interrupt request
  */
 static int intrmap_enable_sid_verify = 0;
+static int immu_intrmap_two_phase_irte_update = 1;
+static uint32_t immu_intrmap_drhd_transition_mask = 0;
+static uint32_t immu_intrmap_drhd_transition_warn_mask = 0;
+#define	IMMU_INTRMAP_DRHD_GATE_MAX	32
+static kmutex_t immu_intrmap_drhd_gate_lock[IMMU_INTRMAP_DRHD_GATE_MAX];
+static kcondvar_t immu_intrmap_drhd_gate_cv[IMMU_INTRMAP_DRHD_GATE_MAX];
+static uint32_t immu_intrmap_drhd_gate_active[IMMU_INTRMAP_DRHD_GATE_MAX];
+static uint32_t immu_intrmap_drhd_transition_depth[IMMU_INTRMAP_DRHD_GATE_MAX];
+static boolean_t immu_intrmap_drhd_gate_inited = B_FALSE;
+
+#define	IMMU_INTRMAP_IRTE_TRACE_RING_SZ	128
+typedef struct immu_intrmap_irte_trace {
+	uint32_t	it_seq;
+	uint32_t	it_idx;
+	uint32_t	it_sid;
+	uint32_t	it_dst;
+	uint16_t	it_type;
+	uint16_t	it_count;
+	uint8_t		it_unit;
+	uint8_t		it_vector;
+	uint8_t		it_dlm;
+	uint8_t		it_tm;
+	uint8_t		it_rh;
+	uint8_t		it_dm;
+	uint8_t		it_pad[2];
+	uintptr_t	it_immu;
+	uintptr_t	it_dip;
+	uint64_t	it_lo;
+	uint64_t	it_hi;
+} immu_intrmap_irte_trace_t;
+
+static int immu_intrmap_trace_recent_irte = 1;
+static int immu_intrmap_trace_recent_irte_dump = 1;
+static int immu_intrmap_trace_recent_irte_dump_count = 16;
+static uint32_t immu_intrmap_irte_trace_seq = 0;
+static uint32_t immu_intrmap_irte_trace_dumped = 0;
+static immu_intrmap_irte_trace_t
+    immu_intrmap_irte_trace_ring[IMMU_INTRMAP_IRTE_TRACE_RING_SZ];
 
 /* fault types for DVMA remapping */
 static char *immu_dvma_faults[] = {
@@ -141,6 +180,13 @@ static void immu_intrmap_map(void *intrmap_private, void *intrmap_data,
 static void immu_intrmap_free(void **intrmap_privatep);
 static void immu_intrmap_rdt(void *intrmap_private, ioapic_rdt_t *irdt);
 static void immu_intrmap_msi(void *intrmap_private, msi_regs_t *mregs);
+static int immu_intrmap_unit_index(immu_t *target);
+static void immu_intrmap_drhd_gate_init(void);
+static void immu_intrmap_drhd_map_enter(int unit);
+static void immu_intrmap_drhd_map_exit(int unit);
+static void immu_intrmap_irte_trace_record(intrmap_private_t *priv, immu_t *immu,
+    uint_t unit, uint_t idx, uint16_t type, int count, uchar_t vector, uint_t dlm,
+    uint_t tm, uint_t rh, uint_t dm, uint_t dst, uint_t sid, intrmap_rte_t *irte);
 
 static struct apic_intrmap_ops intrmap_ops = {
 	immu_intrmap_init,
@@ -154,6 +200,190 @@ static struct apic_intrmap_ops intrmap_ops = {
 
 /* apic mode, APIC/X2APIC */
 static int intrmap_apic_mode = LOCAL_APIC;
+
+static void
+immu_intrmap_drhd_gate_init(void)
+{
+	int i;
+
+	if (immu_intrmap_drhd_gate_inited)
+		return;
+
+	for (i = 0; i < IMMU_INTRMAP_DRHD_GATE_MAX; i++) {
+		mutex_init(&immu_intrmap_drhd_gate_lock[i], NULL, MUTEX_DRIVER,
+		    NULL);
+		cv_init(&immu_intrmap_drhd_gate_cv[i], NULL, CV_DRIVER, NULL);
+		immu_intrmap_drhd_gate_active[i] = 0;
+		immu_intrmap_drhd_transition_depth[i] = 0;
+	}
+
+	immu_intrmap_drhd_gate_inited = B_TRUE;
+}
+
+static void
+immu_intrmap_drhd_map_enter(int unit)
+{
+	if (unit < 0 || unit >= IMMU_INTRMAP_DRHD_GATE_MAX)
+		return;
+
+	ASSERT(immu_intrmap_drhd_gate_inited);
+	mutex_enter(&immu_intrmap_drhd_gate_lock[unit]);
+	immu_intrmap_drhd_gate_active[unit]++;
+	mutex_exit(&immu_intrmap_drhd_gate_lock[unit]);
+}
+
+static void
+immu_intrmap_drhd_map_exit(int unit)
+{
+	if (unit < 0 || unit >= IMMU_INTRMAP_DRHD_GATE_MAX)
+		return;
+
+	ASSERT(immu_intrmap_drhd_gate_inited);
+	mutex_enter(&immu_intrmap_drhd_gate_lock[unit]);
+	ASSERT(immu_intrmap_drhd_gate_active[unit] != 0);
+	if (--immu_intrmap_drhd_gate_active[unit] == 0 &&
+	    immu_intrmap_drhd_transition_active(unit)) {
+		cv_broadcast(&immu_intrmap_drhd_gate_cv[unit]);
+	}
+	mutex_exit(&immu_intrmap_drhd_gate_lock[unit]);
+}
+
+void
+immu_intrmap_drhd_transition_set(int unit, boolean_t enter)
+{
+	uint32_t bit;
+	uint32_t depth;
+
+	if (unit < 0 || unit >= IMMU_INTRMAP_DRHD_GATE_MAX)
+		return;
+
+	if (!immu_intrmap_drhd_gate_inited)
+		immu_intrmap_drhd_gate_init();
+
+	bit = (1u << unit);
+	if (enter) {
+		mutex_enter(&immu_intrmap_drhd_gate_lock[unit]);
+		depth = ++immu_intrmap_drhd_transition_depth[unit];
+		if (depth == 1) {
+			atomic_or_32(&immu_intrmap_drhd_transition_mask, bit);
+			atomic_and_32(&immu_intrmap_drhd_transition_warn_mask, ~bit);
+			while (immu_intrmap_drhd_gate_active[unit] != 0) {
+				cv_wait(&immu_intrmap_drhd_gate_cv[unit],
+				    &immu_intrmap_drhd_gate_lock[unit]);
+			}
+		}
+		mutex_exit(&immu_intrmap_drhd_gate_lock[unit]);
+		cmn_err(CE_NOTE, "immu_intrmap: drhd=%d transition enter depth=%u",
+		    unit, depth);
+	} else {
+		mutex_enter(&immu_intrmap_drhd_gate_lock[unit]);
+		if (immu_intrmap_drhd_transition_depth[unit] == 0) {
+			depth = 0;
+		} else {
+			depth = --immu_intrmap_drhd_transition_depth[unit];
+			if (depth == 0) {
+				atomic_and_32(&immu_intrmap_drhd_transition_mask,
+				    ~bit);
+				atomic_and_32(&immu_intrmap_drhd_transition_warn_mask,
+				    ~bit);
+			}
+		}
+		mutex_exit(&immu_intrmap_drhd_gate_lock[unit]);
+		cmn_err(CE_NOTE, "immu_intrmap: drhd=%d transition exit depth=%u",
+		    unit, depth);
+	}
+}
+
+boolean_t
+immu_intrmap_drhd_transition_active(int unit)
+{
+	if (unit < 0 || unit >= IMMU_INTRMAP_DRHD_GATE_MAX)
+		return (B_FALSE);
+
+	return ((immu_intrmap_drhd_transition_mask & (1u << unit)) != 0);
+}
+
+static void
+immu_intrmap_irte_trace_record(intrmap_private_t *priv, immu_t *immu, uint_t unit,
+    uint_t idx, uint16_t type, int count, uchar_t vector, uint_t dlm, uint_t tm,
+    uint_t rh, uint_t dm, uint_t dst, uint_t sid, intrmap_rte_t *irte)
+{
+	immu_intrmap_irte_trace_t *ent;
+	uint32_t seq;
+
+	if (!immu_intrmap_trace_recent_irte)
+		return;
+
+	seq = atomic_inc_32_nv(&immu_intrmap_irte_trace_seq);
+	ent = &immu_intrmap_irte_trace_ring[
+	    (seq - 1) % IMMU_INTRMAP_IRTE_TRACE_RING_SZ];
+
+	ent->it_idx = idx;
+	ent->it_sid = sid;
+	ent->it_dst = dst;
+	ent->it_type = type;
+	ent->it_count = (count < 0) ? 0 : (uint16_t)count;
+	ent->it_unit = (unit > 0xffu) ? 0xffu : (uint8_t)unit;
+	ent->it_vector = vector;
+	ent->it_dlm = (uint8_t)dlm;
+	ent->it_tm = (uint8_t)tm;
+	ent->it_rh = (uint8_t)rh;
+	ent->it_dm = (uint8_t)dm;
+	ent->it_immu = (uintptr_t)immu;
+	ent->it_dip = (uintptr_t)(priv != NULL ? priv->ir_dip : NULL);
+	ent->it_lo = irte->lo;
+	ent->it_hi = irte->hi;
+	membar_producer();
+	ent->it_seq = seq;
+}
+
+void
+immu_intrmap_debug_dump_recent_irte(const char *reason)
+{
+	immu_intrmap_irte_trace_t ent;
+	uint32_t seq;
+	uint32_t start;
+	uint32_t end;
+	uint_t i;
+	uint_t n;
+	const char *why = (reason != NULL) ? reason : "<null>";
+
+	if (!immu_intrmap_trace_recent_irte || !immu_intrmap_trace_recent_irte_dump)
+		return;
+
+	if (atomic_cas_32(&immu_intrmap_irte_trace_dumped, 0, 1) != 0)
+		return;
+
+	seq = immu_intrmap_irte_trace_seq;
+	n = immu_intrmap_trace_recent_irte_dump_count;
+	if (n == 0 || n > IMMU_INTRMAP_IRTE_TRACE_RING_SZ)
+		n = 8;
+	if (n > IMMU_INTRMAP_IRTE_TRACE_RING_SZ)
+		n = IMMU_INTRMAP_IRTE_TRACE_RING_SZ;
+
+	end = seq;
+	start = (end > n) ? (end - n + 1) : 1;
+
+	prom_printf("IMMU IRTE trace dump reason=%s seq=%u start=%u end=%u\n",
+	    why, seq, start, end);
+
+	for (i = start; i <= end; i++) {
+		ent = immu_intrmap_irte_trace_ring[
+		    (i - 1) % IMMU_INTRMAP_IRTE_TRACE_RING_SZ];
+		membar_consumer();
+		if (ent.it_seq != i)
+			continue;
+		prom_printf("IMMU IRTE[%u] unit=%u idx=%u sid=0x%x "
+		    "bdf=%02x:%02x.%u type=0x%x cnt=%u vec=0x%x dst=0x%x "
+		    "tm=%u dm=%u rh=%u dlm=%u lo=0x%llx hi=0x%llx dip=%p\n",
+		    ent.it_seq, ent.it_unit, ent.it_idx, ent.it_sid,
+		    (ent.it_sid >> 8) & 0xff, (ent.it_sid >> 3) & 0x1f,
+		    ent.it_sid & 0x7, ent.it_type, ent.it_count, ent.it_vector,
+		    ent.it_dst, ent.it_tm, ent.it_dm, ent.it_rh, ent.it_dlm,
+		    (u_longlong_t)ent.it_lo, (u_longlong_t)ent.it_hi,
+		    (void *)ent.it_dip);
+	}
+}
 
 
 /*
@@ -181,6 +411,21 @@ bitset_find_free(bitset_t *b, uint_t post)
 	}
 
 	return (INTRMAP_IDX_FULL);	/* no free index */
+}
+
+static int
+immu_intrmap_unit_index(immu_t *target)
+{
+	immu_t *immu;
+	int idx = 0;
+
+	for (immu = list_head(&immu_list); immu != NULL;
+	    immu = list_next(&immu_list, immu), idx++) {
+		if (immu == target)
+			return (idx);
+	}
+
+	return (-1);
 }
 
 /*
@@ -727,6 +972,7 @@ immu_intrmap_init(int apic_mode)
 	}
 
 	intrmap_apic_mode = apic_mode;
+	immu_intrmap_drhd_gate_init();
 
 	immu = list_head(&immu_list);
 	for (; immu; immu = list_next(&immu_list, immu)) {
@@ -788,6 +1034,7 @@ immu_intrmap_alloc(void **intrmap_private_tbl, dev_info_t *dip,
 	immu = get_immu(dip, type, ioapic_index);
 	if ((immu != NULL) && (immu->immu_intrmap_running == B_TRUE)) {
 		intrmap_private->ir_immu = immu;
+		intrmap_private->ir_dip = dip;
 	} else {
 		prom_printf("IRMAP: alloc failed for dip=%p type=0x%x "
 		    "(immu=%p, running=%d)\n",
@@ -838,6 +1085,7 @@ immu_intrmap_alloc(void **intrmap_private_tbl, dev_info_t *dip,
 		    kmem_zalloc(sizeof (intrmap_private_t), KM_SLEEP);
 
 		INTRMAP_PRIVATE(intrmap_private_tbl[i])->ir_immu = immu;
+		INTRMAP_PRIVATE(intrmap_private_tbl[i])->ir_dip = dip;
 		INTRMAP_PRIVATE(intrmap_private_tbl[i])->ir_sid_svt_sq =
 		    sid_svt_sq;
 		INTRMAP_PRIVATE(intrmap_private_tbl[i])->ir_idx = idx + i;
@@ -869,9 +1117,15 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data,
 	ioapic_rdt_t    *irdt = (ioapic_rdt_t *)intrmap_data;
 	msi_regs_t      *mregs = (msi_regs_t *)intrmap_data;
 	intrmap_rte_t    irte;
+	intrmap_rte_t    irte_np;
 	uint_t           idx, i;
+	uint_t           last_vector;
+	uint_t           sid;
 	uint32_t         dst, sid_svt_sq;
+	uint64_t         raw_dst, shifted_dst;
 	uchar_t          vector, dlm, tm, rh, dm;
+	int              unit = -1;
+	boolean_t        unit_entered = B_FALSE;
 
 	if (intrmap_private == INTRMAP_DISABLE)
 		return;
@@ -881,6 +1135,36 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data,
 	iwp = &INTRMAP_PRIVATE(intrmap_private)->ir_inv_wait;
 	intrmap = immu->immu_intrmap;
 	sid_svt_sq = INTRMAP_PRIVATE(intrmap_private)->ir_sid_svt_sq;
+	sid = sid_svt_sq & 0xffff;
+	unit = immu_intrmap_unit_index(immu);
+	immu_intrmap_drhd_map_enter(unit);
+	unit_entered = B_TRUE;
+
+	{
+		if (unit >= 0 && immu_intrmap_drhd_transition_active(unit)) {
+			uint32_t bit = (1u << unit);
+			char dip_path[1024];
+			const char *dip_name = "<null>";
+			dev_info_t *dip = INTRMAP_PRIVATE(intrmap_private)->ir_dip;
+
+			if (dip != NULL) {
+				if (ddi_pathname(dip, dip_path) == NULL)
+					(void) strlcpy(dip_path, "<pathname-failed>",
+					    sizeof (dip_path));
+				dip_name = dip_path;
+			}
+
+			if ((atomic_or_32_nv(&immu_intrmap_drhd_transition_warn_mask,
+			    bit) & bit) == 0) {
+				cmn_err(CE_WARN, "!immu_intrmap_map: deferring IRTE "
+				    "update during DRHD transition dip=%s unit=%d "
+				    "sid=0x%x bdf=%02x:%02x.%u idx=%u type=0x%x count=%d",
+				    dip_name, unit, sid, (sid >> 8) & 0xff,
+				    (sid >> 3) & 0x1f, sid & 0x7, idx, type, count);
+			}
+			goto out;
+		}
+	}
 
 	if (!DDI_INTR_IS_MSI_OR_MSIX(type)) {
 		dm = RDT_DM(irdt->ir_lo);
@@ -908,9 +1192,9 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data,
 		vector = mregs->mr_data & 0xff;
 
 		/* Diagnostic logging before shifting dst */
-		uint64_t raw_dst = (uint64_t)mregs->mr_addr;
-		uint64_t shifted_dst = (intrmap_apic_mode == LOCAL_APIC) ?
-			((raw_dst & 0xFFULL) << 8) : raw_dst;
+		raw_dst = (uint64_t)mregs->mr_addr;
+		shifted_dst = (intrmap_apic_mode == LOCAL_APIC) ?
+		    ((raw_dst & 0xFFULL) << 8) : raw_dst;
 
 		if (intrmap_apic_mode == LOCAL_APIC && shifted_dst > 0xFF00) {
 			cmn_err(CE_WARN,
@@ -931,39 +1215,108 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data,
 	if (intrmap_apic_mode == LOCAL_APIC)
 		dst = (dst & 0xFF) << 8;
 
+	if (count <= 0) {
+		cmn_err(CE_WARN, "!immu_intrmap_map: invalid interrupt count=%d "
+		    "idx=%u type=0x%x", count, idx, type);
+		goto out;
+	}
+
+	last_vector = (uint_t)vector + (uint_t)count - 1;
+	if (vector < APIC_BASE_VECT || last_vector > 0xffu) {
+		char dip_path[1024];
+		const char *dip_name = "<null>";
+		dev_info_t *dip = INTRMAP_PRIVATE(intrmap_private)->ir_dip;
+
+		if (dip != NULL) {
+			if (ddi_pathname(dip, dip_path) == NULL)
+				(void) strlcpy(dip_path, "<pathname-failed>",
+				    sizeof (dip_path));
+			dip_name = dip_path;
+		}
+		cmn_err(CE_WARN, "!immu_intrmap_map: refusing illegal vector "
+		    "programming dip=%s sid=0x%x bdf=%02x:%02x.%u idx=%u "
+		    "type=0x%x vector=0x%x count=%d (last=0x%x, base=0x%x)",
+		    dip_name, sid, (sid >> 8) & 0xff, (sid >> 3) & 0x1f,
+		    sid & 0x7, idx, type, (uint_t)vector, count, last_vector,
+		    APIC_BASE_VECT);
+		bzero(intrmap->intrmap_vaddr + idx * INTRMAP_RTE_SIZE,
+		    (size_t)count * INTRMAP_RTE_SIZE);
+		if (count == 1) {
+			immu_qinv_intr_one_cache(immu, idx, iwp);
+		} else {
+			immu_qinv_intr_caches(immu, idx, count, iwp);
+		}
+		goto out;
+		}
+
 	if (count == 1) {
 		irte.lo = IRTE_LOW(dst, vector, dlm, tm, rh, dm, 0, 1);
 		irte.hi = IRTE_HIGH(sid_svt_sq);
+		if (immu_intrmap_two_phase_irte_update) {
+			irte_np = irte;
+			irte_np.lo &= ~1ULL;
+			bcopy(&irte_np, intrmap->intrmap_vaddr + idx * INTRMAP_RTE_SIZE,
+			    INTRMAP_RTE_SIZE);
+			membar_producer();
+			immu_qinv_intr_one_cache(immu, idx, iwp);
+		}
+		immu_intrmap_irte_trace_record(
+		    INTRMAP_PRIVATE(intrmap_private), immu, unit, idx, type,
+		    count, vector, dlm, tm, rh, dm, dst, sid, &irte);
 
 		cmn_err(CE_CONT,
-			"!IRTE[%u]: lo=0x%" PRIx64 " hi=0x%" PRIx64,
-			idx, (uint64_t)irte.lo, (uint64_t)irte.hi);
+		    "!IRTE[%u]: lo=0x%" PRIx64 " hi=0x%" PRIx64,
+		    idx, (uint64_t)irte.lo, (uint64_t)irte.hi);
 
 		/* set interrupt remapping table entry */
-		bcopy(&irte, intrmap->intrmap_vaddr +
-			idx * INTRMAP_RTE_SIZE,
-			INTRMAP_RTE_SIZE);
+		bcopy(&irte, intrmap->intrmap_vaddr + idx * INTRMAP_RTE_SIZE,
+		    INTRMAP_RTE_SIZE);
 
+		membar_producer();
 		immu_qinv_intr_one_cache(immu, idx, iwp);
 
 	} else {
+		if (immu_intrmap_two_phase_irte_update) {
+			uchar_t pvec = vector;
+
+			for (i = 0; i < count; i++) {
+				irte.lo = IRTE_LOW(dst, pvec, dlm, tm, rh, dm, 0, 1);
+				irte.hi = IRTE_HIGH(sid_svt_sq);
+				irte_np = irte;
+				irte_np.lo &= ~1ULL;
+				bcopy(&irte_np, intrmap->intrmap_vaddr +
+				    (idx + i) * INTRMAP_RTE_SIZE,
+				    INTRMAP_RTE_SIZE);
+				pvec++;
+			}
+			membar_producer();
+			immu_qinv_intr_caches(immu, idx, count, iwp);
+		}
 		for (i = 0; i < count; i++) {
 			irte.lo = IRTE_LOW(dst, vector, dlm, tm, rh, dm, 0, 1);
 			irte.hi = IRTE_HIGH(sid_svt_sq);
+			immu_intrmap_irte_trace_record(
+			    INTRMAP_PRIVATE(intrmap_private), immu, unit,
+			    idx + i, type, count, vector, dlm, tm, rh, dm,
+			    dst, sid, &irte);
 
 			cmn_err(CE_CONT,
-				"!IRTE[%u]: lo=0x%" PRIx64 " hi=0x%" PRIx64,
-				idx + i, (uint64_t)irte.lo, (uint64_t)irte.hi);
+			    "!IRTE[%u]: lo=0x%" PRIx64 " hi=0x%" PRIx64,
+			    idx + i, (uint64_t)irte.lo, (uint64_t)irte.hi);
 
 			/* set interrupt remapping table entry */
 			bcopy(&irte, intrmap->intrmap_vaddr +
-				(idx + i) * INTRMAP_RTE_SIZE,
-				INTRMAP_RTE_SIZE);
+			    (idx + i) * INTRMAP_RTE_SIZE,
+			    INTRMAP_RTE_SIZE);
 			vector++;
 		}
 
+		membar_producer();
 		immu_qinv_intr_caches(immu, idx, count, iwp);
 	}
+out:
+	if (unit_entered)
+		immu_intrmap_drhd_map_exit(unit);
 }
 /* remapping the interrupt */
 // static void
@@ -1287,4 +1640,3 @@ immu_intr_register(immu_t *immu)
 // 
 // 	return (DDI_SUCCESS);
 // }
-

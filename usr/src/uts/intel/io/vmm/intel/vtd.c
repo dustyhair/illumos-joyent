@@ -62,6 +62,13 @@
 #include "io/iommu.h"
 
 /*
+ * rootnex/immu_intrmap owns interrupt-remap hardware state on SmartOS.  We
+ * coordinate DRHD transitions through these exported hooks without pulling in
+ * i86pc private headers from this build path.
+ */
+extern void immu_intrmap_drhd_transition_set(int, boolean_t);
+
+/*
  * Documented in the "Intel Virtualization Technology for Directed I/O",
  * Architecture Spec, September 2008.
  */
@@ -89,6 +96,7 @@ struct vtdmap {
 #define	VTD_CAP_RWBF(cap)	(((cap) >> 4) & 0x1)
 
 #define	VTD_ECAP_DI(ecap)	(((ecap) >> 2) & 0x1)
+#define	VTD_ECAP_IR(ecap)	(((ecap) >> 3) & 0x1)
 #define	VTD_ECAP_COHERENCY(ecap) ((ecap) & 0x1)
 #define	VTD_ECAP_IRO(ecap)	(((ecap) >> 8) & 0x3FF)
 
@@ -104,6 +112,19 @@ struct vtdmap {
 #define	VTD_CCR_ICC		(1UL << 63)	/* invalidate context cache */
 #define	VTD_CCR_CIRG_GLOBAL	(1UL << 61)	/* global invalidation */
 #define	VTD_CCR_CAIG(_ccr)	(((_ccr) >> 59) & 0x3)	/* actual granularity */
+
+/*
+ * Fault event/status registers (Intel VT-d spec, register block section).
+ * These are used to mask fault-event interrupts during DRHD bring-up/teardown
+ * to avoid delivering a bogus local-APIC vector before fault MSI is valid.
+ */
+#define	VTD_REG_FSTS_OFF	0x34
+#define	VTD_REG_FECTL_OFF	0x38
+#define	VTD_REG_FEDATA_OFF	0x3c
+#define	VTD_REG_FEADDR_OFF	0x40
+#define	VTD_REG_FEUADDR_OFF	0x44
+
+#define	VTD_FECTL_IM		(1U << 31)
 
 #define	VTD_IIR_IVT		(1UL << 63)	/* invalidation IOTLB */
 #define	VTD_IIR_IIRG_GLOBAL	(1ULL << 60)	/* global IOTLB invalidation */
@@ -176,23 +197,48 @@ uint32_t vtd_drhd_ignore_mask = 0x0;
  */
 uint32_t vtd_wait_timeout_us = 2000000;
 uint32_t vtd_wait_delay_us = 1;
-uint32_t vtd_trace_lifecycle = 1;
-uint32_t vtd_trace_invalidate = 1;
-uint32_t vtd_trace_invlock = 1;
+uint32_t vtd_trace_lifecycle = 0;
+uint32_t vtd_trace_invalidate = 0;
+uint32_t vtd_trace_invlock = 0;
 uint32_t vtd_trace_timeout_dump = 1;
-uint32_t vtd_trace_bringup_dump = 1;
-uint32_t vtd_trace_inv_precheck = 1;
+uint32_t vtd_trace_bringup_dump = 0;
+uint32_t vtd_trace_inv_precheck = 0;
 /*
- * Debug hard-coded default for field testing:
- * skip invalidate commands when TES is clear to avoid wedging ICC/IVT.
- * Flip back to 0 for the control test.
+ * Debug knob: skip invalidate commands when TES is clear.
+ *
+ * Default is off. Skipping invalidations can hide coherency bugs and should
+ * only be used for narrow diagnostics.
  */
-uint32_t vtd_skip_invalidate_if_tes_clear = 1;
-uint32_t vtd_trace_inv_cmd = 1;
-uint32_t vtd_trace_init_order = 1;
+uint32_t vtd_skip_invalidate_if_tes_clear = 0;
+uint32_t vtd_trace_inv_cmd = 0;
+uint32_t vtd_trace_init_order = 0;
 uint32_t vtd_trace_map = 0;
 uint32_t vtd_trace_map_verbose = 0;
 uint32_t vtd_trace_domid = 0xffffffffU;
+/*
+ * Debug/mitigation knob: quiesce host interrupt-remap updates while vmm_vtd is
+ * updating or invalidating DMA mappings for a non-host domain. This widens the
+ * existing DRHD transition gate beyond vtd_enable() and targets the
+ * vm_assign_pptdev/vm_iommu_modify mapping burst where APIC ESR=0x40 has been
+ * observed.
+ */
+uint32_t vtd_intrmap_quiesce_on_mapping = 1;
+uint32_t vtd_intrmap_quiesce_on_mapping_host = 0;
+/*
+ * By default, hold the immu_intrmap quiesce gate at the batched TLB
+ * invalidate boundary rather than on every individual page-table update.
+ * vm_iommu_modify() performs many vtd_update_mapping() calls and then issues a
+ * single invalidate; per-update enter/exit churn can itself trigger the APIC
+ * ESR=0x40 failure on this platform.
+ */
+uint32_t vtd_intrmap_quiesce_on_mapping_updates = 0;
+/*
+ * Interrupt remapping is host-owned via immu_intrmap on SmartOS.
+ * Leave IRE untouched in vmm_vtd by default to avoid conflicting writes.
+ *
+ * Set to 1 only for controlled experiments with vmm_vtd-managed IRE.
+ */
+uint32_t vtd_manage_ire = 0;
 
 #define	VTD_HOST_DOMAIN_ID	1U
 
@@ -200,6 +246,9 @@ static uint64_t root_table[PAGE_SIZE / sizeof (uint64_t)] __aligned(4096);
 static uint64_t ctx_tables[256][PAGE_SIZE / sizeof (uint64_t)] __aligned(4096);
 
 static boolean_t vtd_ir_unit_ok(int unit, struct vtdmap *vtdmap);
+static int vtd_drhd_index(struct vtdmap *vtdmap);
+static void vtd_fault_intr_mask(struct vtdmap *vtdmap, boolean_t masked);
+static void vtd_fault_status_clear(struct vtdmap *vtdmap, const char *tag);
 
 static boolean_t
 vtd_trace_domain_enabled(const struct domain *dom)
@@ -217,6 +266,52 @@ vtd_drhd_enabled(int idx)
 	if ((vtd_drhd_ignore_mask & (1u << idx)) != 0)
 		return (B_FALSE);
 	return (vtdmaps[idx] != NULL);
+}
+
+static void
+vtd_fault_intr_mask(struct vtdmap *vtdmap, boolean_t masked)
+{
+	volatile uint32_t *fectl;
+	uint32_t val, newval;
+
+	fectl = (volatile uint32_t *)((caddr_t)vtdmap + VTD_REG_FECTL_OFF);
+	val = *fectl;
+	newval = masked ? (val | VTD_FECTL_IM) : (val & ~VTD_FECTL_IM);
+	if (newval != val)
+		*fectl = newval;
+	(void)*fectl; /* flush posted write */
+
+	if (vtd_trace_lifecycle != 0) {
+		cmn_err(CE_NOTE, "vtd: fault-event intr %s drhd=%d FECTL=0x%x->0x%x "
+		    "FEDATA=0x%x FEADDR=0x%x FEUADDR=0x%x",
+		    masked ? "MASK" : "UNMASK", vtd_drhd_index(vtdmap), val, *fectl,
+		    *(volatile uint32_t *)((caddr_t)vtdmap + VTD_REG_FEDATA_OFF),
+		    *(volatile uint32_t *)((caddr_t)vtdmap + VTD_REG_FEADDR_OFF),
+		    *(volatile uint32_t *)((caddr_t)vtdmap + VTD_REG_FEUADDR_OFF));
+	}
+}
+
+static void
+vtd_fault_status_clear(struct vtdmap *vtdmap, const char *tag)
+{
+	volatile uint32_t *fsts;
+	uint32_t val;
+
+	fsts = (volatile uint32_t *)((caddr_t)vtdmap + VTD_REG_FSTS_OFF);
+	val = *fsts;
+	if (val != 0) {
+		/*
+		 * Fault status bits are write-1-to-clear. Writing back the observed
+		 * status clears pending fault conditions before/after TE transitions.
+		 */
+		*fsts = val;
+		(void)*fsts; /* flush posted write */
+	}
+
+	if (vtd_trace_lifecycle != 0) {
+		cmn_err(CE_NOTE, "vtd: fault-status clear drhd=%d tag=%s FSTS=0x%x "
+		    "after=0x%x", vtd_drhd_index(vtdmap), tag, val, *fsts);
+	}
 }
 
 static int
@@ -472,6 +567,31 @@ vtd_invalidate_precheck(struct vtdmap *vtdmap, const char *which)
 		return (B_FALSE);
 
 	return (B_TRUE);
+}
+
+static boolean_t
+vtd_intrmap_quiesce_domain(const struct domain *dom)
+{
+	if (vtd_intrmap_quiesce_on_mapping == 0 || dom == NULL)
+		return (B_FALSE);
+
+	if (vtd_intrmap_quiesce_on_mapping_host == 0 &&
+	    dom->id == VTD_HOST_DOMAIN_ID)
+		return (B_FALSE);
+
+	return (B_TRUE);
+}
+
+static void
+vtd_intrmap_quiesce_all(boolean_t enter)
+{
+	int i;
+
+	for (i = 0; i < drhd_num; i++) {
+		if (!vtd_drhd_enabled(i))
+			continue;
+		immu_intrmap_drhd_transition_set(i, enter);
+	}
 }
 
 static boolean_t
@@ -868,27 +988,44 @@ vtd_context_changed_invalidate(struct vtdmap *scope)
 	return (ok);
 }
 
-static void
+static boolean_t
 vtd_translation_enable(struct vtdmap *vtdmap)
 {
+	boolean_t ok;
+
+	/*
+	 * Prevent VT-d fault-event interrupts from firing with an invalid vector
+	 * while the unit is transitioning into TE and fault MSI state may not yet
+	 * be fully initialized.
+	 */
+	vtd_fault_intr_mask(vtdmap, B_TRUE);
+	vtd_fault_status_clear(vtdmap, "pre-te");
 	vtd_dump_bringup_state_once(vtdmap, &vtd_bringup_dumped_te_mask,
 	    "pre-translation-enable");
-	(void) vtd_mark_mask_for_map(vtdmap, &vtd_init_stage_te_mask);
 	vtd_log_init_stage(vtdmap, "te-cmd");
 
 	vtdmap->gcr = VTD_GCR_TE;
-	(void) vtd_wait_reg32(&vtdmap->gsr, VTD_GSR_TES, VTD_GSR_TES,
+	ok = vtd_wait_reg32(&vtdmap->gsr, VTD_GSR_TES, VTD_GSR_TES,
 	    vtdmap, "translation enable (TES set)");
+	if (!ok)
+		return (B_FALSE);
+	vtd_fault_status_clear(vtdmap, "post-te");
+
+	(void) vtd_mark_mask_for_map(vtdmap, &vtd_init_stage_te_mask);
 	vtd_log_init_stage(vtdmap, "te-done");
+	return (B_TRUE);
 }
 
 static void
 vtd_translation_disable(struct vtdmap *vtdmap)
 {
+	vtd_fault_intr_mask(vtdmap, B_TRUE);
+	vtd_fault_status_clear(vtdmap, "pre-td");
 
 	vtdmap->gcr = 0;
 	(void) vtd_wait_reg32(&vtdmap->gsr, VTD_GSR_TES, 0,
 	    vtdmap, "translation disable (TES clear)");
+	vtd_fault_status_clear(vtdmap, "post-td");
 }
 
 static boolean_t
@@ -909,7 +1046,8 @@ vtd_rearm_unit_and_invalidate(struct vtdmap *vtdmap)
 	    vtdmap, "set-root-table (RTPS set)")) {
 		return (B_FALSE);
 	}
-	vtd_translation_enable(vtdmap);
+	if (!vtd_translation_enable(vtdmap))
+		return (B_FALSE);
 	vtd_invalidate_clear_skip(vtdmap);
 	if (vtd_trace_invalidate != 0) {
 		cmn_err(CE_NOTE, "vtd: rearm done drhd=%d",
@@ -938,6 +1076,8 @@ static boolean_t
 vtd_ensure_unit_enabled(struct vtdmap *vtdmap)
 {
 	int idx;
+	boolean_t gate_entered = B_FALSE;
+	boolean_t ok = B_FALSE;
 
 	if (vtdmap == NULL)
 		return (B_FALSE);
@@ -950,6 +1090,8 @@ vtd_ensure_unit_enabled(struct vtdmap *vtdmap)
 		return (B_TRUE);
 
 	cmn_err(CE_NOTE, "vtd: ensure-unit-enable drhd=%d begin", idx);
+	immu_intrmap_drhd_transition_set(idx, B_TRUE);
+	gate_entered = B_TRUE;
 
 	vtd_wbflush(vtdmap);
 
@@ -961,28 +1103,36 @@ vtd_ensure_unit_enabled(struct vtdmap *vtdmap)
 	    vtdmap, "set-root-table (RTPS set)")) {
 		cmn_err(CE_WARN, "vtd: ensure-unit-enable drhd=%d SRTP timeout",
 		    idx);
-		return (B_FALSE);
+		goto out;
 	}
 	(void) vtd_mark_mask_for_map(vtdmap, &vtd_init_stage_srtp_mask);
 	vtd_log_init_stage(vtdmap, "srtp-done");
 
-	/*
-	 * Some units wedge if invalidate is issued before TE. The debug
-	 * precheck/skip logic will prevent that when enabled.
-	 */
-	(void) vtd_ctx_global_invalidate(vtdmap);
-	(void) vtd_iotlb_global_invalidate(vtdmap);
+	if (!vtd_translation_enable(vtdmap)) {
+		cmn_err(CE_WARN, "vtd: ensure-unit-enable drhd=%d TE timeout", idx);
+		goto out;
+	}
 
-	vtd_translation_enable(vtdmap);
+	if (!vtd_ctx_global_invalidate(vtdmap) ||
+	    !vtd_iotlb_global_invalidate(vtdmap)) {
+		cmn_err(CE_WARN, "vtd: ensure-unit-enable drhd=%d invalidate failed",
+		    idx);
+		goto out;
+	}
 
 	if (vtd_ir_unit_ok(idx, vtdmap)) {
 		vtdmap->gcr = VTD_GCR_TE | VTD_GCR_IRE;
 		cmn_err(CE_NOTE,
-		    "vtd_enable: DRHD %d translation=ENABLED, interrupt remap=ENABLED",
-		    idx);
+		    "vtd_enable: DRHD %d translation=ENABLED, interrupt remap=ENABLED "
+		    "(vmm_vtd-managed)", idx);
+	} else if (VTD_ECAP_IR(vtdmap->ext_cap) != 0) {
+		cmn_err(CE_NOTE,
+		    "vtd_enable: DRHD %d translation=ENABLED, interrupt remap=HOST-OWNED "
+		    "(immu_intrmap), gsr.ires=%d", idx,
+		    ((vtdmap->gsr & VTD_GCR_IRE) != 0) ? 1 : 0);
 	} else {
 		cmn_err(CE_NOTE,
-		    "vtd_enable: DRHD %d translation=ENABLED, interrupt remap=DISABLED",
+		    "vtd_enable: DRHD %d translation=ENABLED, interrupt remap=UNSUPPORTED",
 		    idx);
 	}
 
@@ -990,8 +1140,11 @@ vtd_ensure_unit_enabled(struct vtdmap *vtdmap)
 	    idx, (vtdmap->gsr & VTD_GSR_TES) ? "ENABLED" : "DISABLED",
 	    vtdmap->gsr);
 	cmn_err(CE_NOTE, "vtd: ensure-unit-enable drhd=%d done", idx);
-
-	return (B_TRUE);
+	ok = B_TRUE;
+out:
+	if (gate_entered)
+		immu_intrmap_drhd_transition_set(idx, B_FALSE);
+	return (ok);
 }
 
 static void *
@@ -1258,16 +1411,14 @@ vtd_cleanup(void)
 #endif
 }
 
-
-#ifndef VTD_ECAP_IR
-#define VTD_ECAP_IR(_ecap) (((_ecap) >> 3) & 0x1)
-#endif 
-
 static boolean_t
 vtd_ir_unit_ok(int unit, struct vtdmap *vtdmap)
 {
+	if (vtd_manage_ire == 0)
+		return (B_FALSE);
+
 	/*
-	 * Temporary policy function in a real tree you’d probably make
+	 * Temporary policy function in a real tree you'd probably make
 	 * this check for quirks, errata, or even a tunable to skip/force
 	 * certain units.
 	 *
@@ -1293,8 +1444,30 @@ vtd_enable(void)
 
 	cmn_err(CE_NOTE, "vtd_enable: enabling VT-d units");
 
+	/*
+	 * Coordinate with host interrupt-remap programming across the full VT-d
+	 * enable phase, not just individual unit bring-up, to reduce exposure to
+	 * cross-DRHD IRTE updates while units are transitioning.
+	 */
 	for (i = 0; i < drhd_num; i++) {
-		(void) vtd_ensure_unit_enabled(vtdmaps[i]);
+		if (!vtd_drhd_enabled(i))
+			continue;
+		immu_intrmap_drhd_transition_set(i, B_TRUE);
+	}
+
+	for (i = 0; i < drhd_num; i++) {
+		if (!vtd_drhd_enabled(i))
+			continue;
+		if (!vtd_ensure_unit_enabled(vtdmaps[i])) {
+			cmn_err(CE_WARN, "vtd_enable: failed to initialize DRHD %d",
+				    i);
+		}
+	}
+
+	for (i = 0; i < drhd_num; i++) {
+		if (!vtd_drhd_enabled(i))
+			continue;
+		immu_intrmap_drhd_transition_set(i, B_FALSE);
 	}
 }
 
@@ -1486,7 +1659,11 @@ vtd_add_device(void *arg, uint16_t rid)
 	}
 
 	if (dom->id == VTD_HOST_DOMAIN_ID && !vtd_unit_init_complete(vtdmap)) {
-		(void) vtd_ensure_unit_enabled(vtdmap);
+		if (!vtd_ensure_unit_enabled(vtdmap)) {
+			cmn_err(CE_WARN, "vtd_add_device: host-domain ensure failed "
+			    "for rid=0x%x domid=%u", rid, dom->id);
+			return;
+		}
 	}
 
 	/*
@@ -1654,6 +1831,7 @@ vtd_update_mapping(void *arg, vm_paddr_t gpa, vm_paddr_t hpa,
 	struct domain *dom = arg;
 	uint64_t mapped = 0;
 	const char *op = remove ? "unmap" : "map";
+	boolean_t gate_entered = B_FALSE;
 
 	KASSERT(((gpa | hpa | len) & PAGE_MASK) == 0,
 		("%s: unaligned gpa/hpa/len", __func__));
@@ -1667,6 +1845,12 @@ vtd_update_mapping(void *arg, vm_paddr_t gpa, vm_paddr_t hpa,
 		    "vtd_%s: domid=%u gpa=0x%llx hpa=0x%llx len=0x%llx max=0x%llx",
 		    op, dom->id, (unsigned long long)gpa, (unsigned long long)hpa,
 		    (unsigned long long)len, (unsigned long long)dom->maxaddr);
+	}
+
+	if (vtd_intrmap_quiesce_on_mapping_updates != 0 &&
+	    vtd_intrmap_quiesce_domain(dom)) {
+		vtd_intrmap_quiesce_all(B_TRUE);
+		gate_entered = B_TRUE;
 	}
 
 	while (len > 0) {
@@ -1737,6 +1921,9 @@ vtd_update_mapping(void *arg, vm_paddr_t gpa, vm_paddr_t hpa,
 		    op, dom->id, (unsigned long long)mapped);
 	}
 
+	if (gate_entered)
+		vtd_intrmap_quiesce_all(B_FALSE);
+
 	return mapped;
 }
 static uint64_t
@@ -1759,10 +1946,16 @@ vtd_invalidate_tlb(void *dom)
 	int i;
 	struct vtdmap *vtdmap;
 	struct domain *d = dom;
+	boolean_t gate_entered = B_FALSE;
 
 	if (vtd_trace_invalidate != 0 && vtd_trace_domain_enabled(d)) {
 		cmn_err(CE_NOTE, "vtd_invalidate_tlb: domid=%u",
 		    d != NULL ? d->id : 0);
+	}
+
+	if (vtd_intrmap_quiesce_domain(d)) {
+		vtd_intrmap_quiesce_all(B_TRUE);
+		gate_entered = B_TRUE;
 	}
 
 	/*
@@ -1776,11 +1969,13 @@ vtd_invalidate_tlb(void *dom)
 		if (!vtd_iotlb_global_invalidate(vtdmap)) {
 			cmn_err(CE_WARN, "vtd_invalidate_tlb: invalidate "
 			    "timed out on DRHD %d", i);
-		}
+			}
 	}
+
+	if (gate_entered)
+		vtd_intrmap_quiesce_all(B_FALSE);
 }
 
-#define VTD_ECAP_IR(_ecap)	(((_ecap) >> 3) & 0x1)	/* Interrupt Remapping */
 #define VTD_ECAP_DEV_IOTLB(_ecap)	(((_ecap) >> 2) & 0x1)	/* DEV-IOTLB support */
 #define VTD_ECAP_MGAW(_ecap)	(((_ecap) >> 16) & 0x7f) /* Max Guest Addr Width */
 
