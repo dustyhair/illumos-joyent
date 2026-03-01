@@ -240,6 +240,17 @@ uint32_t vtd_intrmap_quiesce_on_mapping_updates = 0;
  */
 uint32_t vtd_manage_ire = 0;
 
+/*
+ * Deferred passthru hardening backlog (record only; do not implement during
+ * current functionality bringup unless new evidence demands it):
+ *
+ * - Replace DRHD transition defer/drop IRTE updates with deferred replay.
+ * - Promote per-DRHD degraded invalidate handling into explicit health states.
+ * - Treat no-progress map/unmap as hard failure and consider batch rollback.
+ * - Reduce hot-path logging by default; keep deep tracing opt-in/rate-limited.
+ * - Add fault-injection coverage for two-phase IRTE updates + transitions.
+ * - Add assign/reset/MSI/map stress coverage before production sign-off.
+ */
 #define	VTD_HOST_DOMAIN_ID	1U
 
 static uint64_t root_table[PAGE_SIZE / sizeof (uint64_t)] __aligned(4096);

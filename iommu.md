@@ -42,7 +42,7 @@ meta:
   project: smartos-gpu-passthrough-illumos
   repo_path: /build/smartos-live/projects/illumos
   owner: jonathan-wagner
-  last_updated_utc: 2026-02-20T19:11:02Z
+  last_updated_utc: 2026-03-01T19:51:51Z
   baseline_commit: 163766864e9e03150779d67df8d72b9242a84eb7
 
 state:
@@ -135,6 +135,42 @@ next_actions:
     completed_utc: 2026-02-20T19:11:02Z
     completion_note: "Issue no longer reproduces in targeted builder runs (`vmm` link + ctfmerge succeed on 192.168.1.210)."
     owner: jonathan-wagner
+  - id: NA-006
+    priority: P2
+    title: "Replace DRHD transition defer/drop IRTE behavior with replay queue"
+    status: deferred
+    defer_reason: "Functionality-first phase: host and guest are currently stable enough for bringup. Revisit after smoke matrix execution."
+    owner: jonathan-wagner
+  - id: NA-007
+    priority: P2
+    title: "Promote degraded invalidate handling to explicit per-DRHD health states"
+    status: deferred
+    defer_reason: "Keep current recovery behavior during initial passthru validation; refine policy when failure modes are better characterized."
+    owner: jonathan-wagner
+  - id: NA-008
+    priority: P2
+    title: "Return hard errors on no-progress IOMMU map/unmap and evaluate rollback"
+    status: deferred
+    defer_reason: "Current goal is functional bringup. Tightening failure semantics can follow after baseline guest workloads pass."
+    owner: jonathan-wagner
+  - id: NA-009
+    priority: P2
+    title: "Rate-limit hot-path VT-d/IR logging and move deep diagnostics behind opt-in"
+    status: deferred
+    defer_reason: "Current instrumentation is useful for active debugging. Reduce verbosity after functional confidence increases."
+    owner: jonathan-wagner
+  - id: NA-010
+    priority: P2
+    title: "Add fault-injection test coverage for two-phase IRTE updates during transitions"
+    status: deferred
+    defer_reason: "Requires dedicated test harness time; deferred until core passthru functionality is consistently reproducible."
+    owner: jonathan-wagner
+  - id: NA-011
+    priority: P1
+    title: "Run focused assign/reset/MSI/map stress suite before production sign-off"
+    status: deferred
+    defer_reason: "Functionality milestone first; schedule stress campaign once smoke matrix items are passing."
+    owner: jonathan-wagner
 
 findings:
   - id: F-001
@@ -176,6 +212,26 @@ findings:
     detail: "After merge commit 1b58ea7ae1, vm_memquery_list() no longer ends with `return (0);` and closing brace before vm_mmiohook_init(), which is now parsed as if nested in the previous function."
 
 history:
+  - entry_id: H-2026-03-01-003
+    timestamp_utc: 2026-03-01T19:51:51Z
+    actor: codex
+    type: change
+    summary: "Recorded deferred hardening backlog in source/log without behavior changes; preserved functionality-first focus."
+    refs:
+      commits: []
+      files:
+        - usr/src/uts/intel/io/vmm/intel/vtd.c
+        - iommu.md
+      commands: []
+    results:
+      - "Added non-functional deferred-hardening note in vtd.c near VT-d tunables."
+      - "Added NA-006..NA-011 as deferred backlog items in iommu.md."
+      - "Left runtime behavior unchanged to keep current guest/host functionality path stable."
+    risks:
+      - "Deferred items remain unimplemented and should be re-evaluated after smoke/stress validation."
+    next_actions:
+      - "Continue functionality validation and smoke matrix execution on current branch state."
+      - "Reassess deferred hardening items when current passthru flow is consistently reproducible."
   - entry_id: H-2026-02-20-002
     timestamp_utc: 2026-02-20T19:11:02Z
     actor: codex
