@@ -62,6 +62,9 @@ SYMBOL_VERSION ILLUMOSprivate {
 
 	# IOMMU API for PCI pass-thru
 	iommu_add_device;
+	iommu_domain_map;
+	iommu_domain_unmap;
+	iommu_invalidate_tlb;
 	iommu_host_domain;
 	iommu_remove_device;
 	lapic_intr_msi;

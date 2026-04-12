@@ -630,9 +630,11 @@ vtd_add_device(void *arg, uint16_t rid)
 	ctxp[idx] |= pt_paddr | VTD_CTX_PRESENT;
 
 	/*
-	 * 'Not Present' entries are not cached in either the Context Cache
-	 * or in the IOTLB, so there is no need to invalidate either of them.
+	 * Flush any stale context or IOTLB state retained from a previous
+	 * assignment of this RID before the device is allowed to DMA.
 	 */
+	vtd_ctx_global_invalidate(vtdmap);
+	vtd_iotlb_global_invalidate(vtdmap);
 }
 
 static void

@@ -237,6 +237,13 @@ iommu_create_mapping(void *domain, vm_paddr_t gpa, vm_paddr_t hpa, size_t len)
 		uint64_t mapped;
 
 		mapped = ops->create_mapping(domain, gpa, hpa, remaining);
+		if (mapped == 0) {
+			cmn_err(CE_WARN, "iommu_create_mapping: no forward "
+			    "progress (gpa=%llx hpa=%llx rem=%llx)",
+			    (u_longlong_t)gpa, (u_longlong_t)hpa,
+			    (u_longlong_t)remaining);
+			break;
+		}
 		gpa += mapped;
 		hpa += mapped;
 		remaining -= mapped;
@@ -254,9 +261,51 @@ iommu_remove_mapping(void *domain, vm_paddr_t gpa, size_t len)
 		uint64_t unmapped;
 
 		unmapped = ops->remove_mapping(domain, gpa, remaining);
+		if (unmapped == 0) {
+			cmn_err(CE_WARN, "iommu_remove_mapping: no forward "
+			    "progress (gpa=%llx rem=%llx)",
+			    (u_longlong_t)gpa, (u_longlong_t)remaining);
+			break;
+		}
 		gpa += unmapped;
 		remaining -= unmapped;
 	}
+}
+
+int
+iommu_domain_map(void *domain, uint64_t gpa, uint64_t hpa, size_t len, int prot)
+{
+	if (domain == NULL)
+		return (EINVAL);
+	if (len == 0)
+		return (0);
+	if (((gpa | hpa | len) & PAGEOFFSET) != 0)
+		return (EINVAL);
+	if (gpa + len < gpa || hpa + len < hpa)
+		return (EINVAL);
+
+	/*
+	 * For now we ignore prot and install RW mappings like the existing
+	 * VM domain map path.
+	 */
+	iommu_create_mapping(domain, gpa, hpa, len);
+	return (0);
+}
+
+int
+iommu_domain_unmap(void *domain, uint64_t gpa, size_t len)
+{
+	if (domain == NULL)
+		return (EINVAL);
+	if (len == 0)
+		return (0);
+	if (((gpa | len) & PAGEOFFSET) != 0)
+		return (EINVAL);
+	if (gpa + len < gpa)
+		return (EINVAL);
+
+	iommu_remove_mapping(domain, gpa, len);
+	return (0);
 }
 
 void *

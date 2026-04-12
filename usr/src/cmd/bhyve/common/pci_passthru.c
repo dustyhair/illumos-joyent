@@ -1065,6 +1065,24 @@ passthru_msix_addr(struct vmctx *ctx, struct pci_devinst *pi, int baridx,
 	uint32_t table_size, table_offset;
 
 	sc = pi->pi_arg;
+
+	if (enabled && address != 0) {
+		struct ppt_iommu_map map = {
+			.gpa = address,
+			.hpa = sc->psc_bar[baridx].addr,
+			.size = sc->psc_bar[baridx].size,
+			.prot = IOMMU_PROT_RW
+		};
+
+		if (ioctl(sc->pptfd, PPT_IOMMU_MAP, &map) != 0) {
+			warn("PASSTHRU: MSIX PPT_IOMMU_MAP BAR%d FAILED "
+			    "gpa=0x%llx hpa=0x%llx sz=0x%llx", baridx,
+			    (unsigned long long)map.gpa,
+			    (unsigned long long)map.hpa,
+			    (unsigned long long)map.size);
+		}
+	}
+
 	table_offset = rounddown2(pi->pi_msix.table_offset, 4096);
 	if (table_offset > 0) {
 		if (!enabled) {
