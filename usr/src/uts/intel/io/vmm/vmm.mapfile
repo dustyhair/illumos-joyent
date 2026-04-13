@@ -68,6 +68,8 @@ SYMBOL_VERSION ILLUMOSprivate {
 	iommu_host_domain;
 	iommu_remove_device;
 	lapic_intr_msi;
+	vioapic_pincount;
+	vioapic_pulse_irq;
 	vm_iommu_domain;
 	vm_map_mmio;
 	vm_unmap_mmio;

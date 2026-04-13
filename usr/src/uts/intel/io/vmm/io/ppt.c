@@ -75,6 +75,7 @@
 
 #include "iommu.h"
 #include "ppt.h"
+#include "vioapic.h"
 
 #define	MAX_MSIMSGS	32
 
@@ -92,6 +93,11 @@ struct pptintr_arg {
 	struct pptdev	*pptdev;
 	uint64_t	addr;
 	uint64_t	msg_data;
+};
+
+struct pptintx_arg {
+	struct pptdev	*pptdev;
+	int		ioapic_irq;
 };
 
 struct pptseg {
@@ -134,6 +140,12 @@ struct pptdev {
 		ddi_intr_handle_t *inth;
 		struct pptintr_arg *arg;
 	} msix;
+	struct {
+		boolean_t enabled;
+		int ioapic_irq;
+		ddi_intr_handle_t inth;
+		struct pptintx_arg arg;
+	} intx;
 };
 
 
@@ -141,6 +153,9 @@ static major_t		ppt_major;
 static void		*ppt_state;
 static kmutex_t		pptdev_mtx;
 static list_t		pptdev_list;
+
+static void ppt_teardown_intx(struct pptdev *);
+static uint_t pptintr_intx(caddr_t, caddr_t);
 
 #define	PPT_MINOR_NAME	"ppt"
 
@@ -382,11 +397,77 @@ ppt_ioctl(dev_t dev, int cmd, intptr_t arg, int md, cred_t *cr, int *rv)
 		struct ppt_caps caps;
 
 		caps.version = 1;
-		caps.caps = PPT_CAP_BAR_INFO | PPT_CAP_IOMMU;
+		caps.caps = PPT_CAP_BAR_INFO | PPT_CAP_IOMMU | PPT_CAP_INTX;
 
 		if (ddi_copyout(&caps, data, sizeof (caps), md) != 0) {
 			return (EFAULT);
 		}
+		return (0);
+	}
+	case PPT_INTX_SETUP: {
+		struct ppt_intx pintx;
+
+		if (ddi_copyin(data, &pintx, sizeof (pintx), md) != 0) {
+			return (EFAULT);
+		}
+
+		mutex_enter(&pptdev_mtx);
+		if (!pintx.enable) {
+			ppt_teardown_intx(ppt);
+			mutex_exit(&pptdev_mtx);
+			return (0);
+		}
+
+		if (ppt->vm == NULL) {
+			mutex_exit(&pptdev_mtx);
+			return (ENODEV);
+		}
+
+		if (pintx.ioapic_irq >= vioapic_pincount(ppt->vm)) {
+			mutex_exit(&pptdev_mtx);
+			return (EINVAL);
+		}
+
+		if (ppt->intx.inth != NULL && ppt->intx.enabled &&
+		    ppt->intx.ioapic_irq == (int)pintx.ioapic_irq) {
+			mutex_exit(&pptdev_mtx);
+			return (0);
+		}
+
+		ppt_teardown_intx(ppt);
+		{
+			int nalloc = 0;
+
+			if (ddi_intr_alloc(ppt->pptd_dip, &ppt->intx.inth,
+			    DDI_INTR_TYPE_FIXED, 0, 1, &nalloc, 0) !=
+			    DDI_SUCCESS || nalloc != 1) {
+				ppt->intx.inth = NULL;
+				mutex_exit(&pptdev_mtx);
+				return (ENXIO);
+			}
+		}
+
+		ppt->intx.arg.pptdev = ppt;
+		ppt->intx.arg.ioapic_irq = pintx.ioapic_irq;
+		if (ddi_intr_add_handler(ppt->intx.inth, pptintr_intx,
+		    &ppt->intx.arg, NULL) != DDI_SUCCESS) {
+			(void) ddi_intr_free(ppt->intx.inth);
+			ppt->intx.inth = NULL;
+			mutex_exit(&pptdev_mtx);
+			return (ENXIO);
+		}
+
+		if (ddi_intr_enable(ppt->intx.inth) != DDI_SUCCESS) {
+			(void) ddi_intr_remove_handler(ppt->intx.inth);
+			(void) ddi_intr_free(ppt->intx.inth);
+			ppt->intx.inth = NULL;
+			mutex_exit(&pptdev_mtx);
+			return (ENXIO);
+		}
+
+		ppt->intx.enabled = B_TRUE;
+		ppt->intx.ioapic_irq = pintx.ioapic_irq;
+		mutex_exit(&pptdev_mtx);
 		return (0);
 	}
 	case PPT_IOMMU_MAP: {
@@ -1234,6 +1315,20 @@ ppt_teardown_msix(struct pptdev *ppt)
 	ppt->msix.num_msgs = 0;
 }
 
+static void
+ppt_teardown_intx(struct pptdev *ppt)
+{
+	if (ppt->intx.inth != NULL) {
+		(void) ddi_intr_disable(ppt->intx.inth);
+		(void) ddi_intr_remove_handler(ppt->intx.inth);
+		(void) ddi_intr_free(ppt->intx.inth);
+		ppt->intx.inth = NULL;
+	}
+
+	ppt->intx.enabled = B_FALSE;
+	ppt->intx.ioapic_irq = -1;
+}
+
 int
 ppt_assigned_devices(struct vm *vm)
 {
@@ -1370,6 +1465,7 @@ ppt_do_unassign(struct pptdev *ppt)
 	ppt_unmap_all_mmio(vm, ppt);
 	ppt_teardown_msi(ppt);
 	ppt_teardown_msix(ppt);
+	ppt_teardown_intx(ppt);
 	iommu_remove_device(vm_iommu_domain(vm), pci_get_bdf(ppt->pptd_dip));
 	iommu_add_device(iommu_host_domain(), pci_get_bdf(ppt->pptd_dip));
 	ppt->vm = NULL;
@@ -1513,13 +1609,35 @@ pptintr(caddr_t arg, caddr_t unused)
 	return (ppt->msi.is_fixed ? DDI_INTR_UNCLAIMED : DDI_INTR_CLAIMED);
 }
 
+static uint_t
+pptintr_intx(caddr_t arg, caddr_t unused)
+{
+	struct pptintx_arg *pptarg = (struct pptintx_arg *)arg;
+	struct pptdev *ppt = pptarg->pptdev;
+
+	if (ppt->vm != NULL && ppt->intx.enabled) {
+		if (ppt->msi.num_msgs == 1) {
+			(void) lapic_intr_msi(ppt->vm, ppt->msi.arg[0].addr,
+			    ppt->msi.arg[0].msg_data);
+		} else {
+			(void) vioapic_pulse_irq(ppt->vm, pptarg->ioapic_irq);
+		}
+	}
+
+	return (DDI_INTR_CLAIMED);
+}
+
 int
 ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
     int numvec)
 {
 	int i, msi_count, intr_type;
+	int supported_types = 0;
+	int navail_msi = -1;
+	int navail_fixed = -1;
 	struct pptdev *ppt;
 	int err = 0;
+	uint16_t bdf = 0xffff;
 
 	if (numvec < 0 || numvec > MAX_MSIMSGS)
 		return (EINVAL);
@@ -1530,6 +1648,7 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 		mutex_exit(&pptdev_mtx);
 		return (err);
 	}
+	bdf = pci_get_bdf(ppt->pptd_dip);
 
 	/* Reject attempts to enable MSI while MSI-X is active. */
 	if (ppt->msix.num_msgs != 0 && numvec != 0) {
@@ -1545,10 +1664,19 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 		goto done;
 	}
 
+	(void) ddi_intr_get_supported_types(ppt->pptd_dip, &supported_types);
 	if (ddi_intr_get_navail(ppt->pptd_dip, DDI_INTR_TYPE_MSI,
 	    &msi_count) != DDI_SUCCESS) {
+		(void) ddi_intr_get_navail(ppt->pptd_dip, DDI_INTR_TYPE_FIXED,
+		    &navail_fixed);
+		cmn_err(CE_NOTE, "ppt: MSI navail failed bdf=0x%x req=%d "
+		    "types=0x%x fixed_navail=%d", bdf, numvec,
+		    supported_types, navail_fixed);
 		if (ddi_intr_get_navail(ppt->pptd_dip, DDI_INTR_TYPE_FIXED,
 		    &msi_count) != DDI_SUCCESS) {
+			cmn_err(CE_WARN, "ppt: MSI setup no interrupt mode "
+			    "bdf=0x%x req=%d types=0x%x", bdf, numvec,
+			    supported_types);
 			err = EINVAL;
 			goto done;
 		}
@@ -1556,6 +1684,7 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 		intr_type = DDI_INTR_TYPE_FIXED;
 		ppt->msi.is_fixed = B_TRUE;
 	} else {
+		navail_msi = msi_count;
 		intr_type = DDI_INTR_TYPE_MSI;
 	}
 
@@ -1564,6 +1693,9 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 	 * the guest wants to allocate.
 	 */
 	if (numvec > msi_count) {
+		cmn_err(CE_WARN, "ppt: MSI request exceeds navail bdf=0x%x "
+		    "req=%d navail=%d type=0x%x types=0x%x", bdf, numvec,
+		    msi_count, intr_type, supported_types);
 		err = EINVAL;
 		goto done;
 	}
@@ -1572,6 +1704,9 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 	ppt->msi.inth = kmem_zalloc(ppt->msi.inth_sz, KM_SLEEP);
 	if (ddi_intr_alloc(ppt->pptd_dip, ppt->msi.inth, intr_type, 0,
 	    numvec, &msi_count, 0) != DDI_SUCCESS) {
+		cmn_err(CE_WARN, "ppt: ddi_intr_alloc failed bdf=0x%x req=%d "
+		    "type=0x%x navail_msi=%d actual=%d types=0x%x", bdf,
+		    numvec, intr_type, navail_msi, msi_count, supported_types);
 		kmem_free(ppt->msi.inth, ppt->msi.inth_sz);
 		err = EINVAL;
 		goto done;
@@ -1579,6 +1714,9 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 
 	/* Verify that we got as many vectors as the guest requested */
 	if (numvec != msi_count) {
+		cmn_err(CE_WARN, "ppt: MSI partial alloc bdf=0x%x req=%d "
+		    "got=%d type=0x%x navail_msi=%d types=0x%x", bdf,
+		    numvec, msi_count, intr_type, navail_msi, supported_types);
 		ppt_teardown_msi(ppt);
 		err = EINVAL;
 		goto done;
@@ -1764,6 +1902,71 @@ ppt_disable_msix(struct vm *vm, int pptfd)
 
 	ppt_teardown_msix(ppt);
 
+	releasef(pptfd);
+	mutex_exit(&pptdev_mtx);
+	return (err);
+}
+
+int
+ppt_setup_intx(struct vm *vm, int pptfd, int ioapic_irq, boolean_t enable)
+{
+	struct pptdev *ppt;
+	int nalloc = 0;
+	int err = 0;
+
+	mutex_enter(&pptdev_mtx);
+	err = ppt_findf(vm, pptfd, &ppt);
+	if (err != 0) {
+		mutex_exit(&pptdev_mtx);
+		return (err);
+	}
+
+	if (!enable) {
+		ppt_teardown_intx(ppt);
+		goto done;
+	}
+
+	if (ioapic_irq < 0 || ioapic_irq >= vioapic_pincount(vm)) {
+		err = EINVAL;
+		goto done;
+	}
+
+	if (ppt->intx.inth != NULL && ppt->intx.enabled &&
+	    ppt->intx.ioapic_irq == ioapic_irq) {
+		goto done;
+	}
+
+	ppt_teardown_intx(ppt);
+
+	if (ddi_intr_alloc(ppt->pptd_dip, &ppt->intx.inth, DDI_INTR_TYPE_FIXED,
+	    0, 1, &nalloc, 0) != DDI_SUCCESS || nalloc != 1) {
+		ppt->intx.inth = NULL;
+		err = ENXIO;
+		goto done;
+	}
+
+	ppt->intx.arg.pptdev = ppt;
+	ppt->intx.arg.ioapic_irq = ioapic_irq;
+	if (ddi_intr_add_handler(ppt->intx.inth, pptintr_intx, &ppt->intx.arg,
+	    NULL) != DDI_SUCCESS) {
+		(void) ddi_intr_free(ppt->intx.inth);
+		ppt->intx.inth = NULL;
+		err = ENXIO;
+		goto done;
+	}
+
+	if (ddi_intr_enable(ppt->intx.inth) != DDI_SUCCESS) {
+		(void) ddi_intr_remove_handler(ppt->intx.inth);
+		(void) ddi_intr_free(ppt->intx.inth);
+		ppt->intx.inth = NULL;
+		err = ENXIO;
+		goto done;
+	}
+
+	ppt->intx.enabled = B_TRUE;
+	ppt->intx.ioapic_irq = ioapic_irq;
+
+done:
 	releasef(pptfd);
 	mutex_exit(&pptdev_mtx);
 	return (err);

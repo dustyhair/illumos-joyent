@@ -191,6 +191,11 @@ struct passthru_softc {
 	int pptfd;
 	int msi_limit;
 	int msix_limit;
+	int psc_msi_host_active;
+	int psc_intx_configured;
+	int psc_intx_enabled;
+	int psc_intx_irq;
+	int psc_intx_ioctl_supported;
 
 	cfgread_handler psc_pcir_rhandler[PCI_REGMAX + 1];
 	cfgwrite_handler psc_pcir_whandler[PCI_REGMAX + 1];
@@ -213,6 +218,11 @@ static void passthru_tu102_drop_bar1_postbar3_window_locked(
     struct passthru_softc *);
 static bool passthru_tu102_map_bar1_window_page_locked(struct passthru_softc *,
     int, uint64_t);
+static int passthru_setup_intx(struct vmctx *, int, int, int);
+static int passthru_vm_setup_pptdev_msi(struct passthru_softc *,
+    struct pci_devinst *, struct vmctx *, uint64_t, uint64_t, int);
+static int passthru_vm_setup_pptdev_msix(struct passthru_softc *,
+    struct pci_devinst *, struct vmctx *, int, uint64_t, uint64_t, uint32_t);
 
 static int
 passthru_nvidia_display_fn0(const struct passthru_softc *sc)
@@ -973,9 +983,49 @@ passthru_tu102_host_cmd_sticky_quirk(struct pci_devinst *pi)
 }
 
 static int
+passthru_env_enabled(const char *name)
+{
+	const char *v = getenv(name);
+
+	if (v == NULL || *v == '\0')
+		return (0);
+	if (strcmp(v, "0") == 0)
+		return (0);
+	return (1);
+}
+
+static int
 passthru_tu102_host_cmd_shadow_quirk(struct pci_devinst *pi)
 {
 	return (passthru_tu102_host_cmd_sticky_quirk(pi));
+}
+
+/*
+ * Keep the old TU102 fn0 INTx bootstrap knobs available while the runtime MSI
+ * path is still under recovery.
+ */
+static int
+passthru_intx_bootstrap_quirk(struct pci_devinst *pi)
+{
+	const char *v;
+
+	v = getenv("BHYVE_PPT_INTX_BOOTSTRAP");
+	if (v != NULL && (*v == '\0' || strcmp(v, "0") == 0))
+		return (0);
+
+	return (passthru_tu102_host_cmd_sticky_quirk(pi));
+}
+
+static int
+passthru_intx_force_on_quirk(struct pci_devinst *pi)
+{
+	const char *v;
+
+	v = getenv("BHYVE_PPT_INTX_FORCE_ON");
+	if (v == NULL || *v == '\0' || strcmp(v, "0") == 0)
+		return (0);
+
+	return (passthru_tu102_host_cmd_sticky_quirk(pi) != 0);
 }
 
 static int
@@ -1012,6 +1062,18 @@ passthru_read_config(const struct passthru_softc *sc, long reg, int width)
 		return (0);
 	}
 	return (pi.pci_data);
+}
+
+static int
+passthru_setup_intx(struct vmctx *ctx __unused, int pptfd, int ioapic_irq,
+    int enable)
+{
+	struct ppt_intx pi;
+
+	bzero(&pi, sizeof (pi));
+	pi.ioapic_irq = ioapic_irq;
+	pi.enable = enable;
+	return (ioctl(pptfd, PPT_INTX_SETUP, &pi));
 }
 
 static int
@@ -1430,7 +1492,7 @@ msix_table_write(struct vmctx *ctx, struct passthru_softc *sc,
 		/* If the entry is masked, don't set it up */
 		if ((entry->vector_control & PCIM_MSIX_VCTRL_MASK) == 0 ||
 		    (vector_control & PCIM_MSIX_VCTRL_MASK) == 0) {
-			(void) vm_setup_pptdev_msix(ctx, sc->pptfd,
+			(void) passthru_vm_setup_pptdev_msix(sc, pi, ctx,
 			    index, entry->addr, entry->msg_data,
 			    entry->vector_control);
 		}
@@ -1498,6 +1560,99 @@ init_msix_table(struct vmctx *ctx __unused, struct passthru_softc *sc)
 			warn("Failed to unmap MSI-X table BAR region");
 
 	return (0);
+}
+
+static int
+passthru_vm_setup_pptdev_msi(struct passthru_softc *sc, struct pci_devinst *pi,
+    struct vmctx *ctx, uint64_t addr, uint64_t data, int numvec)
+{
+	int rc;
+	int saved_irq = -1;
+
+	if (numvec == 0 && !sc->psc_msi_host_active) {
+		return (0);
+	}
+
+	if (numvec > 0 && sc->psc_intx_ioctl_supported &&
+	    sc->psc_intx_configured && sc->psc_intx_enabled &&
+	    !passthru_intx_force_on_quirk(pi)) {
+		saved_irq = sc->psc_intx_irq;
+		if (saved_irq <= 0)
+			saved_irq = pi->pi_lintr.ioapic_irq;
+		rc = passthru_setup_intx(ctx, sc->pptfd, 0, 0);
+		if (rc != 0) {
+			if (errno == ENOTSUP)
+				sc->psc_intx_ioctl_supported = 0;
+			return (rc);
+		}
+		sc->psc_intx_configured = 1;
+		sc->psc_intx_enabled = 0;
+		sc->psc_intx_irq = 0;
+	}
+
+	rc = vm_setup_pptdev_msi(ctx, sc->pptfd, addr, data, numvec);
+	if (rc != 0) {
+		warnx("ppt msi setup failed bdf=%d:%d:%d pptfd=%d addr=0x%llx "
+		    "data=0x%llx numvec=%d intx_cfg=%d intx_en=%d intx_irq=%d "
+		    "msi_en=%d msix_en=%d host_msi_active=%d",
+		    pi->pi_bus, pi->pi_slot, pi->pi_func, sc->pptfd,
+		    (unsigned long long)addr, (unsigned long long)data, numvec,
+		    sc->psc_intx_configured, sc->psc_intx_enabled,
+		    sc->psc_intx_irq, pi->pi_msi.enabled, pi->pi_msix.enabled,
+		    sc->psc_msi_host_active);
+	}
+	if (rc == 0)
+		sc->psc_msi_host_active = (numvec > 0);
+	if (rc != 0 && numvec > 0 && saved_irq > 0 &&
+	    sc->psc_intx_ioctl_supported && !passthru_intx_force_on_quirk(pi)) {
+		if (passthru_setup_intx(ctx, sc->pptfd, saved_irq, 1) == 0) {
+			sc->psc_intx_configured = 1;
+			sc->psc_intx_enabled = 1;
+			sc->psc_intx_irq = saved_irq;
+		}
+	}
+
+	return (rc);
+}
+
+static int
+passthru_vm_setup_pptdev_msix(struct passthru_softc *sc, struct pci_devinst *pi,
+    struct vmctx *ctx, int idx, uint64_t addr, uint64_t data,
+    uint32_t vector_control)
+{
+	int rc;
+	int saved_irq = -1;
+
+	if ((vector_control & PCIM_MSIX_VCTRL_MASK) == 0 &&
+	    sc->psc_intx_ioctl_supported && sc->psc_intx_configured &&
+	    sc->psc_intx_enabled && !passthru_intx_force_on_quirk(pi)) {
+		saved_irq = sc->psc_intx_irq;
+		if (saved_irq <= 0)
+			saved_irq = pi->pi_lintr.ioapic_irq;
+		rc = passthru_setup_intx(ctx, sc->pptfd, 0, 0);
+		if (rc != 0) {
+			if (errno == ENOTSUP)
+				sc->psc_intx_ioctl_supported = 0;
+			return (rc);
+		}
+		sc->psc_intx_configured = 1;
+		sc->psc_intx_enabled = 0;
+		sc->psc_intx_irq = 0;
+	}
+
+	rc = vm_setup_pptdev_msix(ctx, sc->pptfd, idx, addr, data,
+	    vector_control);
+	if (rc != 0 && (vector_control & PCIM_MSIX_VCTRL_MASK) == 0 &&
+	    saved_irq > 0 && sc->psc_intx_ioctl_supported &&
+	    !passthru_intx_force_on_quirk(pi)) {
+		if (passthru_setup_intx(ctx, sc->pptfd, saved_irq, 1) == 0) {
+			sc->psc_intx_configured = 1;
+			sc->psc_intx_enabled = 1;
+			sc->psc_intx_irq = saved_irq;
+		}
+	}
+
+	return (rc);
 }
 
 static int
@@ -1830,6 +1985,7 @@ passthru_init(struct pci_devinst *pi, nvlist_t *nvl)
 	pi->pi_arg = sc;
 	sc->psc_pi = pi;
 	sc->pptfd = pptfd;
+	sc->psc_intx_ioctl_supported = 1;
 	(void) pthread_mutex_init(&sc->psc_alias_lock, NULL);
 
 	if ((error = vm_get_pptdev_limits(ctx, pptfd, &sc->msi_limit,
@@ -1970,7 +2126,7 @@ passthru_cfgwrite_default(struct passthru_softc *sc, struct pci_devinst *pi,
 	if (msicap_access(sc, coff)) {
 		pci_emul_capwrite(pi, coff, bytes, val, sc->psc_msi.capoff,
 		    PCIY_MSI);
-		error = vm_setup_pptdev_msi(ctx, sc->pptfd,
+		error = passthru_vm_setup_pptdev_msi(sc, pi, ctx,
 		    pi->pi_msi.addr, pi->pi_msi.msg_data, pi->pi_msi.maxmsgnum);
 		if (error != 0)
 			err(1, "vm_setup_pptdev_msi");
@@ -1983,8 +2139,8 @@ passthru_cfgwrite_default(struct passthru_softc *sc, struct pci_devinst *pi,
 		if (pi->pi_msix.enabled) {
 			msix_table_entries = pi->pi_msix.table_count;
 			for (i = 0; i < msix_table_entries; i++) {
-				error = vm_setup_pptdev_msix(ctx,
-				    sc->pptfd, i,
+				error = passthru_vm_setup_pptdev_msix(sc, pi, ctx,
+				    i,
 				    pi->pi_msix.table[i].addr,
 				    pi->pi_msix.table[i].msg_data,
 				    pi->pi_msix.table[i].vector_control);
@@ -2048,6 +2204,40 @@ passthru_cfgwrite_default(struct passthru_softc *sc, struct pci_devinst *pi,
 
 		if (need_host_sync)
 			passthru_write_config(sc, PCIR_COMMAND, 2, host_write);
+
+		if (sc->psc_intx_ioctl_supported &&
+		    pi->pi_lintr.ioapic_irq > 0 &&
+		    (passthru_env_enabled("BHYVE_PPT_ENABLE_INTX") ||
+		    passthru_intx_bootstrap_quirk(pi) ||
+		    passthru_intx_force_on_quirk(pi))) {
+			int intx_enable;
+			int need_cfg;
+
+			intx_enable = ((passthru_intx_force_on_quirk(pi) ||
+			    (!pi->pi_msi.enabled && !pi->pi_msix.enabled &&
+			    ((newval & PCIM_CMD_INTxDIS) == 0)))) ? 1 : 0;
+			need_cfg = (!sc->psc_intx_configured ||
+			    sc->psc_intx_enabled != intx_enable ||
+			    (intx_enable != 0 &&
+			    sc->psc_intx_irq != pi->pi_lintr.ioapic_irq));
+
+			if (need_cfg) {
+				error = passthru_setup_intx(ctx, sc->pptfd,
+				    intx_enable ? pi->pi_lintr.ioapic_irq : 0,
+				    intx_enable);
+				if (error == 0) {
+					sc->psc_intx_configured = 1;
+					sc->psc_intx_enabled = intx_enable;
+					sc->psc_intx_irq = intx_enable ?
+					    pi->pi_lintr.ioapic_irq : 0;
+				} else if (errno == ENOTSUP) {
+					sc->psc_intx_ioctl_supported = 0;
+					sc->psc_intx_configured = 1;
+					sc->psc_intx_enabled = 0;
+					sc->psc_intx_irq = 0;
+				}
+			}
+		}
 
 		return (PE_CFGRW_DROP);
 	}

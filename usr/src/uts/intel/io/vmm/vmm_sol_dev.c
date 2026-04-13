@@ -655,6 +655,15 @@ vmmdev_do_ioctl(vmm_softc_t *sc, int cmd, intptr_t arg, int md,
 		}
 		error = ppt_setup_msi(sc->vmm_vm, pptmsi.vcpu, pptmsi.pptfd,
 		    pptmsi.addr, pptmsi.msg, pptmsi.numvec);
+		if (error != 0) {
+			cmn_err(CE_WARN, "vmm: VM_PPTDEV_MSI failed vm=%p "
+			    "pptfd=%d vcpu=%d addr=0x%llx msg=0x%llx "
+			    "numvec=%d err=%d",
+			    (void *)sc->vmm_vm, pptmsi.pptfd, pptmsi.vcpu,
+			    (unsigned long long)pptmsi.addr,
+			    (unsigned long long)pptmsi.msg, pptmsi.numvec,
+			    error);
+		}
 		break;
 	}
 	case VM_PPTDEV_MSIX: {

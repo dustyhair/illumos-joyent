@@ -29,6 +29,7 @@ extern "C" {
 #define	PPT_BAR_READ		(PPT_IOC | 0x04)
 #define	PPT_BAR_WRITE		(PPT_IOC | 0x05)
 #define	PPT_GET_CAPS		(PPT_IOC | 0x10)
+#define	PPT_INTX_SETUP		(PPT_IOC | 0x11)
 #define	PPT_IOMMU_MAP		(PPT_IOC | 0x20)
 #define	PPT_IOMMU_UNMAP		(PPT_IOC | 0x21)
 #define	PPT_IOMMU_MAP_BATCH	(PPT_IOC | 0x22)
@@ -37,6 +38,7 @@ extern "C" {
 #define	PPT_MAXNAMELEN	32
 
 #define	PPT_CAP_IOMMU		(1 << 0)
+#define	PPT_CAP_INTX		(1 << 1)
 #define	PPT_CAP_BAR_INFO	(1 << 2)
 
 #define	IOMMU_PROT_READ		0x1
@@ -65,6 +67,11 @@ struct ppt_bar_query {
 struct ppt_caps {
 	uint32_t version;
 	uint32_t caps;
+};
+
+struct ppt_intx {
+	uint32_t ioapic_irq;
+	uint32_t enable;
 };
 
 struct ppt_iommu_map {
