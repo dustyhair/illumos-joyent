@@ -44,6 +44,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <stdarg.h>
 #include <string.h>
 #include <err.h>
 #include <errno.h>
@@ -66,6 +67,25 @@
 #define MSIX_TABLE_COUNT(ctrl) (((ctrl) & PCIM_MSIXCTRL_TABLE_SIZE) + 1)
 #define MSIX_CAPLEN 12
 #define	PASSTHRU_NVIDIA_VENDOR_ID	0x10de
+/*
+ * TU102 startup compatibility path:
+ *
+ * The preserved working shape keeps the real guest BARs pinned high
+ * (BAR1=0x800000000, BAR3=0x810000000, BAR0=0xc0000000). That is the
+ * target layout we want to keep.
+ *
+ * The low-GPA aliases below are not the preferred steady-state model.
+ * They exist only to cover the current firmware/GOP first-touch path that
+ * still expects:
+ *
+ * - a low BAR0 firmware alias
+ * - an initial low BAR1 compatibility aperture
+ * - a low BAR3 alias plus the small BAR3 tail page
+ * - post-BAR3 BAR1 windows that start trap-only and are promoted later
+ *
+ * Keep this block visibly isolated so it can be reduced or removed once the
+ * proper startup path is understood.
+ */
 #define	PASSTHRU_TU102_BAR0_FW_ALIAS_GPA	0xc2000000ULL
 #define	PASSTHRU_TU102_BAR1_FW_ALIAS0_GPA	0x160000000ULL
 #define	PASSTHRU_TU102_BAR3_FW_ALIAS_GPA	0x170000000ULL
@@ -90,6 +110,43 @@
 #define	NVIDIA_TU102_PMC_MASK_PROMOTE_END	0x680U
 #define	NVIDIA_TU102_PGRAPH_DISPATCH_OFF	0x404000ULL
 #define	NVIDIA_TU102_PGRAPH_DISPATCH_END	0x404010ULL
+
+/*
+ * Detailed TU102 startup tracing is runtime-gated because the current
+ * compatibility path can generate a large amount of warnx() traffic while
+ * BARs are being churned. Keep the trace available for diagnosis, but make
+ * it opt-in so the default startup path stays quieter.
+ *
+ * Enable with: BHYVE_PPT_TU102_TRACE=1
+ */
+static bool
+passthru_tu102_trace_enabled(void)
+{
+	static int enabled = -1;
+	const char *value;
+
+	if (enabled == -1) {
+		value = getenv("BHYVE_PPT_TU102_TRACE");
+		enabled = (value != NULL && value[0] != '\0' &&
+		    !(value[0] == '0' && value[1] == '\0')) ? 1 : 0;
+	}
+
+	return (enabled != 0);
+}
+
+static void
+passthru_tu102_trace(const char *fmt, ...)
+{
+	va_list ap;
+
+	if (!passthru_tu102_trace_enabled()) {
+		return;
+	}
+
+	va_start(ap, fmt);
+	vwarnx(fmt, ap);
+	va_end(ap);
+}
 
 static const uint32_t nvidia_tu102_pmc_daemon_regs[] = {
 	0x108, 0x148, 0x168, 0x16c, 0x170, 0x174, 0x178, 0x17c,
@@ -363,7 +420,7 @@ passthru_trace_tu102_bar1_mmio(struct passthru_softc *sc, const char *op,
 	}
 	if (sc->psc_bar1_trace_count >= PASSTHRU_TU102_BAR1_TRACE_LIMIT) {
 		if (sc->psc_bar1_trace_suppressed == 0) {
-			warnx("passthru: TU102 BAR1 MMIO trace suppressed "
+			passthru_tu102_trace("passthru: TU102 BAR1 MMIO trace suppressed "
 			    "bdf=%d/%d/%d after %u accesses",
 			    sc->psc_pi->pi_bus, sc->psc_pi->pi_slot,
 			    sc->psc_pi->pi_func, PASSTHRU_TU102_BAR1_TRACE_LIMIT);
@@ -376,7 +433,7 @@ passthru_trace_tu102_bar1_mmio(struct passthru_softc *sc, const char *op,
 	offset = fault_gpa - window_gpa;
 	sc->psc_bar1_trace_count++;
 
-	warnx("passthru: TU102 BAR1_MMIO bdf=%d/%d/%d op=%s "
+	passthru_tu102_trace("passthru: TU102 BAR1_MMIO bdf=%d/%d/%d op=%s "
 	    "fault_gpa=0x%lx window_gpa=0x%lx slot=%d offset=0x%lx "
 	    "size=%d value=0x%lx host_hpa=0x%lx bar_size=0x%lx count=%u",
 	    pi->pi_bus, pi->pi_slot, pi->pi_func,
@@ -407,7 +464,7 @@ passthru_trace_tu102_bar1_transition(struct passthru_softc *sc, uint64_t gpa)
 	native_base = sc->psc_bar_gpa_valid[1] != 0 ?
 	    sc->psc_bar_gpa[1] : sc->psc_pi->pi_bar[1].addr;
 	sc->psc_bar1_transition_first_seen = 1;
-	warnx("passthru: TU102 BAR1 transition attempt "
+	passthru_tu102_trace("passthru: TU102 BAR1 transition attempt "
 	    "fault_gpa=0x%lx alias_base=0x%lx alias_limit=0x%lx "
 	    "bar3_alias_limit=0x%lx native_bar1_gpa=0x%lx native_bar1_limit=0x%lx",
 	    (ulong_t)gpa, (ulong_t)PASSTHRU_TU102_BAR1_FW_ALIAS0_GPA,
@@ -426,7 +483,7 @@ passthru_trace_tu102_bar3_tail_mmio(struct passthru_softc *sc, const char *op,
 	}
 	if (sc->psc_bar3_tail_trace_count >= PASSTHRU_TU102_BAR3_TAIL_TRACE_LIMIT) {
 		if (sc->psc_bar3_tail_trace_suppressed == 0) {
-			warnx("passthru: TU102 BAR3 tail trace suppressed "
+			passthru_tu102_trace("passthru: TU102 BAR3 tail trace suppressed "
 			    "bdf=%d/%d/%d after %u accesses",
 			    sc->psc_pi->pi_bus, sc->psc_pi->pi_slot,
 			    sc->psc_pi->pi_func, PASSTHRU_TU102_BAR3_TAIL_TRACE_LIMIT);
@@ -437,7 +494,7 @@ passthru_trace_tu102_bar3_tail_mmio(struct passthru_softc *sc, const char *op,
 
 	pi = sc->psc_pi;
 	sc->psc_bar3_tail_trace_count++;
-	warnx("passthru: TU102 BAR3_TAIL_MMIO bdf=%d/%d/%d op=%s "
+	passthru_tu102_trace("passthru: TU102 BAR3_TAIL_MMIO bdf=%d/%d/%d op=%s "
 	    "fault_gpa=0x%lx offset=0x%lx size=%d value=0x%lx "
 	    "host_hpa=0x%lx bar_size=0x%lx count=%u",
 	    pi->pi_bus, pi->pi_slot, pi->pi_func, op != NULL ? op : "unknown",
@@ -479,9 +536,10 @@ static uint64_t
 passthru_tu102_bar1_postbar3_base(const struct passthru_softc *sc)
 {
 	/*
-	 * The older working TU102 path exposed the first page past BAR3 as a
-	 * small BAR3 tail alias. The advancing BAR1 windows start immediately
-	 * after that tail page.
+	 * This is the current compatibility handoff from the BAR3 tail page into
+	 * the advancing post-BAR3 BAR1 windows. It is a temporary recovery
+	 * mechanism, not the long-term preferred model; preserve it here so it
+	 * can be reverted cleanly once startup no longer depends on it.
 	 */
 	return (PASSTHRU_TU102_BAR3_FW_ALIAS_GPA + sc->psc_bar[3].size +
 	    PASSTHRU_TU102_BAR3_TAIL_ALIAS_SIZE);
@@ -605,7 +663,7 @@ passthru_tu102_map_region(struct passthru_softc *sc, int baridx,
 		return (0);
 	}
 
-	warnx("passthru: TU102 %s map bar=%d gpa=0x%lx len=0x%lx hpa=0x%lx",
+	passthru_tu102_trace("passthru: TU102 %s map bar=%d gpa=0x%lx len=0x%lx hpa=0x%lx",
 	    what, baridx, (ulong_t)gpa, (ulong_t)sc->psc_bar[baridx].size,
 	    (ulong_t)sc->psc_bar[baridx].addr);
 	return (1);
@@ -615,7 +673,7 @@ static void
 passthru_tu102_map_subregion_log(const struct passthru_softc *sc, int baridx,
     uint64_t gpa, uint64_t len, uint64_t hpa, const char *what)
 {
-	warnx("passthru: TU102 %s map bar=%d gpa=0x%lx len=0x%lx hpa=0x%lx",
+	passthru_tu102_trace("passthru: TU102 %s map bar=%d gpa=0x%lx len=0x%lx hpa=0x%lx",
 	    what, baridx, (ulong_t)gpa, (ulong_t)len, (ulong_t)hpa);
 }
 
@@ -721,7 +779,7 @@ passthru_tu102_touch_bar1_postbar3_window_locked(struct passthru_softc *sc,
 			sc->psc_bar1_postbar3_cache[i].seq =
 			    ++sc->psc_bar1_postbar3_seq;
 			if (fault_gpa != 0) {
-				warnx("passthru: TU102 postbar3-window hit slot=%lu "
+				passthru_tu102_trace("passthru: TU102 postbar3-window hit slot=%lu "
 				    "gpa=0x%lx trap_only=%u fault_gpa=0x%lx off=0x%lx op=%s "
 				    "size=%d value=0x%lx", (ulong_t)i,
 				    (ulong_t)window_gpa,
@@ -781,11 +839,11 @@ passthru_tu102_touch_bar1_postbar3_window_locked(struct passthru_softc *sc,
 	sc->psc_bar1_trace_count = 0;
 	sc->psc_bar1_trace_suppressed = 0;
 	if (fault_gpa == 0) {
-		warnx("passthru: TU102 postbar3-window seed slot=%lu gpa=0x%lx trap_only=%u",
+		passthru_tu102_trace("passthru: TU102 postbar3-window seed slot=%lu gpa=0x%lx trap_only=%u",
 		    (ulong_t)i, (ulong_t)window_gpa,
 		    sc->psc_bar1_postbar3_cache[i].trap_only);
 	} else {
-		warnx("passthru: TU102 postbar3-window %s slot=%lu old_gpa=0x%lx "
+		passthru_tu102_trace("passthru: TU102 postbar3-window %s slot=%lu old_gpa=0x%lx "
 		    "new_gpa=0x%lx trap_only=%u fault_gpa=0x%lx off=0x%lx op=%s size=%d "
 		    "value=0x%lx", old_gpa != 0 ? "evict" : "fill",
 		    (ulong_t)i, (ulong_t)old_gpa, (ulong_t)window_gpa,
@@ -848,7 +906,7 @@ passthru_tu102_map_bar1_window_page_locked(struct passthru_softc *sc,
 	if (victim == PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS)
 		return (false);
 
-	warnx("passthru: TU102 postbar3-window promote retry slot=%d "
+	passthru_tu102_trace("passthru: TU102 postbar3-window promote retry slot=%d "
 	    "gpa=0x%lx evict_slot=%lu evict_gpa=0x%lx", window_slot,
 	    (ulong_t)window_gpa, (ulong_t)victim,
 	    (ulong_t)sc->psc_bar1_postbar3_cache[victim].gpa);
@@ -900,10 +958,13 @@ passthru_tu102_drop_bar1_postbar3_window_locked(struct passthru_softc *sc)
 }
 
 /*
+ * Temporary TU102 startup quirk:
+ *
  * Guest firmware churn on TU102 touches PCI_COMMAND aggressively while it
  * probes the option ROM and sibling functions. Forwarding those writes to the
  * physical device has been enough to collapse BAR0 / config-mirror access, so
- * keep the guest-visible shadow exact while clamping the host side.
+ * keep the guest-visible shadow exact while clamping the host side. Keep this
+ * quirk fenced off so we can delete it once a cleaner startup path exists.
  */
 static int
 passthru_tu102_host_cmd_sticky_quirk(struct pci_devinst *pi)
@@ -2131,7 +2192,7 @@ passthru_mmio_addr(struct vmctx *ctx, struct pci_devinst *pi, int baridx,
 
 	sc = pi->pi_arg;
 	if (passthru_nvidia_display_fn0(sc)) {
-		warnx("passthru: TU102 mmio %s bar=%d gpa=0x%lx len=0x%lx hpa=0x%lx",
+		passthru_tu102_trace("passthru: TU102 mmio %s bar=%d gpa=0x%lx len=0x%lx hpa=0x%lx",
 		    enabled ? "map" : "unmap", baridx, (ulong_t)address,
 		    (ulong_t)sc->psc_bar[baridx].size,
 		    (ulong_t)sc->psc_bar[baridx].addr);
@@ -2248,7 +2309,7 @@ passthru_tu102_mmio_fault(struct vmctx *ctx, struct vm_mmio *mmio)
 		if (sc->psc_bar1_alias_first_seen == 0 &&
 		    window_gpa == PASSTHRU_TU102_BAR1_FW_ALIAS0_GPA) {
 			sc->psc_bar1_alias_first_seen = 1;
-			warnx("passthru: TU102 BAR1 alias first-hit "
+			passthru_tu102_trace("passthru: TU102 BAR1 alias first-hit "
 			    "fault_gpa=0x%lx alias_base=0x%lx native_bar1_gpa=0x%lx",
 			    (ulong_t)mmio->gpa,
 			    (ulong_t)PASSTHRU_TU102_BAR1_FW_ALIAS0_GPA,
@@ -2263,7 +2324,7 @@ passthru_tu102_mmio_fault(struct vmctx *ctx, struct vm_mmio *mmio)
 		    offset + mmio->bytes >= 0x1000 &&
 		    passthru_tu102_map_bar1_window_page_locked(sc, window_slot,
 		    window_gpa)) {
-			warnx("passthru: TU102 postbar3-window page-map slot=%d "
+			passthru_tu102_trace("passthru: TU102 postbar3-window page-map slot=%d "
 			    "gpa=0x%lx after_off=0x%lx", window_slot,
 			    (ulong_t)window_gpa, (ulong_t)offset);
 		}
@@ -2405,10 +2466,10 @@ passthru_addr(struct pci_devinst *pi, int baridx,
 		cfg_hi = (pi->pi_bar[baridx].type == PCIBAR_MEM64 &&
 		    baridx + 1 <= PCI_BARMAX) ?
 		    pci_get_cfgdata32(pi, PCIR_BAR(baridx + 1)) : 0;
-		warnx("passthru: TU102 baraddr enabled=%d bar=%d req_gpa=0x%lx gpa=0x%lx size=0x%lx",
+		passthru_tu102_trace("passthru: TU102 baraddr enabled=%d bar=%d req_gpa=0x%lx gpa=0x%lx size=0x%lx",
 		    enabled, baridx, (ulong_t)req_address, (ulong_t)address,
 		    (ulong_t)sc->psc_bar[baridx].size);
-		warnx("passthru: TU102 barcfg bar=%d type=%d cfg_lo=0x%08x cfg_hi=0x%08x pi_addr=0x%lx valid=%u mapped=%u alias=%u",
+		passthru_tu102_trace("passthru: TU102 barcfg bar=%d type=%d cfg_lo=0x%08x cfg_hi=0x%08x pi_addr=0x%lx valid=%u mapped=%u alias=%u",
 		    baridx, pi->pi_bar[baridx].type, cfg_lo, cfg_hi,
 		    (ulong_t)pi->pi_bar[baridx].addr,
 		    sc->psc_bar_gpa_valid[baridx], sc->psc_bar_mapped[baridx],

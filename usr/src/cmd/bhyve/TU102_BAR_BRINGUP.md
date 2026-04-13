@@ -235,6 +235,175 @@ This is the strongest current stock-UEFI checkpoint in the recovery branch:
 the guest is stable enough to boot, accept SSH, and complete `nvidia-smi`
 with the restored high-GPA BAR layout.
 
+### Guest modeset follow-up on the stable stock checkpoint
+
+After the stable stock checkpoint was committed, the guest was retested with
+the boot-time NVIDIA blacklist removed and `nvidia-drm.modeset=1` added to
+the kernel command line.
+
+Current follow-up run:
+
+- Trace: `/zones/build/traces/testvm-trace-MODESETTEST-20260413T131358Z`
+- Host binary: `/zones/build/bhyve-tu102-highpin`
+- Guest kernel cmdline now includes:
+  - `nvidia-drm.modeset=1`
+  - no `modprobe.blacklist=` or `rd.driver.blacklist=` NVIDIA entries
+
+Observed behavior change:
+
+- The guest still boots successfully to late userspace.
+- COM1 now reaches:
+  - `Started gdm.service - GNOME Display Manager.`
+  - `Ubuntu 24.04.3 LTS jon-BHYVE ttyS0`
+  - later `NVRM: probing 0x10de 0x1e07, class 0x30000`
+- Guest SSH still works after the modeset boot.
+- `nvidia-smi` and `nvidia-smi -L` still succeed.
+- `/proc/interrupts` still shows the GPU on MSI IRQ `37`.
+
+However, the guest still does not load `nvidia_drm`, and that turned out to
+be a guest-local policy issue rather than a SmartOS/bhyve issue. The guest
+contains multiple local modprobe blacklist files:
+
+- `/etc/modprobe.d/zz-nvidia-block-display.conf`
+- `/etc/modprobe.d/nvidia-early-trace-blacklist.conf`
+- `/etc/modprobe.d/zz-gpu-test-blacklist.conf`
+- `/etc/modprobe.d/zz-nvidia-passthru-blacklist.conf`
+
+Those files blacklist `nvidia_drm` / `nvidia_modeset`, and one of them also
+contains:
+
+- `install nvidia_drm /bin/false`
+- `install nvidia_modeset /bin/false`
+
+That means the current remaining display-handoff blocker is no longer the
+host-side ROM/BAR path. The next step is guest-local cleanup so
+`nvidia_drm` can actually load and honor the already-active
+`nvidia-drm.modeset=1` kernel argument.
+
+### Clean guest DRM autoload after blacklist removal
+
+After the guest-local blacklist files were moved aside and the guest
+`initramfs` was rebuilt, the next stock-UEFI boot successfully brought up
+the DRM stack without any live `modprobe` workaround.
+
+Current follow-up run:
+
+- Trace: `/zones/build/traces/testvm-trace-MODESETREBOOT-20260413T134107Z`
+- Host binary: `/zones/build/bhyve-tu102-highpin`
+
+Observed result from guest `192.168.1.222`:
+
+- Kernel command line still includes:
+  - `nvidia-drm.modeset=1`
+- Guest boots back to the normal serial login path.
+- `gdm`, `graphical.target`, and `ssh` are all active.
+- `nvidia-smi -L` still succeeds.
+- `nvidia_drm` now autoloads during boot:
+  - `nvidia_drm`
+  - `nvidia_modeset`
+  - `nvidia`
+- Guest DRM nodes now exist for the passed GPU without any manual load:
+  - `/dev/dri/card1`
+  - `/dev/dri/renderD128`
+  - `/dev/dri/by-path/pci-0000:00:08.0-card`
+- `dmesg` now shows the full early display handoff sequence:
+  - `fbcon: Taking over console`
+  - `Initialized simpledrm`
+  - `NVRM: probing 0x10de 0x1e07`
+  - `[nvidia-drm] Loading driver`
+  - `GPU 0000:00:08.0 is primary UEFI console device`
+  - `Initialized nvidia-drm ... for 0000:00:08.0 on minor 1`
+
+This is the first preserved checkpoint where the current SmartOS/bhyve
+baseline plus guest-local cleanup produces:
+
+- stock UEFI boot,
+- working `nvidia-smi`,
+- active `gdm`,
+- and automatic `nvidia_drm` startup on the passed GPU.
+
+## Timing notes
+
+The current traces do not support the idea that UEFI itself is the major
+startup delay anymore.
+
+From `/zones/build/traces/testvm-trace-MODESETREBOOT-20260413T134107Z`:
+
+- launcher starts `bhyve` at `2026-04-13T13:41:11Z`
+- COM1 capture attaches at `2026-04-13T13:41:13Z`
+- `BdsDxe: starting Boot0003 "Ubuntu"` is already present in that first COM1
+  burst
+- the first Linux kernel line appears immediately after the `BdsDxe` lines in
+  the same initial COM1 burst
+
+So the visible firmware handoff from UEFI boot manager into the Linux kernel
+is already down in the low-seconds range, and the expensive part of startup
+is later:
+
+- `NVRM: probing 0x10de 0x1e07` appears at about `+54s` in guest kernel time
+- `Initialized nvidia-drm ...` appears at about `+68s`
+- serial login appears after the later systemd/network/GDM work
+
+That means the current startup improvement target is not “make BDS itself much
+faster”; it is reducing or replacing the temporary TU102 compatibility path
+without regressing the already-fast firmware handoff.
+
+### Quiet-trace confirmation on the stable stock checkpoint
+
+After the TU102 startup trace points were moved behind the
+`BHYVE_PPT_TU102_TRACE=1` runtime gate, the stock-UEFI path was rerun to
+confirm that the quieter default still behaved like the earlier stable
+checkpoint.
+
+Current follow-up run:
+
+- Trace: `/zones/build/traces/testvm-trace-QUIETTRACE-20260413T135929Z`
+- Host binary: `/zones/build/bhyve-tu102-quiettrace`
+- `bhyve` sha256:
+  - `e642fa9902818e7e146dfaa7e3ec004b463154436c5104437166a5570fab60af`
+
+Observed behavior:
+
+- The host-side TU102 BAR churn logs are quiet by default.
+- COM1 still shows the same fast firmware handoff:
+  - `BdsDxe: loading Boot0003 "Ubuntu"...`
+  - `BdsDxe: starting Boot0003 "Ubuntu"...`
+  - immediate Linux boot output afterward
+- The guest again reaches late userspace, with the visible delay now in:
+  - `NetworkManager.service`
+  - `accounts-daemon.service`
+  - `snapd.service` / `snapd.seeded.service`
+- Representative COM1 timing from this run:
+  - `ucsi_ccg ... PPM init failed` around `73s`
+  - `NetworkManager.service/start running` near `57s+`
+  - `accounts-daemon.service/start running` near `61s+`
+  - `snapd.service/start running` near `65s+`
+
+So the quieter default host build preserves the current stock-UEFI path, and
+the next startup optimization target is guest userspace policy and service
+behavior rather than firmware or early bhyve bring-up.
+
+### Guest memory sizing on the stable stock checkpoint
+
+The current stable stock-UEFI checkpoint was re-tested with larger guest
+memory sizes.
+
+Observed results:
+
+- `1G` remains bootable, but it is no longer the preferred default.
+- `2G` boots successfully on the same stock-UEFI flat-topology baseline and
+  reaches the normal late-userspace / SSH / graphical-target path.
+- `4G` currently fails before firmware with:
+  - `pci_emul_alloc_rom: failed to create rom segment`
+  - `passthru_init_rom: failed to alloc rom segment`
+  - `Device emulation initialization error: Not enough space`
+
+The practical conclusion is:
+
+- use `2G` as the default working size for this recovery path
+- do not use `4G` until the bhyve guest address-space layout is adjusted so
+  the GPU ROM/MMIO placement still fits
+
 ## Source research notes
 
 ### Linux / VFIO model
