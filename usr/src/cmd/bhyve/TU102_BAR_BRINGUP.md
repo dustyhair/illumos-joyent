@@ -468,3 +468,40 @@ Primary source:
 - Check whether the physical passed-GPU display now shows useful output on the
   same stock run, since the guest now reaches `primary UEFI console device`
   and a stable NVIDIA runtime.
+
+## 2026-04-13 libvmmapi MSI ioctl fix
+
+The current SmartOS tree had a real `libvmmapi` regression in
+`usr/src/lib/libvmmapi/common/vmmapi.c`:
+
+- `vm_setup_pptdev_msi()`
+- `vm_setup_pptdev_msix()`
+
+Both functions were issuing `VM_PPTDEV_MSI` / `VM_PPTDEV_MSIX` without first
+zeroing the ioctl payload and setting `vcpu = 0`, even though
+`usr/src/uts/intel/sys/vmm_dev.h` still defines `vcpu` as the first field in
+both request structs.
+
+The narrow recovery fix was:
+
+- `bzero(&pptmsi, sizeof (pptmsi)); pptmsi.vcpu = 0;`
+- `bzero(&pptmsix, sizeof (pptmsix)); pptmsix.vcpu = 0;`
+
+The rebuilt `libvmmapi.so.1` was staged on the host at `/zones/build` and
+tested by running bhyve with:
+
+- `LD_LIBRARY_PATH=/zones/build`
+- `BHYVE_BIN=/zones/build/bhyve-tu102-quiettrace`
+- stock UEFI, flat topology, `2G`
+
+Observed runtime effect on the guest:
+
+- `00:08.2` xHCI now comes up on guest MSI IRQ `33`
+- `00:08.3` UCSI now comes up on guest MSI IRQ `36`
+- `00:08.0` NVIDIA still comes up on guest MSI IRQ `37`
+- `nvidia-smi -L` still succeeds
+- the earlier host-side `00:08.2` MSI `EINVAL` did not reproduce on this run
+
+Reference run:
+
+- Trace: `/zones/build/traces/testvm-trace-LIBVMMAPIFIX-20260413T`
