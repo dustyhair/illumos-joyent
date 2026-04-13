@@ -78,14 +78,12 @@
  * They exist only to cover the current firmware/GOP first-touch path that
  * still expects:
  *
- * - an initial low BAR1 compatibility aperture
  * - a low BAR3 alias plus the small BAR3 tail page
  * - post-BAR3 BAR1 windows that start trap-only and are promoted later
  *
  * Keep this block visibly isolated so it can be reduced or removed once the
  * proper startup path is understood.
  */
-#define	PASSTHRU_TU102_BAR1_FW_ALIAS0_GPA	0x160000000ULL
 #define	PASSTHRU_TU102_BAR3_FW_ALIAS_GPA	0x170000000ULL
 #define	PASSTHRU_TU102_BAR3_TAIL_ALIAS_SIZE	0x1000ULL
 #define	PASSTHRU_TU102_BAR1_PAGE_SIZE	0x1000ULL
@@ -149,7 +147,6 @@ struct passthru_softc {
 	uint32_t psc_bar1_postbar3_seq;
 	uint32_t psc_bar1_trace_count;
 	uint8_t psc_bar1_trace_suppressed;
-	uint8_t psc_bar1_alias_first_seen;
 	uint8_t psc_bar1_transition_first_seen;
 	uint32_t psc_bar3_tail_trace_count;
 	uint8_t psc_bar3_tail_trace_suppressed;
@@ -192,7 +189,6 @@ static void passthru_tu102_drop_bar1_postbar3_window_locked(
 static bool passthru_tu102_map_bar1_window_page_locked(struct passthru_softc *,
     int, uint64_t);
 static int passthru_setup_intx(struct vmctx *, int, int, int);
-static int passthru_tu102_bar1_alias_enabled(void);
 static int passthru_vm_setup_pptdev_msi(struct passthru_softc *,
     struct pci_devinst *, struct vmctx *, uint64_t, uint64_t, int);
 static int passthru_vm_setup_pptdev_msix(struct passthru_softc *,
@@ -251,7 +247,6 @@ passthru_trace_tu102_bar1_mmio(struct passthru_softc *sc, const char *op,
 static void
 passthru_trace_tu102_bar1_transition(struct passthru_softc *sc, uint64_t gpa)
 {
-	uint64_t alias_limit;
 	uint64_t transition_base;
 	uint64_t native_base;
 
@@ -260,7 +255,6 @@ passthru_trace_tu102_bar1_transition(struct passthru_softc *sc, uint64_t gpa)
 		return;
 	}
 
-	alias_limit = PASSTHRU_TU102_BAR1_FW_ALIAS0_GPA + sc->psc_bar[1].size;
 	transition_base = PASSTHRU_TU102_BAR3_FW_ALIAS_GPA + sc->psc_bar[3].size;
 	if (gpa < transition_base) {
 		return;
@@ -270,10 +264,9 @@ passthru_trace_tu102_bar1_transition(struct passthru_softc *sc, uint64_t gpa)
 	    sc->psc_bar_gpa[1] : sc->psc_pi->pi_bar[1].addr;
 	sc->psc_bar1_transition_first_seen = 1;
 	passthru_tu102_trace("passthru: TU102 BAR1 transition attempt "
-	    "fault_gpa=0x%lx alias_base=0x%lx alias_limit=0x%lx "
-	    "bar3_alias_limit=0x%lx native_bar1_gpa=0x%lx native_bar1_limit=0x%lx",
-	    (ulong_t)gpa, (ulong_t)PASSTHRU_TU102_BAR1_FW_ALIAS0_GPA,
-	    (ulong_t)alias_limit, (ulong_t)transition_base, (ulong_t)native_base,
+	    "fault_gpa=0x%lx bar3_alias_limit=0x%lx "
+	    "native_bar1_gpa=0x%lx native_bar1_limit=0x%lx",
+	    (ulong_t)gpa, (ulong_t)transition_base, (ulong_t)native_base,
 	    (ulong_t)(native_base + sc->psc_bar[1].size));
 }
 
@@ -312,10 +305,6 @@ static uint64_t
 passthru_tu102_fw_alias_gpa(int baridx)
 {
 	switch (baridx) {
-	case 1:
-		if (!passthru_tu102_bar1_alias_enabled())
-			return (0);
-		return (PASSTHRU_TU102_BAR1_FW_ALIAS0_GPA);
 	case 3:
 		return (PASSTHRU_TU102_BAR3_FW_ALIAS_GPA);
 	default:
@@ -408,12 +397,6 @@ passthru_tu102_alias_decode(const struct passthru_softc *sc, uint64_t gpa,
 	uint64_t size;
 
 	size = sc->psc_bar[1].size;
-	if (passthru_tu102_addr_in_window(gpa, PASSTHRU_TU102_BAR1_FW_ALIAS0_GPA,
-	    size)) {
-		*baridxp = 1;
-		*offsetp = gpa - PASSTHRU_TU102_BAR1_FW_ALIAS0_GPA;
-		return (1);
-	}
 	if (passthru_tu102_addr_in_window(gpa,
 	    passthru_tu102_native_bar_gpa(sc, 1), size)) {
 		*baridxp = 1;
@@ -767,24 +750,6 @@ static int
 passthru_tu102_host_cmd_sticky_quirk(struct pci_devinst *pi)
 {
 	return (passthru_nvidia_display_fn0((struct passthru_softc *)pi->pi_arg));
-}
-
-static int
-passthru_env_enabled(const char *name)
-{
-	const char *v = getenv(name);
-
-	if (v == NULL || *v == '\0')
-		return (0);
-	if (strcmp(v, "0") == 0)
-		return (0);
-	return (1);
-}
-
-static int
-passthru_tu102_bar1_alias_enabled(void)
-{
-	return (!passthru_env_enabled("BHYVE_PPT_TU102_DISABLE_BAR1_ALIAS"));
 }
 
 static int
@@ -2174,10 +2139,7 @@ passthru_tu102_mmio_fault(struct vmctx *ctx, struct vm_mmio *mmio)
 		if (baridx == 1) {
 			window_gpa = mmio->gpa - offset;
 		}
-		if (baridx != 1 || mmio->gpa == PASSTHRU_TU102_BAR1_FW_ALIAS0_GPA +
-		    offset) {
-			(void) passthru_tu102_ensure_alias_locked(sc, baridx);
-		}
+		(void) passthru_tu102_ensure_alias_locked(sc, baridx);
 	} else if (passthru_tu102_bar1_postbar3_decode(sc, mmio->gpa,
 	    &window_gpa, &offset)) {
 		baridx = 1;
@@ -2189,8 +2151,7 @@ passthru_tu102_mmio_fault(struct vmctx *ctx, struct vm_mmio *mmio)
 		passthru_trace_tu102_bar1_transition(sc, mmio->gpa);
 		return (0);
 	}
-	if (baridx == 1 && window_gpa != 0 &&
-	    window_gpa != PASSTHRU_TU102_BAR1_FW_ALIAS0_GPA) {
+	if (baridx == 1 && window_gpa != 0) {
 		window_slot = passthru_tu102_bar1_window_slot_locked(sc, window_gpa);
 	}
 
@@ -2216,16 +2177,6 @@ passthru_tu102_mmio_fault(struct vmctx *ctx, struct vm_mmio *mmio)
 		passthru_trace_tu102_bar3_tail_mmio(sc, mmio->read != 0 ? "read" :
 		    "write", mmio->gpa, offset, mmio->bytes, mmio->data);
 	} else if (handled && baridx == 1) {
-		if (sc->psc_bar1_alias_first_seen == 0 &&
-		    window_gpa == PASSTHRU_TU102_BAR1_FW_ALIAS0_GPA) {
-			sc->psc_bar1_alias_first_seen = 1;
-			passthru_tu102_trace("passthru: TU102 BAR1 alias first-hit "
-			    "fault_gpa=0x%lx alias_base=0x%lx native_bar1_gpa=0x%lx",
-			    (ulong_t)mmio->gpa,
-			    (ulong_t)PASSTHRU_TU102_BAR1_FW_ALIAS0_GPA,
-			    (ulong_t)(sc->psc_bar_gpa_valid[1] != 0 ?
-			    sc->psc_bar_gpa[1] : sc->psc_pi->pi_bar[1].addr));
-		}
 		passthru_trace_tu102_bar1_mmio(sc, mmio->read != 0 ? "read" :
 		    "write", mmio->gpa, window_gpa, mmio->bytes, mmio->data,
 		    window_slot);
