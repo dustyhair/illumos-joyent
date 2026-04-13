@@ -19,7 +19,7 @@
  * CDDL HEADER END
  */
 /*
- * Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2026 Oxide Computer Company
  */
 
 #include <sys/types.h>
@@ -38,18 +38,18 @@ pcie_apply_plat_props(dev_info_t *dip)
 void
 pcie_init_plat(dev_info_t *dip)
 {
-	pcie_bus_t	*bus_p = PCIE_DIP2BUS(dip);
+	pcie_bus_t *bus_p = PCIE_DIP2BUS(dip);
 
 	if (PCIE_IS_PCIE_BDG(bus_p)) {
 		bus_p->bus_pcie2pci_secbus = bus_p->bus_bdg_secbus;
 	} else {
 		dev_info_t *pdip;
 
-		for (pdip = ddi_get_parent(dip); pdip;
+		for (pdip = ddi_get_parent(dip); pdip != NULL;
 		    pdip = ddi_get_parent(pdip)) {
 			pcie_bus_t *parent_bus_p = PCIE_DIP2BUS(pdip);
 
-			if (parent_bus_p->bus_pcie2pci_secbus) {
+			if (parent_bus_p->bus_pcie2pci_secbus != 0) {
 				bus_p->bus_pcie2pci_secbus =
 				    parent_bus_p->bus_pcie2pci_secbus;
 				break;
@@ -63,7 +63,7 @@ pcie_init_plat(dev_info_t *dip)
 void
 pcie_fini_plat(dev_info_t *dip)
 {
-	pcie_bus_t	*bus_p = PCIE_DIP2BUS(dip);
+	pcie_bus_t *bus_p = PCIE_DIP2BUS(dip);
 
 	if (PCIE_IS_PCIE_BDG(bus_p))
 		bus_p->bus_pcie2pci_secbus = 0;
@@ -99,12 +99,10 @@ pcie_plat_pwr_setup(dev_info_t *dip)
 		    ddi_driver_name(dip), ddi_get_instance(dip));
 		return (DDI_FAILURE);
 	}
+
 	return (DDI_SUCCESS);
 }
 
-/*
- * Undo whatever is done in pcie_plat_pwr_common_setup
- */
 void
 pcie_plat_pwr_teardown(dev_info_t *dip)
 {

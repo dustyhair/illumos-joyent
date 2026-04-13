@@ -76,6 +76,7 @@
 #include "gdb.h"
 #include "inout.h"
 #include "mem.h"
+#include "pci_passthru.h"
 #include "spinup_ap.h"
 #include "vmexit.h"
 #include "xmsr.h"
@@ -486,7 +487,7 @@ vmexit_inst_emul(struct vmctx *ctx __unused, struct vcpu *vcpu,
 
 #ifndef	__FreeBSD__
 static int
-vmexit_mmio(struct vmctx *ctx __unused, struct vcpu *vcpu, struct vm_exit *vme)
+vmexit_mmio(struct vmctx *ctx, struct vcpu *vcpu, struct vm_exit *vme)
 {
 	int err;
 	struct vm_mmio mmio;
@@ -498,15 +499,19 @@ vmexit_mmio(struct vmctx *ctx __unused, struct vcpu *vcpu, struct vm_exit *vme)
 	err = emulate_mem(vcpu, &mmio);
 
 	if (err == ESRCH) {
-		fprintf(stderr, "Unhandled memory access to 0x%lx\n", mmio.gpa);
+		if (passthru_tu102_mmio_fault(ctx, &mmio) != 0) {
+			err = 0;
+		} else {
+			fprintf(stderr, "Unhandled memory access to 0x%lx\n", mmio.gpa);
 
-		/*
-		 * Access to non-existent physical addresses is not likely to
-		 * result in fatal errors on hardware machines, but rather reads
-		 * of all-ones or discarded-but-acknowledged writes.
-		 */
-		mmio.data = ~0UL;
-		err = 0;
+			/*
+			 * Access to non-existent physical addresses is not likely to
+			 * result in fatal errors on hardware machines, but rather reads
+			 * of all-ones or discarded-but-acknowledged writes.
+			 */
+			mmio.data = ~0UL;
+			err = 0;
+		}
 	}
 
 	if (err == 0) {

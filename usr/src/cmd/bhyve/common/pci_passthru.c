@@ -43,10 +43,12 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <sysexits.h>
 #include <unistd.h>
 
@@ -63,11 +65,64 @@
 
 #define MSIX_TABLE_COUNT(ctrl) (((ctrl) & PCIM_MSIXCTRL_TABLE_SIZE) + 1)
 #define MSIX_CAPLEN 12
+#define	PASSTHRU_NVIDIA_VENDOR_ID	0x10de
+#define	PASSTHRU_TU102_BAR0_FW_ALIAS_GPA	0xc2000000ULL
+#define	PASSTHRU_TU102_BAR1_FW_ALIAS0_GPA	0x160000000ULL
+#define	PASSTHRU_TU102_BAR3_FW_ALIAS_GPA	0x170000000ULL
+#define	PASSTHRU_TU102_BAR3_TAIL_ALIAS_SIZE	0x1000ULL
+#define	PASSTHRU_TU102_BAR1_PAGE_SIZE	0x1000ULL
+#define	PASSTHRU_TU102_BAR0_PAGE0_SIZE	0x1000U
+#define	PASSTHRU_TU102_BAR0_DWORD_COUNT \
+	(PASSTHRU_TU102_BAR0_PAGE0_SIZE / sizeof (uint32_t))
+#define	PASSTHRU_TU102_BAR1_TRACE_LIMIT	1024U
+#define	PASSTHRU_TU102_BAR3_TAIL_TRACE_LIMIT	128U
+#define	PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS	8U
+
+#define	NVIDIA_TU102_PMC_GAP_OFF	0x0cU
+#define	NVIDIA_TU102_PMC_GAP_END	0x100U
+#define	NVIDIA_TU102_PMC_DAEMON_GAP_OFF	0x10cU
+#define	NVIDIA_TU102_PMC_DAEMON_GAP_END	0x140U
+#define	NVIDIA_TU102_PMC_DAEMON2_GAP_OFF	0x14cU
+#define	NVIDIA_TU102_PMC_DAEMON2_GAP_END	0x160U
+#define	NVIDIA_TU102_PMC_MASK_WIN_OFF	0x640U
+#define	NVIDIA_TU102_PMC_MASK_WIN_END	0x660U
+#define	NVIDIA_TU102_PMC_MASK_PROMOTE_OFF	0x640U
+#define	NVIDIA_TU102_PMC_MASK_PROMOTE_END	0x680U
+#define	NVIDIA_TU102_PGRAPH_DISPATCH_OFF	0x404000ULL
+#define	NVIDIA_TU102_PGRAPH_DISPATCH_END	0x404010ULL
+
+static const uint32_t nvidia_tu102_pmc_daemon_regs[] = {
+	0x108, 0x148, 0x168, 0x16c, 0x170, 0x174, 0x178, 0x17c,
+	0x640, 0x644, 0x648, 0x64c, 0x650, 0x654, 0x658, 0x65c
+};
 
 struct passthru_softc {
 	struct pci_devinst *psc_pi;
 	/* ROM is handled like a BAR */
 	struct pcibar psc_bar[PCI_BARMAX_WITH_ROM + 1];
+	uint64_t psc_bar_gpa[PCI_BARMAX_WITH_ROM + 1];
+	uint8_t psc_bar_gpa_valid[PCI_BARMAX_WITH_ROM + 1];
+	uint8_t psc_bar_mapped[PCI_BARMAX_WITH_ROM + 1];
+	uint8_t psc_bar_fw_alias_mapped[PCI_BARMAX_WITH_ROM + 1];
+	pthread_mutex_t psc_alias_lock;
+	struct {
+		uint64_t gpa;
+		uint64_t map_len;
+		uint32_t seq;
+		uint8_t mapped;
+		uint8_t trap_only;
+	} psc_bar1_postbar3_cache[PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS];
+	uint32_t psc_bar1_postbar3_seq;
+	uint32_t psc_bar1_trace_count;
+	uint8_t psc_bar1_trace_suppressed;
+	uint8_t psc_bar1_alias_first_seen;
+	uint8_t psc_bar1_transition_first_seen;
+	uint32_t psc_bar3_tail_trace_count;
+	uint8_t psc_bar3_tail_trace_suppressed;
+	struct {
+		uint32_t value;
+		uint8_t seen_write;
+	} psc_bar0_shadow[PASSTHRU_TU102_BAR0_DWORD_COUNT];
 	struct {
 		int		capoff;
 		int		msgctrl;
@@ -83,6 +138,784 @@ struct passthru_softc {
 	cfgread_handler psc_pcir_rhandler[PCI_REGMAX + 1];
 	cfgwrite_handler psc_pcir_whandler[PCI_REGMAX + 1];
 };
+
+static struct passthru_softc *passthru_tu102_active_sc;
+static int passthru_host_bar_read(struct passthru_softc *, int, uint64_t, int,
+    uint64_t *);
+static int passthru_host_bar_write(struct passthru_softc *, int, uint64_t, int,
+    uint64_t);
+static void passthru_trace_tu102_bar1_mmio(struct passthru_softc *,
+    const char *, uint64_t, uint64_t, int, uint64_t, int);
+static void passthru_trace_tu102_bar1_transition(struct passthru_softc *,
+    uint64_t);
+static void passthru_trace_tu102_bar3_tail_mmio(struct passthru_softc *,
+    const char *, uint64_t, uint64_t, int, uint64_t);
+static int passthru_tu102_touch_bar1_postbar3_window_locked(
+    struct passthru_softc *, uint64_t, uint64_t, int, int, uint64_t);
+static void passthru_tu102_drop_bar1_postbar3_window_locked(
+    struct passthru_softc *);
+static bool passthru_tu102_map_bar1_window_page_locked(struct passthru_softc *,
+    int, uint64_t);
+
+static int
+passthru_nvidia_display_fn0(const struct passthru_softc *sc)
+{
+	struct pci_devinst *pi = sc->psc_pi;
+
+	return (pci_get_cfgdata16(pi, PCIR_VENDOR) ==
+	    PASSTHRU_NVIDIA_VENDOR_ID &&
+	    pci_get_cfgdata8(pi, PCIR_CLASS) == PCIC_DISPLAY &&
+	    pi->pi_func == 0);
+}
+
+static bool
+passthru_tu102_range_contains(uint64_t offset, int size, uint64_t start,
+    uint64_t end)
+{
+	uint64_t limit;
+
+	if (size <= 0) {
+		return (false);
+	}
+	limit = offset + (uint64_t)size;
+	return (offset >= start && limit <= end);
+}
+
+static bool
+passthru_tu102_bar0_page0_access_supported(uint64_t offset, int size)
+{
+	if (size != 4 || (offset & (sizeof (uint32_t) - 1)) != 0) {
+		return (false);
+	}
+	return (offset < PASSTHRU_TU102_BAR0_PAGE0_SIZE &&
+	    offset + (uint64_t)size <= PASSTHRU_TU102_BAR0_PAGE0_SIZE);
+}
+
+static bool
+passthru_tu102_bar0_pmc_gap_contains(uint64_t offset, int size)
+{
+	return (passthru_tu102_range_contains(offset, size,
+	    NVIDIA_TU102_PMC_GAP_OFF, NVIDIA_TU102_PMC_GAP_END));
+}
+
+static bool
+passthru_tu102_bar0_pmc_daemon_contains(uint64_t offset, int size)
+{
+	size_t i;
+
+	if (size <= 0) {
+		return (false);
+	}
+
+	for (i = 0; i < nitems(nvidia_tu102_pmc_daemon_regs); i++) {
+		if (passthru_tu102_range_contains(offset, size,
+		    nvidia_tu102_pmc_daemon_regs[i],
+		    nvidia_tu102_pmc_daemon_regs[i] + sizeof (uint32_t))) {
+			return (true);
+		}
+	}
+
+	return (false);
+}
+
+static bool
+passthru_tu102_bar0_pmc_daemon_gap_contains(uint64_t offset, int size)
+{
+	return (passthru_tu102_range_contains(offset, size,
+	    NVIDIA_TU102_PMC_DAEMON_GAP_OFF, NVIDIA_TU102_PMC_DAEMON_GAP_END));
+}
+
+static bool
+passthru_tu102_bar0_pmc_daemon2_gap_contains(uint64_t offset, int size)
+{
+	return (passthru_tu102_range_contains(offset, size,
+	    NVIDIA_TU102_PMC_DAEMON2_GAP_OFF,
+	    NVIDIA_TU102_PMC_DAEMON2_GAP_END));
+}
+
+static bool
+passthru_tu102_bar0_pmc_mask_window_contains(uint64_t offset, int size)
+{
+	return (passthru_tu102_range_contains(offset, size,
+	    NVIDIA_TU102_PMC_MASK_WIN_OFF, NVIDIA_TU102_PMC_MASK_WIN_END));
+}
+
+static bool
+passthru_tu102_bar0_pmc_mask_promote_contains(uint64_t offset, int size)
+{
+	return (passthru_tu102_range_contains(offset, size,
+	    NVIDIA_TU102_PMC_MASK_PROMOTE_OFF,
+	    NVIDIA_TU102_PMC_MASK_PROMOTE_END));
+}
+
+static bool
+passthru_tu102_pgraph_dispatch_contains(uint64_t offset, int size)
+{
+	return (passthru_tu102_range_contains(offset, size,
+	    NVIDIA_TU102_PGRAPH_DISPATCH_OFF, NVIDIA_TU102_PGRAPH_DISPATCH_END));
+}
+
+static bool
+passthru_tu102_bar0_trap_contains(uint64_t offset, int size)
+{
+	return (passthru_tu102_bar0_pmc_gap_contains(offset, size) ||
+	    passthru_tu102_bar0_pmc_daemon_contains(offset, size) ||
+	    passthru_tu102_bar0_pmc_daemon_gap_contains(offset, size) ||
+	    passthru_tu102_bar0_pmc_daemon2_gap_contains(offset, size));
+}
+
+static bool
+passthru_tu102_bar0_read_is_poison(uint64_t val, int size)
+{
+	return (size == 4 && (uint32_t)val == 0xbadf5040U);
+}
+
+static uint32_t *
+passthru_tu102_bar0_shadow_value(struct passthru_softc *sc, uint64_t offset,
+    bool *have_value)
+{
+	size_t idx = (size_t)(offset / sizeof (uint32_t));
+
+	if (idx >= PASSTHRU_TU102_BAR0_DWORD_COUNT) {
+		return (NULL);
+	}
+	if (have_value != NULL) {
+		*have_value = (sc->psc_bar0_shadow[idx].seen_write != 0);
+	}
+	return (&sc->psc_bar0_shadow[idx].value);
+}
+
+static int
+passthru_tu102_bar0_read_emulate(struct passthru_softc *sc, uint64_t offset,
+    int size, uint64_t *valp)
+{
+	bool have_shadow = false;
+	uint32_t *shadowp;
+	uint64_t val;
+
+	if (passthru_tu102_pgraph_dispatch_contains(offset, size)) {
+		*valp = 0;
+		return (1);
+	}
+	if (!passthru_tu102_bar0_page0_access_supported(offset, size)) {
+		return (0);
+	}
+
+	shadowp = passthru_tu102_bar0_shadow_value(sc, offset, &have_shadow);
+	if (passthru_tu102_bar0_trap_contains(offset, size)) {
+		*valp = (passthru_tu102_bar0_pmc_mask_window_contains(offset, size) &&
+		    have_shadow) ? *shadowp : 0;
+		return (1);
+	}
+	if (passthru_host_bar_read(sc, 0, offset, size, &val) == 0) {
+		if (passthru_tu102_bar0_read_is_poison(val, size) &&
+		    passthru_tu102_bar0_pmc_mask_promote_contains(offset, size)) {
+			*valp = have_shadow ? *shadowp : 0;
+		} else {
+			*valp = val;
+		}
+		return (1);
+	}
+	if (passthru_tu102_bar0_pmc_mask_promote_contains(offset, size)) {
+		*valp = have_shadow ? *shadowp : 0;
+		return (1);
+	}
+	return (0);
+}
+
+static int
+passthru_tu102_bar0_write_emulate(struct passthru_softc *sc, uint64_t offset,
+    int size, uint64_t val)
+{
+	uint32_t *shadowp;
+
+	shadowp = passthru_tu102_bar0_shadow_value(sc, offset, NULL);
+	if (passthru_tu102_pgraph_dispatch_contains(offset, size)) {
+		return (1);
+	}
+	if (!passthru_tu102_bar0_page0_access_supported(offset, size)) {
+		return (0);
+	}
+	if (passthru_tu102_bar0_trap_contains(offset, size)) {
+		if (shadowp != NULL &&
+		    passthru_tu102_bar0_pmc_mask_window_contains(offset, size)) {
+			*shadowp = (uint32_t)val;
+			sc->psc_bar0_shadow[offset / sizeof (uint32_t)].seen_write = 1;
+		}
+		return (1);
+	}
+	return (0);
+}
+
+static void
+passthru_trace_tu102_bar1_mmio(struct passthru_softc *sc, const char *op,
+    uint64_t fault_gpa, uint64_t window_gpa, int size, uint64_t value,
+    int window_slot)
+{
+	struct pci_devinst *pi;
+	uint64_t offset;
+
+	if (sc == NULL || !passthru_nvidia_display_fn0(sc)) {
+		return;
+	}
+	if (sc->psc_bar[1].size == 0) {
+		return;
+	}
+	if (sc->psc_bar1_trace_count >= PASSTHRU_TU102_BAR1_TRACE_LIMIT) {
+		if (sc->psc_bar1_trace_suppressed == 0) {
+			warnx("passthru: TU102 BAR1 MMIO trace suppressed "
+			    "bdf=%d/%d/%d after %u accesses",
+			    sc->psc_pi->pi_bus, sc->psc_pi->pi_slot,
+			    sc->psc_pi->pi_func, PASSTHRU_TU102_BAR1_TRACE_LIMIT);
+			sc->psc_bar1_trace_suppressed = 1;
+		}
+		return;
+	}
+
+	pi = sc->psc_pi;
+	offset = fault_gpa - window_gpa;
+	sc->psc_bar1_trace_count++;
+
+	warnx("passthru: TU102 BAR1_MMIO bdf=%d/%d/%d op=%s "
+	    "fault_gpa=0x%lx window_gpa=0x%lx slot=%d offset=0x%lx "
+	    "size=%d value=0x%lx host_hpa=0x%lx bar_size=0x%lx count=%u",
+	    pi->pi_bus, pi->pi_slot, pi->pi_func,
+	    op != NULL ? op : "unknown", (ulong_t)fault_gpa,
+	    (ulong_t)window_gpa, window_slot, (ulong_t)offset, size,
+	    (ulong_t)value, (ulong_t)(sc->psc_bar[1].addr + offset),
+	    (ulong_t)sc->psc_bar[1].size, sc->psc_bar1_trace_count);
+}
+
+static void
+passthru_trace_tu102_bar1_transition(struct passthru_softc *sc, uint64_t gpa)
+{
+	uint64_t alias_limit;
+	uint64_t transition_base;
+	uint64_t native_base;
+
+	if (sc == NULL || !passthru_nvidia_display_fn0(sc) ||
+	    sc->psc_bar[1].size == 0 || sc->psc_bar1_transition_first_seen != 0) {
+		return;
+	}
+
+	alias_limit = PASSTHRU_TU102_BAR1_FW_ALIAS0_GPA + sc->psc_bar[1].size;
+	transition_base = PASSTHRU_TU102_BAR3_FW_ALIAS_GPA + sc->psc_bar[3].size;
+	if (gpa < transition_base) {
+		return;
+	}
+
+	native_base = sc->psc_bar_gpa_valid[1] != 0 ?
+	    sc->psc_bar_gpa[1] : sc->psc_pi->pi_bar[1].addr;
+	sc->psc_bar1_transition_first_seen = 1;
+	warnx("passthru: TU102 BAR1 transition attempt "
+	    "fault_gpa=0x%lx alias_base=0x%lx alias_limit=0x%lx "
+	    "bar3_alias_limit=0x%lx native_bar1_gpa=0x%lx native_bar1_limit=0x%lx",
+	    (ulong_t)gpa, (ulong_t)PASSTHRU_TU102_BAR1_FW_ALIAS0_GPA,
+	    (ulong_t)alias_limit, (ulong_t)transition_base, (ulong_t)native_base,
+	    (ulong_t)(native_base + sc->psc_bar[1].size));
+}
+
+static void
+passthru_trace_tu102_bar3_tail_mmio(struct passthru_softc *sc, const char *op,
+    uint64_t fault_gpa, uint64_t offset, int size, uint64_t value)
+{
+	struct pci_devinst *pi;
+
+	if (sc == NULL || !passthru_nvidia_display_fn0(sc)) {
+		return;
+	}
+	if (sc->psc_bar3_tail_trace_count >= PASSTHRU_TU102_BAR3_TAIL_TRACE_LIMIT) {
+		if (sc->psc_bar3_tail_trace_suppressed == 0) {
+			warnx("passthru: TU102 BAR3 tail trace suppressed "
+			    "bdf=%d/%d/%d after %u accesses",
+			    sc->psc_pi->pi_bus, sc->psc_pi->pi_slot,
+			    sc->psc_pi->pi_func, PASSTHRU_TU102_BAR3_TAIL_TRACE_LIMIT);
+			sc->psc_bar3_tail_trace_suppressed = 1;
+		}
+		return;
+	}
+
+	pi = sc->psc_pi;
+	sc->psc_bar3_tail_trace_count++;
+	warnx("passthru: TU102 BAR3_TAIL_MMIO bdf=%d/%d/%d op=%s "
+	    "fault_gpa=0x%lx offset=0x%lx size=%d value=0x%lx "
+	    "host_hpa=0x%lx bar_size=0x%lx count=%u",
+	    pi->pi_bus, pi->pi_slot, pi->pi_func, op != NULL ? op : "unknown",
+	    (ulong_t)fault_gpa, (ulong_t)offset, size, (ulong_t)value,
+	    (ulong_t)(sc->psc_bar[3].addr + offset),
+	    (ulong_t)sc->psc_bar[3].size, sc->psc_bar3_tail_trace_count);
+}
+
+static uint64_t
+passthru_tu102_fw_alias_gpa(int baridx)
+{
+	switch (baridx) {
+	case 0:
+		return (PASSTHRU_TU102_BAR0_FW_ALIAS_GPA);
+	case 1:
+		return (PASSTHRU_TU102_BAR1_FW_ALIAS0_GPA);
+	case 3:
+		return (PASSTHRU_TU102_BAR3_FW_ALIAS_GPA);
+	default:
+		return (0);
+	}
+}
+
+static bool
+passthru_tu102_addr_in_window(uint64_t gpa, uint64_t base, uint64_t size)
+{
+	return (size != 0 && gpa >= base && gpa - base < size);
+}
+
+static uint64_t
+passthru_tu102_native_bar_gpa(const struct passthru_softc *sc, int baridx)
+{
+	if (sc->psc_bar_gpa_valid[baridx] != 0)
+		return (sc->psc_bar_gpa[baridx]);
+	return (sc->psc_pi->pi_bar[baridx].addr);
+}
+
+static uint64_t
+passthru_tu102_bar1_postbar3_base(const struct passthru_softc *sc)
+{
+	/*
+	 * The older working TU102 path exposed the first page past BAR3 as a
+	 * small BAR3 tail alias. The advancing BAR1 windows start immediately
+	 * after that tail page.
+	 */
+	return (PASSTHRU_TU102_BAR3_FW_ALIAS_GPA + sc->psc_bar[3].size +
+	    PASSTHRU_TU102_BAR3_TAIL_ALIAS_SIZE);
+}
+
+static bool
+passthru_tu102_bar1_postbar3_decode(const struct passthru_softc *sc,
+    uint64_t gpa, uint64_t *window_basep, uint64_t *offsetp)
+{
+	uint64_t base;
+	uint64_t size;
+	uint64_t delta;
+
+	size = sc->psc_bar[1].size;
+	if (size == 0) {
+		return (false);
+	}
+
+	base = passthru_tu102_bar1_postbar3_base(sc);
+	if (gpa < base) {
+		return (false);
+	}
+
+	delta = gpa - base;
+	if (window_basep != NULL) {
+		*window_basep = base + (delta / size) * size;
+	}
+	if (offsetp != NULL) {
+		*offsetp = delta % size;
+	}
+	return (true);
+}
+
+static bool
+passthru_tu102_bar3_tail_alias_decode(const struct passthru_softc *sc,
+    uint64_t gpa, uint64_t *offsetp)
+{
+	uint64_t alias_base;
+
+	if (sc->psc_bar[3].size < PASSTHRU_TU102_BAR3_TAIL_ALIAS_SIZE) {
+		return (false);
+	}
+
+	alias_base = PASSTHRU_TU102_BAR3_FW_ALIAS_GPA + sc->psc_bar[3].size;
+	if (!passthru_tu102_addr_in_window(gpa, alias_base,
+	    PASSTHRU_TU102_BAR3_TAIL_ALIAS_SIZE)) {
+		return (false);
+	}
+
+	if (offsetp != NULL) {
+		*offsetp = sc->psc_bar[3].size - PASSTHRU_TU102_BAR3_TAIL_ALIAS_SIZE +
+		    (gpa - alias_base);
+	}
+	return (true);
+}
+
+static int
+passthru_tu102_alias_decode(const struct passthru_softc *sc, uint64_t gpa,
+    int *baridxp, uint64_t *offsetp)
+{
+	uint64_t size;
+
+	size = sc->psc_bar[0].size;
+	if (passthru_tu102_addr_in_window(gpa, PASSTHRU_TU102_BAR0_FW_ALIAS_GPA,
+	    size)) {
+		*baridxp = 0;
+		*offsetp = gpa - PASSTHRU_TU102_BAR0_FW_ALIAS_GPA;
+		return (1);
+	}
+
+	size = sc->psc_bar[1].size;
+	if (passthru_tu102_addr_in_window(gpa, PASSTHRU_TU102_BAR1_FW_ALIAS0_GPA,
+	    size)) {
+		*baridxp = 1;
+		*offsetp = gpa - PASSTHRU_TU102_BAR1_FW_ALIAS0_GPA;
+		return (1);
+	}
+	if (passthru_tu102_addr_in_window(gpa,
+	    passthru_tu102_native_bar_gpa(sc, 1), size)) {
+		*baridxp = 1;
+		*offsetp = gpa - passthru_tu102_native_bar_gpa(sc, 1);
+		return (1);
+	}
+	for (size_t i = 0; i < PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS; i++) {
+		if (sc->psc_bar1_postbar3_cache[i].mapped != 0 &&
+		    passthru_tu102_addr_in_window(gpa,
+		    sc->psc_bar1_postbar3_cache[i].gpa, size)) {
+			*baridxp = 1;
+			*offsetp = gpa - sc->psc_bar1_postbar3_cache[i].gpa;
+			return (1);
+		}
+	}
+
+	size = sc->psc_bar[3].size;
+	if (passthru_tu102_addr_in_window(gpa, PASSTHRU_TU102_BAR3_FW_ALIAS_GPA,
+	    size)) {
+		*baridxp = 3;
+		*offsetp = gpa - PASSTHRU_TU102_BAR3_FW_ALIAS_GPA;
+		return (1);
+	}
+	if (passthru_tu102_bar3_tail_alias_decode(sc, gpa, offsetp)) {
+		*baridxp = 3;
+		return (1);
+	}
+
+	return (0);
+}
+
+static int
+passthru_tu102_map_region(struct passthru_softc *sc, int baridx,
+    uint64_t gpa, const char *what)
+{
+	struct vmctx *ctx = sc->psc_pi->pi_vmctx;
+
+	if (vm_map_pptdev_mmio(ctx, sc->pptfd, gpa, sc->psc_bar[baridx].size,
+	    sc->psc_bar[baridx].addr) != 0) {
+		warnx("pci_passthru: TU102 %s map failed bar=%d gpa=0x%lx "
+		    "len=0x%lx hpa=0x%lx", what, baridx, (ulong_t)gpa,
+		    (ulong_t)sc->psc_bar[baridx].size,
+		    (ulong_t)sc->psc_bar[baridx].addr);
+		return (0);
+	}
+
+	warnx("passthru: TU102 %s map bar=%d gpa=0x%lx len=0x%lx hpa=0x%lx",
+	    what, baridx, (ulong_t)gpa, (ulong_t)sc->psc_bar[baridx].size,
+	    (ulong_t)sc->psc_bar[baridx].addr);
+	return (1);
+}
+
+static void
+passthru_tu102_map_subregion_log(const struct passthru_softc *sc, int baridx,
+    uint64_t gpa, uint64_t len, uint64_t hpa, const char *what)
+{
+	warnx("passthru: TU102 %s map bar=%d gpa=0x%lx len=0x%lx hpa=0x%lx",
+	    what, baridx, (ulong_t)gpa, (ulong_t)len, (ulong_t)hpa);
+}
+
+static int
+passthru_tu102_map_subregion(struct passthru_softc *sc, int baridx,
+    uint64_t gpa, uint64_t len, uint64_t hpa_offset, const char *what)
+{
+	struct vmctx *ctx = sc->psc_pi->pi_vmctx;
+	uint64_t hpa;
+
+	hpa = sc->psc_bar[baridx].addr + hpa_offset;
+	if (vm_map_pptdev_mmio(ctx, sc->pptfd, gpa, len, hpa) != 0) {
+		warnx("pci_passthru: TU102 %s map failed bar=%d gpa=0x%lx "
+		    "len=0x%lx hpa=0x%lx", what, baridx, (ulong_t)gpa,
+		    (ulong_t)len, (ulong_t)hpa);
+		return (0);
+	}
+
+	passthru_tu102_map_subregion_log(sc, baridx, gpa, len, hpa, what);
+	return (1);
+}
+
+static void
+passthru_tu102_unmap_region(struct passthru_softc *sc, int baridx,
+    uint64_t gpa, const char *what)
+{
+	struct vmctx *ctx = sc->psc_pi->pi_vmctx;
+
+	if (vm_unmap_pptdev_mmio(ctx, sc->pptfd, gpa,
+	    sc->psc_bar[baridx].size) != 0) {
+		warnx("pci_passthru: TU102 %s unmap failed bar=%d gpa=0x%lx",
+		    what, baridx, (ulong_t)gpa);
+	}
+}
+
+static int
+passthru_tu102_unmap_subregion(struct passthru_softc *sc, int baridx,
+    uint64_t gpa, uint64_t len, const char *what)
+{
+	struct vmctx *ctx = sc->psc_pi->pi_vmctx;
+
+	if (vm_unmap_pptdev_mmio(ctx, sc->pptfd, gpa, len) != 0) {
+		warnx("pci_passthru: TU102 %s unmap failed bar=%d gpa=0x%lx "
+		    "len=0x%lx", what, baridx, (ulong_t)gpa, (ulong_t)len);
+		return (0);
+	}
+	return (1);
+}
+
+static int
+passthru_tu102_ensure_alias_locked(struct passthru_softc *sc, int baridx)
+{
+	const uint64_t gpa = passthru_tu102_fw_alias_gpa(baridx);
+
+	if (gpa == 0 || sc->psc_bar_mapped[baridx] == 0) {
+		return (0);
+	}
+	if (sc->psc_bar_fw_alias_mapped[baridx] != 0) {
+		return (0);
+	}
+	if (!passthru_tu102_map_region(sc, baridx, gpa, "fixed-alias")) {
+		return (0);
+	}
+
+	sc->psc_bar_fw_alias_mapped[baridx] = 1;
+	return (1);
+}
+
+static void
+passthru_tu102_drop_alias_locked(struct passthru_softc *sc, int baridx)
+{
+	const uint64_t gpa = passthru_tu102_fw_alias_gpa(baridx);
+
+	if (gpa == 0 || sc->psc_bar_fw_alias_mapped[baridx] == 0) {
+		return;
+	}
+
+	passthru_tu102_unmap_region(sc, baridx, gpa, "fixed-alias");
+	sc->psc_bar_fw_alias_mapped[baridx] = 0;
+}
+
+static int
+passthru_tu102_touch_bar1_postbar3_window_locked(struct passthru_softc *sc,
+    uint64_t window_gpa, uint64_t fault_gpa, int is_read, int size,
+    uint64_t value)
+{
+	size_t free_slot = PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS;
+	size_t victim_slot = PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS;
+	uint32_t victim_seq = UINT32_MAX;
+	uint64_t old_gpa = 0;
+	bool trap_only;
+	bool hit = false;
+	size_t i;
+
+	if (sc->psc_bar_mapped[1] == 0) {
+		return (0);
+	}
+
+	for (i = 0; i < PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS; i++) {
+		if (sc->psc_bar1_postbar3_cache[i].mapped != 0 &&
+		    sc->psc_bar1_postbar3_cache[i].gpa == window_gpa) {
+			hit = true;
+			sc->psc_bar1_postbar3_cache[i].seq =
+			    ++sc->psc_bar1_postbar3_seq;
+			if (fault_gpa != 0) {
+				warnx("passthru: TU102 postbar3-window hit slot=%lu "
+				    "gpa=0x%lx trap_only=%u fault_gpa=0x%lx off=0x%lx op=%s "
+				    "size=%d value=0x%lx", (ulong_t)i,
+				    (ulong_t)window_gpa,
+				    sc->psc_bar1_postbar3_cache[i].trap_only,
+				    (ulong_t)fault_gpa,
+				    (ulong_t)(fault_gpa - window_gpa),
+				    is_read != 0 ? "read" : "write", size,
+				    (ulong_t)value);
+			}
+			return (0);
+		}
+		if (sc->psc_bar1_postbar3_cache[i].mapped == 0) {
+			if (free_slot == PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS) {
+				free_slot = i;
+			}
+			continue;
+		}
+		if (sc->psc_bar1_postbar3_cache[i].seq < victim_seq) {
+			victim_seq = sc->psc_bar1_postbar3_cache[i].seq;
+			victim_slot = i;
+		}
+	}
+
+	if (hit) {
+		return (0);
+	}
+
+	i = free_slot != PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS ?
+	    free_slot : victim_slot;
+	if (i == PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS) {
+		return (0);
+	}
+	/*
+	 * Observe the first page of every new post-tail BAR1 slice before
+	 * promoting the whole window. The first slice already showed a linear
+	 * 0xff fill across its first page, and we need to know if the later
+	 * slices follow the same pattern.
+	 */
+	trap_only = true;
+	if (sc->psc_bar1_postbar3_cache[i].mapped != 0) {
+		old_gpa = sc->psc_bar1_postbar3_cache[i].gpa;
+		if (sc->psc_bar1_postbar3_cache[i].map_len != 0) {
+			(void) passthru_tu102_unmap_subregion(sc, 1, old_gpa,
+			    sc->psc_bar1_postbar3_cache[i].map_len,
+			    "postbar3-window");
+		}
+	}
+	if (!trap_only &&
+	    !passthru_tu102_map_region(sc, 1, window_gpa, "postbar3-window")) {
+		return (0);
+	}
+	sc->psc_bar1_postbar3_cache[i].gpa = window_gpa;
+	sc->psc_bar1_postbar3_cache[i].map_len = 0;
+	sc->psc_bar1_postbar3_cache[i].mapped = 1;
+	sc->psc_bar1_postbar3_cache[i].trap_only = trap_only ? 1 : 0;
+	sc->psc_bar1_postbar3_cache[i].seq = ++sc->psc_bar1_postbar3_seq;
+	sc->psc_bar1_trace_count = 0;
+	sc->psc_bar1_trace_suppressed = 0;
+	if (fault_gpa == 0) {
+		warnx("passthru: TU102 postbar3-window seed slot=%lu gpa=0x%lx trap_only=%u",
+		    (ulong_t)i, (ulong_t)window_gpa,
+		    sc->psc_bar1_postbar3_cache[i].trap_only);
+	} else {
+		warnx("passthru: TU102 postbar3-window %s slot=%lu old_gpa=0x%lx "
+		    "new_gpa=0x%lx trap_only=%u fault_gpa=0x%lx off=0x%lx op=%s size=%d "
+		    "value=0x%lx", old_gpa != 0 ? "evict" : "fill",
+		    (ulong_t)i, (ulong_t)old_gpa, (ulong_t)window_gpa,
+		    sc->psc_bar1_postbar3_cache[i].trap_only,
+		    (ulong_t)fault_gpa, (ulong_t)(fault_gpa - window_gpa),
+		    is_read != 0 ? "read" : "write", size, (ulong_t)value);
+	}
+	return (1);
+}
+
+static int
+passthru_tu102_bar1_window_slot_locked(struct passthru_softc *sc,
+    uint64_t window_gpa)
+{
+	size_t i;
+
+	for (i = 0; i < PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS; i++) {
+		if (sc->psc_bar1_postbar3_cache[i].mapped != 0 &&
+		    sc->psc_bar1_postbar3_cache[i].gpa == window_gpa) {
+			return ((int)i);
+		}
+	}
+
+	return (-1);
+}
+
+static bool
+passthru_tu102_map_bar1_window_page_locked(struct passthru_softc *sc,
+    int window_slot, uint64_t window_gpa)
+{
+	size_t victim = PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS;
+	uint32_t victim_seq = UINT32_MAX;
+	size_t i;
+
+	if (window_slot < 0 ||
+	    window_slot >= PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS) {
+		return (false);
+	}
+	if (passthru_tu102_map_subregion(sc, 1, window_gpa,
+	    PASSTHRU_TU102_BAR1_PAGE_SIZE, 0, "postbar3-window-page")) {
+		sc->psc_bar1_postbar3_cache[window_slot].map_len =
+		    PASSTHRU_TU102_BAR1_PAGE_SIZE;
+		sc->psc_bar1_postbar3_cache[window_slot].trap_only = 0;
+		sc->psc_bar1_postbar3_cache[window_slot].seq =
+		    ++sc->psc_bar1_postbar3_seq;
+		return (true);
+	}
+
+	for (i = 0; i < PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS; i++) {
+		if ((int)i == window_slot)
+			continue;
+		if (sc->psc_bar1_postbar3_cache[i].mapped == 0 ||
+		    sc->psc_bar1_postbar3_cache[i].trap_only != 0)
+			continue;
+		if (sc->psc_bar1_postbar3_cache[i].seq < victim_seq) {
+			victim = i;
+			victim_seq = sc->psc_bar1_postbar3_cache[i].seq;
+		}
+	}
+	if (victim == PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS)
+		return (false);
+
+	warnx("passthru: TU102 postbar3-window promote retry slot=%d "
+	    "gpa=0x%lx evict_slot=%lu evict_gpa=0x%lx", window_slot,
+	    (ulong_t)window_gpa, (ulong_t)victim,
+	    (ulong_t)sc->psc_bar1_postbar3_cache[victim].gpa);
+	(void) passthru_tu102_unmap_subregion(sc, 1,
+	    sc->psc_bar1_postbar3_cache[victim].gpa,
+	    sc->psc_bar1_postbar3_cache[victim].map_len,
+	    "postbar3-window");
+	sc->psc_bar1_postbar3_cache[victim].gpa = 0;
+	sc->psc_bar1_postbar3_cache[victim].map_len = 0;
+	sc->psc_bar1_postbar3_cache[victim].mapped = 0;
+	sc->psc_bar1_postbar3_cache[victim].trap_only = 0;
+	sc->psc_bar1_postbar3_cache[victim].seq = 0;
+
+	if (!passthru_tu102_map_subregion(sc, 1, window_gpa,
+	    PASSTHRU_TU102_BAR1_PAGE_SIZE, 0, "postbar3-window-page")) {
+		return (false);
+	}
+
+	sc->psc_bar1_postbar3_cache[window_slot].map_len =
+	    PASSTHRU_TU102_BAR1_PAGE_SIZE;
+	sc->psc_bar1_postbar3_cache[window_slot].trap_only = 0;
+	sc->psc_bar1_postbar3_cache[window_slot].seq =
+	    ++sc->psc_bar1_postbar3_seq;
+	return (true);
+}
+
+static void
+passthru_tu102_drop_bar1_postbar3_window_locked(struct passthru_softc *sc)
+{
+	size_t i;
+
+	for (i = 0; i < PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS; i++) {
+		if (sc->psc_bar1_postbar3_cache[i].mapped == 0) {
+			continue;
+		}
+		if (sc->psc_bar1_postbar3_cache[i].map_len != 0) {
+			(void) passthru_tu102_unmap_subregion(sc, 1,
+			    sc->psc_bar1_postbar3_cache[i].gpa,
+			    sc->psc_bar1_postbar3_cache[i].map_len,
+			    "postbar3-window");
+		}
+		sc->psc_bar1_postbar3_cache[i].gpa = 0;
+		sc->psc_bar1_postbar3_cache[i].map_len = 0;
+		sc->psc_bar1_postbar3_cache[i].mapped = 0;
+		sc->psc_bar1_postbar3_cache[i].trap_only = 0;
+		sc->psc_bar1_postbar3_cache[i].seq = 0;
+	}
+	sc->psc_bar1_postbar3_seq = 0;
+}
+
+/*
+ * Guest firmware churn on TU102 touches PCI_COMMAND aggressively while it
+ * probes the option ROM and sibling functions. Forwarding those writes to the
+ * physical device has been enough to collapse BAR0 / config-mirror access, so
+ * keep the guest-visible shadow exact while clamping the host side.
+ */
+static int
+passthru_tu102_host_cmd_sticky_quirk(struct pci_devinst *pi)
+{
+	return (passthru_nvidia_display_fn0((struct passthru_softc *)pi->pi_arg));
+}
+
+static int
+passthru_tu102_host_cmd_shadow_quirk(struct pci_devinst *pi)
+{
+	return (passthru_tu102_host_cmd_sticky_quirk(pi));
+}
 
 static int
 msi_caplen(int msgctrl)
@@ -118,6 +951,61 @@ passthru_read_config(const struct passthru_softc *sc, long reg, int width)
 		return (0);
 	}
 	return (pi.pci_data);
+}
+
+static int
+passthru_host_bar_read(struct passthru_softc *sc, int baridx, uint64_t offset,
+    int size, uint64_t *val)
+{
+	struct ppt_bar_io pbi;
+	uint64_t lo;
+	uint64_t hi;
+
+	if (size == 8) {
+		if (passthru_host_bar_read(sc, baridx, offset, 4, &lo) != 0 ||
+		    passthru_host_bar_read(sc, baridx, offset + 4, 4, &hi) != 0) {
+			return (-1);
+		}
+		*val = lo | (hi << 32);
+		return (0);
+	}
+
+	bzero(&pbi, sizeof (pbi));
+	pbi.pbi_bar = baridx;
+	pbi.pbi_width = size;
+	pbi.pbi_off = offset;
+
+	if (ioctl(sc->pptfd, PPT_BAR_READ, &pbi) != 0) {
+		return (-1);
+	}
+
+	*val = pbi.pbi_data;
+	return (0);
+}
+
+static int
+passthru_host_bar_write(struct passthru_softc *sc, int baridx, uint64_t offset,
+    int size, uint64_t val)
+{
+	struct ppt_bar_io pbi;
+
+	if (size == 8) {
+		if (passthru_host_bar_write(sc, baridx, offset, 4,
+		    val & 0xffffffffU) != 0 ||
+		    passthru_host_bar_write(sc, baridx, offset + 4, 4,
+		    val >> 32) != 0) {
+			return (-1);
+		}
+		return (0);
+	}
+
+	bzero(&pbi, sizeof (pbi));
+	pbi.pbi_bar = baridx;
+	pbi.pbi_width = size;
+	pbi.pbi_off = offset;
+	pbi.pbi_data = val;
+
+	return (ioctl(sc->pptfd, PPT_BAR_WRITE, &pbi));
 }
 
 static void
@@ -716,6 +1604,85 @@ passthru_legacy_config(nvlist_t *nvl, const char *opt)
 	return (0);
 }
 
+static uint16_t
+passthru_rom_get_u16(const uint8_t *p)
+{
+	return ((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+}
+
+/*
+ * Some dumped option ROMs claim that another image follows even though the
+ * file ends after the current image. Clamp those single-image dumps to LAST in
+ * the in-memory guest copy so firmware does not walk off the end of the ROM.
+ */
+static void
+passthru_rom_fixup_chain(uint8_t *rom, size_t rom_file_size)
+{
+	size_t off = 0;
+	int image = 0;
+
+	while (off + 0x1a <= rom_file_size && image < 16) {
+		uint16_t pcir;
+		size_t hdr_off;
+		uint16_t blocks;
+		size_t next_off;
+		uint8_t indicator;
+		uint8_t *hdr;
+
+		if (rom[off] != 0x55 || rom[off + 1] != 0xaa) {
+			return;
+		}
+
+		pcir = passthru_rom_get_u16(&rom[off + 0x18]);
+		hdr_off = off + pcir;
+		if (pcir < 0x18 || hdr_off + 0x16 > rom_file_size) {
+			return;
+		}
+
+		hdr = &rom[hdr_off];
+		if (memcmp(hdr, "PCIR", 4) != 0) {
+			return;
+		}
+
+		blocks = passthru_rom_get_u16(&hdr[0x10]);
+		if (blocks == 0) {
+			return;
+		}
+
+		indicator = hdr[0x15];
+		next_off = off + (size_t)blocks * 512;
+		if ((indicator & 0x80) != 0) {
+			return;
+		}
+
+		if (next_off + 2 > rom_file_size ||
+		    rom[next_off] != 0x55 || rom[next_off + 1] != 0xaa) {
+			uint8_t sum = 0;
+			size_t i;
+
+			hdr[0x15] = indicator | 0x80;
+
+			/*
+			 * Keep the image checksum valid after forcing LAST so
+			 * ROM consumers do not reject the repaired image.
+			 */
+			if (next_off <= rom_file_size && next_off > off) {
+				for (i = off; i < next_off; i++) {
+					sum = (uint8_t)(sum + rom[i]);
+				}
+				if (sum != 0) {
+					rom[next_off - 1] =
+					    (uint8_t)(rom[next_off - 1] - sum);
+				}
+			}
+			return;
+		}
+
+		off = next_off;
+		image++;
+	}
+}
+
 static int
 passthru_init_rom(struct vmctx *const ctx __unused,
     struct passthru_softc *const sc, const char *const romfile)
@@ -756,6 +1723,7 @@ passthru_init_rom(struct vmctx *const ctx __unused,
 		return (error);
 	}
 	memcpy(rom_addr, rom_data, rom_size);
+	passthru_rom_fixup_chain(rom_addr, rom_size);
 
 	sc->psc_bar[PCI_ROM_IDX].type = PCIBAR_ROM;
 	sc->psc_bar[PCI_ROM_IDX].addr = (uint64_t)rom_addr;
@@ -801,6 +1769,7 @@ passthru_init(struct pci_devinst *pi, nvlist_t *nvl)
 	pi->pi_arg = sc;
 	sc->psc_pi = pi;
 	sc->pptfd = pptfd;
+	(void) pthread_mutex_init(&sc->psc_alias_lock, NULL);
 
 	if ((error = vm_get_pptdev_limits(ctx, pptfd, &sc->msi_limit,
 	    &sc->msix_limit)) != 0)
@@ -827,9 +1796,15 @@ passthru_init(struct pci_devinst *pi, nvlist_t *nvl)
 	    get_config_value_node(nvl, "rom"))) != 0) {
 		goto done;
 	}
+	if (passthru_nvidia_display_fn0(sc)) {
+		passthru_tu102_active_sc = sc;
+	}
 
 done:
 	if (error) {
+		if (sc != NULL) {
+			(void) pthread_mutex_destroy(&sc->psc_alias_lock);
+		}
 		free(sc);
 		if (pptfd != -1)
 			vm_unassign_pptdev(ctx, pptfd);
@@ -969,16 +1944,50 @@ passthru_cfgwrite_default(struct passthru_softc *sc, struct pci_devinst *pi,
 	 * is passed through.
 	 */
 	if (coff == PCIR_COMMAND) {
+		uint16_t reqval;
+		uint16_t newval;
+		uint16_t host_cur;
+		uint16_t host_write;
+		int need_host_sync;
+		int sticky_host_cmd;
+		int shadow_host_cmd;
+
 		if (bytes <= 2)
 			return (PE_CFGRW_DEFAULT);
+
+		reqval = val & 0xffff;
+		newval = reqval;
+		host_cur = 0;
+		host_write = newval;
+		need_host_sync = 1;
+		sticky_host_cmd = passthru_tu102_host_cmd_sticky_quirk(pi);
+		shadow_host_cmd = passthru_tu102_host_cmd_shadow_quirk(pi);
 
 		/* Update the physical status register. */
 		passthru_write_config(sc, PCIR_STATUS, 2, val >> 16);
 
 		/* Update the virtual command register. */
 		cmd_old = pci_get_cfgdata16(pi, PCIR_COMMAND);
-		pci_set_cfgdata16(pi, PCIR_COMMAND, val & 0xffff);
+		pci_set_cfgdata16(pi, PCIR_COMMAND, newval);
 		pci_emul_cmd_changed(pi, cmd_old);
+
+		if (shadow_host_cmd) {
+			host_cur = passthru_read_config(sc, PCIR_COMMAND,
+			    sizeof (uint16_t));
+			host_write = host_cur;
+			need_host_sync = 0;
+		} else if (sticky_host_cmd) {
+			host_cur = passthru_read_config(sc, PCIR_COMMAND,
+			    sizeof (uint16_t));
+			host_write |= host_cur & (PCIM_CMD_PORTEN |
+			    PCIM_CMD_MEMEN | PCIM_CMD_BUSMASTEREN);
+			if (host_write == host_cur)
+				need_host_sync = 0;
+		}
+
+		if (need_host_sync)
+			passthru_write_config(sc, PCIR_COMMAND, 2, host_write);
+
 		return (PE_CFGRW_DROP);
 	}
 
@@ -1114,22 +2123,159 @@ passthru_msix_addr(struct vmctx *ctx, struct pci_devinst *pi, int baridx,
 	}
 }
 
-static void
+static int
 passthru_mmio_addr(struct vmctx *ctx, struct pci_devinst *pi, int baridx,
 		   int enabled, uint64_t address)
 {
 	struct passthru_softc *sc;
 
 	sc = pi->pi_arg;
+	if (passthru_nvidia_display_fn0(sc)) {
+		warnx("passthru: TU102 mmio %s bar=%d gpa=0x%lx len=0x%lx hpa=0x%lx",
+		    enabled ? "map" : "unmap", baridx, (ulong_t)address,
+		    (ulong_t)sc->psc_bar[baridx].size,
+		    (ulong_t)sc->psc_bar[baridx].addr);
+	}
 	if (!enabled) {
+		if (passthru_nvidia_display_fn0(sc)) {
+			(void) pthread_mutex_lock(&sc->psc_alias_lock);
+			passthru_tu102_drop_alias_locked(sc, baridx);
+			if (baridx == 1) {
+				passthru_tu102_drop_bar1_postbar3_window_locked(sc);
+			}
+			(void) pthread_mutex_unlock(&sc->psc_alias_lock);
+		}
+		if (!sc->psc_bar_mapped[baridx])
+			return (1);
 		if (vm_unmap_pptdev_mmio(ctx, sc->pptfd, address,
 		    sc->psc_bar[baridx].size) != 0)
 			warnx("pci_passthru: unmap_pptdev_mmio failed");
+		sc->psc_bar_mapped[baridx] = 0;
 	} else {
 		if (vm_map_pptdev_mmio(ctx, sc->pptfd, address,
 		    sc->psc_bar[baridx].size, sc->psc_bar[baridx].addr) != 0)
 			warnx("pci_passthru: map_pptdev_mmio failed");
+		else
+			sc->psc_bar_mapped[baridx] = 1;
+		if (passthru_nvidia_display_fn0(sc) && sc->psc_bar_mapped[baridx] &&
+		    baridx == 1) {
+			(void) pthread_mutex_lock(&sc->psc_alias_lock);
+			(void) passthru_tu102_touch_bar1_postbar3_window_locked(sc,
+			    passthru_tu102_bar1_postbar3_base(sc), 0, 0, 0, 0);
+			(void) pthread_mutex_unlock(&sc->psc_alias_lock);
+		}
 	}
+
+	return (!enabled || sc->psc_bar_mapped[baridx] != 0);
+}
+
+int
+passthru_tu102_mmio_fault(struct vmctx *ctx, struct vm_mmio *mmio)
+{
+	struct passthru_softc *sc = passthru_tu102_active_sc;
+	int baridx;
+	int window_slot = -1;
+	uint64_t offset;
+	uint64_t window_gpa = 0;
+	int handled = 0;
+	int err = 0;
+	bool bar3_tail = false;
+
+	if (sc == NULL || sc->psc_pi == NULL || sc->psc_pi->pi_vmctx != ctx ||
+	    !passthru_nvidia_display_fn0(sc) || mmio == NULL) {
+		return (0);
+	}
+	(void) pthread_mutex_lock(&sc->psc_alias_lock);
+	if (passthru_tu102_bar3_tail_alias_decode(sc, mmio->gpa, &offset)) {
+		baridx = 3;
+		bar3_tail = true;
+	} else if (passthru_tu102_alias_decode(sc, mmio->gpa, &baridx,
+	    &offset)) {
+		if (baridx == 1) {
+			window_gpa = mmio->gpa - offset;
+		}
+		if (baridx != 1 || mmio->gpa == PASSTHRU_TU102_BAR1_FW_ALIAS0_GPA +
+		    offset) {
+			(void) passthru_tu102_ensure_alias_locked(sc, baridx);
+		}
+	} else if (passthru_tu102_bar1_postbar3_decode(sc, mmio->gpa,
+	    &window_gpa, &offset)) {
+		baridx = 1;
+		passthru_trace_tu102_bar1_transition(sc, mmio->gpa);
+		(void) passthru_tu102_touch_bar1_postbar3_window_locked(sc,
+		    window_gpa, mmio->gpa, mmio->read, mmio->bytes, mmio->data);
+	} else {
+		(void) pthread_mutex_unlock(&sc->psc_alias_lock);
+		passthru_trace_tu102_bar1_transition(sc, mmio->gpa);
+		return (0);
+	}
+	if (baridx == 1 && window_gpa != 0 &&
+	    window_gpa != PASSTHRU_TU102_BAR1_FW_ALIAS0_GPA) {
+		window_slot = passthru_tu102_bar1_window_slot_locked(sc, window_gpa);
+	}
+
+	if (mmio->read != 0) {
+		uint64_t val = 0;
+
+		if (baridx == 0 &&
+		    passthru_tu102_bar0_read_emulate(sc, offset, mmio->bytes,
+		    &val) != 0) {
+			mmio->data = val;
+			handled = 1;
+		} else if (passthru_host_bar_read(sc, baridx, offset, mmio->bytes,
+		    &val) == 0) {
+			mmio->data = val;
+			handled = 1;
+		} else {
+			err = errno;
+		}
+	} else {
+		if (baridx == 0 &&
+		    passthru_tu102_bar0_write_emulate(sc, offset, mmio->bytes,
+		    mmio->data) != 0) {
+			handled = 1;
+		} else if (passthru_host_bar_write(sc, baridx, offset, mmio->bytes,
+		    mmio->data) == 0) {
+			handled = 1;
+		} else {
+			err = errno;
+		}
+	}
+	if (handled && bar3_tail) {
+		passthru_trace_tu102_bar3_tail_mmio(sc, mmio->read != 0 ? "read" :
+		    "write", mmio->gpa, offset, mmio->bytes, mmio->data);
+	} else if (handled && baridx == 1) {
+		if (sc->psc_bar1_alias_first_seen == 0 &&
+		    window_gpa == PASSTHRU_TU102_BAR1_FW_ALIAS0_GPA) {
+			sc->psc_bar1_alias_first_seen = 1;
+			warnx("passthru: TU102 BAR1 alias first-hit "
+			    "fault_gpa=0x%lx alias_base=0x%lx native_bar1_gpa=0x%lx",
+			    (ulong_t)mmio->gpa,
+			    (ulong_t)PASSTHRU_TU102_BAR1_FW_ALIAS0_GPA,
+			    (ulong_t)(sc->psc_bar_gpa_valid[1] != 0 ?
+			    sc->psc_bar_gpa[1] : sc->psc_pi->pi_bar[1].addr));
+		}
+		passthru_trace_tu102_bar1_mmio(sc, mmio->read != 0 ? "read" :
+		    "write", mmio->gpa, window_gpa, mmio->bytes, mmio->data,
+		    window_slot);
+		if (window_slot >= 0 &&
+		    sc->psc_bar1_postbar3_cache[window_slot].trap_only != 0 &&
+		    offset + mmio->bytes >= 0x1000 &&
+		    passthru_tu102_map_bar1_window_page_locked(sc, window_slot,
+		    window_gpa)) {
+			warnx("passthru: TU102 postbar3-window page-map slot=%d "
+			    "gpa=0x%lx after_off=0x%lx", window_slot,
+			    (ulong_t)window_gpa, (ulong_t)offset);
+		}
+	}
+	(void) pthread_mutex_unlock(&sc->psc_alias_lock);
+	if (!handled && err != 0) {
+		warnx("pci_passthru: TU102 alias mmio %s failed bar=%d "
+		    "gpa=0x%lx off=0x%lx size=%u errno=%d",
+		    mmio->read != 0 ? "read" : "write", baridx,
+		    (ulong_t)mmio->gpa, (ulong_t)offset, mmio->bytes, err);
+	}
+	return (handled);
 }
 
 static void
@@ -1154,29 +2300,143 @@ passthru_addr_rom(struct pci_devinst *const pi, const int idx,
 	}
 }
 
-static void
-passthru_addr(struct pci_devinst *pi, int baridx,
-    int enabled, uint64_t address)
+static int
+passthru_addr_one(struct pci_devinst *pi, int baridx, int enabled,
+    uint64_t address)
 {
 	struct vmctx *ctx = pi->pi_vmctx;
 
 	switch (pi->pi_bar[baridx].type) {
 	case PCIBAR_IO:
 		/* IO BARs are emulated */
-		break;
+		return (1);
 	case PCIBAR_ROM:
 		passthru_addr_rom(pi, baridx, enabled);
-		break;
+		return (1);
 	case PCIBAR_MEM32:
 	case PCIBAR_MEM64:
 		if (baridx == pci_msix_table_bar(pi))
 			passthru_msix_addr(ctx, pi, baridx, enabled, address);
 		else
-			passthru_mmio_addr(ctx, pi, baridx, enabled, address);
-		break;
+			return (passthru_mmio_addr(ctx, pi, baridx, enabled,
+			    address));
+		return (1);
 	default:
 		errx(4, "%s: invalid BAR type %d", __func__,
 		    pi->pi_bar[baridx].type);
+	}
+
+	return (0);
+}
+
+static void
+passthru_retry_pending_bars(struct pci_devinst *pi)
+{
+	struct passthru_softc *sc = pi->pi_arg;
+	int baridx;
+	int progress;
+
+	do {
+		progress = 0;
+		for (baridx = 0; baridx <= PCI_BARMAX; baridx++) {
+			if (pi->pi_bar[baridx].type != PCIBAR_MEM32 &&
+			    pi->pi_bar[baridx].type != PCIBAR_MEM64)
+				continue;
+			if (baridx == pci_msix_table_bar(pi))
+				continue;
+			if (sc->psc_bar_gpa_valid[baridx] != 0 ||
+			    pi->pi_bar[baridx].addr == 0)
+				continue;
+			if (passthru_addr_one(pi, baridx, 1,
+			    pi->pi_bar[baridx].addr)) {
+				sc->psc_bar_gpa[baridx] = pi->pi_bar[baridx].addr;
+				sc->psc_bar_gpa_valid[baridx] = 1;
+				progress = 1;
+			}
+		}
+	} while (progress != 0);
+}
+
+static void
+passthru_addr(struct pci_devinst *pi, int baridx,
+    int enabled, uint64_t address)
+{
+	struct passthru_softc *sc = pi->pi_arg;
+	uint64_t oldaddr;
+	int success;
+	uint64_t req_address = address;
+	uint32_t cfg_lo;
+	uint32_t cfg_hi;
+
+	if (enabled && passthru_nvidia_display_fn0(sc)) {
+		uint64_t pinned;
+
+		switch (baridx) {
+		case 0:
+			pinned = 0xc0000000ULL;
+			address = pinned;
+			pi->pi_bar[0].addr = pinned;
+			pci_set_cfgdata32(pi, PCIR_BAR(0),
+			    (uint32_t)pinned | pi->pi_bar[0].lobits);
+			break;
+		case 1:
+			pinned = 0x800000000ULL;
+			address = pinned;
+			pi->pi_bar[1].addr = pinned;
+			pci_set_cfgdata32(pi, PCIR_BAR(1),
+			    (uint32_t)pinned | pi->pi_bar[1].lobits);
+			pci_set_cfgdata32(pi, PCIR_BAR(2), pinned >> 32);
+			break;
+		case 3:
+			pinned = 0x810000000ULL;
+			address = pinned;
+			pi->pi_bar[3].addr = pinned;
+			pci_set_cfgdata32(pi, PCIR_BAR(3),
+			    (uint32_t)pinned | pi->pi_bar[3].lobits);
+			pci_set_cfgdata32(pi, PCIR_BAR(4), pinned >> 32);
+			break;
+		default:
+			break;
+		}
+	}
+
+	if (passthru_nvidia_display_fn0(sc)) {
+		cfg_lo = pci_get_cfgdata32(pi, PCIR_BAR(baridx));
+		cfg_hi = (pi->pi_bar[baridx].type == PCIBAR_MEM64 &&
+		    baridx + 1 <= PCI_BARMAX) ?
+		    pci_get_cfgdata32(pi, PCIR_BAR(baridx + 1)) : 0;
+		warnx("passthru: TU102 baraddr enabled=%d bar=%d req_gpa=0x%lx gpa=0x%lx size=0x%lx",
+		    enabled, baridx, (ulong_t)req_address, (ulong_t)address,
+		    (ulong_t)sc->psc_bar[baridx].size);
+		warnx("passthru: TU102 barcfg bar=%d type=%d cfg_lo=0x%08x cfg_hi=0x%08x pi_addr=0x%lx valid=%u mapped=%u alias=%u",
+		    baridx, pi->pi_bar[baridx].type, cfg_lo, cfg_hi,
+		    (ulong_t)pi->pi_bar[baridx].addr,
+		    sc->psc_bar_gpa_valid[baridx], sc->psc_bar_mapped[baridx],
+		    sc->psc_bar_fw_alias_mapped[baridx]);
+	}
+
+	if (enabled && sc->psc_bar_gpa_valid[baridx] &&
+	    sc->psc_bar_gpa[baridx] == address && sc->psc_bar_mapped[baridx]) {
+		passthru_retry_pending_bars(pi);
+		return;
+	}
+
+	if (enabled && sc->psc_bar_gpa_valid[baridx] &&
+	    sc->psc_bar_gpa[baridx] != address) {
+		oldaddr = sc->psc_bar_gpa[baridx];
+		(void) passthru_addr_one(pi, baridx, 0, oldaddr);
+		sc->psc_bar_gpa_valid[baridx] = 0;
+	}
+
+	success = passthru_addr_one(pi, baridx, enabled, address);
+
+	if (enabled && success) {
+		sc->psc_bar_gpa[baridx] = address;
+		sc->psc_bar_gpa_valid[baridx] = 1;
+		passthru_retry_pending_bars(pi);
+	} else if (!enabled) {
+		sc->psc_bar_gpa_valid[baridx] = 0;
+		sc->psc_bar_mapped[baridx] = 0;
 	}
 }
 
