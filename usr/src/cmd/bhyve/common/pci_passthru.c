@@ -91,25 +91,9 @@
 #define	PASSTHRU_TU102_BAR3_FW_ALIAS_GPA	0x170000000ULL
 #define	PASSTHRU_TU102_BAR3_TAIL_ALIAS_SIZE	0x1000ULL
 #define	PASSTHRU_TU102_BAR1_PAGE_SIZE	0x1000ULL
-#define	PASSTHRU_TU102_BAR0_PAGE0_SIZE	0x1000U
-#define	PASSTHRU_TU102_BAR0_DWORD_COUNT \
-	(PASSTHRU_TU102_BAR0_PAGE0_SIZE / sizeof (uint32_t))
 #define	PASSTHRU_TU102_BAR1_TRACE_LIMIT	1024U
 #define	PASSTHRU_TU102_BAR3_TAIL_TRACE_LIMIT	128U
 #define	PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS	8U
-
-#define	NVIDIA_TU102_PMC_GAP_OFF	0x0cU
-#define	NVIDIA_TU102_PMC_GAP_END	0x100U
-#define	NVIDIA_TU102_PMC_DAEMON_GAP_OFF	0x10cU
-#define	NVIDIA_TU102_PMC_DAEMON_GAP_END	0x140U
-#define	NVIDIA_TU102_PMC_DAEMON2_GAP_OFF	0x14cU
-#define	NVIDIA_TU102_PMC_DAEMON2_GAP_END	0x160U
-#define	NVIDIA_TU102_PMC_MASK_WIN_OFF	0x640U
-#define	NVIDIA_TU102_PMC_MASK_WIN_END	0x660U
-#define	NVIDIA_TU102_PMC_MASK_PROMOTE_OFF	0x640U
-#define	NVIDIA_TU102_PMC_MASK_PROMOTE_END	0x680U
-#define	NVIDIA_TU102_PGRAPH_DISPATCH_OFF	0x404000ULL
-#define	NVIDIA_TU102_PGRAPH_DISPATCH_END	0x404010ULL
 
 /*
  * Detailed TU102 startup tracing is runtime-gated because the current
@@ -148,11 +132,6 @@ passthru_tu102_trace(const char *fmt, ...)
 	va_end(ap);
 }
 
-static const uint32_t nvidia_tu102_pmc_daemon_regs[] = {
-	0x108, 0x148, 0x168, 0x16c, 0x170, 0x174, 0x178, 0x17c,
-	0x640, 0x644, 0x648, 0x64c, 0x650, 0x654, 0x658, 0x65c
-};
-
 struct passthru_softc {
 	struct pci_devinst *psc_pi;
 	/* ROM is handled like a BAR */
@@ -176,10 +155,6 @@ struct passthru_softc {
 	uint8_t psc_bar1_transition_first_seen;
 	uint32_t psc_bar3_tail_trace_count;
 	uint8_t psc_bar3_tail_trace_suppressed;
-	struct {
-		uint32_t value;
-		uint8_t seen_write;
-	} psc_bar0_shadow[PASSTHRU_TU102_BAR0_DWORD_COUNT];
 	struct {
 		int		capoff;
 		int		msgctrl;
@@ -233,185 +208,6 @@ passthru_nvidia_display_fn0(const struct passthru_softc *sc)
 	    PASSTHRU_NVIDIA_VENDOR_ID &&
 	    pci_get_cfgdata8(pi, PCIR_CLASS) == PCIC_DISPLAY &&
 	    pi->pi_func == 0);
-}
-
-static bool
-passthru_tu102_range_contains(uint64_t offset, int size, uint64_t start,
-    uint64_t end)
-{
-	uint64_t limit;
-
-	if (size <= 0) {
-		return (false);
-	}
-	limit = offset + (uint64_t)size;
-	return (offset >= start && limit <= end);
-}
-
-static bool
-passthru_tu102_bar0_page0_access_supported(uint64_t offset, int size)
-{
-	if (size != 4 || (offset & (sizeof (uint32_t) - 1)) != 0) {
-		return (false);
-	}
-	return (offset < PASSTHRU_TU102_BAR0_PAGE0_SIZE &&
-	    offset + (uint64_t)size <= PASSTHRU_TU102_BAR0_PAGE0_SIZE);
-}
-
-static bool
-passthru_tu102_bar0_pmc_gap_contains(uint64_t offset, int size)
-{
-	return (passthru_tu102_range_contains(offset, size,
-	    NVIDIA_TU102_PMC_GAP_OFF, NVIDIA_TU102_PMC_GAP_END));
-}
-
-static bool
-passthru_tu102_bar0_pmc_daemon_contains(uint64_t offset, int size)
-{
-	size_t i;
-
-	if (size <= 0) {
-		return (false);
-	}
-
-	for (i = 0; i < nitems(nvidia_tu102_pmc_daemon_regs); i++) {
-		if (passthru_tu102_range_contains(offset, size,
-		    nvidia_tu102_pmc_daemon_regs[i],
-		    nvidia_tu102_pmc_daemon_regs[i] + sizeof (uint32_t))) {
-			return (true);
-		}
-	}
-
-	return (false);
-}
-
-static bool
-passthru_tu102_bar0_pmc_daemon_gap_contains(uint64_t offset, int size)
-{
-	return (passthru_tu102_range_contains(offset, size,
-	    NVIDIA_TU102_PMC_DAEMON_GAP_OFF, NVIDIA_TU102_PMC_DAEMON_GAP_END));
-}
-
-static bool
-passthru_tu102_bar0_pmc_daemon2_gap_contains(uint64_t offset, int size)
-{
-	return (passthru_tu102_range_contains(offset, size,
-	    NVIDIA_TU102_PMC_DAEMON2_GAP_OFF,
-	    NVIDIA_TU102_PMC_DAEMON2_GAP_END));
-}
-
-static bool
-passthru_tu102_bar0_pmc_mask_window_contains(uint64_t offset, int size)
-{
-	return (passthru_tu102_range_contains(offset, size,
-	    NVIDIA_TU102_PMC_MASK_WIN_OFF, NVIDIA_TU102_PMC_MASK_WIN_END));
-}
-
-static bool
-passthru_tu102_bar0_pmc_mask_promote_contains(uint64_t offset, int size)
-{
-	return (passthru_tu102_range_contains(offset, size,
-	    NVIDIA_TU102_PMC_MASK_PROMOTE_OFF,
-	    NVIDIA_TU102_PMC_MASK_PROMOTE_END));
-}
-
-static bool
-passthru_tu102_pgraph_dispatch_contains(uint64_t offset, int size)
-{
-	return (passthru_tu102_range_contains(offset, size,
-	    NVIDIA_TU102_PGRAPH_DISPATCH_OFF, NVIDIA_TU102_PGRAPH_DISPATCH_END));
-}
-
-static bool
-passthru_tu102_bar0_trap_contains(uint64_t offset, int size)
-{
-	return (passthru_tu102_bar0_pmc_gap_contains(offset, size) ||
-	    passthru_tu102_bar0_pmc_daemon_contains(offset, size) ||
-	    passthru_tu102_bar0_pmc_daemon_gap_contains(offset, size) ||
-	    passthru_tu102_bar0_pmc_daemon2_gap_contains(offset, size));
-}
-
-static bool
-passthru_tu102_bar0_read_is_poison(uint64_t val, int size)
-{
-	return (size == 4 && (uint32_t)val == 0xbadf5040U);
-}
-
-static uint32_t *
-passthru_tu102_bar0_shadow_value(struct passthru_softc *sc, uint64_t offset,
-    bool *have_value)
-{
-	size_t idx = (size_t)(offset / sizeof (uint32_t));
-
-	if (idx >= PASSTHRU_TU102_BAR0_DWORD_COUNT) {
-		return (NULL);
-	}
-	if (have_value != NULL) {
-		*have_value = (sc->psc_bar0_shadow[idx].seen_write != 0);
-	}
-	return (&sc->psc_bar0_shadow[idx].value);
-}
-
-static int
-passthru_tu102_bar0_read_emulate(struct passthru_softc *sc, uint64_t offset,
-    int size, uint64_t *valp)
-{
-	bool have_shadow = false;
-	uint32_t *shadowp;
-	uint64_t val;
-
-	if (passthru_tu102_pgraph_dispatch_contains(offset, size)) {
-		*valp = 0;
-		return (1);
-	}
-	if (!passthru_tu102_bar0_page0_access_supported(offset, size)) {
-		return (0);
-	}
-
-	shadowp = passthru_tu102_bar0_shadow_value(sc, offset, &have_shadow);
-	if (passthru_tu102_bar0_trap_contains(offset, size)) {
-		*valp = (passthru_tu102_bar0_pmc_mask_window_contains(offset, size) &&
-		    have_shadow) ? *shadowp : 0;
-		return (1);
-	}
-	if (passthru_host_bar_read(sc, 0, offset, size, &val) == 0) {
-		if (passthru_tu102_bar0_read_is_poison(val, size) &&
-		    passthru_tu102_bar0_pmc_mask_promote_contains(offset, size)) {
-			*valp = have_shadow ? *shadowp : 0;
-		} else {
-			*valp = val;
-		}
-		return (1);
-	}
-	if (passthru_tu102_bar0_pmc_mask_promote_contains(offset, size)) {
-		*valp = have_shadow ? *shadowp : 0;
-		return (1);
-	}
-	return (0);
-}
-
-static int
-passthru_tu102_bar0_write_emulate(struct passthru_softc *sc, uint64_t offset,
-    int size, uint64_t val)
-{
-	uint32_t *shadowp;
-
-	shadowp = passthru_tu102_bar0_shadow_value(sc, offset, NULL);
-	if (passthru_tu102_pgraph_dispatch_contains(offset, size)) {
-		return (1);
-	}
-	if (!passthru_tu102_bar0_page0_access_supported(offset, size)) {
-		return (0);
-	}
-	if (passthru_tu102_bar0_trap_contains(offset, size)) {
-		if (shadowp != NULL &&
-		    passthru_tu102_bar0_pmc_mask_window_contains(offset, size)) {
-			*shadowp = (uint32_t)val;
-			sc->psc_bar0_shadow[offset / sizeof (uint32_t)].seen_write = 1;
-		}
-		return (1);
-	}
-	return (0);
 }
 
 static void
@@ -2468,12 +2264,7 @@ passthru_tu102_mmio_fault(struct vmctx *ctx, struct vm_mmio *mmio)
 	if (mmio->read != 0) {
 		uint64_t val = 0;
 
-		if (baridx == 0 &&
-		    passthru_tu102_bar0_read_emulate(sc, offset, mmio->bytes,
-		    &val) != 0) {
-			mmio->data = val;
-			handled = 1;
-		} else if (passthru_host_bar_read(sc, baridx, offset, mmio->bytes,
+		if (passthru_host_bar_read(sc, baridx, offset, mmio->bytes,
 		    &val) == 0) {
 			mmio->data = val;
 			handled = 1;
@@ -2481,11 +2272,7 @@ passthru_tu102_mmio_fault(struct vmctx *ctx, struct vm_mmio *mmio)
 			err = errno;
 		}
 	} else {
-		if (baridx == 0 &&
-		    passthru_tu102_bar0_write_emulate(sc, offset, mmio->bytes,
-		    mmio->data) != 0) {
-			handled = 1;
-		} else if (passthru_host_bar_write(sc, baridx, offset, mmio->bytes,
+		if (passthru_host_bar_write(sc, baridx, offset, mmio->bytes,
 		    mmio->data) == 0) {
 			handled = 1;
 		} else {
