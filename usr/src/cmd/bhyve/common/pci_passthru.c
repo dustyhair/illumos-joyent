@@ -78,7 +78,6 @@
  * They exist only to cover the current firmware/GOP first-touch path that
  * still expects:
  *
- * - a low BAR0 firmware alias
  * - an initial low BAR1 compatibility aperture
  * - a low BAR3 alias plus the small BAR3 tail page
  * - post-BAR3 BAR1 windows that start trap-only and are promoted later
@@ -86,7 +85,6 @@
  * Keep this block visibly isolated so it can be reduced or removed once the
  * proper startup path is understood.
  */
-#define	PASSTHRU_TU102_BAR0_FW_ALIAS_GPA	0xc2000000ULL
 #define	PASSTHRU_TU102_BAR1_FW_ALIAS0_GPA	0x160000000ULL
 #define	PASSTHRU_TU102_BAR3_FW_ALIAS_GPA	0x170000000ULL
 #define	PASSTHRU_TU102_BAR3_TAIL_ALIAS_SIZE	0x1000ULL
@@ -313,8 +311,6 @@ static uint64_t
 passthru_tu102_fw_alias_gpa(int baridx)
 {
 	switch (baridx) {
-	case 0:
-		return (PASSTHRU_TU102_BAR0_FW_ALIAS_GPA);
 	case 1:
 		return (PASSTHRU_TU102_BAR1_FW_ALIAS0_GPA);
 	case 3:
@@ -407,14 +403,6 @@ passthru_tu102_alias_decode(const struct passthru_softc *sc, uint64_t gpa,
     int *baridxp, uint64_t *offsetp)
 {
 	uint64_t size;
-
-	size = sc->psc_bar[0].size;
-	if (passthru_tu102_addr_in_window(gpa, PASSTHRU_TU102_BAR0_FW_ALIAS_GPA,
-	    size)) {
-		*baridxp = 0;
-		*offsetp = gpa - PASSTHRU_TU102_BAR0_FW_ALIAS_GPA;
-		return (1);
-	}
 
 	size = sc->psc_bar[1].size;
 	if (passthru_tu102_addr_in_window(gpa, PASSTHRU_TU102_BAR1_FW_ALIAS0_GPA,
