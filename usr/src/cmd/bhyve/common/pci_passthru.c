@@ -78,15 +78,10 @@
  * They exist only to cover the current firmware/GOP first-touch path that
  * still expects:
  *
- * - post-BAR3 BAR1 windows that start trap-only and are promoted later
- *
  * Keep this block visibly isolated so it can be reduced or removed once the
  * proper startup path is understood.
  */
 #define	PASSTHRU_TU102_BAR3_FW_ALIAS_GPA	0x170000000ULL
-#define	PASSTHRU_TU102_BAR1_PAGE_SIZE	0x1000ULL
-#define	PASSTHRU_TU102_BAR1_TRACE_LIMIT	1024U
-#define	PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS	8U
 
 /*
  * Detailed TU102 startup tracing is runtime-gated because the current
@@ -132,19 +127,7 @@ struct passthru_softc {
 	uint64_t psc_bar_gpa[PCI_BARMAX_WITH_ROM + 1];
 	uint8_t psc_bar_gpa_valid[PCI_BARMAX_WITH_ROM + 1];
 	uint8_t psc_bar_mapped[PCI_BARMAX_WITH_ROM + 1];
-	uint8_t psc_bar_fw_alias_mapped[PCI_BARMAX_WITH_ROM + 1];
 	pthread_mutex_t psc_alias_lock;
-	struct {
-		uint64_t gpa;
-		uint64_t map_len;
-		uint32_t seq;
-		uint8_t mapped;
-		uint8_t trap_only;
-	} psc_bar1_postbar3_cache[PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS];
-	uint32_t psc_bar1_postbar3_seq;
-	uint32_t psc_bar1_trace_count;
-	uint8_t psc_bar1_trace_suppressed;
-	uint8_t psc_bar1_transition_first_seen;
 	struct {
 		int		capoff;
 		int		msgctrl;
@@ -171,16 +154,6 @@ static int passthru_host_bar_read(struct passthru_softc *, int, uint64_t, int,
     uint64_t *);
 static int passthru_host_bar_write(struct passthru_softc *, int, uint64_t, int,
     uint64_t);
-static void passthru_trace_tu102_bar1_mmio(struct passthru_softc *,
-    const char *, uint64_t, uint64_t, int, uint64_t, int);
-static void passthru_trace_tu102_bar1_transition(struct passthru_softc *,
-    uint64_t);
-static int passthru_tu102_touch_bar1_postbar3_window_locked(
-    struct passthru_softc *, uint64_t, uint64_t, int, int, uint64_t);
-static void passthru_tu102_drop_bar1_postbar3_window_locked(
-    struct passthru_softc *);
-static bool passthru_tu102_map_bar1_window_page_locked(struct passthru_softc *,
-    int, uint64_t);
 static int passthru_setup_intx(struct vmctx *, int, int, int);
 static int passthru_vm_setup_pptdev_msi(struct passthru_softc *,
     struct pci_devinst *, struct vmctx *, uint64_t, uint64_t, int);
@@ -198,80 +171,6 @@ passthru_nvidia_display_fn0(const struct passthru_softc *sc)
 	    pi->pi_func == 0);
 }
 
-static void
-passthru_trace_tu102_bar1_mmio(struct passthru_softc *sc, const char *op,
-    uint64_t fault_gpa, uint64_t window_gpa, int size, uint64_t value,
-    int window_slot)
-{
-	struct pci_devinst *pi;
-	uint64_t offset;
-
-	if (sc == NULL || !passthru_nvidia_display_fn0(sc)) {
-		return;
-	}
-	if (sc->psc_bar[1].size == 0) {
-		return;
-	}
-	if (sc->psc_bar1_trace_count >= PASSTHRU_TU102_BAR1_TRACE_LIMIT) {
-		if (sc->psc_bar1_trace_suppressed == 0) {
-			passthru_tu102_trace("passthru: TU102 BAR1 MMIO trace suppressed "
-			    "bdf=%d/%d/%d after %u accesses",
-			    sc->psc_pi->pi_bus, sc->psc_pi->pi_slot,
-			    sc->psc_pi->pi_func, PASSTHRU_TU102_BAR1_TRACE_LIMIT);
-			sc->psc_bar1_trace_suppressed = 1;
-		}
-		return;
-	}
-
-	pi = sc->psc_pi;
-	offset = fault_gpa - window_gpa;
-	sc->psc_bar1_trace_count++;
-
-	passthru_tu102_trace("passthru: TU102 BAR1_MMIO bdf=%d/%d/%d op=%s "
-	    "fault_gpa=0x%lx window_gpa=0x%lx slot=%d offset=0x%lx "
-	    "size=%d value=0x%lx host_hpa=0x%lx bar_size=0x%lx count=%u",
-	    pi->pi_bus, pi->pi_slot, pi->pi_func,
-	    op != NULL ? op : "unknown", (ulong_t)fault_gpa,
-	    (ulong_t)window_gpa, window_slot, (ulong_t)offset, size,
-	    (ulong_t)value, (ulong_t)(sc->psc_bar[1].addr + offset),
-	    (ulong_t)sc->psc_bar[1].size, sc->psc_bar1_trace_count);
-}
-
-static void
-passthru_trace_tu102_bar1_transition(struct passthru_softc *sc, uint64_t gpa)
-{
-	uint64_t transition_base;
-	uint64_t native_base;
-
-	if (sc == NULL || !passthru_nvidia_display_fn0(sc) ||
-	    sc->psc_bar[1].size == 0 || sc->psc_bar1_transition_first_seen != 0) {
-		return;
-	}
-
-	transition_base = PASSTHRU_TU102_BAR3_FW_ALIAS_GPA + sc->psc_bar[3].size;
-	if (gpa < transition_base) {
-		return;
-	}
-
-	native_base = sc->psc_bar_gpa_valid[1] != 0 ?
-	    sc->psc_bar_gpa[1] : sc->psc_pi->pi_bar[1].addr;
-	sc->psc_bar1_transition_first_seen = 1;
-	passthru_tu102_trace("passthru: TU102 BAR1 transition attempt "
-	    "fault_gpa=0x%lx bar3_alias_limit=0x%lx "
-	    "native_bar1_gpa=0x%lx native_bar1_limit=0x%lx",
-	    (ulong_t)gpa, (ulong_t)transition_base, (ulong_t)native_base,
-	    (ulong_t)(native_base + sc->psc_bar[1].size));
-}
-
-static uint64_t
-passthru_tu102_fw_alias_gpa(int baridx)
-{
-	switch (baridx) {
-	default:
-		return (0);
-	}
-}
-
 static bool
 passthru_tu102_addr_in_window(uint64_t gpa, uint64_t base, uint64_t size)
 {
@@ -284,46 +183,6 @@ passthru_tu102_native_bar_gpa(const struct passthru_softc *sc, int baridx)
 	if (sc->psc_bar_gpa_valid[baridx] != 0)
 		return (sc->psc_bar_gpa[baridx]);
 	return (sc->psc_pi->pi_bar[baridx].addr);
-}
-
-static uint64_t
-passthru_tu102_bar1_postbar3_base(const struct passthru_softc *sc)
-{
-	/*
-	 * This is the current compatibility handoff into the advancing
-	 * post-BAR3 BAR1 windows. It is a temporary recovery
-	 * mechanism, not the long-term preferred model; preserve it here so it
-	 * can be reverted cleanly once startup no longer depends on it.
-	 */
-	return (PASSTHRU_TU102_BAR3_FW_ALIAS_GPA + sc->psc_bar[3].size);
-}
-
-static bool
-passthru_tu102_bar1_postbar3_decode(const struct passthru_softc *sc,
-    uint64_t gpa, uint64_t *window_basep, uint64_t *offsetp)
-{
-	uint64_t base;
-	uint64_t size;
-	uint64_t delta;
-
-	size = sc->psc_bar[1].size;
-	if (size == 0) {
-		return (false);
-	}
-
-	base = passthru_tu102_bar1_postbar3_base(sc);
-	if (gpa < base) {
-		return (false);
-	}
-
-	delta = gpa - base;
-	if (window_basep != NULL) {
-		*window_basep = base + (delta / size) * size;
-	}
-	if (offsetp != NULL) {
-		*offsetp = delta % size;
-	}
-	return (true);
 }
 
 static int
@@ -339,325 +198,7 @@ passthru_tu102_alias_decode(const struct passthru_softc *sc, uint64_t gpa,
 		*offsetp = gpa - passthru_tu102_native_bar_gpa(sc, 1);
 		return (1);
 	}
-	for (size_t i = 0; i < PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS; i++) {
-		if (sc->psc_bar1_postbar3_cache[i].mapped != 0 &&
-		    passthru_tu102_addr_in_window(gpa,
-		    sc->psc_bar1_postbar3_cache[i].gpa, size)) {
-			*baridxp = 1;
-			*offsetp = gpa - sc->psc_bar1_postbar3_cache[i].gpa;
-			return (1);
-		}
-	}
 	return (0);
-}
-
-static int
-passthru_tu102_map_region(struct passthru_softc *sc, int baridx,
-    uint64_t gpa, const char *what)
-{
-	struct vmctx *ctx = sc->psc_pi->pi_vmctx;
-
-	if (vm_map_pptdev_mmio(ctx, sc->pptfd, gpa, sc->psc_bar[baridx].size,
-	    sc->psc_bar[baridx].addr) != 0) {
-		warnx("pci_passthru: TU102 %s map failed bar=%d gpa=0x%lx "
-		    "len=0x%lx hpa=0x%lx", what, baridx, (ulong_t)gpa,
-		    (ulong_t)sc->psc_bar[baridx].size,
-		    (ulong_t)sc->psc_bar[baridx].addr);
-		return (0);
-	}
-
-	passthru_tu102_trace("passthru: TU102 %s map bar=%d gpa=0x%lx len=0x%lx hpa=0x%lx",
-	    what, baridx, (ulong_t)gpa, (ulong_t)sc->psc_bar[baridx].size,
-	    (ulong_t)sc->psc_bar[baridx].addr);
-	return (1);
-}
-
-static void
-passthru_tu102_map_subregion_log(const struct passthru_softc *sc, int baridx,
-    uint64_t gpa, uint64_t len, uint64_t hpa, const char *what)
-{
-	passthru_tu102_trace("passthru: TU102 %s map bar=%d gpa=0x%lx len=0x%lx hpa=0x%lx",
-	    what, baridx, (ulong_t)gpa, (ulong_t)len, (ulong_t)hpa);
-}
-
-static int
-passthru_tu102_map_subregion(struct passthru_softc *sc, int baridx,
-    uint64_t gpa, uint64_t len, uint64_t hpa_offset, const char *what)
-{
-	struct vmctx *ctx = sc->psc_pi->pi_vmctx;
-	uint64_t hpa;
-
-	hpa = sc->psc_bar[baridx].addr + hpa_offset;
-	if (vm_map_pptdev_mmio(ctx, sc->pptfd, gpa, len, hpa) != 0) {
-		warnx("pci_passthru: TU102 %s map failed bar=%d gpa=0x%lx "
-		    "len=0x%lx hpa=0x%lx", what, baridx, (ulong_t)gpa,
-		    (ulong_t)len, (ulong_t)hpa);
-		return (0);
-	}
-
-	passthru_tu102_map_subregion_log(sc, baridx, gpa, len, hpa, what);
-	return (1);
-}
-
-static void
-passthru_tu102_unmap_region(struct passthru_softc *sc, int baridx,
-    uint64_t gpa, const char *what)
-{
-	struct vmctx *ctx = sc->psc_pi->pi_vmctx;
-
-	if (vm_unmap_pptdev_mmio(ctx, sc->pptfd, gpa,
-	    sc->psc_bar[baridx].size) != 0) {
-		warnx("pci_passthru: TU102 %s unmap failed bar=%d gpa=0x%lx",
-		    what, baridx, (ulong_t)gpa);
-	}
-}
-
-static int
-passthru_tu102_unmap_subregion(struct passthru_softc *sc, int baridx,
-    uint64_t gpa, uint64_t len, const char *what)
-{
-	struct vmctx *ctx = sc->psc_pi->pi_vmctx;
-
-	if (vm_unmap_pptdev_mmio(ctx, sc->pptfd, gpa, len) != 0) {
-		warnx("pci_passthru: TU102 %s unmap failed bar=%d gpa=0x%lx "
-		    "len=0x%lx", what, baridx, (ulong_t)gpa, (ulong_t)len);
-		return (0);
-	}
-	return (1);
-}
-
-static int
-passthru_tu102_ensure_alias_locked(struct passthru_softc *sc, int baridx)
-{
-	const uint64_t gpa = passthru_tu102_fw_alias_gpa(baridx);
-
-	if (gpa == 0 || sc->psc_bar_mapped[baridx] == 0) {
-		return (0);
-	}
-	if (sc->psc_bar_fw_alias_mapped[baridx] != 0) {
-		return (0);
-	}
-	if (!passthru_tu102_map_region(sc, baridx, gpa, "fixed-alias")) {
-		return (0);
-	}
-
-	sc->psc_bar_fw_alias_mapped[baridx] = 1;
-	return (1);
-}
-
-static void
-passthru_tu102_drop_alias_locked(struct passthru_softc *sc, int baridx)
-{
-	const uint64_t gpa = passthru_tu102_fw_alias_gpa(baridx);
-
-	if (gpa == 0 || sc->psc_bar_fw_alias_mapped[baridx] == 0) {
-		return;
-	}
-
-	passthru_tu102_unmap_region(sc, baridx, gpa, "fixed-alias");
-	sc->psc_bar_fw_alias_mapped[baridx] = 0;
-}
-
-static int
-passthru_tu102_touch_bar1_postbar3_window_locked(struct passthru_softc *sc,
-    uint64_t window_gpa, uint64_t fault_gpa, int is_read, int size,
-    uint64_t value)
-{
-	size_t free_slot = PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS;
-	size_t victim_slot = PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS;
-	uint32_t victim_seq = UINT32_MAX;
-	uint64_t old_gpa = 0;
-	bool trap_only;
-	bool hit = false;
-	size_t i;
-
-	if (sc->psc_bar_mapped[1] == 0) {
-		return (0);
-	}
-
-	for (i = 0; i < PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS; i++) {
-		if (sc->psc_bar1_postbar3_cache[i].mapped != 0 &&
-		    sc->psc_bar1_postbar3_cache[i].gpa == window_gpa) {
-			hit = true;
-			sc->psc_bar1_postbar3_cache[i].seq =
-			    ++sc->psc_bar1_postbar3_seq;
-			if (fault_gpa != 0) {
-				passthru_tu102_trace("passthru: TU102 postbar3-window hit slot=%lu "
-				    "gpa=0x%lx trap_only=%u fault_gpa=0x%lx off=0x%lx op=%s "
-				    "size=%d value=0x%lx", (ulong_t)i,
-				    (ulong_t)window_gpa,
-				    sc->psc_bar1_postbar3_cache[i].trap_only,
-				    (ulong_t)fault_gpa,
-				    (ulong_t)(fault_gpa - window_gpa),
-				    is_read != 0 ? "read" : "write", size,
-				    (ulong_t)value);
-			}
-			return (0);
-		}
-		if (sc->psc_bar1_postbar3_cache[i].mapped == 0) {
-			if (free_slot == PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS) {
-				free_slot = i;
-			}
-			continue;
-		}
-		if (sc->psc_bar1_postbar3_cache[i].seq < victim_seq) {
-			victim_seq = sc->psc_bar1_postbar3_cache[i].seq;
-			victim_slot = i;
-		}
-	}
-
-	if (hit) {
-		return (0);
-	}
-
-	i = free_slot != PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS ?
-	    free_slot : victim_slot;
-	if (i == PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS) {
-		return (0);
-	}
-	/*
-	 * Observe the first page of every new post-tail BAR1 slice before
-	 * promoting the whole window. The first slice already showed a linear
-	 * 0xff fill across its first page, and we need to know if the later
-	 * slices follow the same pattern.
-	 */
-	trap_only = true;
-	if (sc->psc_bar1_postbar3_cache[i].mapped != 0) {
-		old_gpa = sc->psc_bar1_postbar3_cache[i].gpa;
-		if (sc->psc_bar1_postbar3_cache[i].map_len != 0) {
-			(void) passthru_tu102_unmap_subregion(sc, 1, old_gpa,
-			    sc->psc_bar1_postbar3_cache[i].map_len,
-			    "postbar3-window");
-		}
-	}
-	if (!trap_only &&
-	    !passthru_tu102_map_region(sc, 1, window_gpa, "postbar3-window")) {
-		return (0);
-	}
-	sc->psc_bar1_postbar3_cache[i].gpa = window_gpa;
-	sc->psc_bar1_postbar3_cache[i].map_len = 0;
-	sc->psc_bar1_postbar3_cache[i].mapped = 1;
-	sc->psc_bar1_postbar3_cache[i].trap_only = trap_only ? 1 : 0;
-	sc->psc_bar1_postbar3_cache[i].seq = ++sc->psc_bar1_postbar3_seq;
-	sc->psc_bar1_trace_count = 0;
-	sc->psc_bar1_trace_suppressed = 0;
-	if (fault_gpa == 0) {
-		passthru_tu102_trace("passthru: TU102 postbar3-window seed slot=%lu gpa=0x%lx trap_only=%u",
-		    (ulong_t)i, (ulong_t)window_gpa,
-		    sc->psc_bar1_postbar3_cache[i].trap_only);
-	} else {
-		passthru_tu102_trace("passthru: TU102 postbar3-window %s slot=%lu old_gpa=0x%lx "
-		    "new_gpa=0x%lx trap_only=%u fault_gpa=0x%lx off=0x%lx op=%s size=%d "
-		    "value=0x%lx", old_gpa != 0 ? "evict" : "fill",
-		    (ulong_t)i, (ulong_t)old_gpa, (ulong_t)window_gpa,
-		    sc->psc_bar1_postbar3_cache[i].trap_only,
-		    (ulong_t)fault_gpa, (ulong_t)(fault_gpa - window_gpa),
-		    is_read != 0 ? "read" : "write", size, (ulong_t)value);
-	}
-	return (1);
-}
-
-static int
-passthru_tu102_bar1_window_slot_locked(struct passthru_softc *sc,
-    uint64_t window_gpa)
-{
-	size_t i;
-
-	for (i = 0; i < PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS; i++) {
-		if (sc->psc_bar1_postbar3_cache[i].mapped != 0 &&
-		    sc->psc_bar1_postbar3_cache[i].gpa == window_gpa) {
-			return ((int)i);
-		}
-	}
-
-	return (-1);
-}
-
-static bool
-passthru_tu102_map_bar1_window_page_locked(struct passthru_softc *sc,
-    int window_slot, uint64_t window_gpa)
-{
-	size_t victim = PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS;
-	uint32_t victim_seq = UINT32_MAX;
-	size_t i;
-
-	if (window_slot < 0 ||
-	    window_slot >= PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS) {
-		return (false);
-	}
-	if (passthru_tu102_map_subregion(sc, 1, window_gpa,
-	    PASSTHRU_TU102_BAR1_PAGE_SIZE, 0, "postbar3-window-page")) {
-		sc->psc_bar1_postbar3_cache[window_slot].map_len =
-		    PASSTHRU_TU102_BAR1_PAGE_SIZE;
-		sc->psc_bar1_postbar3_cache[window_slot].trap_only = 0;
-		sc->psc_bar1_postbar3_cache[window_slot].seq =
-		    ++sc->psc_bar1_postbar3_seq;
-		return (true);
-	}
-
-	for (i = 0; i < PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS; i++) {
-		if ((int)i == window_slot)
-			continue;
-		if (sc->psc_bar1_postbar3_cache[i].mapped == 0 ||
-		    sc->psc_bar1_postbar3_cache[i].trap_only != 0)
-			continue;
-		if (sc->psc_bar1_postbar3_cache[i].seq < victim_seq) {
-			victim = i;
-			victim_seq = sc->psc_bar1_postbar3_cache[i].seq;
-		}
-	}
-	if (victim == PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS)
-		return (false);
-
-	passthru_tu102_trace("passthru: TU102 postbar3-window promote retry slot=%d "
-	    "gpa=0x%lx evict_slot=%lu evict_gpa=0x%lx", window_slot,
-	    (ulong_t)window_gpa, (ulong_t)victim,
-	    (ulong_t)sc->psc_bar1_postbar3_cache[victim].gpa);
-	(void) passthru_tu102_unmap_subregion(sc, 1,
-	    sc->psc_bar1_postbar3_cache[victim].gpa,
-	    sc->psc_bar1_postbar3_cache[victim].map_len,
-	    "postbar3-window");
-	sc->psc_bar1_postbar3_cache[victim].gpa = 0;
-	sc->psc_bar1_postbar3_cache[victim].map_len = 0;
-	sc->psc_bar1_postbar3_cache[victim].mapped = 0;
-	sc->psc_bar1_postbar3_cache[victim].trap_only = 0;
-	sc->psc_bar1_postbar3_cache[victim].seq = 0;
-
-	if (!passthru_tu102_map_subregion(sc, 1, window_gpa,
-	    PASSTHRU_TU102_BAR1_PAGE_SIZE, 0, "postbar3-window-page")) {
-		return (false);
-	}
-
-	sc->psc_bar1_postbar3_cache[window_slot].map_len =
-	    PASSTHRU_TU102_BAR1_PAGE_SIZE;
-	sc->psc_bar1_postbar3_cache[window_slot].trap_only = 0;
-	sc->psc_bar1_postbar3_cache[window_slot].seq =
-	    ++sc->psc_bar1_postbar3_seq;
-	return (true);
-}
-
-static void
-passthru_tu102_drop_bar1_postbar3_window_locked(struct passthru_softc *sc)
-{
-	size_t i;
-
-	for (i = 0; i < PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS; i++) {
-		if (sc->psc_bar1_postbar3_cache[i].mapped == 0) {
-			continue;
-		}
-		if (sc->psc_bar1_postbar3_cache[i].map_len != 0) {
-			(void) passthru_tu102_unmap_subregion(sc, 1,
-			    sc->psc_bar1_postbar3_cache[i].gpa,
-			    sc->psc_bar1_postbar3_cache[i].map_len,
-			    "postbar3-window");
-		}
-		sc->psc_bar1_postbar3_cache[i].gpa = 0;
-		sc->psc_bar1_postbar3_cache[i].map_len = 0;
-		sc->psc_bar1_postbar3_cache[i].mapped = 0;
-		sc->psc_bar1_postbar3_cache[i].trap_only = 0;
-		sc->psc_bar1_postbar3_cache[i].seq = 0;
-	}
-	sc->psc_bar1_postbar3_seq = 0;
 }
 
 /*
@@ -2007,10 +1548,6 @@ passthru_mmio_addr(struct vmctx *ctx, struct pci_devinst *pi, int baridx,
 	if (!enabled) {
 		if (passthru_nvidia_display_fn0(sc)) {
 			(void) pthread_mutex_lock(&sc->psc_alias_lock);
-			passthru_tu102_drop_alias_locked(sc, baridx);
-			if (baridx == 1) {
-				passthru_tu102_drop_bar1_postbar3_window_locked(sc);
-			}
 			(void) pthread_mutex_unlock(&sc->psc_alias_lock);
 		}
 		if (!sc->psc_bar_mapped[baridx])
@@ -2025,13 +1562,6 @@ passthru_mmio_addr(struct vmctx *ctx, struct pci_devinst *pi, int baridx,
 			warnx("pci_passthru: map_pptdev_mmio failed");
 		else
 			sc->psc_bar_mapped[baridx] = 1;
-		if (passthru_nvidia_display_fn0(sc) && sc->psc_bar_mapped[baridx] &&
-		    baridx == 1) {
-			(void) pthread_mutex_lock(&sc->psc_alias_lock);
-			(void) passthru_tu102_touch_bar1_postbar3_window_locked(sc,
-			    passthru_tu102_bar1_postbar3_base(sc), 0, 0, 0, 0);
-			(void) pthread_mutex_unlock(&sc->psc_alias_lock);
-		}
 	}
 
 	return (!enabled || sc->psc_bar_mapped[baridx] != 0);
@@ -2042,9 +1572,7 @@ passthru_tu102_mmio_fault(struct vmctx *ctx, struct vm_mmio *mmio)
 {
 	struct passthru_softc *sc = passthru_tu102_active_sc;
 	int baridx;
-	int window_slot = -1;
 	uint64_t offset;
-	uint64_t window_gpa = 0;
 	int handled = 0;
 	int err = 0;
 
@@ -2055,23 +1583,9 @@ passthru_tu102_mmio_fault(struct vmctx *ctx, struct vm_mmio *mmio)
 	(void) pthread_mutex_lock(&sc->psc_alias_lock);
 	if (passthru_tu102_alias_decode(sc, mmio->gpa, &baridx,
 	    &offset)) {
-		if (baridx == 1) {
-			window_gpa = mmio->gpa - offset;
-		}
-		(void) passthru_tu102_ensure_alias_locked(sc, baridx);
-	} else if (passthru_tu102_bar1_postbar3_decode(sc, mmio->gpa,
-	    &window_gpa, &offset)) {
-		baridx = 1;
-		passthru_trace_tu102_bar1_transition(sc, mmio->gpa);
-		(void) passthru_tu102_touch_bar1_postbar3_window_locked(sc,
-		    window_gpa, mmio->gpa, mmio->read, mmio->bytes, mmio->data);
 	} else {
 		(void) pthread_mutex_unlock(&sc->psc_alias_lock);
-		passthru_trace_tu102_bar1_transition(sc, mmio->gpa);
 		return (0);
-	}
-	if (baridx == 1 && window_gpa != 0) {
-		window_slot = passthru_tu102_bar1_window_slot_locked(sc, window_gpa);
 	}
 
 	if (mmio->read != 0) {
@@ -2090,20 +1604,6 @@ passthru_tu102_mmio_fault(struct vmctx *ctx, struct vm_mmio *mmio)
 			handled = 1;
 		} else {
 			err = errno;
-		}
-	}
-	if (handled && baridx == 1) {
-		passthru_trace_tu102_bar1_mmio(sc, mmio->read != 0 ? "read" :
-		    "write", mmio->gpa, window_gpa, mmio->bytes, mmio->data,
-		    window_slot);
-		if (window_slot >= 0 &&
-		    sc->psc_bar1_postbar3_cache[window_slot].trap_only != 0 &&
-		    offset + mmio->bytes >= 0x1000 &&
-		    passthru_tu102_map_bar1_window_page_locked(sc, window_slot,
-		    window_gpa)) {
-			passthru_tu102_trace("passthru: TU102 postbar3-window page-map slot=%d "
-			    "gpa=0x%lx after_off=0x%lx", window_slot,
-			    (ulong_t)window_gpa, (ulong_t)offset);
 		}
 	}
 	(void) pthread_mutex_unlock(&sc->psc_alias_lock);
@@ -2246,11 +1746,10 @@ passthru_addr(struct pci_devinst *pi, int baridx,
 		passthru_tu102_trace("passthru: TU102 baraddr enabled=%d bar=%d req_gpa=0x%lx gpa=0x%lx size=0x%lx",
 		    enabled, baridx, (ulong_t)req_address, (ulong_t)address,
 		    (ulong_t)sc->psc_bar[baridx].size);
-		passthru_tu102_trace("passthru: TU102 barcfg bar=%d type=%d cfg_lo=0x%08x cfg_hi=0x%08x pi_addr=0x%lx valid=%u mapped=%u alias=%u",
+		passthru_tu102_trace("passthru: TU102 barcfg bar=%d type=%d cfg_lo=0x%08x cfg_hi=0x%08x pi_addr=0x%lx valid=%u mapped=%u",
 		    baridx, pi->pi_bar[baridx].type, cfg_lo, cfg_hi,
 		    (ulong_t)pi->pi_bar[baridx].addr,
-		    sc->psc_bar_gpa_valid[baridx], sc->psc_bar_mapped[baridx],
-		    sc->psc_bar_fw_alias_mapped[baridx]);
+		    sc->psc_bar_gpa_valid[baridx], sc->psc_bar_mapped[baridx]);
 	}
 
 	if (enabled && sc->psc_bar_gpa_valid[baridx] &&
