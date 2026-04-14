@@ -67,21 +67,6 @@
 #define MSIX_TABLE_COUNT(ctrl) (((ctrl) & PCIM_MSIXCTRL_TABLE_SIZE) + 1)
 #define MSIX_CAPLEN 12
 #define	PASSTHRU_NVIDIA_VENDOR_ID	0x10de
-/*
- * TU102 startup compatibility path:
- *
- * The preserved working shape keeps the real guest BARs pinned high
- * (BAR1=0x800000000, BAR3=0x810000000, BAR0=0xc0000000). That is the
- * target layout we want to keep.
- *
- * The low-GPA aliases below are not the preferred steady-state model.
- * They exist only to cover the current firmware/GOP first-touch path that
- * still expects:
- *
- * Keep this block visibly isolated so it can be reduced or removed once the
- * proper startup path is understood.
- */
-#define	PASSTHRU_TU102_BAR3_FW_ALIAS_GPA	0x170000000ULL
 
 /*
  * Detailed TU102 startup tracing is runtime-gated because the current
@@ -127,7 +112,6 @@ struct passthru_softc {
 	uint64_t psc_bar_gpa[PCI_BARMAX_WITH_ROM + 1];
 	uint8_t psc_bar_gpa_valid[PCI_BARMAX_WITH_ROM + 1];
 	uint8_t psc_bar_mapped[PCI_BARMAX_WITH_ROM + 1];
-	pthread_mutex_t psc_alias_lock;
 	struct {
 		int		capoff;
 		int		msgctrl;
@@ -169,36 +153,6 @@ passthru_nvidia_display_fn0(const struct passthru_softc *sc)
 	    PASSTHRU_NVIDIA_VENDOR_ID &&
 	    pci_get_cfgdata8(pi, PCIR_CLASS) == PCIC_DISPLAY &&
 	    pi->pi_func == 0);
-}
-
-static bool
-passthru_tu102_addr_in_window(uint64_t gpa, uint64_t base, uint64_t size)
-{
-	return (size != 0 && gpa >= base && gpa - base < size);
-}
-
-static uint64_t
-passthru_tu102_native_bar_gpa(const struct passthru_softc *sc, int baridx)
-{
-	if (sc->psc_bar_gpa_valid[baridx] != 0)
-		return (sc->psc_bar_gpa[baridx]);
-	return (sc->psc_pi->pi_bar[baridx].addr);
-}
-
-static int
-passthru_tu102_alias_decode(const struct passthru_softc *sc, uint64_t gpa,
-    int *baridxp, uint64_t *offsetp)
-{
-	uint64_t size;
-
-	size = sc->psc_bar[1].size;
-	if (passthru_tu102_addr_in_window(gpa,
-	    passthru_tu102_native_bar_gpa(sc, 1), size)) {
-		*baridxp = 1;
-		*offsetp = gpa - passthru_tu102_native_bar_gpa(sc, 1);
-		return (1);
-	}
-	return (0);
 }
 
 /*
@@ -1178,7 +1132,6 @@ passthru_init(struct pci_devinst *pi, nvlist_t *nvl)
 	sc->psc_pi = pi;
 	sc->pptfd = pptfd;
 	sc->psc_intx_ioctl_supported = 1;
-	(void) pthread_mutex_init(&sc->psc_alias_lock, NULL);
 
 	if ((error = vm_get_pptdev_limits(ctx, pptfd, &sc->msi_limit,
 	    &sc->msix_limit)) != 0)
@@ -1211,9 +1164,6 @@ passthru_init(struct pci_devinst *pi, nvlist_t *nvl)
 
 done:
 	if (error) {
-		if (sc != NULL) {
-			(void) pthread_mutex_destroy(&sc->psc_alias_lock);
-		}
 		free(sc);
 		if (pptfd != -1)
 			vm_unassign_pptdev(ctx, pptfd);
@@ -1546,10 +1496,6 @@ passthru_mmio_addr(struct vmctx *ctx, struct pci_devinst *pi, int baridx,
 		    (ulong_t)sc->psc_bar[baridx].addr);
 	}
 	if (!enabled) {
-		if (passthru_nvidia_display_fn0(sc)) {
-			(void) pthread_mutex_lock(&sc->psc_alias_lock);
-			(void) pthread_mutex_unlock(&sc->psc_alias_lock);
-		}
 		if (!sc->psc_bar_mapped[baridx])
 			return (1);
 		if (vm_unmap_pptdev_mmio(ctx, sc->pptfd, address,
@@ -1571,7 +1517,8 @@ int
 passthru_tu102_mmio_fault(struct vmctx *ctx, struct vm_mmio *mmio)
 {
 	struct passthru_softc *sc = passthru_tu102_active_sc;
-	int baridx;
+	const uint64_t base = sc != NULL ? sc->psc_bar_gpa_valid[1] != 0 ?
+	    sc->psc_bar_gpa[1] : sc->psc_pi->pi_bar[1].addr : 0;
 	uint64_t offset;
 	int handled = 0;
 	int err = 0;
@@ -1580,18 +1527,16 @@ passthru_tu102_mmio_fault(struct vmctx *ctx, struct vm_mmio *mmio)
 	    !passthru_nvidia_display_fn0(sc) || mmio == NULL) {
 		return (0);
 	}
-	(void) pthread_mutex_lock(&sc->psc_alias_lock);
-	if (passthru_tu102_alias_decode(sc, mmio->gpa, &baridx,
-	    &offset)) {
-	} else {
-		(void) pthread_mutex_unlock(&sc->psc_alias_lock);
+	if (sc->psc_bar[1].size == 0 || mmio->gpa < base ||
+	    mmio->gpa - base >= sc->psc_bar[1].size) {
 		return (0);
 	}
+	offset = mmio->gpa - base;
 
 	if (mmio->read != 0) {
 		uint64_t val = 0;
 
-		if (passthru_host_bar_read(sc, baridx, offset, mmio->bytes,
+		if (passthru_host_bar_read(sc, 1, offset, mmio->bytes,
 		    &val) == 0) {
 			mmio->data = val;
 			handled = 1;
@@ -1599,18 +1544,17 @@ passthru_tu102_mmio_fault(struct vmctx *ctx, struct vm_mmio *mmio)
 			err = errno;
 		}
 	} else {
-		if (passthru_host_bar_write(sc, baridx, offset, mmio->bytes,
+		if (passthru_host_bar_write(sc, 1, offset, mmio->bytes,
 		    mmio->data) == 0) {
 			handled = 1;
 		} else {
 			err = errno;
 		}
 	}
-	(void) pthread_mutex_unlock(&sc->psc_alias_lock);
 	if (!handled && err != 0) {
-		warnx("pci_passthru: TU102 alias mmio %s failed bar=%d "
+		warnx("pci_passthru: TU102 BAR1 mmio %s failed "
 		    "gpa=0x%lx off=0x%lx size=%u errno=%d",
-		    mmio->read != 0 ? "read" : "write", baridx,
+		    mmio->read != 0 ? "read" : "write",
 		    (ulong_t)mmio->gpa, (ulong_t)offset, mmio->bytes, err);
 	}
 	return (handled);
