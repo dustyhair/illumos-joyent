@@ -305,8 +305,6 @@ static uint64_t
 passthru_tu102_fw_alias_gpa(int baridx)
 {
 	switch (baridx) {
-	case 3:
-		return (PASSTHRU_TU102_BAR3_FW_ALIAS_GPA);
 	default:
 		return (0);
 	}
@@ -414,12 +412,6 @@ passthru_tu102_alias_decode(const struct passthru_softc *sc, uint64_t gpa,
 	}
 
 	size = sc->psc_bar[3].size;
-	if (passthru_tu102_addr_in_window(gpa, PASSTHRU_TU102_BAR3_FW_ALIAS_GPA,
-	    size)) {
-		*baridxp = 3;
-		*offsetp = gpa - PASSTHRU_TU102_BAR3_FW_ALIAS_GPA;
-		return (1);
-	}
 	if (passthru_tu102_bar3_tail_alias_decode(sc, gpa, offsetp)) {
 		*baridxp = 3;
 		return (1);
