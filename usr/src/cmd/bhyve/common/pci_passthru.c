@@ -78,17 +78,14 @@
  * They exist only to cover the current firmware/GOP first-touch path that
  * still expects:
  *
- * - a low BAR3 alias plus the small BAR3 tail page
  * - post-BAR3 BAR1 windows that start trap-only and are promoted later
  *
  * Keep this block visibly isolated so it can be reduced or removed once the
  * proper startup path is understood.
  */
 #define	PASSTHRU_TU102_BAR3_FW_ALIAS_GPA	0x170000000ULL
-#define	PASSTHRU_TU102_BAR3_TAIL_ALIAS_SIZE	0x1000ULL
 #define	PASSTHRU_TU102_BAR1_PAGE_SIZE	0x1000ULL
 #define	PASSTHRU_TU102_BAR1_TRACE_LIMIT	1024U
-#define	PASSTHRU_TU102_BAR3_TAIL_TRACE_LIMIT	128U
 #define	PASSTHRU_TU102_BAR1_POSTBAR3_CACHE_SLOTS	8U
 
 /*
@@ -148,8 +145,6 @@ struct passthru_softc {
 	uint32_t psc_bar1_trace_count;
 	uint8_t psc_bar1_trace_suppressed;
 	uint8_t psc_bar1_transition_first_seen;
-	uint32_t psc_bar3_tail_trace_count;
-	uint8_t psc_bar3_tail_trace_suppressed;
 	struct {
 		int		capoff;
 		int		msgctrl;
@@ -180,8 +175,6 @@ static void passthru_trace_tu102_bar1_mmio(struct passthru_softc *,
     const char *, uint64_t, uint64_t, int, uint64_t, int);
 static void passthru_trace_tu102_bar1_transition(struct passthru_softc *,
     uint64_t);
-static void passthru_trace_tu102_bar3_tail_mmio(struct passthru_softc *,
-    const char *, uint64_t, uint64_t, int, uint64_t);
 static int passthru_tu102_touch_bar1_postbar3_window_locked(
     struct passthru_softc *, uint64_t, uint64_t, int, int, uint64_t);
 static void passthru_tu102_drop_bar1_postbar3_window_locked(
@@ -270,37 +263,6 @@ passthru_trace_tu102_bar1_transition(struct passthru_softc *sc, uint64_t gpa)
 	    (ulong_t)(native_base + sc->psc_bar[1].size));
 }
 
-static void
-passthru_trace_tu102_bar3_tail_mmio(struct passthru_softc *sc, const char *op,
-    uint64_t fault_gpa, uint64_t offset, int size, uint64_t value)
-{
-	struct pci_devinst *pi;
-
-	if (sc == NULL || !passthru_nvidia_display_fn0(sc)) {
-		return;
-	}
-	if (sc->psc_bar3_tail_trace_count >= PASSTHRU_TU102_BAR3_TAIL_TRACE_LIMIT) {
-		if (sc->psc_bar3_tail_trace_suppressed == 0) {
-			passthru_tu102_trace("passthru: TU102 BAR3 tail trace suppressed "
-			    "bdf=%d/%d/%d after %u accesses",
-			    sc->psc_pi->pi_bus, sc->psc_pi->pi_slot,
-			    sc->psc_pi->pi_func, PASSTHRU_TU102_BAR3_TAIL_TRACE_LIMIT);
-			sc->psc_bar3_tail_trace_suppressed = 1;
-		}
-		return;
-	}
-
-	pi = sc->psc_pi;
-	sc->psc_bar3_tail_trace_count++;
-	passthru_tu102_trace("passthru: TU102 BAR3_TAIL_MMIO bdf=%d/%d/%d op=%s "
-	    "fault_gpa=0x%lx offset=0x%lx size=%d value=0x%lx "
-	    "host_hpa=0x%lx bar_size=0x%lx count=%u",
-	    pi->pi_bus, pi->pi_slot, pi->pi_func, op != NULL ? op : "unknown",
-	    (ulong_t)fault_gpa, (ulong_t)offset, size, (ulong_t)value,
-	    (ulong_t)(sc->psc_bar[3].addr + offset),
-	    (ulong_t)sc->psc_bar[3].size, sc->psc_bar3_tail_trace_count);
-}
-
 static uint64_t
 passthru_tu102_fw_alias_gpa(int baridx)
 {
@@ -328,13 +290,12 @@ static uint64_t
 passthru_tu102_bar1_postbar3_base(const struct passthru_softc *sc)
 {
 	/*
-	 * This is the current compatibility handoff from the BAR3 tail page into
-	 * the advancing post-BAR3 BAR1 windows. It is a temporary recovery
+	 * This is the current compatibility handoff into the advancing
+	 * post-BAR3 BAR1 windows. It is a temporary recovery
 	 * mechanism, not the long-term preferred model; preserve it here so it
 	 * can be reverted cleanly once startup no longer depends on it.
 	 */
-	return (PASSTHRU_TU102_BAR3_FW_ALIAS_GPA + sc->psc_bar[3].size +
-	    PASSTHRU_TU102_BAR3_TAIL_ALIAS_SIZE);
+	return (PASSTHRU_TU102_BAR3_FW_ALIAS_GPA + sc->psc_bar[3].size);
 }
 
 static bool
@@ -365,29 +326,6 @@ passthru_tu102_bar1_postbar3_decode(const struct passthru_softc *sc,
 	return (true);
 }
 
-static bool
-passthru_tu102_bar3_tail_alias_decode(const struct passthru_softc *sc,
-    uint64_t gpa, uint64_t *offsetp)
-{
-	uint64_t alias_base;
-
-	if (sc->psc_bar[3].size < PASSTHRU_TU102_BAR3_TAIL_ALIAS_SIZE) {
-		return (false);
-	}
-
-	alias_base = PASSTHRU_TU102_BAR3_FW_ALIAS_GPA + sc->psc_bar[3].size;
-	if (!passthru_tu102_addr_in_window(gpa, alias_base,
-	    PASSTHRU_TU102_BAR3_TAIL_ALIAS_SIZE)) {
-		return (false);
-	}
-
-	if (offsetp != NULL) {
-		*offsetp = sc->psc_bar[3].size - PASSTHRU_TU102_BAR3_TAIL_ALIAS_SIZE +
-		    (gpa - alias_base);
-	}
-	return (true);
-}
-
 static int
 passthru_tu102_alias_decode(const struct passthru_softc *sc, uint64_t gpa,
     int *baridxp, uint64_t *offsetp)
@@ -410,13 +348,6 @@ passthru_tu102_alias_decode(const struct passthru_softc *sc, uint64_t gpa,
 			return (1);
 		}
 	}
-
-	size = sc->psc_bar[3].size;
-	if (passthru_tu102_bar3_tail_alias_decode(sc, gpa, offsetp)) {
-		*baridxp = 3;
-		return (1);
-	}
-
 	return (0);
 }
 
@@ -2116,17 +2047,13 @@ passthru_tu102_mmio_fault(struct vmctx *ctx, struct vm_mmio *mmio)
 	uint64_t window_gpa = 0;
 	int handled = 0;
 	int err = 0;
-	bool bar3_tail = false;
 
 	if (sc == NULL || sc->psc_pi == NULL || sc->psc_pi->pi_vmctx != ctx ||
 	    !passthru_nvidia_display_fn0(sc) || mmio == NULL) {
 		return (0);
 	}
 	(void) pthread_mutex_lock(&sc->psc_alias_lock);
-	if (passthru_tu102_bar3_tail_alias_decode(sc, mmio->gpa, &offset)) {
-		baridx = 3;
-		bar3_tail = true;
-	} else if (passthru_tu102_alias_decode(sc, mmio->gpa, &baridx,
+	if (passthru_tu102_alias_decode(sc, mmio->gpa, &baridx,
 	    &offset)) {
 		if (baridx == 1) {
 			window_gpa = mmio->gpa - offset;
@@ -2165,10 +2092,7 @@ passthru_tu102_mmio_fault(struct vmctx *ctx, struct vm_mmio *mmio)
 			err = errno;
 		}
 	}
-	if (handled && bar3_tail) {
-		passthru_trace_tu102_bar3_tail_mmio(sc, mmio->read != 0 ? "read" :
-		    "write", mmio->gpa, offset, mmio->bytes, mmio->data);
-	} else if (handled && baridx == 1) {
+	if (handled && baridx == 1) {
 		passthru_trace_tu102_bar1_mmio(sc, mmio->read != 0 ? "read" :
 		    "write", mmio->gpa, window_gpa, mmio->bytes, mmio->data,
 		    window_slot);
