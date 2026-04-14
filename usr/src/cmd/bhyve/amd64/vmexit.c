@@ -76,7 +76,6 @@
 #include "gdb.h"
 #include "inout.h"
 #include "mem.h"
-#include "pci_passthru.h"
 #include "spinup_ap.h"
 #include "vmexit.h"
 #include "xmsr.h"
@@ -487,7 +486,7 @@ vmexit_inst_emul(struct vmctx *ctx __unused, struct vcpu *vcpu,
 
 #ifndef	__FreeBSD__
 static int
-vmexit_mmio(struct vmctx *ctx, struct vcpu *vcpu, struct vm_exit *vme)
+vmexit_mmio(struct vmctx *ctx __unused, struct vcpu *vcpu, struct vm_exit *vme)
 {
 	int err;
 	struct vm_mmio mmio;

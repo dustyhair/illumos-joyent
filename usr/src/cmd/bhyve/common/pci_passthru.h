@@ -13,8 +13,6 @@
 #include "pci_emul.h"
 
 struct passthru_softc;
-struct vm_mmio;
-
 typedef int (*cfgread_handler)(struct passthru_softc *sc,
     struct pci_devinst *pi, int coff, int bytes, uint32_t *rv);
 typedef int (*cfgwrite_handler)(struct passthru_softc *sc,
