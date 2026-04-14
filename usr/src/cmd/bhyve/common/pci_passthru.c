@@ -1650,38 +1650,6 @@ passthru_addr(struct pci_devinst *pi, int baridx,
 	uint32_t cfg_lo;
 	uint32_t cfg_hi;
 
-	if (enabled && passthru_nvidia_display_fn0(sc)) {
-		uint64_t pinned;
-
-		switch (baridx) {
-		case 0:
-			pinned = 0xc0000000ULL;
-			address = pinned;
-			pi->pi_bar[0].addr = pinned;
-			pci_set_cfgdata32(pi, PCIR_BAR(0),
-			    (uint32_t)pinned | pi->pi_bar[0].lobits);
-			break;
-		case 1:
-			pinned = 0x800000000ULL;
-			address = pinned;
-			pi->pi_bar[1].addr = pinned;
-			pci_set_cfgdata32(pi, PCIR_BAR(1),
-			    (uint32_t)pinned | pi->pi_bar[1].lobits);
-			pci_set_cfgdata32(pi, PCIR_BAR(2), pinned >> 32);
-			break;
-		case 3:
-			pinned = 0x810000000ULL;
-			address = pinned;
-			pi->pi_bar[3].addr = pinned;
-			pci_set_cfgdata32(pi, PCIR_BAR(3),
-			    (uint32_t)pinned | pi->pi_bar[3].lobits);
-			pci_set_cfgdata32(pi, PCIR_BAR(4), pinned >> 32);
-			break;
-		default:
-			break;
-		}
-	}
-
 	if (passthru_nvidia_display_fn0(sc)) {
 		cfg_lo = pci_get_cfgdata32(pi, PCIR_BAR(baridx));
 		cfg_hi = (pi->pi_bar[baridx].type == PCIBAR_MEM64 &&
