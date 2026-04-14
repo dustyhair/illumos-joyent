@@ -56,12 +56,9 @@ extern "C" {
 /* third DWORD: Control Field (set by OS/BIOS) */
 #define	OSC_CONTROL_PCIE_NAT_HP	0x1	/* PCI Exp Native Hot Plug control */
 #define	OSC_CONTROL_SHPC_NAT_HP	0x2	/* SHPC Native Hot Plug control */
-#define	OSC_CONTROL_PCIE_PME	0x4	/* PCI Exp PME control */
-#define	OSC_CONTROL_PCIE_NAT_PM	OSC_CONTROL_PCIE_PME
+#define	OSC_CONTROL_PCIE_NAT_PM	0x4	/* PCI Exp Native Power Mgmt. control */
 #define	OSC_CONTROL_PCIE_ADV_ERR 0x8	/* PCIE Advanced Err. rep. control */
 #define	OSC_CONTROL_PCIE_CAPS	0x10	/* PCIE Caps Structure control */
-#define	OSC_CONTROL_PCIE_LTR	0x20	/* PCI Exp LTR control */
-#define	OSC_CONTROL_PCIE_DPC	0x80	/* PCI Exp DPC control */
 
 #define	OSC_CONTROL_FIELD_INIT \
 	(OSC_CONTROL_PCIE_CAPS | OSC_CONTROL_PCIE_ADV_ERR)
@@ -73,16 +70,12 @@ extern "C" {
 
 typedef struct pcie_x86_priv {
 	/* _OSC related */
-	boolean_t	bus_osc;  	/* Has _OSC method been attempted */
-	boolean_t	bus_osc_valid;	/* Did _OSC return usable control bits */
+	boolean_t	bus_osc;  	/* Has _OSC method been called */
 	boolean_t	bus_osc_hp;	/* Was native HP control granted */
 	boolean_t	bus_osc_aer;	/* Was AER control granted */
-	uint32_t	bus_osc_ctrl;	/* Returned control mask */
 } pcie_x86_priv_t;
 
 extern int pcie_acpi_osc(dev_info_t *dip, uint32_t *osc_flags);
-extern int pcie_acpi_get_osc_ctl(dev_info_t *dip, uint32_t *osc_flags);
-extern int pcie_acpi_program_hp_params(dev_info_t *dip);
 extern boolean_t pcie_is_osc(dev_info_t *dip);
 
 #ifdef	__cplusplus

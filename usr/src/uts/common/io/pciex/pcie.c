@@ -501,7 +501,6 @@
 /* Local functions prototypes */
 static void pcie_init_pfd(dev_info_t *);
 static void pcie_fini_pfd(dev_info_t *);
-static uint16_t pcie_handoff_min_command(pcie_bus_t *);
 
 #ifdef DEBUG
 uint_t pcie_debug_flags = 0;
@@ -1080,8 +1079,6 @@ pcie_initchild(dev_info_t *cdip)
 {
 	uint16_t		tmp16, reg16;
 	pcie_bus_t		*bus_p;
-	boolean_t		preserve_config;
-	boolean_t		own_aer;
 
 	bus_p = PCIE_DIP2BUS(cdip);
 	if (bus_p == NULL) {
@@ -1094,86 +1091,75 @@ pcie_initchild(dev_info_t *cdip)
 	if (pcie_init_cfghdl(cdip) != DDI_SUCCESS)
 		return (DDI_FAILURE);
 
-	preserve_config = pcie_plat_preserve_config(cdip);
-	own_aer = pcie_plat_owns_aer(cdip);
+	/* Clear the device's status register */
+	reg16 = PCIE_GET(16, bus_p, PCI_CONF_STAT);
+	PCIE_PUT(16, bus_p, PCI_CONF_STAT, reg16);
 
-	if (preserve_config) {
-		uint16_t min_cmd;
+	/* Setup the device's command register */
+	reg16 = PCIE_GET(16, bus_p, PCI_CONF_COMM);
+	tmp16 = (reg16 & pcie_command_default_fw) | pcie_command_default;
 
-		reg16 = PCIE_GET(16, bus_p, PCI_CONF_COMM);
-		min_cmd = pcie_handoff_min_command(bus_p);
-		tmp16 = reg16 | min_cmd;
-		if (tmp16 != reg16) {
-			PCIE_PUT(16, bus_p, PCI_CONF_COMM, tmp16);
-			PCIE_DBG_CFG(cdip, bus_p, "COMMAND", 16, PCI_CONF_COMM,
-			    reg16);
-		}
-	} else {
-		/* Clear the device's status register */
-		reg16 = PCIE_GET(16, bus_p, PCI_CONF_STAT);
-		PCIE_PUT(16, bus_p, PCI_CONF_STAT, reg16);
+	if (pcie_serr_disable_flag && PCIE_IS_PCIE(bus_p))
+		tmp16 &= ~PCI_COMM_SERR_ENABLE;
 
-		/* Setup the device's command register */
-		reg16 = PCIE_GET(16, bus_p, PCI_CONF_COMM);
-		tmp16 = (reg16 & pcie_command_default_fw) | pcie_command_default;
+	PCIE_PUT(16, bus_p, PCI_CONF_COMM, tmp16);
+	PCIE_DBG_CFG(cdip, bus_p, "COMMAND", 16, PCI_CONF_COMM, reg16);
 
-		if (pcie_serr_disable_flag && PCIE_IS_PCIE(bus_p))
-			tmp16 &= ~PCI_COMM_SERR_ENABLE;
+	/*
+	 * If the device has a bus control register then program it
+	 * based on the settings in the command register.
+	 */
+	if (PCIE_IS_BDG(bus_p)) {
+		/* Clear the device's secondary status register */
+		reg16 = PCIE_GET(16, bus_p, PCI_BCNF_SEC_STATUS);
+		PCIE_PUT(16, bus_p, PCI_BCNF_SEC_STATUS, reg16);
 
-		PCIE_PUT(16, bus_p, PCI_CONF_COMM, tmp16);
-		PCIE_DBG_CFG(cdip, bus_p, "COMMAND", 16, PCI_CONF_COMM, reg16);
+		/* Setup the device's secondary command register */
+		reg16 = PCIE_GET(16, bus_p, PCI_BCNF_BCNTRL);
+		tmp16 = (reg16 & pcie_bdg_command_default_fw);
+
+		tmp16 |= PCI_BCNF_BCNTRL_SERR_ENABLE;
+		/*
+		 * Workaround for this Nvidia bridge. Don't enable the SERR
+		 * enable bit in the bridge control register as it could lead to
+		 * bogus NMIs.
+		 */
+		if (bus_p->bus_dev_ven_id == 0x037010DE)
+			tmp16 &= ~PCI_BCNF_BCNTRL_SERR_ENABLE;
+
+		if (pcie_command_default & PCI_COMM_PARITY_DETECT)
+			tmp16 |= PCI_BCNF_BCNTRL_PARITY_ENABLE;
 
 		/*
-		 * If the device has a bus control register then program it
-		 * based on the settings in the command register.
+		 * Enable Master Abort Mode only if URs have not been masked.
+		 * For PCI and PCIe-PCI bridges, enabling this bit causes a
+		 * Master Aborts/UR to be forwarded as a UR/TA or SERR.  If this
+		 * bit is masked, posted requests are dropped and non-posted
+		 * requests are returned with -1.
 		 */
-		if (PCIE_IS_BDG(bus_p)) {
-			/* Clear the device's secondary status register */
-			reg16 = PCIE_GET(16, bus_p, PCI_BCNF_SEC_STATUS);
-			PCIE_PUT(16, bus_p, PCI_BCNF_SEC_STATUS, reg16);
-
-			/* Setup the device's secondary command register */
-			reg16 = PCIE_GET(16, bus_p, PCI_BCNF_BCNTRL);
-			tmp16 = (reg16 & pcie_bdg_command_default_fw);
-
-			tmp16 |= PCI_BCNF_BCNTRL_SERR_ENABLE;
-			/*
-			 * Workaround for this Nvidia bridge. Don't enable the
-			 * SERR enable bit in the bridge control register as it
-			 * could lead to bogus NMIs.
-			 */
-			if (bus_p->bus_dev_ven_id == 0x037010DE)
-				tmp16 &= ~PCI_BCNF_BCNTRL_SERR_ENABLE;
-
-			if (pcie_command_default & PCI_COMM_PARITY_DETECT)
-				tmp16 |= PCI_BCNF_BCNTRL_PARITY_ENABLE;
-
-			/*
-			 * Enable Master Abort Mode only if URs have not been
-			 * masked.
-			 */
-			if (pcie_aer_uce_mask & PCIE_AER_UCE_UR)
-				tmp16 &= ~PCI_BCNF_BCNTRL_MAST_AB_MODE;
-			else
-				tmp16 |= PCI_BCNF_BCNTRL_MAST_AB_MODE;
-			PCIE_PUT(16, bus_p, PCI_BCNF_BCNTRL, tmp16);
-			PCIE_DBG_CFG(cdip, bus_p, "SEC CMD", 16,
-			    PCI_BCNF_BCNTRL, reg16);
-		}
+		if (pcie_aer_uce_mask & PCIE_AER_UCE_UR)
+			tmp16 &= ~PCI_BCNF_BCNTRL_MAST_AB_MODE;
+		else
+			tmp16 |= PCI_BCNF_BCNTRL_MAST_AB_MODE;
+		PCIE_PUT(16, bus_p, PCI_BCNF_BCNTRL, tmp16);
+		PCIE_DBG_CFG(cdip, bus_p, "SEC CMD", 16, PCI_BCNF_BCNTRL,
+		    reg16);
 	}
 
 	if (PCIE_IS_PCIE(bus_p)) {
-		if (!preserve_config && pcie_plat_owns_pcie_caps(cdip)) {
-			reg16 = PCIE_CAP_GET(16, bus_p, PCIE_DEVCTL);
-			tmp16 = (reg16 & pcie_devctl_default_mask) |
-			    (pcie_devctl_default & ~pcie_devctl_default_mask);
-			PCIE_CAP_PUT(16, bus_p, PCIE_DEVCTL, tmp16);
-			PCIE_DBG_CAP(cdip, bus_p, "DEVCTL", 16, PCIE_DEVCTL,
-			    reg16);
-		}
+		/*
+		 * Get the device control register into an initial state that
+		 * makes sense. The maximum payload, tagging, and related will
+		 * be dealt with in pcie_fabric_setup().
+		 */
+		reg16 = PCIE_CAP_GET(16, bus_p, PCIE_DEVCTL);
+		tmp16 = (reg16 & pcie_devctl_default_mask) |
+		    (pcie_devctl_default & ~pcie_devctl_default_mask);
+		PCIE_CAP_PUT(16, bus_p, PCIE_DEVCTL, tmp16);
+		PCIE_DBG_CAP(cdip, bus_p, "DEVCTL", 16, PCIE_DEVCTL, reg16);
 
-		if (own_aer)
-			pcie_enable_errors(cdip);
+		/* Enable PCIe errors */
+		pcie_enable_errors(cdip);
 
 		pcie_determine_serial(cdip);
 
@@ -1510,63 +1496,6 @@ pcie_speed_to_int(pcie_link_speed_t speed)
 	default:
 		return (0);
 	}
-}
-
-static uint16_t
-pcie_handoff_min_command(pcie_bus_t *bus_p)
-{
-	uint16_t cmd = 0;
-	int i;
-
-	for (i = 0; i < bus_p->bus_assigned_entries; i++) {
-		pci_regspec_t *rp = &bus_p->bus_assigned_addr[i];
-		uint64_t size;
-
-		size = ((uint64_t)rp->pci_size_hi << 32) | rp->pci_size_low;
-		if (size == 0)
-			continue;
-
-		switch (rp->pci_phys_hi & PCI_ADDR_MASK) {
-		case PCI_ADDR_IO:
-			cmd |= PCI_COMM_IO;
-			break;
-		case PCI_ADDR_MEM32:
-		case PCI_ADDR_MEM64:
-			cmd |= PCI_COMM_MAE;
-			break;
-		default:
-			continue;
-		}
-
-		cmd |= PCI_COMM_ME;
-	}
-
-	if (PCIE_IS_BDG(bus_p)) {
-		for (i = 0; i < bus_p->bus_addr_entries; i++) {
-			ppb_ranges_t *rp = &bus_p->bus_addr_ranges[i];
-			uint64_t size;
-
-			size = ((uint64_t)rp->size_high << 32) | rp->size_low;
-			if (size == 0)
-				continue;
-
-			switch (rp->child_high & PCI_ADDR_MASK) {
-			case PCI_ADDR_IO:
-				cmd |= PCI_COMM_IO;
-				break;
-			case PCI_ADDR_MEM32:
-			case PCI_ADDR_MEM64:
-				cmd |= PCI_COMM_MAE;
-				break;
-			default:
-				continue;
-			}
-
-			cmd |= PCI_COMM_ME;
-		}
-	}
-
-	return (cmd);
 }
 
 /*
@@ -2266,14 +2195,11 @@ int
 pcie_postattach_child(dev_info_t *cdip)
 {
 	pcie_bus_t *bus_p = PCIE_DIP2BUS(cdip);
-	int ret;
 
 	if (!bus_p)
 		return (DDI_FAILURE);
 
-	ret = pcie_enable_ce(cdip);
-	pcie_apply_plat_props(cdip);
-	return (ret);
+	return (pcie_enable_ce(cdip));
 }
 
 /*
@@ -2399,9 +2325,6 @@ pcie_enable_errors(dev_info_t *dip)
 
 	ASSERT(bus_p);
 
-	if (!pcie_plat_owns_aer(dip))
-		return;
-
 	/*
 	 * Clear any pending errors
 	 */
@@ -2523,9 +2446,6 @@ pcie_enable_ce(dev_info_t *dip)
 	if (!PCIE_IS_PCIE(bus_p))
 		return (DDI_SUCCESS);
 
-	if (!pcie_plat_owns_aer(dip))
-		return (DDI_SUCCESS);
-
 	/*
 	 * The "pcie_ce_mask" property is used to control both the CE reporting
 	 * enable field in the device control register and the AER CE mask. We
@@ -2576,9 +2496,6 @@ pcie_disable_errors(dev_info_t *dip)
 	uint32_t	aer_reg;
 
 	if (!PCIE_IS_PCIE(bus_p))
-		return;
-
-	if (!pcie_plat_owns_aer(dip))
 		return;
 
 	/*

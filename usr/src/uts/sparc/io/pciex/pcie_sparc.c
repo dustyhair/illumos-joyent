@@ -30,12 +30,6 @@
 #include <sys/pcie_pwr.h>
 
 void
-pcie_apply_plat_props(dev_info_t *dip)
-{
-	(void) dip;
-}
-
-void
 pcie_init_plat(dev_info_t *dip)
 {
 	pcie_bus_t	*bus_p = PCIE_DIP2BUS(dip);
@@ -67,27 +61,6 @@ pcie_fini_plat(dev_info_t *dip)
 
 	if (PCIE_IS_PCIE_BDG(bus_p))
 		bus_p->bus_pcie2pci_secbus = 0;
-}
-
-/* ARGSUSED */
-boolean_t
-pcie_plat_preserve_config(dev_info_t *dip)
-{
-	return (B_FALSE);
-}
-
-/* ARGSUSED */
-boolean_t
-pcie_plat_owns_pcie_caps(dev_info_t *dip)
-{
-	return (B_TRUE);
-}
-
-/* ARGSUSED */
-boolean_t
-pcie_plat_owns_aer(dev_info_t *dip)
-{
-	return (B_TRUE);
 }
 
 int
