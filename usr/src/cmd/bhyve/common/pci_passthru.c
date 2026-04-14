@@ -89,9 +89,7 @@ struct passthru_softc {
 };
 
 static int passthru_vm_setup_pptdev_msi(struct passthru_softc *,
-    struct pci_devinst *, struct vmctx *, uint64_t, uint64_t, int);
-static int passthru_vm_setup_pptdev_msix(struct passthru_softc *,
-    struct pci_devinst *, struct vmctx *, int, uint64_t, uint64_t, uint32_t);
+    struct vmctx *, uint64_t, uint64_t, int);
 
 static int
 msi_caplen(int msgctrl)
@@ -490,8 +488,8 @@ msix_table_write(struct vmctx *ctx, struct passthru_softc *sc,
 		/* If the entry is masked, don't set it up */
 		if ((entry->vector_control & PCIM_MSIX_VCTRL_MASK) == 0 ||
 		    (vector_control & PCIM_MSIX_VCTRL_MASK) == 0) {
-			(void) passthru_vm_setup_pptdev_msix(sc, pi, ctx,
-			    index, entry->addr, entry->msg_data,
+			(void) vm_setup_pptdev_msix(ctx, sc->pptfd, index,
+			    entry->addr, entry->msg_data,
 			    entry->vector_control);
 		}
 	}
@@ -561,8 +559,8 @@ init_msix_table(struct vmctx *ctx __unused, struct passthru_softc *sc)
 }
 
 static int
-passthru_vm_setup_pptdev_msi(struct passthru_softc *sc, struct pci_devinst *pi,
-    struct vmctx *ctx, uint64_t addr, uint64_t data, int numvec)
+passthru_vm_setup_pptdev_msi(struct passthru_softc *sc, struct vmctx *ctx,
+    uint64_t addr, uint64_t data, int numvec)
 {
 	int rc;
 
@@ -576,16 +574,6 @@ passthru_vm_setup_pptdev_msi(struct passthru_softc *sc, struct pci_devinst *pi,
 
 	return (rc);
 }
-
-static int
-passthru_vm_setup_pptdev_msix(struct passthru_softc *sc, struct pci_devinst *pi,
-    struct vmctx *ctx, int idx, uint64_t addr, uint64_t data,
-    uint32_t vector_control)
-{
-	return (vm_setup_pptdev_msix(ctx, sc->pptfd, idx, addr, data,
-	    vector_control));
-}
-
 static int
 cfginitbar(struct vmctx *ctx __unused, struct passthru_softc *sc)
 {
@@ -1048,7 +1036,7 @@ passthru_cfgwrite_default(struct passthru_softc *sc, struct pci_devinst *pi,
 	if (msicap_access(sc, coff)) {
 		pci_emul_capwrite(pi, coff, bytes, val, sc->psc_msi.capoff,
 		    PCIY_MSI);
-		error = passthru_vm_setup_pptdev_msi(sc, pi, ctx,
+		error = passthru_vm_setup_pptdev_msi(sc, ctx,
 		    pi->pi_msi.addr, pi->pi_msi.msg_data, pi->pi_msi.maxmsgnum);
 		if (error != 0)
 			err(1, "vm_setup_pptdev_msi");
@@ -1061,8 +1049,7 @@ passthru_cfgwrite_default(struct passthru_softc *sc, struct pci_devinst *pi,
 		if (pi->pi_msix.enabled) {
 			msix_table_entries = pi->pi_msix.table_count;
 			for (i = 0; i < msix_table_entries; i++) {
-				error = passthru_vm_setup_pptdev_msix(sc, pi, ctx,
-				    i,
+				error = vm_setup_pptdev_msix(ctx, sc->pptfd, i,
 				    pi->pi_msix.table[i].addr,
 				    pi->pi_msix.table[i].msg_data,
 				    pi->pi_msix.table[i].vector_control);
