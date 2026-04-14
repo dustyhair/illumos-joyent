@@ -28,7 +28,6 @@ int passthru_cfgread_emulate(struct passthru_softc *sc, struct pci_devinst *pi,
     int coff, int bytes, uint32_t *rv);
 int passthru_cfgwrite_emulate(struct passthru_softc *sc, struct pci_devinst *pi,
     int coff, int bytes, uint32_t val);
-int passthru_tu102_mmio_fault(struct vmctx *ctx, struct vm_mmio *mmio);
 int set_pcir_handler(struct passthru_softc *sc, int reg, int len,
     cfgread_handler rhandler, cfgwrite_handler whandler);
 

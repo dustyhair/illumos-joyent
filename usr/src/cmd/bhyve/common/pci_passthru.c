@@ -66,8 +66,6 @@
 
 #define MSIX_TABLE_COUNT(ctrl) (((ctrl) & PCIM_MSIXCTRL_TABLE_SIZE) + 1)
 #define MSIX_CAPLEN 12
-#define	PASSTHRU_NVIDIA_VENDOR_ID	0x10de
-
 struct passthru_softc {
 	struct pci_devinst *psc_pi;
 	/* ROM is handled like a BAR */
@@ -96,27 +94,11 @@ struct passthru_softc {
 	cfgwrite_handler psc_pcir_whandler[PCI_REGMAX + 1];
 };
 
-static struct passthru_softc *passthru_tu102_active_sc;
-static int passthru_host_bar_read(struct passthru_softc *, int, uint64_t, int,
-    uint64_t *);
-static int passthru_host_bar_write(struct passthru_softc *, int, uint64_t, int,
-    uint64_t);
 static int passthru_setup_intx(struct vmctx *, int, int, int);
 static int passthru_vm_setup_pptdev_msi(struct passthru_softc *,
     struct pci_devinst *, struct vmctx *, uint64_t, uint64_t, int);
 static int passthru_vm_setup_pptdev_msix(struct passthru_softc *,
     struct pci_devinst *, struct vmctx *, int, uint64_t, uint64_t, uint32_t);
-
-static int
-passthru_nvidia_display_fn0(const struct passthru_softc *sc)
-{
-	struct pci_devinst *pi = sc->psc_pi;
-
-	return (pci_get_cfgdata16(pi, PCIR_VENDOR) ==
-	    PASSTHRU_NVIDIA_VENDOR_ID &&
-	    pci_get_cfgdata8(pi, PCIR_CLASS) == PCIC_DISPLAY &&
-	    pi->pi_func == 0);
-}
 
 static int
 msi_caplen(int msgctrl)
@@ -164,61 +146,6 @@ passthru_setup_intx(struct vmctx *ctx __unused, int pptfd, int ioapic_irq,
 	pi.ioapic_irq = ioapic_irq;
 	pi.enable = enable;
 	return (ioctl(pptfd, PPT_INTX_SETUP, &pi));
-}
-
-static int
-passthru_host_bar_read(struct passthru_softc *sc, int baridx, uint64_t offset,
-    int size, uint64_t *val)
-{
-	struct ppt_bar_io pbi;
-	uint64_t lo;
-	uint64_t hi;
-
-	if (size == 8) {
-		if (passthru_host_bar_read(sc, baridx, offset, 4, &lo) != 0 ||
-		    passthru_host_bar_read(sc, baridx, offset + 4, 4, &hi) != 0) {
-			return (-1);
-		}
-		*val = lo | (hi << 32);
-		return (0);
-	}
-
-	bzero(&pbi, sizeof (pbi));
-	pbi.pbi_bar = baridx;
-	pbi.pbi_width = size;
-	pbi.pbi_off = offset;
-
-	if (ioctl(sc->pptfd, PPT_BAR_READ, &pbi) != 0) {
-		return (-1);
-	}
-
-	*val = pbi.pbi_data;
-	return (0);
-}
-
-static int
-passthru_host_bar_write(struct passthru_softc *sc, int baridx, uint64_t offset,
-    int size, uint64_t val)
-{
-	struct ppt_bar_io pbi;
-
-	if (size == 8) {
-		if (passthru_host_bar_write(sc, baridx, offset, 4,
-		    val & 0xffffffffU) != 0 ||
-		    passthru_host_bar_write(sc, baridx, offset + 4, 4,
-		    val >> 32) != 0) {
-			return (-1);
-		}
-		return (0);
-	}
-
-	bzero(&pbi, sizeof (pbi));
-	pbi.pbi_bar = baridx;
-	pbi.pbi_width = size;
-	pbi.pbi_off = offset;
-	pbi.pbi_data = val;
-
-	return (ioctl(sc->pptfd, PPT_BAR_WRITE, &pbi));
 }
 
 static void
@@ -1100,10 +1027,6 @@ passthru_init(struct pci_devinst *pi, nvlist_t *nvl)
 	    get_config_value_node(nvl, "rom"))) != 0) {
 		goto done;
 	}
-	if (passthru_nvidia_display_fn0(sc)) {
-		passthru_tu102_active_sc = sc;
-	}
-
 done:
 	if (error) {
 		free(sc);
@@ -1422,53 +1345,6 @@ passthru_mmio_addr(struct vmctx *ctx, struct pci_devinst *pi, int baridx,
 	}
 
 	return (!enabled || sc->psc_bar_mapped[baridx] != 0);
-}
-
-int
-passthru_tu102_mmio_fault(struct vmctx *ctx, struct vm_mmio *mmio)
-{
-	struct passthru_softc *sc = passthru_tu102_active_sc;
-	const uint64_t base = sc != NULL ? sc->psc_bar_gpa_valid[1] != 0 ?
-	    sc->psc_bar_gpa[1] : sc->psc_pi->pi_bar[1].addr : 0;
-	uint64_t offset;
-	int handled = 0;
-	int err = 0;
-
-	if (sc == NULL || sc->psc_pi == NULL || sc->psc_pi->pi_vmctx != ctx ||
-	    !passthru_nvidia_display_fn0(sc) || mmio == NULL) {
-		return (0);
-	}
-	if (sc->psc_bar[1].size == 0 || mmio->gpa < base ||
-	    mmio->gpa - base >= sc->psc_bar[1].size) {
-		return (0);
-	}
-	offset = mmio->gpa - base;
-
-	if (mmio->read != 0) {
-		uint64_t val = 0;
-
-		if (passthru_host_bar_read(sc, 1, offset, mmio->bytes,
-		    &val) == 0) {
-			mmio->data = val;
-			handled = 1;
-		} else {
-			err = errno;
-		}
-	} else {
-		if (passthru_host_bar_write(sc, 1, offset, mmio->bytes,
-		    mmio->data) == 0) {
-			handled = 1;
-		} else {
-			err = errno;
-		}
-	}
-	if (!handled && err != 0) {
-		warnx("pci_passthru: TU102 BAR1 mmio %s failed "
-		    "gpa=0x%lx off=0x%lx size=%u errno=%d",
-		    mmio->read != 0 ? "read" : "write",
-		    (ulong_t)mmio->gpa, (ulong_t)offset, mmio->bytes, err);
-	}
-	return (handled);
 }
 
 static void

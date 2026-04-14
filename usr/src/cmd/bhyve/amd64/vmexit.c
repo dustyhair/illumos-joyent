@@ -499,19 +499,15 @@ vmexit_mmio(struct vmctx *ctx, struct vcpu *vcpu, struct vm_exit *vme)
 	err = emulate_mem(vcpu, &mmio);
 
 	if (err == ESRCH) {
-		if (passthru_tu102_mmio_fault(ctx, &mmio) != 0) {
-			err = 0;
-		} else {
-			fprintf(stderr, "Unhandled memory access to 0x%lx\n", mmio.gpa);
+		fprintf(stderr, "Unhandled memory access to 0x%lx\n", mmio.gpa);
 
-			/*
-			 * Access to non-existent physical addresses is not likely to
-			 * result in fatal errors on hardware machines, but rather reads
-			 * of all-ones or discarded-but-acknowledged writes.
-			 */
-			mmio.data = ~0UL;
-			err = 0;
-		}
+		/*
+		 * Access to non-existent physical addresses is not likely to
+		 * result in fatal errors on hardware machines, but rather reads
+		 * of all-ones or discarded-but-acknowledged writes.
+		 */
+		mmio.data = ~0UL;
+		err = 0;
 	}
 
 	if (err == 0) {
