@@ -155,27 +155,6 @@ passthru_nvidia_display_fn0(const struct passthru_softc *sc)
 	    pi->pi_func == 0);
 }
 
-/*
- * Temporary TU102 startup quirk:
- *
- * Guest firmware churn on TU102 touches PCI_COMMAND aggressively while it
- * probes the option ROM and sibling functions. Forwarding those writes to the
- * physical device has been enough to collapse BAR0 / config-mirror access, so
- * keep the guest-visible shadow exact while clamping the host side. Keep this
- * quirk fenced off so we can delete it once a cleaner startup path exists.
- */
-static int
-passthru_tu102_host_cmd_sticky_quirk(struct pci_devinst *pi)
-{
-	return (passthru_nvidia_display_fn0((struct passthru_softc *)pi->pi_arg));
-}
-
-static int
-passthru_tu102_host_cmd_shadow_quirk(struct pci_devinst *pi)
-{
-	return (passthru_tu102_host_cmd_sticky_quirk(pi));
-}
-
 static int
 msi_caplen(int msgctrl)
 {
@@ -1305,22 +1284,12 @@ passthru_cfgwrite_default(struct passthru_softc *sc, struct pci_devinst *pi,
 	if (coff == PCIR_COMMAND) {
 		uint16_t reqval;
 		uint16_t newval;
-		uint16_t host_cur;
-		uint16_t host_write;
-		int need_host_sync;
-		int sticky_host_cmd;
-		int shadow_host_cmd;
 
 		if (bytes <= 2)
 			return (PE_CFGRW_DEFAULT);
 
 		reqval = val & 0xffff;
 		newval = reqval;
-		host_cur = 0;
-		host_write = newval;
-		need_host_sync = 1;
-		sticky_host_cmd = passthru_tu102_host_cmd_sticky_quirk(pi);
-		shadow_host_cmd = passthru_tu102_host_cmd_shadow_quirk(pi);
 
 		/* Update the physical status register. */
 		passthru_write_config(sc, PCIR_STATUS, 2, val >> 16);
@@ -1330,22 +1299,7 @@ passthru_cfgwrite_default(struct passthru_softc *sc, struct pci_devinst *pi,
 		pci_set_cfgdata16(pi, PCIR_COMMAND, newval);
 		pci_emul_cmd_changed(pi, cmd_old);
 
-		if (shadow_host_cmd) {
-			host_cur = passthru_read_config(sc, PCIR_COMMAND,
-			    sizeof (uint16_t));
-			host_write = host_cur;
-			need_host_sync = 0;
-		} else if (sticky_host_cmd) {
-			host_cur = passthru_read_config(sc, PCIR_COMMAND,
-			    sizeof (uint16_t));
-			host_write |= host_cur & (PCIM_CMD_PORTEN |
-			    PCIM_CMD_MEMEN | PCIM_CMD_BUSMASTEREN);
-			if (host_write == host_cur)
-				need_host_sync = 0;
-		}
-
-		if (need_host_sync)
-			passthru_write_config(sc, PCIR_COMMAND, 2, host_write);
+		passthru_write_config(sc, PCIR_COMMAND, 2, newval);
 
 		return (PE_CFGRW_DROP);
 	}
