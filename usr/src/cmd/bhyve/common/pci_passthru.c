@@ -68,9 +68,6 @@ struct passthru_softc {
 	struct pci_devinst *psc_pi;
 	/* ROM is handled like a BAR */
 	struct pcibar psc_bar[PCI_BARMAX_WITH_ROM + 1];
-	uint64_t psc_bar_gpa[PCI_BARMAX_WITH_ROM + 1];
-	uint8_t psc_bar_gpa_valid[PCI_BARMAX_WITH_ROM + 1];
-	uint8_t psc_bar_mapped[PCI_BARMAX_WITH_ROM + 1];
 	struct {
 		int		capoff;
 		int		msgctrl;
@@ -1206,7 +1203,7 @@ passthru_msix_addr(struct vmctx *ctx, struct pci_devinst *pi, int baridx,
 	}
 }
 
-static int
+static void
 passthru_mmio_addr(struct vmctx *ctx, struct pci_devinst *pi, int baridx,
 		   int enabled, uint64_t address)
 {
@@ -1214,21 +1211,14 @@ passthru_mmio_addr(struct vmctx *ctx, struct pci_devinst *pi, int baridx,
 
 	sc = pi->pi_arg;
 	if (!enabled) {
-		if (!sc->psc_bar_mapped[baridx])
-			return (1);
 		if (vm_unmap_pptdev_mmio(ctx, sc->pptfd, address,
 		    sc->psc_bar[baridx].size) != 0)
 			warnx("pci_passthru: unmap_pptdev_mmio failed");
-		sc->psc_bar_mapped[baridx] = 0;
 	} else {
 		if (vm_map_pptdev_mmio(ctx, sc->pptfd, address,
 		    sc->psc_bar[baridx].size, sc->psc_bar[baridx].addr) != 0)
 			warnx("pci_passthru: map_pptdev_mmio failed");
-		else
-			sc->psc_bar_mapped[baridx] = 1;
 	}
-
-	return (!enabled || sc->psc_bar_mapped[baridx] != 0);
 }
 
 static void
@@ -1253,93 +1243,29 @@ passthru_addr_rom(struct pci_devinst *const pi, const int idx,
 	}
 }
 
-static int
-passthru_addr_one(struct pci_devinst *pi, int baridx, int enabled,
-    uint64_t address)
+static void
+passthru_addr(struct pci_devinst *pi, int baridx,
+    int enabled, uint64_t address)
 {
 	struct vmctx *ctx = pi->pi_vmctx;
 
 	switch (pi->pi_bar[baridx].type) {
 	case PCIBAR_IO:
 		/* IO BARs are emulated */
-		return (1);
+		break;
 	case PCIBAR_ROM:
 		passthru_addr_rom(pi, baridx, enabled);
-		return (1);
+		break;
 	case PCIBAR_MEM32:
 	case PCIBAR_MEM64:
 		if (baridx == pci_msix_table_bar(pi))
 			passthru_msix_addr(ctx, pi, baridx, enabled, address);
 		else
-			return (passthru_mmio_addr(ctx, pi, baridx, enabled,
-			    address));
-		return (1);
+			passthru_mmio_addr(ctx, pi, baridx, enabled, address);
+		break;
 	default:
 		errx(4, "%s: invalid BAR type %d", __func__,
 		    pi->pi_bar[baridx].type);
-	}
-
-	return (0);
-}
-
-static void
-passthru_retry_pending_bars(struct pci_devinst *pi)
-{
-	struct passthru_softc *sc = pi->pi_arg;
-	int baridx;
-	int progress;
-
-	do {
-		progress = 0;
-		for (baridx = 0; baridx <= PCI_BARMAX; baridx++) {
-			if (pi->pi_bar[baridx].type != PCIBAR_MEM32 &&
-			    pi->pi_bar[baridx].type != PCIBAR_MEM64)
-				continue;
-			if (baridx == pci_msix_table_bar(pi))
-				continue;
-			if (sc->psc_bar_gpa_valid[baridx] != 0 ||
-			    pi->pi_bar[baridx].addr == 0)
-				continue;
-			if (passthru_addr_one(pi, baridx, 1,
-			    pi->pi_bar[baridx].addr)) {
-				sc->psc_bar_gpa[baridx] = pi->pi_bar[baridx].addr;
-				sc->psc_bar_gpa_valid[baridx] = 1;
-				progress = 1;
-			}
-		}
-	} while (progress != 0);
-}
-
-static void
-passthru_addr(struct pci_devinst *pi, int baridx,
-    int enabled, uint64_t address)
-{
-	struct passthru_softc *sc = pi->pi_arg;
-	uint64_t oldaddr;
-	int success;
-
-	if (enabled && sc->psc_bar_gpa_valid[baridx] &&
-	    sc->psc_bar_gpa[baridx] == address && sc->psc_bar_mapped[baridx]) {
-		passthru_retry_pending_bars(pi);
-		return;
-	}
-
-	if (enabled && sc->psc_bar_gpa_valid[baridx] &&
-	    sc->psc_bar_gpa[baridx] != address) {
-		oldaddr = sc->psc_bar_gpa[baridx];
-		(void) passthru_addr_one(pi, baridx, 0, oldaddr);
-		sc->psc_bar_gpa_valid[baridx] = 0;
-	}
-
-	success = passthru_addr_one(pi, baridx, enabled, address);
-
-	if (enabled && success) {
-		sc->psc_bar_gpa[baridx] = address;
-		sc->psc_bar_gpa_valid[baridx] = 1;
-		passthru_retry_pending_bars(pi);
-	} else if (!enabled) {
-		sc->psc_bar_gpa_valid[baridx] = 0;
-		sc->psc_bar_mapped[baridx] = 0;
 	}
 }
 
