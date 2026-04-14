@@ -85,16 +85,11 @@ struct passthru_softc {
 	int msi_limit;
 	int msix_limit;
 	int psc_msi_host_active;
-	int psc_intx_configured;
-	int psc_intx_enabled;
-	int psc_intx_irq;
-	int psc_intx_ioctl_supported;
 
 	cfgread_handler psc_pcir_rhandler[PCI_REGMAX + 1];
 	cfgwrite_handler psc_pcir_whandler[PCI_REGMAX + 1];
 };
 
-static int passthru_setup_intx(struct vmctx *, int, int, int);
 static int passthru_vm_setup_pptdev_msi(struct passthru_softc *,
     struct pci_devinst *, struct vmctx *, uint64_t, uint64_t, int);
 static int passthru_vm_setup_pptdev_msix(struct passthru_softc *,
@@ -134,18 +129,6 @@ passthru_read_config(const struct passthru_softc *sc, long reg, int width)
 		return (0);
 	}
 	return (pi.pci_data);
-}
-
-static int
-passthru_setup_intx(struct vmctx *ctx __unused, int pptfd, int ioapic_irq,
-    int enable)
-{
-	struct ppt_intx pi;
-
-	bzero(&pi, sizeof (pi));
-	pi.ioapic_irq = ioapic_irq;
-	pi.enable = enable;
-	return (ioctl(pptfd, PPT_INTX_SETUP, &pi));
 }
 
 static void
@@ -584,49 +567,23 @@ passthru_vm_setup_pptdev_msi(struct passthru_softc *sc, struct pci_devinst *pi,
     struct vmctx *ctx, uint64_t addr, uint64_t data, int numvec)
 {
 	int rc;
-	int saved_irq = -1;
 
 	if (numvec == 0 && !sc->psc_msi_host_active) {
 		return (0);
 	}
 
-	if (numvec > 0 && sc->psc_intx_ioctl_supported &&
-	    sc->psc_intx_configured && sc->psc_intx_enabled) {
-		saved_irq = sc->psc_intx_irq;
-		if (saved_irq <= 0)
-			saved_irq = pi->pi_lintr.ioapic_irq;
-		rc = passthru_setup_intx(ctx, sc->pptfd, 0, 0);
-		if (rc != 0) {
-			if (errno == ENOTSUP)
-				sc->psc_intx_ioctl_supported = 0;
-			return (rc);
-		}
-		sc->psc_intx_configured = 1;
-		sc->psc_intx_enabled = 0;
-		sc->psc_intx_irq = 0;
-	}
-
 	rc = vm_setup_pptdev_msi(ctx, sc->pptfd, addr, data, numvec);
 	if (rc != 0) {
 		warnx("ppt msi setup failed bdf=%d:%d:%d pptfd=%d addr=0x%llx "
-		    "data=0x%llx numvec=%d intx_cfg=%d intx_en=%d intx_irq=%d "
-		    "msi_en=%d msix_en=%d host_msi_active=%d",
+		    "data=0x%llx numvec=%d msi_en=%d msix_en=%d "
+		    "host_msi_active=%d",
 		    pi->pi_bus, pi->pi_slot, pi->pi_func, sc->pptfd,
-		    (unsigned long long)addr, (unsigned long long)data, numvec,
-		    sc->psc_intx_configured, sc->psc_intx_enabled,
-		    sc->psc_intx_irq, pi->pi_msi.enabled, pi->pi_msix.enabled,
+		    (unsigned long long)addr, (unsigned long long)data,
+		    numvec, pi->pi_msi.enabled, pi->pi_msix.enabled,
 		    sc->psc_msi_host_active);
 	}
 	if (rc == 0)
 		sc->psc_msi_host_active = (numvec > 0);
-	if (rc != 0 && numvec > 0 && saved_irq > 0 &&
-	    sc->psc_intx_ioctl_supported) {
-		if (passthru_setup_intx(ctx, sc->pptfd, saved_irq, 1) == 0) {
-			sc->psc_intx_configured = 1;
-			sc->psc_intx_enabled = 1;
-			sc->psc_intx_irq = saved_irq;
-		}
-	}
 
 	return (rc);
 }
@@ -636,38 +593,8 @@ passthru_vm_setup_pptdev_msix(struct passthru_softc *sc, struct pci_devinst *pi,
     struct vmctx *ctx, int idx, uint64_t addr, uint64_t data,
     uint32_t vector_control)
 {
-	int rc;
-	int saved_irq = -1;
-
-	if ((vector_control & PCIM_MSIX_VCTRL_MASK) == 0 &&
-	    sc->psc_intx_ioctl_supported && sc->psc_intx_configured &&
-	    sc->psc_intx_enabled) {
-		saved_irq = sc->psc_intx_irq;
-		if (saved_irq <= 0)
-			saved_irq = pi->pi_lintr.ioapic_irq;
-		rc = passthru_setup_intx(ctx, sc->pptfd, 0, 0);
-		if (rc != 0) {
-			if (errno == ENOTSUP)
-				sc->psc_intx_ioctl_supported = 0;
-			return (rc);
-		}
-		sc->psc_intx_configured = 1;
-		sc->psc_intx_enabled = 0;
-		sc->psc_intx_irq = 0;
-	}
-
-	rc = vm_setup_pptdev_msix(ctx, sc->pptfd, idx, addr, data,
-	    vector_control);
-	if (rc != 0 && (vector_control & PCIM_MSIX_VCTRL_MASK) == 0 &&
-	    saved_irq > 0 && sc->psc_intx_ioctl_supported) {
-		if (passthru_setup_intx(ctx, sc->pptfd, saved_irq, 1) == 0) {
-			sc->psc_intx_configured = 1;
-			sc->psc_intx_enabled = 1;
-			sc->psc_intx_irq = saved_irq;
-		}
-	}
-
-	return (rc);
+	return (vm_setup_pptdev_msix(ctx, sc->pptfd, idx, addr, data,
+	    vector_control));
 }
 
 static int
@@ -1000,7 +927,6 @@ passthru_init(struct pci_devinst *pi, nvlist_t *nvl)
 	pi->pi_arg = sc;
 	sc->psc_pi = pi;
 	sc->pptfd = pptfd;
-	sc->psc_intx_ioctl_supported = 1;
 
 	if ((error = vm_get_pptdev_limits(ctx, pptfd, &sc->msi_limit,
 	    &sc->msix_limit)) != 0)
