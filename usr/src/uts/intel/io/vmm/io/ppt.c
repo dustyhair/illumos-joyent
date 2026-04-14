@@ -1632,12 +1632,8 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
     int numvec)
 {
 	int i, msi_count, intr_type;
-	int supported_types = 0;
-	int navail_msi = -1;
-	int navail_fixed = -1;
 	struct pptdev *ppt;
 	int err = 0;
-	uint16_t bdf = 0xffff;
 
 	if (numvec < 0 || numvec > MAX_MSIMSGS)
 		return (EINVAL);
@@ -1648,7 +1644,6 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 		mutex_exit(&pptdev_mtx);
 		return (err);
 	}
-	bdf = pci_get_bdf(ppt->pptd_dip);
 
 	/* Reject attempts to enable MSI while MSI-X is active. */
 	if (ppt->msix.num_msgs != 0 && numvec != 0) {
@@ -1664,19 +1659,10 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 		goto done;
 	}
 
-	(void) ddi_intr_get_supported_types(ppt->pptd_dip, &supported_types);
 	if (ddi_intr_get_navail(ppt->pptd_dip, DDI_INTR_TYPE_MSI,
 	    &msi_count) != DDI_SUCCESS) {
-		(void) ddi_intr_get_navail(ppt->pptd_dip, DDI_INTR_TYPE_FIXED,
-		    &navail_fixed);
-		cmn_err(CE_NOTE, "ppt: MSI navail failed bdf=0x%x req=%d "
-		    "types=0x%x fixed_navail=%d", bdf, numvec,
-		    supported_types, navail_fixed);
 		if (ddi_intr_get_navail(ppt->pptd_dip, DDI_INTR_TYPE_FIXED,
 		    &msi_count) != DDI_SUCCESS) {
-			cmn_err(CE_WARN, "ppt: MSI setup no interrupt mode "
-			    "bdf=0x%x req=%d types=0x%x", bdf, numvec,
-			    supported_types);
 			err = EINVAL;
 			goto done;
 		}
@@ -1684,7 +1670,6 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 		intr_type = DDI_INTR_TYPE_FIXED;
 		ppt->msi.is_fixed = B_TRUE;
 	} else {
-		navail_msi = msi_count;
 		intr_type = DDI_INTR_TYPE_MSI;
 	}
 
@@ -1693,9 +1678,6 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 	 * the guest wants to allocate.
 	 */
 	if (numvec > msi_count) {
-		cmn_err(CE_WARN, "ppt: MSI request exceeds navail bdf=0x%x "
-		    "req=%d navail=%d type=0x%x types=0x%x", bdf, numvec,
-		    msi_count, intr_type, supported_types);
 		err = EINVAL;
 		goto done;
 	}
@@ -1704,9 +1686,6 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 	ppt->msi.inth = kmem_zalloc(ppt->msi.inth_sz, KM_SLEEP);
 	if (ddi_intr_alloc(ppt->pptd_dip, ppt->msi.inth, intr_type, 0,
 	    numvec, &msi_count, 0) != DDI_SUCCESS) {
-		cmn_err(CE_WARN, "ppt: ddi_intr_alloc failed bdf=0x%x req=%d "
-		    "type=0x%x navail_msi=%d actual=%d types=0x%x", bdf,
-		    numvec, intr_type, navail_msi, msi_count, supported_types);
 		kmem_free(ppt->msi.inth, ppt->msi.inth_sz);
 		err = EINVAL;
 		goto done;
@@ -1714,9 +1693,6 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 
 	/* Verify that we got as many vectors as the guest requested */
 	if (numvec != msi_count) {
-		cmn_err(CE_WARN, "ppt: MSI partial alloc bdf=0x%x req=%d "
-		    "got=%d type=0x%x navail_msi=%d types=0x%x", bdf,
-		    numvec, msi_count, intr_type, navail_msi, supported_types);
 		ppt_teardown_msi(ppt);
 		err = EINVAL;
 		goto done;
