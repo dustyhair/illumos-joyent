@@ -237,13 +237,8 @@ iommu_create_mapping(void *domain, vm_paddr_t gpa, vm_paddr_t hpa, size_t len)
 		uint64_t mapped;
 
 		mapped = ops->create_mapping(domain, gpa, hpa, remaining);
-		if (mapped == 0) {
-			cmn_err(CE_WARN, "iommu_create_mapping: no forward "
-			    "progress (gpa=%llx hpa=%llx rem=%llx)",
-			    (u_longlong_t)gpa, (u_longlong_t)hpa,
-			    (u_longlong_t)remaining);
+		if (mapped == 0)
 			break;
-		}
 		gpa += mapped;
 		hpa += mapped;
 		remaining -= mapped;
@@ -261,12 +256,8 @@ iommu_remove_mapping(void *domain, vm_paddr_t gpa, size_t len)
 		uint64_t unmapped;
 
 		unmapped = ops->remove_mapping(domain, gpa, remaining);
-		if (unmapped == 0) {
-			cmn_err(CE_WARN, "iommu_remove_mapping: no forward "
-			    "progress (gpa=%llx rem=%llx)",
-			    (u_longlong_t)gpa, (u_longlong_t)remaining);
+		if (unmapped == 0)
 			break;
-		}
 		gpa += unmapped;
 		remaining -= unmapped;
 	}
