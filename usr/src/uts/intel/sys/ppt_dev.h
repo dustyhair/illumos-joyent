@@ -35,9 +35,6 @@ extern "C" {
 
 #define	PPT_MAXNAMELEN	32
 
-#define	PPT_CAP_IOMMU		(1 << 0)
-#define	PPT_CAP_BAR_INFO	(1 << 2)
-
 #define	IOMMU_PROT_READ		0x1
 #define	IOMMU_PROT_WRITE	0x2
 #define	IOMMU_PROT_RW		(IOMMU_PROT_READ | IOMMU_PROT_WRITE)
