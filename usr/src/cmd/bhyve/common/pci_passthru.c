@@ -68,43 +68,6 @@
 #define MSIX_CAPLEN 12
 #define	PASSTHRU_NVIDIA_VENDOR_ID	0x10de
 
-/*
- * Detailed TU102 startup tracing is runtime-gated because the current
- * compatibility path can generate a large amount of warnx() traffic while
- * BARs are being churned. Keep the trace available for diagnosis, but make
- * it opt-in so the default startup path stays quieter.
- *
- * Enable with: BHYVE_PPT_TU102_TRACE=1
- */
-static bool
-passthru_tu102_trace_enabled(void)
-{
-	static int enabled = -1;
-	const char *value;
-
-	if (enabled == -1) {
-		value = getenv("BHYVE_PPT_TU102_TRACE");
-		enabled = (value != NULL && value[0] != '\0' &&
-		    !(value[0] == '0' && value[1] == '\0')) ? 1 : 0;
-	}
-
-	return (enabled != 0);
-}
-
-static void
-passthru_tu102_trace(const char *fmt, ...)
-{
-	va_list ap;
-
-	if (!passthru_tu102_trace_enabled()) {
-		return;
-	}
-
-	va_start(ap, fmt);
-	vwarnx(fmt, ap);
-	va_end(ap);
-}
-
 struct passthru_softc {
 	struct pci_devinst *psc_pi;
 	/* ROM is handled like a BAR */
@@ -1443,12 +1406,6 @@ passthru_mmio_addr(struct vmctx *ctx, struct pci_devinst *pi, int baridx,
 	struct passthru_softc *sc;
 
 	sc = pi->pi_arg;
-	if (passthru_nvidia_display_fn0(sc)) {
-		passthru_tu102_trace("passthru: TU102 mmio %s bar=%d gpa=0x%lx len=0x%lx hpa=0x%lx",
-		    enabled ? "map" : "unmap", baridx, (ulong_t)address,
-		    (ulong_t)sc->psc_bar[baridx].size,
-		    (ulong_t)sc->psc_bar[baridx].addr);
-	}
 	if (!enabled) {
 		if (!sc->psc_bar_mapped[baridx])
 			return (1);
@@ -1600,23 +1557,6 @@ passthru_addr(struct pci_devinst *pi, int baridx,
 	struct passthru_softc *sc = pi->pi_arg;
 	uint64_t oldaddr;
 	int success;
-	uint64_t req_address = address;
-	uint32_t cfg_lo;
-	uint32_t cfg_hi;
-
-	if (passthru_nvidia_display_fn0(sc)) {
-		cfg_lo = pci_get_cfgdata32(pi, PCIR_BAR(baridx));
-		cfg_hi = (pi->pi_bar[baridx].type == PCIBAR_MEM64 &&
-		    baridx + 1 <= PCI_BARMAX) ?
-		    pci_get_cfgdata32(pi, PCIR_BAR(baridx + 1)) : 0;
-		passthru_tu102_trace("passthru: TU102 baraddr enabled=%d bar=%d req_gpa=0x%lx gpa=0x%lx size=0x%lx",
-		    enabled, baridx, (ulong_t)req_address, (ulong_t)address,
-		    (ulong_t)sc->psc_bar[baridx].size);
-		passthru_tu102_trace("passthru: TU102 barcfg bar=%d type=%d cfg_lo=0x%08x cfg_hi=0x%08x pi_addr=0x%lx valid=%u mapped=%u",
-		    baridx, pi->pi_bar[baridx].type, cfg_lo, cfg_hi,
-		    (ulong_t)pi->pi_bar[baridx].addr,
-		    sc->psc_bar_gpa_valid[baridx], sc->psc_bar_mapped[baridx]);
-	}
 
 	if (enabled && sc->psc_bar_gpa_valid[baridx] &&
 	    sc->psc_bar_gpa[baridx] == address && sc->psc_bar_mapped[baridx]) {
