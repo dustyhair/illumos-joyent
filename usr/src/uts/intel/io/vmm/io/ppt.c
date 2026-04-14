@@ -378,53 +378,6 @@ ppt_ioctl(dev_t dev, int cmd, intptr_t arg, int md, cred_t *cr, int *rv)
 
 		return (0);
 	}
-	case PPT_IOMMU_MAP: {
-		struct ppt_iommu_map map;
-		void *domain;
-		int err;
-
-		if (ddi_copyin(data, &map, sizeof (map), md) != 0) {
-			return (EFAULT);
-		}
-		if (ppt->vm == NULL) {
-			return (ENODEV);
-		}
-
-		domain = vm_iommu_domain(ppt->vm);
-		if (domain == NULL) {
-			return (ENXIO);
-		}
-
-		err = iommu_domain_map(domain, map.gpa, map.hpa, map.size,
-		    map.prot);
-		if (err == 0) {
-			iommu_invalidate_tlb(domain);
-		}
-		return (err);
-	}
-	case PPT_IOMMU_UNMAP: {
-		struct ppt_iommu_map map;
-		void *domain;
-		int err;
-
-		if (ddi_copyin(data, &map, sizeof (map), md) != 0) {
-			return (EFAULT);
-		}
-		if (ppt->vm == NULL) {
-			return (ENODEV);
-		}
-
-		domain = vm_iommu_domain(ppt->vm);
-		if (domain == NULL) {
-			return (ENXIO);
-		}
-
-		err = iommu_domain_unmap(domain, map.gpa, map.size);
-		if (err == 0) {
-			iommu_invalidate_tlb(domain);
-		}
-		return (err);
-	}
 	default:
 		return (ENOTTY);
 	}

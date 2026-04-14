@@ -1175,18 +1175,6 @@ passthru_msix_addr(struct vmctx *ctx, struct pci_devinst *pi, int baridx,
 	uint32_t table_size, table_offset;
 
 	sc = pi->pi_arg;
-
-	if (enabled && address != 0) {
-		struct ppt_iommu_map map = {
-			.gpa = address,
-			.hpa = sc->psc_bar[baridx].addr,
-			.size = sc->psc_bar[baridx].size,
-			.prot = IOMMU_PROT_RW
-		};
-
-		(void) ioctl(sc->pptfd, PPT_IOMMU_MAP, &map);
-	}
-
 	table_offset = rounddown2(pi->pi_msix.table_offset, 4096);
 	if (table_offset > 0) {
 		if (!enabled) {

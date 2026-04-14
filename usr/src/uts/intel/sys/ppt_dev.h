@@ -28,14 +28,8 @@ extern "C" {
 #define	PPT_BAR_QUERY		(PPT_IOC | 0x03)
 #define	PPT_BAR_READ		(PPT_IOC | 0x04)
 #define	PPT_BAR_WRITE		(PPT_IOC | 0x05)
-#define	PPT_IOMMU_MAP		(PPT_IOC | 0x20)
-#define	PPT_IOMMU_UNMAP		(PPT_IOC | 0x21)
 
 #define	PPT_MAXNAMELEN	32
-
-#define	IOMMU_PROT_READ		0x1
-#define	IOMMU_PROT_WRITE	0x2
-#define	IOMMU_PROT_RW		(IOMMU_PROT_READ | IOMMU_PROT_WRITE)
 
 struct ppt_cfg_io {
 	uint64_t pci_off;
@@ -54,13 +48,6 @@ struct ppt_bar_query {
 	uint32_t pbq_type;
 	uint64_t pbq_base;
 	uint64_t pbq_size;
-};
-
-struct ppt_iommu_map {
-	uint64_t gpa;
-	uint64_t hpa;
-	uint64_t size;
-	uint32_t prot;
 };
 
 #ifdef __cplusplus
