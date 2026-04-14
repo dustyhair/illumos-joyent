@@ -573,15 +573,6 @@ passthru_vm_setup_pptdev_msi(struct passthru_softc *sc, struct pci_devinst *pi,
 	}
 
 	rc = vm_setup_pptdev_msi(ctx, sc->pptfd, addr, data, numvec);
-	if (rc != 0) {
-		warnx("ppt msi setup failed bdf=%d:%d:%d pptfd=%d addr=0x%llx "
-		    "data=0x%llx numvec=%d msi_en=%d msix_en=%d "
-		    "host_msi_active=%d",
-		    pi->pi_bus, pi->pi_slot, pi->pi_func, sc->pptfd,
-		    (unsigned long long)addr, (unsigned long long)data,
-		    numvec, pi->pi_msi.enabled, pi->pi_msix.enabled,
-		    sc->psc_msi_host_active);
-	}
 	if (rc == 0)
 		sc->psc_msi_host_active = (numvec > 0);
 
@@ -1208,13 +1199,7 @@ passthru_msix_addr(struct vmctx *ctx, struct pci_devinst *pi, int baridx,
 			.prot = IOMMU_PROT_RW
 		};
 
-		if (ioctl(sc->pptfd, PPT_IOMMU_MAP, &map) != 0) {
-			warn("PASSTHRU: MSIX PPT_IOMMU_MAP BAR%d FAILED "
-			    "gpa=0x%llx hpa=0x%llx sz=0x%llx", baridx,
-			    (unsigned long long)map.gpa,
-			    (unsigned long long)map.hpa,
-			    (unsigned long long)map.size);
-		}
+		(void) ioctl(sc->pptfd, PPT_IOMMU_MAP, &map);
 	}
 
 	table_offset = rounddown2(pi->pi_msix.table_offset, 4096);
