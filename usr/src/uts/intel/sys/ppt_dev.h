@@ -30,8 +30,6 @@ extern "C" {
 #define	PPT_BAR_WRITE		(PPT_IOC | 0x05)
 #define	PPT_IOMMU_MAP		(PPT_IOC | 0x20)
 #define	PPT_IOMMU_UNMAP		(PPT_IOC | 0x21)
-#define	PPT_IOMMU_MAP_BATCH	(PPT_IOC | 0x22)
-#define	PPT_IOMMU_UNMAP_BATCH	(PPT_IOC | 0x23)
 
 #define	PPT_MAXNAMELEN	32
 
@@ -63,12 +61,6 @@ struct ppt_iommu_map {
 	uint64_t hpa;
 	uint64_t size;
 	uint32_t prot;
-};
-
-struct ppt_iommu_map_batch {
-	uint32_t count;
-	uint32_t pad;
-	struct ppt_iommu_map maps[];
 };
 
 #ifdef __cplusplus

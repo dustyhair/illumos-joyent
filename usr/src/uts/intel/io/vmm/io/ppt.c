@@ -425,67 +425,6 @@ ppt_ioctl(dev_t dev, int cmd, intptr_t arg, int md, cred_t *cr, int *rv)
 		}
 		return (err);
 	}
-	case PPT_IOMMU_MAP_BATCH:
-	case PPT_IOMMU_UNMAP_BATCH: {
-		struct ppt_iommu_map_batch hdr;
-		struct ppt_iommu_map_batch *batch;
-		void *domain;
-		size_t maxcount, totsz;
-		int err = 0;
-		boolean_t did_work = B_FALSE;
-
-		if (ddi_copyin(data, &hdr, sizeof (hdr), md) != 0) {
-			return (EFAULT);
-		}
-		if (ppt->vm == NULL) {
-			return (ENODEV);
-		}
-
-		domain = vm_iommu_domain(ppt->vm);
-		if (domain == NULL) {
-			return (ENXIO);
-		}
-		if (hdr.count == 0) {
-			return (0);
-		}
-
-		maxcount = (SIZE_MAX - offsetof(struct ppt_iommu_map_batch, maps)) /
-		    sizeof (struct ppt_iommu_map);
-		if (hdr.count > maxcount) {
-			return (EINVAL);
-		}
-
-		totsz = offsetof(struct ppt_iommu_map_batch, maps) +
-		    hdr.count * sizeof (struct ppt_iommu_map);
-		batch = kmem_zalloc(totsz, KM_SLEEP);
-		if (ddi_copyin(data, batch, totsz, md) != 0) {
-			kmem_free(batch, totsz);
-			return (EFAULT);
-		}
-
-		for (uint32_t i = 0; i < batch->count; i++) {
-			struct ppt_iommu_map *map = &batch->maps[i];
-
-			if (cmd == PPT_IOMMU_MAP_BATCH) {
-				err = iommu_domain_map(domain, map->gpa, map->hpa,
-				    map->size, map->prot);
-			} else {
-				err = iommu_domain_unmap(domain, map->gpa,
-				    map->size);
-			}
-			if (err != 0) {
-				break;
-			}
-			did_work = B_TRUE;
-		}
-
-		if (did_work) {
-			iommu_invalidate_tlb(domain);
-		}
-		kmem_free(batch, totsz);
-		return (err);
-	}
-
 	default:
 		return (ENOTTY);
 	}
