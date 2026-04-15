@@ -1396,6 +1396,8 @@ vm_setup_pptdev_msi(struct vmctx *ctx, int pptfd, uint64_t addr,
 {
 	struct vm_pptdev_msi pptmsi;
 
+	bzero(&pptmsi, sizeof (pptmsi));
+	pptmsi.vcpu = 0;
 	pptmsi.pptfd = pptfd;
 	pptmsi.msg = msg;
 	pptmsi.addr = addr;
@@ -1409,6 +1411,8 @@ vm_setup_pptdev_msix(struct vmctx *ctx, int pptfd, int idx,
 {
 	struct vm_pptdev_msix pptmsix;
 
+	bzero(&pptmsix, sizeof (pptmsix));
+	pptmsix.vcpu = 0;
 	pptmsix.pptfd = pptfd;
 	pptmsix.idx = idx;
 	pptmsix.msg = msg;
