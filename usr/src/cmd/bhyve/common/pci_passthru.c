@@ -716,6 +716,85 @@ passthru_legacy_config(nvlist_t *nvl, const char *opt)
 	return (0);
 }
 
+static uint16_t
+passthru_rom_get_u16(const uint8_t *p)
+{
+	return ((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+}
+
+/*
+ * Some dumped option ROMs claim that another image follows even though the
+ * file ends after the current image. Clamp those single-image dumps to LAST in
+ * the in-memory guest copy so firmware does not walk off the end of the ROM.
+ */
+static void
+passthru_rom_fixup_chain(uint8_t *rom, size_t rom_file_size)
+{
+	size_t off = 0;
+	int image = 0;
+
+	while (off + 0x1a <= rom_file_size && image < 16) {
+		uint16_t pcir;
+		size_t hdr_off;
+		uint16_t blocks;
+		size_t next_off;
+		uint8_t indicator;
+		uint8_t *hdr;
+
+		if (rom[off] != 0x55 || rom[off + 1] != 0xaa) {
+			return;
+		}
+
+		pcir = passthru_rom_get_u16(&rom[off + 0x18]);
+		hdr_off = off + pcir;
+		if (pcir < 0x18 || hdr_off + 0x16 > rom_file_size) {
+			return;
+		}
+
+		hdr = &rom[hdr_off];
+		if (memcmp(hdr, "PCIR", 4) != 0) {
+			return;
+		}
+
+		blocks = passthru_rom_get_u16(&hdr[0x10]);
+		if (blocks == 0) {
+			return;
+		}
+
+		indicator = hdr[0x15];
+		next_off = off + (size_t)blocks * 512;
+		if ((indicator & 0x80) != 0) {
+			return;
+		}
+
+		if (next_off + 2 > rom_file_size ||
+		    rom[next_off] != 0x55 || rom[next_off + 1] != 0xaa) {
+			uint8_t sum = 0;
+			size_t i;
+
+			hdr[0x15] = indicator | 0x80;
+
+			/*
+			 * Keep the image checksum valid after forcing LAST so
+			 * ROM consumers do not reject the repaired image.
+			 */
+			if (next_off <= rom_file_size && next_off > off) {
+				for (i = off; i < next_off; i++) {
+					sum = (uint8_t)(sum + rom[i]);
+				}
+				if (sum != 0) {
+					rom[next_off - 1] =
+					    (uint8_t)(rom[next_off - 1] - sum);
+				}
+			}
+			return;
+		}
+
+		off = next_off;
+		image++;
+	}
+}
+
 static int
 passthru_init_rom(struct vmctx *const ctx __unused,
     struct passthru_softc *const sc, const char *const romfile)
@@ -756,6 +835,7 @@ passthru_init_rom(struct vmctx *const ctx __unused,
 		return (error);
 	}
 	memcpy(rom_addr, rom_data, rom_size);
+	passthru_rom_fixup_chain(rom_addr, rom_size);
 
 	sc->psc_bar[PCI_ROM_IDX].type = PCIBAR_ROM;
 	sc->psc_bar[PCI_ROM_IDX].addr = (uint64_t)rom_addr;
