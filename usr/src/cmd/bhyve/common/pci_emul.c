@@ -607,11 +607,24 @@ static void
 modify_bar_registration(struct pci_devinst *pi, int idx, int registration)
 {
 	struct pci_devemu *pe;
+	bool passthru_prebaraddr = false;
 	int error;
 	struct inout_port iop;
 	struct mem_range mr;
 
 	pe = pi->pi_d;
+	passthru_prebaraddr = registration != 0 && pe->pe_baraddr != NULL &&
+	    pe->pe_emu != NULL && strcmp(pe->pe_emu, "passthru") == 0;
+	if (passthru_prebaraddr) {
+		/*
+		 * Passthru may rewrite the guest BAR GPA in pe_baraddr().
+		 * Run it before registering the userspace MMIO range so the
+		 * RB tree tracks the final pinned address instead of the
+		 * transient allocator-selected GPA.
+		 */
+		(*pe->pe_baraddr)(pi, idx, registration, pi->pi_bar[idx].addr);
+	}
+
 	switch (pi->pi_bar[idx].type) {
 	case PCIBAR_IO:
 		bzero(&iop, sizeof(struct inout_port));
@@ -650,7 +663,7 @@ modify_bar_registration(struct pci_devinst *pi, int idx, int registration)
 	}
 	assert(error == 0);
 
-	if (pe->pe_baraddr != NULL)
+	if (pe->pe_baraddr != NULL && !passthru_prebaraddr)
 		(*pe->pe_baraddr)(pi, idx, registration, pi->pi_bar[idx].addr);
 }
 

@@ -63,7 +63,6 @@
 
 #define MSIX_TABLE_COUNT(ctrl) (((ctrl) & PCIM_MSIXCTRL_TABLE_SIZE) + 1)
 #define MSIX_CAPLEN 12
-
 struct passthru_softc {
 	struct pci_devinst *psc_pi;
 	/* ROM is handled like a BAR */
@@ -79,10 +78,14 @@ struct passthru_softc {
 	int pptfd;
 	int msi_limit;
 	int msix_limit;
+	int psc_msi_host_active;
 
 	cfgread_handler psc_pcir_rhandler[PCI_REGMAX + 1];
 	cfgwrite_handler psc_pcir_whandler[PCI_REGMAX + 1];
 };
+
+static int passthru_vm_setup_pptdev_msi(struct passthru_softc *,
+    struct vmctx *, uint64_t, uint64_t, int);
 
 static int
 msi_caplen(int msgctrl)
@@ -481,8 +484,8 @@ msix_table_write(struct vmctx *ctx, struct passthru_softc *sc,
 		/* If the entry is masked, don't set it up */
 		if ((entry->vector_control & PCIM_MSIX_VCTRL_MASK) == 0 ||
 		    (vector_control & PCIM_MSIX_VCTRL_MASK) == 0) {
-			(void) vm_setup_pptdev_msix(ctx, sc->pptfd,
-			    index, entry->addr, entry->msg_data,
+			(void) vm_setup_pptdev_msix(ctx, sc->pptfd, index,
+			    entry->addr, entry->msg_data,
 			    entry->vector_control);
 		}
 	}
@@ -551,6 +554,22 @@ init_msix_table(struct vmctx *ctx __unused, struct passthru_softc *sc)
 	return (0);
 }
 
+static int
+passthru_vm_setup_pptdev_msi(struct passthru_softc *sc, struct vmctx *ctx,
+    uint64_t addr, uint64_t data, int numvec)
+{
+	int rc;
+
+	if (numvec == 0 && !sc->psc_msi_host_active) {
+		return (0);
+	}
+
+	rc = vm_setup_pptdev_msi(ctx, sc->pptfd, addr, data, numvec);
+	if (rc == 0)
+		sc->psc_msi_host_active = (numvec > 0);
+
+	return (rc);
+}
 static int
 cfginitbar(struct vmctx *ctx __unused, struct passthru_softc *sc)
 {
@@ -716,6 +735,85 @@ passthru_legacy_config(nvlist_t *nvl, const char *opt)
 	return (0);
 }
 
+static uint16_t
+passthru_rom_get_u16(const uint8_t *p)
+{
+	return ((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+}
+
+/*
+ * Some dumped option ROMs claim that another image follows even though the
+ * file ends after the current image. Clamp those single-image dumps to LAST in
+ * the in-memory guest copy so firmware does not walk off the end of the ROM.
+ */
+static void
+passthru_rom_fixup_chain(uint8_t *rom, size_t rom_file_size)
+{
+	size_t off = 0;
+	int image = 0;
+
+	while (off + 0x1a <= rom_file_size && image < 16) {
+		uint16_t pcir;
+		size_t hdr_off;
+		uint16_t blocks;
+		size_t next_off;
+		uint8_t indicator;
+		uint8_t *hdr;
+
+		if (rom[off] != 0x55 || rom[off + 1] != 0xaa) {
+			return;
+		}
+
+		pcir = passthru_rom_get_u16(&rom[off + 0x18]);
+		hdr_off = off + pcir;
+		if (pcir < 0x18 || hdr_off + 0x16 > rom_file_size) {
+			return;
+		}
+
+		hdr = &rom[hdr_off];
+		if (memcmp(hdr, "PCIR", 4) != 0) {
+			return;
+		}
+
+		blocks = passthru_rom_get_u16(&hdr[0x10]);
+		if (blocks == 0) {
+			return;
+		}
+
+		indicator = hdr[0x15];
+		next_off = off + (size_t)blocks * 512;
+		if ((indicator & 0x80) != 0) {
+			return;
+		}
+
+		if (next_off + 2 > rom_file_size ||
+		    rom[next_off] != 0x55 || rom[next_off + 1] != 0xaa) {
+			uint8_t sum = 0;
+			size_t i;
+
+			hdr[0x15] = indicator | 0x80;
+
+			/*
+			 * Keep the image checksum valid after forcing LAST so
+			 * ROM consumers do not reject the repaired image.
+			 */
+			if (next_off <= rom_file_size && next_off > off) {
+				for (i = off; i < next_off; i++) {
+					sum = (uint8_t)(sum + rom[i]);
+				}
+				if (sum != 0) {
+					rom[next_off - 1] =
+					    (uint8_t)(rom[next_off - 1] - sum);
+				}
+			}
+			return;
+		}
+
+		off = next_off;
+		image++;
+	}
+}
+
 static int
 passthru_init_rom(struct vmctx *const ctx __unused,
     struct passthru_softc *const sc, const char *const romfile)
@@ -756,6 +854,7 @@ passthru_init_rom(struct vmctx *const ctx __unused,
 		return (error);
 	}
 	memcpy(rom_addr, rom_data, rom_size);
+	passthru_rom_fixup_chain(rom_addr, rom_size);
 
 	sc->psc_bar[PCI_ROM_IDX].type = PCIBAR_ROM;
 	sc->psc_bar[PCI_ROM_IDX].addr = (uint64_t)rom_addr;
@@ -827,7 +926,6 @@ passthru_init(struct pci_devinst *pi, nvlist_t *nvl)
 	    get_config_value_node(nvl, "rom"))) != 0) {
 		goto done;
 	}
-
 done:
 	if (error) {
 		free(sc);
@@ -934,7 +1032,7 @@ passthru_cfgwrite_default(struct passthru_softc *sc, struct pci_devinst *pi,
 	if (msicap_access(sc, coff)) {
 		pci_emul_capwrite(pi, coff, bytes, val, sc->psc_msi.capoff,
 		    PCIY_MSI);
-		error = vm_setup_pptdev_msi(ctx, sc->pptfd,
+		error = passthru_vm_setup_pptdev_msi(sc, ctx,
 		    pi->pi_msi.addr, pi->pi_msi.msg_data, pi->pi_msi.maxmsgnum);
 		if (error != 0)
 			err(1, "vm_setup_pptdev_msi");
@@ -947,8 +1045,7 @@ passthru_cfgwrite_default(struct passthru_softc *sc, struct pci_devinst *pi,
 		if (pi->pi_msix.enabled) {
 			msix_table_entries = pi->pi_msix.table_count;
 			for (i = 0; i < msix_table_entries; i++) {
-				error = vm_setup_pptdev_msix(ctx,
-				    sc->pptfd, i,
+				error = vm_setup_pptdev_msix(ctx, sc->pptfd, i,
 				    pi->pi_msix.table[i].addr,
 				    pi->pi_msix.table[i].msg_data,
 				    pi->pi_msix.table[i].vector_control);
@@ -969,16 +1066,25 @@ passthru_cfgwrite_default(struct passthru_softc *sc, struct pci_devinst *pi,
 	 * is passed through.
 	 */
 	if (coff == PCIR_COMMAND) {
+		uint16_t reqval;
+		uint16_t newval;
+
 		if (bytes <= 2)
 			return (PE_CFGRW_DEFAULT);
+
+		reqval = val & 0xffff;
+		newval = reqval;
 
 		/* Update the physical status register. */
 		passthru_write_config(sc, PCIR_STATUS, 2, val >> 16);
 
 		/* Update the virtual command register. */
 		cmd_old = pci_get_cfgdata16(pi, PCIR_COMMAND);
-		pci_set_cfgdata16(pi, PCIR_COMMAND, val & 0xffff);
+		pci_set_cfgdata16(pi, PCIR_COMMAND, newval);
 		pci_emul_cmd_changed(pi, cmd_old);
+
+		passthru_write_config(sc, PCIR_COMMAND, 2, newval);
+
 		return (PE_CFGRW_DROP);
 	}
 

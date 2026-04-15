@@ -237,6 +237,8 @@ iommu_create_mapping(void *domain, vm_paddr_t gpa, vm_paddr_t hpa, size_t len)
 		uint64_t mapped;
 
 		mapped = ops->create_mapping(domain, gpa, hpa, remaining);
+		if (mapped == 0)
+			break;
 		gpa += mapped;
 		hpa += mapped;
 		remaining -= mapped;
@@ -254,6 +256,8 @@ iommu_remove_mapping(void *domain, vm_paddr_t gpa, size_t len)
 		uint64_t unmapped;
 
 		unmapped = ops->remove_mapping(domain, gpa, remaining);
+		if (unmapped == 0)
+			break;
 		gpa += unmapped;
 		remaining -= unmapped;
 	}

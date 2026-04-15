@@ -109,12 +109,22 @@ struct pptbar {
 	uint_t ddireg;
 };
 
+struct pptbar_access {
+	ddi_acc_handle_t	pba_handle;
+	caddr_t			pba_ptr;
+	void			*pba_addr;
+	boolean_t		pba_mapped;
+};
+
 struct pptdev {
 	dev_info_t		*pptd_dip;
 	list_node_t		pptd_node;
 	ddi_acc_handle_t	pptd_cfg;
 	struct pptbar		pptd_bars[PCI_BASE_NUM];
 	struct vm		*vm;
+	uint16_t		pptd_host_cmd_base;
+	uint16_t		pptd_host_cmd_idle;
+	uint8_t			pptd_host_cmd_valid;
 	struct pptseg mmio[MAX_MMIOSEGS];
 	struct {
 		int	num_msgs;		/* guest state */
@@ -160,6 +170,61 @@ ppt_open(dev_t *devp, int flag, int otyp, cred_t *cr)
 		(b) >= PCI_CONF_BASE0 &&	\
 		(b) <= PCI_CONF_BASE5 &&	\
 		((b) & (PCI_BAR_SZ_32-1)) == 0)
+
+static int
+ppt_bar_access_setup(struct pptdev *ppt, uint_t rnum, off_t off, uint_t width,
+    struct pptbar_access *acc)
+{
+	struct pptbar *pbar;
+	off_t len;
+	int rc;
+
+	if (rnum >= PCI_BASE_NUM) {
+		return (EINVAL);
+	}
+	if (width != 1 && width != 2 && width != 4) {
+		return (EINVAL);
+	}
+
+	pbar = &ppt->pptd_bars[rnum];
+	if ((uint64_t)off + (uint64_t)width > pbar->size) {
+		return (EINVAL);
+	}
+
+	bzero(acc, sizeof (*acc));
+
+	if (pbar->type == PCI_ADDR_IO && pbar->io_handle != NULL) {
+		acc->pba_handle = pbar->io_handle;
+		acc->pba_addr = pbar->io_ptr + off;
+		return (0);
+	}
+
+	if (pbar->type != PCI_ADDR_MEM32 && pbar->type != PCI_ADDR_MEM64) {
+		return (EINVAL);
+	}
+
+	len = (off_t)width;
+	rc = ddi_regs_map_setup(ppt->pptd_dip, pbar->ddireg, &acc->pba_ptr, off,
+	    len, &ppt_attr, &acc->pba_handle);
+	if (rc != DDI_SUCCESS || acc->pba_handle == NULL || acc->pba_ptr == NULL) {
+		if (acc->pba_handle != NULL) {
+			ddi_regs_map_free(&acc->pba_handle);
+		}
+		return (rc == DDI_SUCCESS ? EIO : rc);
+	}
+
+	acc->pba_addr = acc->pba_ptr;
+	acc->pba_mapped = B_TRUE;
+	return (0);
+}
+
+static void
+ppt_bar_access_cleanup(struct pptbar_access *acc)
+{
+	if (acc->pba_mapped && acc->pba_handle != NULL) {
+		ddi_regs_map_free(&acc->pba_handle);
+	}
+}
 
 static int
 ppt_ioctl(dev_t dev, int cmd, intptr_t arg, int md, cred_t *cr, int *rv)
@@ -248,37 +313,31 @@ ppt_ioctl(dev_t dev, int cmd, intptr_t arg, int md, cred_t *cr, int *rv)
 	}
 	case PPT_BAR_READ: {
 		struct ppt_bar_io bio;
-		struct pptbar *pbar;
-		void *addr;
-		uint_t rnum;
-		ddi_acc_handle_t cfg;
+		struct pptbar_access acc;
+		int rc;
 
 		if (ddi_copyin(data, &bio, sizeof (bio), md) != 0) {
 			return (EFAULT);
 		}
-		rnum = bio.pbi_bar;
-		if (rnum >= PCI_BASE_NUM) {
-			return (EINVAL);
+		rc = ppt_bar_access_setup(ppt, bio.pbi_bar, (off_t)bio.pbi_off,
+		    bio.pbi_width, &acc);
+		if (rc != 0) {
+			return (rc);
 		}
-		pbar = &ppt->pptd_bars[rnum];
-		if (pbar->type != PCI_ADDR_IO || pbar->io_handle == NULL) {
-			return (EINVAL);
-		}
-		addr = pbar->io_ptr + bio.pbi_off;
 
 		switch (bio.pbi_width) {
 		case 4:
-			bio.pbi_data = ddi_get32(pbar->io_handle, addr);
+			bio.pbi_data = ddi_get32(acc.pba_handle, acc.pba_addr);
 			break;
 		case 2:
-			bio.pbi_data = ddi_get16(pbar->io_handle, addr);
+			bio.pbi_data = ddi_get16(acc.pba_handle, acc.pba_addr);
 			break;
 		case 1:
-			bio.pbi_data = ddi_get8(pbar->io_handle, addr);
+			bio.pbi_data = ddi_get8(acc.pba_handle, acc.pba_addr);
 			break;
-		default:
-			return (EINVAL);
 		}
+
+		ppt_bar_access_cleanup(&acc);
 
 		if (ddi_copyout(&bio, data, sizeof (bio), md) != 0) {
 			return (EFAULT);
@@ -287,41 +346,34 @@ ppt_ioctl(dev_t dev, int cmd, intptr_t arg, int md, cred_t *cr, int *rv)
 	}
 	case PPT_BAR_WRITE: {
 		struct ppt_bar_io bio;
-		struct pptbar *pbar;
-		void *addr;
-		uint_t rnum;
-		ddi_acc_handle_t cfg;
+		struct pptbar_access acc;
+		int rc;
 
 		if (ddi_copyin(data, &bio, sizeof (bio), md) != 0) {
 			return (EFAULT);
 		}
-		rnum = bio.pbi_bar;
-		if (rnum >= PCI_BASE_NUM) {
-			return (EINVAL);
+		rc = ppt_bar_access_setup(ppt, bio.pbi_bar, (off_t)bio.pbi_off,
+		    bio.pbi_width, &acc);
+		if (rc != 0) {
+			return (rc);
 		}
-		pbar = &ppt->pptd_bars[rnum];
-		if (pbar->type != PCI_ADDR_IO || pbar->io_handle == NULL) {
-			return (EINVAL);
-		}
-		addr = pbar->io_ptr + bio.pbi_off;
 
 		switch (bio.pbi_width) {
 		case 4:
-			ddi_put32(pbar->io_handle, addr, bio.pbi_data);
+			ddi_put32(acc.pba_handle, acc.pba_addr, bio.pbi_data);
 			break;
 		case 2:
-			ddi_put16(pbar->io_handle, addr, bio.pbi_data);
+			ddi_put16(acc.pba_handle, acc.pba_addr, bio.pbi_data);
 			break;
 		case 1:
-			ddi_put8(pbar->io_handle, addr, bio.pbi_data);
+			ddi_put8(acc.pba_handle, acc.pba_addr, bio.pbi_data);
 			break;
-		default:
-			return (EINVAL);
 		}
+
+		ppt_bar_access_cleanup(&acc);
 
 		return (0);
 	}
-
 	default:
 		return (ENOTTY);
 	}
@@ -498,6 +550,73 @@ ppt_bar_verify_mmio(struct pptdev *ppt, uint64_t base, uint64_t size)
 }
 
 static boolean_t
+ppt_has_bar_decode(struct pptdev *ppt, uint_t type)
+{
+	for (uint_t i = 0; i < PCI_BASE_NUM; i++) {
+		if (ppt->pptd_bars[i].type == type && ppt->pptd_bars[i].size != 0) {
+			return (B_TRUE);
+		}
+	}
+
+	return (B_FALSE);
+}
+
+static uint16_t
+ppt_compose_bar_command(struct pptdev *ppt, uint16_t base_cmd,
+    boolean_t decode_enable, boolean_t bus_master_enable)
+{
+	uint16_t cmd = base_cmd & ~(PCI_COMM_MAE | PCI_COMM_IO | PCI_COMM_ME);
+
+	if (decode_enable) {
+		if (ppt_has_bar_decode(ppt, PCI_ADDR_MEM32) ||
+		    ppt_has_bar_decode(ppt, PCI_ADDR_MEM64)) {
+			cmd |= PCI_COMM_MAE;
+		}
+		if (ppt_has_bar_decode(ppt, PCI_ADDR_IO)) {
+			cmd |= PCI_COMM_IO;
+		}
+	}
+
+	if (bus_master_enable) {
+		cmd |= PCI_COMM_ME;
+	}
+
+	return (cmd);
+}
+
+static void
+ppt_cache_host_idle_command(struct pptdev *ppt, uint16_t base_cmd)
+{
+	ppt->pptd_host_cmd_base = base_cmd;
+	ppt->pptd_host_cmd_idle = ppt_compose_bar_command(ppt, base_cmd, B_TRUE,
+	    B_FALSE);
+	ppt->pptd_host_cmd_valid = 1;
+}
+
+static boolean_t
+ppt_apply_host_idle_command(struct pptdev *ppt, boolean_t recache_base)
+{
+	uint16_t base_cmd;
+
+	if (ppt == NULL || ppt->pptd_cfg == NULL) {
+		return (B_FALSE);
+	}
+
+	if (recache_base || ppt->pptd_host_cmd_valid == 0) {
+		base_cmd = pci_config_get16(ppt->pptd_cfg, PCI_CONF_COMM);
+		ppt_cache_host_idle_command(ppt, base_cmd);
+	} else {
+		base_cmd = ppt->pptd_host_cmd_base;
+		ppt->pptd_host_cmd_idle = ppt_compose_bar_command(ppt, base_cmd,
+		    B_TRUE, B_FALSE);
+	}
+
+	pci_config_put16(ppt->pptd_cfg, PCI_CONF_COMM, ppt->pptd_host_cmd_idle);
+	ppt->pptd_host_cmd_idle = pci_config_get16(ppt->pptd_cfg, PCI_CONF_COMM);
+	return (B_TRUE);
+}
+
+static boolean_t
 ppt_toggle_bar(struct pptdev *ppt, boolean_t enable)
 {
 	/*
@@ -511,26 +630,7 @@ ppt_toggle_bar(struct pptdev *ppt, boolean_t enable)
 	if (pci_config_setup(ppt->pptd_dip, &hdl) != DDI_SUCCESS)
 		return (B_FALSE);
 	cmd = pci_config_get16(hdl, PCI_CONF_COMM);
-
-	if (enable) {
-		cmd |= PCI_COMM_ME;
-
-		for (uint_t i = 0; i < PCI_BASE_NUM; i++) {
-			const struct pptbar *bar = &ppt->pptd_bars[i];
-
-			switch (bar->type) {
-			case PCI_ADDR_MEM32:
-			case PCI_ADDR_MEM64:
-				cmd |= PCI_COMM_MAE;
-				break;
-			case PCI_ADDR_IO:
-				cmd |= PCI_COMM_IO;
-				break;
-			}
-		}
-	} else {
-		cmd &= ~(PCI_COMM_ME | PCI_COMM_MAE | PCI_COMM_IO);
-	}
+	cmd = ppt_compose_bar_command(ppt, cmd, enable, enable);
 
 	pci_config_put16(hdl, PCI_CONF_COMM, cmd);
 	pci_config_teardown(&hdl);
@@ -568,7 +668,9 @@ ppt_ddi_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 		goto fail;
 	}
 
-	ppt_toggle_bar(ppt, B_FALSE);
+	if (!ppt_apply_host_idle_command(ppt, B_TRUE)) {
+		goto fail;
+	}
 
 	mutex_enter(&pptdev_mtx);
 	list_insert_tail(&pptdev_list, ppt);
