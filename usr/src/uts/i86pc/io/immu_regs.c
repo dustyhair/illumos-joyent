@@ -295,7 +295,7 @@ set_agaw(immu_t *immu)
 	}
 
 	/*
-	 * Find a supported AGAW <= magaw
+	 * Find the smallest supported AGAW that can accommodate magaw.
 	 *
 	 *	sagaw_mask    bitpos   AGAW (bits)  nlevels
 	 *	==============================================
@@ -305,24 +305,29 @@ set_agaw(immu_t *immu)
 	 *	0 1 0 0 0	3	57		5
 	 *	1 0 0 0 0	4	64(66)		6
 	 */
-	mask = 1;
 	nlevels = 0;
 	agaw = 0;
 	for (mask = 1, bitpos = 0; bitpos < 5;
 	    bitpos++, mask <<= 1) {
-		if (mask & sagaw_mask) {
-			nlevels = bitpos + 2;
-			agaw = 30 + (bitpos * 9);
-		}
+		int cand_agaw;
+
+		if ((mask & sagaw_mask) == 0)
+			continue;
+
+		cand_agaw = 30 + (bitpos * 9);
+		if (cand_agaw > 64)
+			cand_agaw = 64;
+
+		nlevels = bitpos + 2;
+		agaw = cand_agaw;
+		if (agaw >= magaw)
+			break;
 	}
 
-	/* calculated agaw can be > 64 */
-	agaw = (agaw > 64) ? 64 : agaw;
-
-	if (agaw < 30 || agaw > magaw) {
+	if (agaw < 30 || agaw < magaw) {
 		ddi_err(DER_WARN, NULL, "%s: Calculated AGAW (%d) "
-		    "is outside valid limits [30,%d] specified by Vt-d spec "
-		    "and magaw",  immu->immu_name, agaw, magaw);
+		    "does not satisfy required adjusted width (%d)",
+		    immu->immu_name, agaw, magaw);
 		return (DDI_FAILURE);
 	}
 

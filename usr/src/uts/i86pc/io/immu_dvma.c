@@ -2806,6 +2806,8 @@ immu_dvma_setup(list_t *listp)
 
 	immu = list_head(listp);
 	for (; immu; immu = list_next(listp, immu)) {
+		if (immu->immu_regs_setup == B_FALSE)
+			continue;
 		create_unity_domain(immu);
 		did_init(immu);
 		context_init(immu);
