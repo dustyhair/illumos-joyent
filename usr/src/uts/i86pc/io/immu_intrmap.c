@@ -95,9 +95,13 @@ static uint_t intrmap_irta_s = INTRMAP_MAX_IRTA_SIZE;
 static int intrmap_suppress_brdcst_eoi = 0;
 
 /*
- * whether verify the source id of interrupt request
+ * Verify the source ID of the interrupt request.
  */
 static int intrmap_enable_sid_verify = 1;
+
+/*
+ * Keep these host drivers off interrupt remapping on this platform.
+ */
 static char *immu_intrmap_exclude_drivers = "xhci,nvme,igb,ahci,e1000g";
 
 /* fault types for DVMA remapping */
