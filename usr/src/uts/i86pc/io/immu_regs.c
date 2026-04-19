@@ -825,6 +825,23 @@ immu_regs_intrmap_enable(immu_t *immu, uint64_t irta_reg)
 	immu->immu_intrmap_running = B_TRUE;
 }
 
+void
+immu_regs_intrmap_sync(immu_t *immu)
+{
+	uint32_t status;
+
+	if (immu_intrmap_enable == B_FALSE)
+		return;
+
+	mutex_enter(&(immu->immu_regs_lock));
+	put_reg64(immu, IMMU_REG_IRTAR, immu->immu_intrmap_irta_reg);
+	put_reg32(immu, IMMU_REG_GLOBAL_CMD,
+	    immu->immu_regs_cmdval | IMMU_GCMD_SIRTP);
+	wait_completion(immu, IMMU_REG_GLOBAL_STS,
+	    get_reg32, (status & IMMU_GSTS_IRTPS), status);
+	mutex_exit(&(immu->immu_regs_lock));
+}
+
 uint64_t
 immu_regs_get64(immu_t *immu, uint_t reg)
 {
