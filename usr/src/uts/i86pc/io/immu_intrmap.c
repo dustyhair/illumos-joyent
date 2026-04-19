@@ -102,7 +102,7 @@ static int intrmap_enable_sid_verify = 1;
 /*
  * Keep these host drivers off interrupt remapping on this platform.
  */
-static char *immu_intrmap_exclude_drivers = "xhci,nvme,igb,ahci,e1000g";
+static char *immu_intrmap_exclude_drivers = "";
 
 /* fault types for DVMA remapping */
 static char *immu_dvma_faults[] = {
