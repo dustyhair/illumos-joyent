@@ -200,6 +200,11 @@ bitset_find_free(bitset_t *b, uint_t post)
 	return (INTRMAP_IDX_FULL);	/* no free index */
 }
 
+/*
+ * Parse the optional denylist of drivers that should bypass interrupt
+ * remapping entirely.  This remains as a low-friction escape hatch when
+ * narrowing down platform-specific regressions.
+ */
 static boolean_t
 immu_intrmap_driver_excluded(const char *driver)
 {
@@ -235,6 +240,12 @@ immu_intrmap_driver_excluded(const char *driver)
 	return (B_FALSE);
 }
 
+/*
+ * Decide whether a given interrupt source should use the "global" update
+ * path.  Today that is just ppt: passed-through devices were the one place
+ * where per-entry IEC invalidation was unreliable, so they reload the IRTA
+ * instead.
+ */
 static boolean_t
 immu_intrmap_use_global_inv_driver(const char *driver)
 {
@@ -246,6 +257,11 @@ immu_intrmap_use_global_inv_driver(const char *driver)
 	return (driver != NULL && strcmp(driver, "ppt") == 0);
 }
 
+/*
+ * The allocation code records whether this interrupt source should use the
+ * ppt-specific global sync path, and the rest of the code consults that flag
+ * instead of re-deciding at each call site.
+ */
 static boolean_t
 immu_intrmap_use_global_inv_private(void *intrmap_private)
 {
@@ -255,6 +271,11 @@ immu_intrmap_use_global_inv_private(void *intrmap_private)
 	return (INTRMAP_PRIVATE(intrmap_private)->ir_global_inv);
 }
 
+/*
+ * Pick the wait descriptor that matches the invalidation style for this
+ * entry.  Ordinary host interrupts keep a private wait record per entry,
+ * while ppt shares the IOMMU-wide wait record used by IRTA reload.
+ */
 static immu_inv_wait_t *
 immu_intrmap_wait_for_private(void *intrmap_private)
 {
@@ -271,6 +292,11 @@ immu_intrmap_wait_for_private(void *intrmap_private)
 	return (&INTRMAP_PRIVATE(intrmap_private)->ir_inv_wait);
 }
 
+/*
+ * Invalidate a single interrupt-remap cache entry using the mechanism that
+ * matches this source.  Host interrupts use queued IEC invalidation; ppt
+ * uses IRTA reload to make the updated IRTE visible.
+ */
 static void
 immu_intrmap_inv_one_cache(immu_t *immu, void *intrmap_private, uint_t idx,
     immu_inv_wait_t *iwp)
@@ -287,6 +313,10 @@ immu_intrmap_inv_one_cache(immu_t *immu, void *intrmap_private, uint_t idx,
 	immu_qinv_intr_one_cache(immu, idx, iwp);
 }
 
+/*
+ * Multi-entry variant of immu_intrmap_inv_one_cache().  This keeps the
+ * caller logic simple while preserving the ppt-vs-host distinction above.
+ */
 static void
 immu_intrmap_inv_caches(immu_t *immu, void *intrmap_private, uint_t idx,
     uint_t count, immu_inv_wait_t *iwp)

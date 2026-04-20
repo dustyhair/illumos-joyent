@@ -149,6 +149,11 @@ static ddi_device_acc_attr_t ppt_attr = {
 	DDI_DEFAULT_ACC
 };
 
+/*
+ * ddi_intr_alloc() can hand back a single MSI/MSI-X handle that still
+ * advertises block semantics.  ppt only ever wants the single-vector enable
+ * path in that case, so normalize the handle once up front.
+ */
 static void
 ppt_intr_normalize_single(ddi_intr_handle_t h)
 {

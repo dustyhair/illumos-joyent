@@ -1332,6 +1332,12 @@ immu_unquiesce(void)
 	return (ret);
 }
 
+/*
+ * Initialize the bookkeeping for an invalidation wait.  Most users keep the
+ * completion word inside the structure itself, but the status pointer lets
+ * callers redirect that wait to DMA-consistent memory when hardware writes
+ * the completion back directly.
+ */
 void
 immu_init_inv_wait(immu_inv_wait_t *iwp, const char *name, boolean_t sync)
 {

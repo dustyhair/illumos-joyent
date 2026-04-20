@@ -618,7 +618,7 @@ typedef struct immu {
 	boolean_t		immu_intrmap_running;
 	intrmap_t		*immu_intrmap;
 	uint64_t		immu_intrmap_irta_reg;
-	immu_inv_wait_t		immu_intrmap_inv_wait;
+	immu_inv_wait_t		immu_intrmap_inv_wait; /* shared ppt/IRTA wait */
 
 	/* queued invalidation related */
 	kmutex_t		immu_qinv_lock;
