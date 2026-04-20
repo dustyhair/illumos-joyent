@@ -41,7 +41,7 @@ typedef struct intrmap_private {
 	immu_inv_wait_t	ir_inv_wait;
 	uint16_t	ir_idx;
 	uint32_t	ir_sid_svt_sq;
-	boolean_t	ir_global_inv;
+	boolean_t	ir_global_inv;	/* use IRTA sync instead of IEC invalidation */
 } intrmap_private_t;
 
 #define	INTRMAP_PRIVATE(intrmap) ((intrmap_private_t *)intrmap)
@@ -101,6 +101,8 @@ static int intrmap_enable_sid_verify = 1;
 
 /*
  * Keep these host drivers off interrupt remapping on this platform.
+ * This is left as a tunable string for future bisection, but the current
+ * working configuration does not exclude any drivers.
  */
 static char *immu_intrmap_exclude_drivers = "";
 
@@ -236,6 +238,11 @@ immu_intrmap_driver_excluded(const char *driver)
 static boolean_t
 immu_intrmap_use_global_inv_driver(const char *driver)
 {
+	/*
+	 * Passthrough devices are the one path where we want to avoid the
+	 * per-entry queued IEC invalidation and use the IRTA reload path
+	 * instead.
+	 */
 	return (driver != NULL && strcmp(driver, "ppt") == 0);
 }
 
@@ -260,6 +267,7 @@ immu_intrmap_wait_for_private(void *intrmap_private)
 	if (immu_intrmap_use_global_inv_private(intrmap_private))
 		return (&immu->immu_intrmap_inv_wait);
 
+	/* Ordinary host drivers keep a per-entry local wait descriptor. */
 	return (&INTRMAP_PRIVATE(intrmap_private)->ir_inv_wait);
 }
 
@@ -268,6 +276,10 @@ immu_intrmap_inv_one_cache(immu_t *immu, void *intrmap_private, uint_t idx,
     immu_inv_wait_t *iwp)
 {
 	if (immu_intrmap_use_global_inv_private(intrmap_private)) {
+		/*
+		 * For ppt we rely on IRTA reload instead of queued interrupt
+		 * entry-cache invalidation for each update.
+		 */
 		immu_regs_intrmap_sync(immu);
 		return;
 	}
@@ -914,6 +926,11 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data, uint16_t type,
 
 		vector = RDT_VECTOR(irdt->ir_lo);
 	} else {
+		/*
+		 * Program remapped MSI in the same physical/fixed form the host
+		 * interrupt code expects, then let the IRTE supply the actual
+		 * routing and validation.
+		 */
 		dm = MSI_ADDR_DM_PHYSICAL;
 		rh = MSI_ADDR_RH_FIXED;
 		tm = TRIGGER_MODE_EDGE;

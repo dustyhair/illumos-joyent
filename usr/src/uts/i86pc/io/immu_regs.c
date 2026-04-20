@@ -833,6 +833,11 @@ immu_regs_intrmap_sync(immu_t *immu)
 	if (immu_intrmap_enable == B_FALSE)
 		return;
 
+	/*
+	 * Reload the interrupt-remap table pointer to make updated IRTEs
+	 * visible.  This is used for passthrough devices in place of the
+	 * queued IEC invalidation path, which proved unreliable here.
+	 */
 	mutex_enter(&(immu->immu_regs_lock));
 	put_reg64(immu, IMMU_REG_IRTAR, immu->immu_intrmap_irta_reg);
 	put_reg32(immu, IMMU_REG_GLOBAL_CMD,

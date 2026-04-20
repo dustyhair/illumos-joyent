@@ -542,7 +542,7 @@ struct immu_flushops;
 
 typedef struct immu_inv_wait {
 	volatile uint32_t iwp_vstatus;
-	volatile uint32_t *iwp_statusp;
+	volatile uint32_t *iwp_statusp;	/* may point at DMA-consistent status */
 	uint64_t iwp_pstatus;
 	boolean_t iwp_sync;
 	const char *iwp_name;		/* ID for debugging/statistics */
