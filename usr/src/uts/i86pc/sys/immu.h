@@ -542,7 +542,7 @@ struct immu_flushops;
 
 typedef struct immu_inv_wait {
 	volatile uint32_t iwp_vstatus;
-	volatile uint32_t *iwp_statusp;
+	volatile uint32_t *iwp_statusp;	/* may point at DMA-consistent status */
 	uint64_t iwp_pstatus;
 	boolean_t iwp_sync;
 	const char *iwp_name;		/* ID for debugging/statistics */
@@ -618,7 +618,7 @@ typedef struct immu {
 	boolean_t		immu_intrmap_running;
 	intrmap_t		*immu_intrmap;
 	uint64_t		immu_intrmap_irta_reg;
-	immu_inv_wait_t		immu_intrmap_inv_wait;
+	immu_inv_wait_t		immu_intrmap_inv_wait; /* shared ppt/IRTA wait */
 
 	/* queued invalidation related */
 	kmutex_t		immu_qinv_lock;

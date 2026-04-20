@@ -592,6 +592,11 @@ immu_qinv_startup(immu_t *immu)
 	qinv = (qinv_t *)immu->immu_qinv;
 	qinv_reg_value = qinv->qinv_table.qinv_mem_paddr | qinv_iqa_qs;
 	immu_regs_qinv_enable(immu, qinv_reg_value);
+	/*
+	 * Interrupt-remap wait descriptors are written back by hardware, so
+	 * keep their status in the DMA-consistent sync area instead of normal
+	 * kernel memory.
+	 */
 	immu->immu_intrmap_inv_wait.iwp_statusp =
 	    (volatile uint32_t *)qinv->qinv_sync.qinv_mem_vaddr;
 	immu->immu_intrmap_inv_wait.iwp_pstatus =

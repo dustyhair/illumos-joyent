@@ -41,7 +41,7 @@ typedef struct intrmap_private {
 	immu_inv_wait_t	ir_inv_wait;
 	uint16_t	ir_idx;
 	uint32_t	ir_sid_svt_sq;
-	boolean_t	ir_global_inv;
+	boolean_t	ir_global_inv;	/* use IRTA sync instead of IEC invalidation */
 } intrmap_private_t;
 
 #define	INTRMAP_PRIVATE(intrmap) ((intrmap_private_t *)intrmap)
@@ -95,9 +95,15 @@ static uint_t intrmap_irta_s = INTRMAP_MAX_IRTA_SIZE;
 static int intrmap_suppress_brdcst_eoi = 0;
 
 /*
- * whether verify the source id of interrupt request
+ * Verify the source ID of the interrupt request.
  */
 static int intrmap_enable_sid_verify = 1;
+
+/*
+ * Keep these host drivers off interrupt remapping on this platform.
+ * This is left as a tunable string for future bisection, but the current
+ * working configuration does not exclude any drivers.
+ */
 static char *immu_intrmap_exclude_drivers = "";
 
 /* fault types for DVMA remapping */
@@ -194,6 +200,11 @@ bitset_find_free(bitset_t *b, uint_t post)
 	return (INTRMAP_IDX_FULL);	/* no free index */
 }
 
+/*
+ * Parse the optional denylist of drivers that should bypass interrupt
+ * remapping entirely.  This remains as a low-friction escape hatch when
+ * narrowing down platform-specific regressions.
+ */
 static boolean_t
 immu_intrmap_driver_excluded(const char *driver)
 {
@@ -229,12 +240,28 @@ immu_intrmap_driver_excluded(const char *driver)
 	return (B_FALSE);
 }
 
+/*
+ * Decide whether a given interrupt source should use the "global" update
+ * path.  Today that is just ppt: passed-through devices were the one place
+ * where per-entry IEC invalidation was unreliable, so they reload the IRTA
+ * instead.
+ */
 static boolean_t
 immu_intrmap_use_global_inv_driver(const char *driver)
 {
+	/*
+	 * Passthrough devices are the one path where we want to avoid the
+	 * per-entry queued IEC invalidation and use the IRTA reload path
+	 * instead.
+	 */
 	return (driver != NULL && strcmp(driver, "ppt") == 0);
 }
 
+/*
+ * The allocation code records whether this interrupt source should use the
+ * ppt-specific global sync path, and the rest of the code consults that flag
+ * instead of re-deciding at each call site.
+ */
 static boolean_t
 immu_intrmap_use_global_inv_private(void *intrmap_private)
 {
@@ -244,6 +271,11 @@ immu_intrmap_use_global_inv_private(void *intrmap_private)
 	return (INTRMAP_PRIVATE(intrmap_private)->ir_global_inv);
 }
 
+/*
+ * Pick the wait descriptor that matches the invalidation style for this
+ * entry.  Ordinary host interrupts keep a private wait record per entry,
+ * while ppt shares the IOMMU-wide wait record used by IRTA reload.
+ */
 static immu_inv_wait_t *
 immu_intrmap_wait_for_private(void *intrmap_private)
 {
@@ -256,14 +288,24 @@ immu_intrmap_wait_for_private(void *intrmap_private)
 	if (immu_intrmap_use_global_inv_private(intrmap_private))
 		return (&immu->immu_intrmap_inv_wait);
 
+	/* Ordinary host drivers keep a per-entry local wait descriptor. */
 	return (&INTRMAP_PRIVATE(intrmap_private)->ir_inv_wait);
 }
 
+/*
+ * Invalidate a single interrupt-remap cache entry using the mechanism that
+ * matches this source.  Host interrupts use queued IEC invalidation; ppt
+ * uses IRTA reload to make the updated IRTE visible.
+ */
 static void
 immu_intrmap_inv_one_cache(immu_t *immu, void *intrmap_private, uint_t idx,
     immu_inv_wait_t *iwp)
 {
 	if (immu_intrmap_use_global_inv_private(intrmap_private)) {
+		/*
+		 * For ppt we rely on IRTA reload instead of queued interrupt
+		 * entry-cache invalidation for each update.
+		 */
 		immu_regs_intrmap_sync(immu);
 		return;
 	}
@@ -271,6 +313,10 @@ immu_intrmap_inv_one_cache(immu_t *immu, void *intrmap_private, uint_t idx,
 	immu_qinv_intr_one_cache(immu, idx, iwp);
 }
 
+/*
+ * Multi-entry variant of immu_intrmap_inv_one_cache().  This keeps the
+ * caller logic simple while preserving the ppt-vs-host distinction above.
+ */
 static void
 immu_intrmap_inv_caches(immu_t *immu, void *intrmap_private, uint_t idx,
     uint_t count, immu_inv_wait_t *iwp)
@@ -910,6 +956,11 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data, uint16_t type,
 
 		vector = RDT_VECTOR(irdt->ir_lo);
 	} else {
+		/*
+		 * Program remapped MSI in the same physical/fixed form the host
+		 * interrupt code expects, then let the IRTE supply the actual
+		 * routing and validation.
+		 */
 		dm = MSI_ADDR_DM_PHYSICAL;
 		rh = MSI_ADDR_RH_FIXED;
 		tm = TRIGGER_MODE_EDGE;
