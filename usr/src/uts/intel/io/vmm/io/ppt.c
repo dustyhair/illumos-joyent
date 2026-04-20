@@ -62,6 +62,7 @@
 
 #include <sys/conf.h>
 #include <sys/ddi.h>
+#include <sys/ddi_intr_impl.h>
 #include <sys/stat.h>
 #include <sys/sunddi.h>
 #include <sys/pci.h>
@@ -147,6 +148,18 @@ static ddi_device_acc_attr_t ppt_attr = {
 	DDI_STORECACHING_OK_ACC,
 	DDI_DEFAULT_ACC
 };
+
+static void
+ppt_intr_normalize_single(ddi_intr_handle_t h)
+{
+	ddi_intr_handle_impl_t *hdlp = (ddi_intr_handle_impl_t *)h;
+
+	if (hdlp == NULL)
+		return;
+
+	if (DDI_INTR_IS_MSI_OR_MSIX(hdlp->ih_type))
+		hdlp->ih_cap &= ~DDI_INTR_FLAG_BLOCK;
+}
 
 static int
 ppt_open(dev_t *devp, int flag, int otyp, cred_t *cr)
@@ -949,7 +962,8 @@ ppt_teardown_msi(struct pptdev *ppt)
 		int intr_cap;
 
 		(void) ddi_intr_get_cap(ppt->msi.inth[i], &intr_cap);
-		if (intr_cap & DDI_INTR_FLAG_BLOCK)
+		if ((intr_cap & DDI_INTR_FLAG_BLOCK) &&
+		    ppt->msi.num_msgs > 1)
 			ddi_intr_block_disable(&ppt->msi.inth[i], 1);
 		else
 			ddi_intr_disable(ppt->msi.inth[i]);
@@ -975,7 +989,8 @@ ppt_teardown_msix_intr(struct pptdev *ppt, int idx)
 		int intr_cap;
 
 		(void) ddi_intr_get_cap(ppt->msix.inth[idx], &intr_cap);
-		if (intr_cap & DDI_INTR_FLAG_BLOCK)
+		if ((intr_cap & DDI_INTR_FLAG_BLOCK) &&
+		    ppt->msix.num_msgs > 1)
 			ddi_intr_block_disable(&ppt->msix.inth[idx], 1);
 		else
 			ddi_intr_disable(ppt->msix.inth[idx]);
@@ -1295,6 +1310,7 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 	int i, msi_count, intr_type;
 	struct pptdev *ppt;
 	int err = 0;
+	boolean_t same_request = B_TRUE;
 
 	if (numvec < 0 || numvec > MAX_MSIMSGS)
 		return (EINVAL);
@@ -1312,13 +1328,29 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 		goto done;
 	}
 
+	/*
+	 * Avoid tearing down and reallocating host MSI state when the guest is
+	 * reissuing the same single-vector request. Under interrupt remapping,
+	 * that churn has been the most suspicious path at the first live window.
+	 */
+	if (numvec != 0 && !ppt->msi.is_fixed && ppt->msi.num_msgs == numvec &&
+	    ppt->msi.inth != NULL) {
+		for (i = 0; i < numvec; i++) {
+			if (ppt->msi.arg[i].addr != addr ||
+			    ppt->msi.arg[i].msg_data != msg + i) {
+				same_request = B_FALSE;
+				break;
+			}
+		}
+		if (same_request)
+			goto done;
+	}
+
 	/* Free any allocated resources */
 	ppt_teardown_msi(ppt);
 
-	if (numvec == 0) {
-		/* nothing more to do */
+	if (numvec == 0)
 		goto done;
-	}
 
 	if (ddi_intr_get_navail(ppt->pptd_dip, DDI_INTR_TYPE_MSI,
 	    &msi_count) != DDI_SUCCESS) {
@@ -1372,8 +1404,11 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 		    &ppt->msi.arg[i], NULL) != DDI_SUCCESS)
 			break;
 
+		if (numvec == 1)
+			ppt_intr_normalize_single(ppt->msi.inth[i]);
+
 		(void) ddi_intr_get_cap(ppt->msi.inth[i], &intr_cap);
-		if (intr_cap & DDI_INTR_FLAG_BLOCK)
+		if ((intr_cap & DDI_INTR_FLAG_BLOCK) && numvec > 1)
 			res = ddi_intr_block_enable(&ppt->msi.inth[i], 1);
 		else
 			res = ddi_intr_enable(ppt->msi.inth[i]);
@@ -1475,8 +1510,12 @@ ppt_setup_msix(struct vm *vm, int vcpu, int pptfd, int idx, uint64_t addr,
 			goto done;
 		}
 
+		if (ppt->msix.num_msgs == 1)
+			ppt_intr_normalize_single(ppt->msix.inth[idx]);
+
 		(void) ddi_intr_get_cap(ppt->msix.inth[idx], &intr_cap);
-		if (intr_cap & DDI_INTR_FLAG_BLOCK)
+		if ((intr_cap & DDI_INTR_FLAG_BLOCK) &&
+		    ppt->msix.num_msgs > 1)
 			res = ddi_intr_block_enable(&ppt->msix.inth[idx], 1);
 		else
 			res = ddi_intr_enable(ppt->msix.inth[idx]);

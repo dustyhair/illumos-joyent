@@ -1339,8 +1339,9 @@ immu_init_inv_wait(immu_inv_wait_t *iwp, const char *name, boolean_t sync)
 	uint64_t paddr;
 
 	iwp->iwp_sync = sync;
+	iwp->iwp_statusp = &iwp->iwp_vstatus;
 
-	vaddr = (caddr_t)&iwp->iwp_vstatus;
+	vaddr = (caddr_t)iwp->iwp_statusp;
 	paddr = pfn_to_pa(hat_getpfnum(kas.a_hat, vaddr));
 	paddr += ((uintptr_t)vaddr) & MMU_PAGEOFFSET;
 

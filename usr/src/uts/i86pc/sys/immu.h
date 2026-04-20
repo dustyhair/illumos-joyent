@@ -542,6 +542,7 @@ struct immu_flushops;
 
 typedef struct immu_inv_wait {
 	volatile uint32_t iwp_vstatus;
+	volatile uint32_t *iwp_statusp;
 	uint64_t iwp_pstatus;
 	boolean_t iwp_sync;
 	const char *iwp_name;		/* ID for debugging/statistics */
@@ -912,6 +913,7 @@ void immu_regs_qinv_enable(immu_t *immu, uint64_t qinv_reg_value);
 void immu_regs_intr_enable(immu_t *immu, uint32_t msi_addr, uint32_t msi_data,
     uint32_t uaddr);
 void immu_regs_intrmap_enable(immu_t *immu, uint64_t irta_reg);
+void immu_regs_intrmap_sync(immu_t *immu);
 uint64_t immu_regs_get64(immu_t *immu, uint_t reg);
 void immu_regs_put64(immu_t *immu, uint_t reg, uint64_t val);
 uint32_t immu_regs_get32(immu_t *immu, uint_t reg);
