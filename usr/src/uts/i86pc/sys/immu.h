@@ -542,7 +542,6 @@ struct immu_flushops;
 
 typedef struct immu_inv_wait {
 	volatile uint32_t iwp_vstatus;
-	volatile uint32_t *iwp_statusp;	/* may point at DMA-consistent status */
 	uint64_t iwp_pstatus;
 	boolean_t iwp_sync;
 	const char *iwp_name;		/* ID for debugging/statistics */
@@ -618,7 +617,7 @@ typedef struct immu {
 	boolean_t		immu_intrmap_running;
 	intrmap_t		*immu_intrmap;
 	uint64_t		immu_intrmap_irta_reg;
-	immu_inv_wait_t		immu_intrmap_inv_wait; /* shared ppt/IRTA wait */
+	immu_inv_wait_t		immu_intrmap_inv_wait;
 
 	/* queued invalidation related */
 	kmutex_t		immu_qinv_lock;
@@ -913,7 +912,6 @@ void immu_regs_qinv_enable(immu_t *immu, uint64_t qinv_reg_value);
 void immu_regs_intr_enable(immu_t *immu, uint32_t msi_addr, uint32_t msi_data,
     uint32_t uaddr);
 void immu_regs_intrmap_enable(immu_t *immu, uint64_t irta_reg);
-void immu_regs_intrmap_sync(immu_t *immu);
 uint64_t immu_regs_get64(immu_t *immu, uint_t reg);
 void immu_regs_put64(immu_t *immu, uint_t reg, uint64_t val);
 uint32_t immu_regs_get32(immu_t *immu, uint_t reg);
@@ -947,6 +945,10 @@ void immu_intrmap_setup(list_t *immu_list);
 void immu_intrmap_startup(immu_t *immu);
 void immu_intrmap_shutdown(immu_t *immu);
 void immu_intrmap_destroy(list_t *immu_list);
+void immu_intrmap_drhd_transition_set(int unit, boolean_t enter);
+boolean_t immu_intrmap_drhd_transition_active(int unit);
+void immu_intrmap_debug_dump_recent_irte(const char *reason);
+void immu_qinv_debug_dump_recent_intr(const char *reason);
 
 /* registers interrupt handler for IOMMU unit */
 void immu_intr_register(immu_t *immu);
