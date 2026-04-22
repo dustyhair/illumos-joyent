@@ -843,22 +843,31 @@ get_sid(dev_info_t *dip, uint16_t type, uchar_t ioapic_index)
 	} else {
 		/* MSI/MSI-X interrupt */
 		ASSERT(dip);
-		pdip = intrmap_top_pcibridge(dip);
-		ASSERT(pdip);
-		immu_devi = DEVI(pdip)->devi_iommu;
+		immu_devi = DEVI(dip)->devi_iommu;
 		ASSERT(immu_devi);
-		if (immu_devi->imd_pcib_type == IMMU_PCIB_PCIE_PCI) {
-			/* device behind pcie to pci bridge */
-			sid = (immu_devi->imd_bus << 8) | immu_devi->imd_sec;
-			svt = SVT_BUS_VERIFY;
-			sq = SQ_VERIFY_ALL;
-		} else {
-			/* pcie device or device behind pci to pci bridge */
-			sid = (immu_devi->imd_bus << 8) |
-			    immu_devi->imd_devfunc;
-			svt = SVT_ALL_VERIFY;
-			sq = SQ_VERIFY_ALL;
+		pdip = intrmap_top_pcibridge(dip);
+		if (pdip != NULL) {
+			immu_devi_t *bridge_devi = DEVI(pdip)->devi_iommu;
+
+			ASSERT(bridge_devi);
+			if (bridge_devi->imd_pcib_type == IMMU_PCIB_PCIE_PCI) {
+				/* device behind pcie to pci bridge */
+				sid = (bridge_devi->imd_bus << 8) |
+				    bridge_devi->imd_sec;
+				svt = SVT_BUS_VERIFY;
+				sq = SQ_VERIFY_ALL;
+				return (sid | (svt << 18) | (sq << 16));
+			}
 		}
+
+		/*
+		 * For a native PCIe endpoint, verify the requester ID of the
+		 * endpoint itself.  Using the top bridge here yields the root
+		 * port BDF and causes false interrupt-remap verification faults.
+		 */
+		sid = (immu_devi->imd_bus << 8) | immu_devi->imd_devfunc;
+		svt = SVT_ALL_VERIFY;
+		sq = SQ_VERIFY_ALL;
 	}
 
 	return (sid | (svt << 18) | (sq << 16));
