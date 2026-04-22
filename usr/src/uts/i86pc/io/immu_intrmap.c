@@ -95,9 +95,16 @@ static uint_t intrmap_irta_s = INTRMAP_MAX_IRTA_SIZE;
 static int intrmap_suppress_brdcst_eoi = 0;
 
 /*
- * whether verify the source id of interrupt request
+ * Verify the source ID of interrupt requests.  This was part of the earlier
+ * APIC-stable passthru line and keeps the IRTE requester-ID check honest for
+ * native PCIe endpoints.
  */
-static int intrmap_enable_sid_verify = 0;
+static int intrmap_enable_sid_verify = 1;
+/*
+ * Keep fragile host drivers on the legacy interrupt path until the IR-on
+ * passthru regression is narrowed down.
+ */
+static char *immu_intrmap_exclude_drivers = "xhci,nvme,igb,ahci,e1000g";
 static int immu_intrmap_two_phase_irte_update = 1;
 static uint32_t immu_intrmap_drhd_transition_mask = 0;
 static uint32_t immu_intrmap_drhd_transition_warn_mask = 0;
@@ -411,6 +418,41 @@ bitset_find_free(bitset_t *b, uint_t post)
 	}
 
 	return (INTRMAP_IDX_FULL);	/* no free index */
+}
+
+static boolean_t
+immu_intrmap_driver_excluded(const char *driver)
+{
+	const char *p, *end;
+	size_t len;
+
+	if (driver == NULL || *driver == '\0' ||
+	    immu_intrmap_exclude_drivers == NULL ||
+	    *immu_intrmap_exclude_drivers == '\0') {
+		return (B_FALSE);
+	}
+
+	for (p = immu_intrmap_exclude_drivers; *p != '\0'; p = end) {
+		while (*p == ' ' || *p == '\t' || *p == ',')
+			p++;
+		if (*p == '\0')
+			break;
+
+		for (end = p; *end != '\0' && *end != ','; end++)
+			continue;
+
+		len = end - p;
+		while (len > 0 && (p[len - 1] == ' ' || p[len - 1] == '\t'))
+			len--;
+
+		if (len == strlen(driver) && strncmp(p, driver, len) == 0)
+			return (B_TRUE);
+
+		if (*end == '\0')
+			break;
+	}
+
+	return (B_FALSE);
 }
 
 static int
@@ -1021,9 +1063,16 @@ immu_intrmap_alloc(void **intrmap_private_tbl, dev_info_t *dip,
 	uint32_t	idx, i;
 	uint32_t	sid_svt_sq;
 	intrmap_private_t *intrmap_private;
+	const char	*driver;
 
 	if (intrmap_private_tbl[0] == INTRMAP_DISABLE ||
 	    intrmap_private_tbl[0] != NULL) {
+		return;
+	}
+
+	driver = (dip != NULL) ? ddi_driver_name(dip) : NULL;
+	if (immu_intrmap_driver_excluded(driver)) {
+		intrmap_private_tbl[0] = INTRMAP_DISABLE;
 		return;
 	}
 

@@ -1065,14 +1065,6 @@ immu_init(void)
 	read_boot_options();
 
 	/*
-	 * Debug A/B gate for the TU102 passthru APIC ESR=0x40 failure path:
-	 * keep VT-d enabled, but force interrupt remapping off regardless of
-	 * boot or rootnex.conf state so we can prove whether the remaining host
-	 * wedge is specific to the IR path.
-	 */
-	immu_intrmap_enable = B_FALSE;
-
-	/*
 	 * Check the IOMMU enable boot-option first.
 	 * This is so that we can skip parsing the ACPI table
 	 * if necessary because that may cause problems in
