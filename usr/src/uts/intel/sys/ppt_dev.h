@@ -28,6 +28,7 @@ extern "C" {
 #define	PPT_BAR_QUERY		(PPT_IOC | 0x03)
 #define	PPT_BAR_READ		(PPT_IOC | 0x04)
 #define	PPT_BAR_WRITE		(PPT_IOC | 0x05)
+#define	PPT_RESET_DEVICE	(PPT_IOC | 0x06)
 
 #define	PPT_MAXNAMELEN	32
 
@@ -48,6 +49,30 @@ struct ppt_bar_query {
 	uint32_t pbq_type;
 	uint64_t pbq_base;
 	uint64_t pbq_size;
+};
+
+typedef enum {
+	PPT_RESET_FLR = 0,
+	PPT_RESET_PM,
+	PPT_RESET_BUS,
+	PPT_RESET_VENDOR,
+	PPT_RESET_NONE
+} ppt_reset_type_t;
+
+typedef enum {
+	PPT_RESET_F_NONE = 0x0,
+	PPT_RESET_F_ALLOW_FALLBACK = 0x1,
+	PPT_RESET_F_FORCE = 0x2,
+	PPT_RESET_F_VM_STOP = 0x4,
+	PPT_RESET_F_GUEST_TRIGGER = 0x8,
+	PPT_RESET_F_ASSIGN_STARTUP = 0x10
+} ppt_reset_flags_t;
+
+struct ppt_reset_req {
+	uint32_t prr_method;
+	uint32_t prr_flags;
+	uint32_t prr_result_method;
+	int32_t prr_result_error;
 };
 
 #ifdef __cplusplus

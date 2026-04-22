@@ -140,6 +140,33 @@ static void		*ppt_state;
 static kmutex_t		pptdev_mtx;
 static list_t		pptdev_list;
 
+#ifndef PCI_PMCSR_STATE_D0
+#define	PCI_PMCSR_STATE_D0	0x0000
+#endif
+
+#ifndef PCI_PMCSR_STATE_D3HOT
+#define	PCI_PMCSR_STATE_D3HOT	0x0003
+#endif
+
+#ifndef PCI_PMCSR_NO_SOFT_RESET
+#define	PCI_PMCSR_NO_SOFT_RESET	0x0008
+#endif
+
+#ifndef PCIE_LINKSTS_NEG_WIDTH_MASK
+#define	PCIE_LINKSTS_NEG_WIDTH_MASK	0x03f0
+#define	PCIE_LINKSTS_NEG_WIDTH_SHIFT	4
+#endif
+
+#define	LINK_POLL_INTERVAL_US	10000
+#define	LINK_POLL_TIMEOUT_US	1000000
+
+static boolean_t ppt_wait_link_active(dev_info_t *);
+static boolean_t ppt_pm_reset(dev_info_t *);
+static void ppt_bus_reset(dev_info_t *);
+static void ppt_reset_pci_power_state(dev_info_t *);
+static int ppt_reset_device_method_locked(struct pptdev *, ppt_reset_flags_t,
+    ppt_reset_type_t, ppt_reset_type_t *);
+
 #define	PPT_MINOR_NAME	"ppt"
 
 static ddi_device_acc_attr_t ppt_attr = {
@@ -343,6 +370,53 @@ ppt_ioctl(dev_t dev, int cmd, intptr_t arg, int md, cred_t *cr, int *rv)
 		}
 
 		return (0);
+	}
+	case PPT_RESET_DEVICE: {
+		struct ppt_reset_req req;
+		ppt_reset_type_t want_method;
+		ppt_reset_type_t actual_method = PPT_RESET_NONE;
+		ppt_reset_flags_t flags;
+		int err;
+
+		if (ddi_copyin(data, &req, sizeof (req), md) != 0) {
+			return (EFAULT);
+		}
+
+		want_method = (ppt_reset_type_t)req.prr_method;
+		flags = (ppt_reset_flags_t)req.prr_flags;
+		req.prr_result_method = PPT_RESET_NONE;
+		req.prr_result_error = 0;
+
+		switch (want_method) {
+		case PPT_RESET_NONE:
+		case PPT_RESET_FLR:
+		case PPT_RESET_PM:
+		case PPT_RESET_BUS:
+			break;
+		default:
+			return (EINVAL);
+		}
+
+		mutex_enter(&pptdev_mtx);
+		if (ppt->vm != NULL) {
+			mutex_exit(&pptdev_mtx);
+			return (EBUSY);
+		}
+
+		flags |= PPT_RESET_F_FORCE;
+		if (want_method == PPT_RESET_NONE) {
+			flags |= PPT_RESET_F_ALLOW_FALLBACK;
+		}
+		err = ppt_reset_device_method_locked(ppt, flags, want_method,
+		    &actual_method);
+		mutex_exit(&pptdev_mtx);
+
+		req.prr_result_method = actual_method;
+		req.prr_result_error = err;
+		if (ddi_copyout(&req, data, sizeof (req), md) != 0) {
+			return (EFAULT);
+		}
+		return (err);
 	}
 
 	default:
@@ -843,6 +917,107 @@ out:
 }
 
 static boolean_t
+ppt_wait_link_active(dev_info_t *dip)
+{
+	ddi_acc_handle_t hdl;
+	uint16_t cap, lstat;
+	hrtime_t start;
+
+	if (pci_config_setup(dip, &hdl) != DDI_SUCCESS)
+		return (B_FALSE);
+
+	if (PCI_CAP_LOCATE(hdl, PCI_CAP_ID_PCI_E, &cap) != DDI_SUCCESS) {
+		pci_config_teardown(&hdl);
+		return (B_FALSE);
+	}
+
+	start = gethrtime();
+	do {
+		lstat = PCI_CAP_GET16(hdl, 0, cap, PCIE_LINKSTS);
+		if (lstat & PCIE_LINKSTS_DLL_LINK_ACTIVE) {
+			pci_config_teardown(&hdl);
+			return (B_TRUE);
+		}
+		delay(drv_usectohz(LINK_POLL_INTERVAL_US));
+	} while ((gethrtime() - start) < (hrtime_t)USEC2NSEC(LINK_POLL_TIMEOUT_US));
+
+	pci_config_teardown(&hdl);
+	return (B_FALSE);
+}
+
+static boolean_t
+ppt_pm_reset(dev_info_t *dip)
+{
+	uint16_t cap_ptr, csr;
+	uint16_t cmd;
+	ddi_acc_handle_t hdl;
+
+	if (pci_config_setup(dip, &hdl) != DDI_SUCCESS)
+		return (B_FALSE);
+
+	if (PCI_CAP_LOCATE(hdl, PCI_CAP_ID_PM, &cap_ptr) != DDI_SUCCESS) {
+		pci_config_teardown(&hdl);
+		return (B_FALSE);
+	}
+
+	cmd = pci_config_get16(hdl, PCI_CONF_COMM);
+	cmd &= ~(PCI_COMM_ME | PCI_COMM_MAE | PCI_COMM_IO);
+	pci_config_put16(hdl, PCI_CONF_COMM, cmd);
+
+	csr = PCI_CAP_GET16(hdl, 0, cap_ptr, PCI_PMCSR);
+	if ((csr & PCI_PMCSR_NO_SOFT_RESET) != 0) {
+		pci_config_teardown(&hdl);
+		return (B_FALSE);
+	}
+
+	if ((csr & PCI_PMCSR_STATE_MASK) != PCI_PMCSR_STATE_D0) {
+		csr = (csr & ~PCI_PMCSR_STATE_MASK) | PCI_PMCSR_STATE_D0;
+		(void) PCI_CAP_PUT16(hdl, 0, cap_ptr, PCI_PMCSR, csr);
+		delay(drv_usectohz(10000));
+		csr = PCI_CAP_GET16(hdl, 0, cap_ptr, PCI_PMCSR);
+		if ((csr & PCI_PMCSR_STATE_MASK) != PCI_PMCSR_STATE_D0) {
+			pci_config_teardown(&hdl);
+			return (B_FALSE);
+		}
+	}
+
+	csr = (csr & ~PCI_PMCSR_STATE_MASK) | PCI_PMCSR_STATE_D3HOT;
+	(void) PCI_CAP_PUT16(hdl, 0, cap_ptr, PCI_PMCSR, csr);
+	delay(drv_usectohz(10000));
+
+	csr = (csr & ~PCI_PMCSR_STATE_MASK) | PCI_PMCSR_STATE_D0;
+	(void) PCI_CAP_PUT16(hdl, 0, cap_ptr, PCI_PMCSR, csr);
+	delay(drv_usectohz(10000));
+
+	pci_config_teardown(&hdl);
+	return (B_TRUE);
+}
+
+static void
+ppt_bus_reset(dev_info_t *dip)
+{
+	dev_info_t *parent;
+	uint16_t bctl;
+	ddi_acc_handle_t hdl;
+
+	parent = ddi_get_parent(dip);
+	if (parent == NULL)
+		return;
+
+	if (pci_config_setup(parent, &hdl) != DDI_SUCCESS)
+		return;
+
+	bctl = pci_config_get16(hdl, PCI_BCNF_BCNTRL);
+	bctl |= PCI_BCNF_BCNTRL_RESET;
+	pci_config_put16(hdl, PCI_BCNF_BCNTRL, bctl);
+	delay(drv_usectohz(100000));
+	bctl &= ~PCI_BCNF_BCNTRL_RESET;
+	pci_config_put16(hdl, PCI_BCNF_BCNTRL, bctl);
+
+	pci_config_teardown(&hdl);
+}
+
+static boolean_t
 ppt_flr(dev_info_t *dip, boolean_t force)
 {
 	uint16_t cap_ptr, ctl, cmd;
@@ -903,6 +1078,111 @@ fail:
 	 */
 	pci_config_teardown(&hdl);
 	return (B_FALSE);
+}
+
+static boolean_t
+ppt_nvidia_gpu_bus_reset_quirk_active(struct pptdev *ppt)
+{
+	uint16_t bdf;
+	uint16_t vid;
+	uint16_t did;
+
+	bdf = pci_get_bdf(ppt->pptd_dip);
+	if ((bdf & 0x7u) != 0)
+		return (B_FALSE);
+
+	vid = pci_config_get16(ppt->pptd_cfg, PCI_CONF_VENID);
+	did = pci_config_get16(ppt->pptd_cfg, PCI_CONF_DEVID);
+	return (vid == 0x10de && did == 0x1e07);
+}
+
+static int
+ppt_reset_run_locked(struct pptdev *ppt, ppt_reset_type_t want_method,
+    ppt_reset_flags_t flags, ppt_reset_type_t *actual_methodp)
+{
+	ppt_reset_type_t method = PPT_RESET_NONE;
+	boolean_t ok = B_FALSE;
+	uint_t func;
+
+	func = pci_get_bdf(ppt->pptd_dip) & 0x7u;
+
+	switch (want_method) {
+	case PPT_RESET_FLR:
+		ok = ppt_flr(ppt->pptd_dip, B_TRUE);
+		method = PPT_RESET_FLR;
+		if (!ok && (flags & PPT_RESET_F_ALLOW_FALLBACK) != 0) {
+			ok = ppt_pm_reset(ppt->pptd_dip);
+			method = ok ? PPT_RESET_PM : method;
+			if (!ok && func == 0) {
+				ppt_bus_reset(ppt->pptd_dip);
+				ok = B_TRUE;
+				method = PPT_RESET_BUS;
+			}
+		}
+		break;
+	case PPT_RESET_PM:
+		ok = ppt_pm_reset(ppt->pptd_dip);
+		method = PPT_RESET_PM;
+		break;
+	case PPT_RESET_BUS:
+		ppt_bus_reset(ppt->pptd_dip);
+		ok = B_TRUE;
+		method = PPT_RESET_BUS;
+		break;
+	case PPT_RESET_NONE:
+		if (ppt_nvidia_gpu_bus_reset_quirk_active(ppt)) {
+			ppt_bus_reset(ppt->pptd_dip);
+			ok = B_TRUE;
+			method = PPT_RESET_BUS;
+			break;
+		}
+		ok = ppt_flr(ppt->pptd_dip, B_TRUE);
+		method = PPT_RESET_FLR;
+		if (!ok && (flags & PPT_RESET_F_ALLOW_FALLBACK) != 0) {
+			ok = ppt_pm_reset(ppt->pptd_dip);
+			method = ok ? PPT_RESET_PM : method;
+			if (!ok && func == 0) {
+				ppt_bus_reset(ppt->pptd_dip);
+				ok = B_TRUE;
+				method = PPT_RESET_BUS;
+			}
+		}
+		break;
+	default:
+		return (EINVAL);
+	}
+
+	if (!ok) {
+		if (actual_methodp != NULL)
+			*actual_methodp = method;
+		return (EIO);
+	}
+
+	ppt_reset_pci_power_state(ppt->pptd_dip);
+	(void) ppt_wait_link_active(ppt->pptd_dip);
+
+	if (actual_methodp != NULL)
+		*actual_methodp = method;
+	return (0);
+}
+
+static int
+ppt_reset_device_method_locked(struct pptdev *ppt, ppt_reset_flags_t flags,
+    ppt_reset_type_t want_method, ppt_reset_type_t *actual_methodp)
+{
+	int err;
+
+	err = ppt_reset_run_locked(ppt, want_method, flags, actual_methodp);
+	if (err != 0) {
+		cmn_err(CE_WARN, "ppt_reset_device: bdf=0x%x failed method=%u err=%d",
+		    pci_get_bdf(ppt->pptd_dip),
+		    actual_methodp != NULL ? *actual_methodp : PPT_RESET_NONE, err);
+	} else {
+		cmn_err(CE_NOTE, "ppt_reset_device: bdf=0x%x complete method=%u",
+		    pci_get_bdf(ppt->pptd_dip),
+		    actual_methodp != NULL ? *actual_methodp : PPT_RESET_NONE);
+	}
+	return (err);
 }
 
 static int
