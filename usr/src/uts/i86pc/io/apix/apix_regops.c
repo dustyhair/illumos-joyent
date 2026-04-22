@@ -61,7 +61,11 @@ static void local_x2apic_write_int_cmd(uint32_t cpu_id, uint32_t cmd1);
  *	1			1	APIC is enabled in X2APIC mode
  * -----------------------------------------------------------
  */
-int	x2apic_enable = 1;
+/*
+ * Haswell passthru workaround: default x2APIC off so apix stays in local APIC
+ * mode unless explicitly re-enabled via tunable.
+ */
+int	x2apic_enable = 0;
 
 /* X2APIC : Uses RDMSR/WRMSR instructions to access APIC registers */
 static apic_reg_ops_t x2apic_regs_ops = {

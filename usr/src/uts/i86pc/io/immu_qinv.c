@@ -34,6 +34,7 @@
 #include <sys/types.h>
 #include <sys/cpu.h>
 #include <sys/sysmacros.h>
+#include <sys/atomic.h>
 #include <sys/immu.h>
 
 /* invalidation queue table entry size */
@@ -84,6 +85,41 @@ typedef struct qinv {
 
 static void immu_qinv_inv_wait(immu_inv_wait_t *iwp);
 
+typedef struct immu_qinv_intr_trace {
+	uint32_t	iqt_seq;
+	uint16_t	iqt_idx;
+	uint16_t	iqt_cnt;
+	uint8_t		iqt_unit;
+	uint8_t		iqt_kind;	/* g=global, o=one, r=range */
+	uint8_t		iqt_phase;	/* s=submit, c=complete */
+	uint8_t		iqt_pad;
+	uintptr_t	iqt_immu;
+	uintptr_t	iqt_iwp;
+	uintptr_t	iqt_iwp_name;
+	uintptr_t	iqt_cpu;
+} immu_qinv_intr_trace_t;
+
+#define	IMMU_QINV_INTR_TRACE_NENT	128
+static immu_qinv_intr_trace_t immu_qinv_intr_trace_ring[IMMU_QINV_INTR_TRACE_NENT];
+static uint32_t immu_qinv_intr_trace_seq;
+static uint32_t immu_qinv_intr_trace_dumped;
+int immu_qinv_trace_intr = 1;
+int immu_qinv_trace_intr_maxdump = 32;
+int immu_qinv_strict_intr_sync = 1;
+int immu_qinv_strict_intr_delay_us = 0;
+/*
+ * Haswell errata-driven mitigation:
+ * force broader IEC invalidation with extra settle time after IRTE updates.
+ */
+int immu_qinv_haswell_quirk = 1;
+int immu_qinv_haswell_force_global_iec = 1;
+int immu_qinv_haswell_extra_delay_us = 4;
+
+static void immu_qinv_intr_trace_record(immu_t *, uint8_t, uint8_t, uint_t,
+    uint_t, immu_inv_wait_t *);
+void immu_qinv_debug_dump_recent_intr(const char *);
+static void immu_qinv_intr_postsync(immu_t *);
+
 static struct immu_flushops immu_qinv_flushops = {
 	immu_qinv_context_fsi,
 	immu_qinv_context_dsi,
@@ -93,6 +129,91 @@ static struct immu_flushops immu_qinv_flushops = {
 	immu_qinv_iotlb_gbl,
 	immu_qinv_inv_wait
 };
+
+static void
+immu_qinv_intr_trace_record(immu_t *immu, uint8_t kind, uint8_t phase,
+    uint_t idx, uint_t cnt, immu_inv_wait_t *iwp)
+{
+	immu_qinv_intr_trace_t *t;
+	uint32_t seq;
+	uint_t slot;
+
+	if (immu == NULL || !immu_qinv_trace_intr)
+		return;
+
+	seq = atomic_inc_32_nv(&immu_qinv_intr_trace_seq);
+	slot = (seq - 1) % IMMU_QINV_INTR_TRACE_NENT;
+	t = &immu_qinv_intr_trace_ring[slot];
+
+	t->iqt_seq = seq;
+	t->iqt_idx = (uint16_t)idx;
+	t->iqt_cnt = (uint16_t)cnt;
+	t->iqt_unit = (immu->immu_dip != NULL) ?
+	    (uint8_t)ddi_get_instance(immu->immu_dip) : 0xff;
+	t->iqt_kind = kind;
+	t->iqt_phase = phase;
+	t->iqt_immu = (uintptr_t)immu;
+	t->iqt_iwp = (uintptr_t)iwp;
+	t->iqt_iwp_name = (uintptr_t)((iwp != NULL) ? iwp->iwp_name : NULL);
+	t->iqt_cpu = (uintptr_t)CPU;
+}
+
+void
+immu_qinv_debug_dump_recent_intr(const char *reason)
+{
+	uint32_t seq = immu_qinv_intr_trace_seq;
+	uint_t nent = IMMU_QINV_INTR_TRACE_NENT;
+	uint_t maxdump = (immu_qinv_trace_intr_maxdump > 0) ?
+	    MIN((uint_t)immu_qinv_trace_intr_maxdump, nent) : nent;
+	uint_t nvalid = MIN((uint_t)seq, nent);
+	uint_t ndump = MIN(maxdump, nvalid);
+	uint_t start, i;
+
+	if (atomic_cas_32(&immu_qinv_intr_trace_dumped, 0, 1) != 0)
+		return;
+
+	if (ndump == 0) {
+		prom_printf("IMMU QINV trace dump reason=%s seq=%u empty\n",
+		    reason != NULL ? reason : "unknown", seq);
+		return;
+	}
+
+	start = (seq >= ndump) ? (seq - ndump + 1) : 1;
+	prom_printf("IMMU QINV trace dump reason=%s seq=%u start=%u end=%u\n",
+	    reason != NULL ? reason : "unknown", seq, start, seq);
+
+	for (i = 0; i < nent; i++) {
+		immu_qinv_intr_trace_t *t = &immu_qinv_intr_trace_ring[i];
+		uint32_t tseq = t->iqt_seq;
+
+		if (tseq < start || tseq > seq)
+			continue;
+
+		prom_printf("IMMU QINV[%u] unit=%u kind=%c phase=%c idx=%u cnt=%u "
+		    "iwp=%p name=%p cpu=%p immu=%p\n",
+		    tseq, t->iqt_unit, t->iqt_kind, t->iqt_phase,
+		    (uint_t)t->iqt_idx, (uint_t)t->iqt_cnt,
+		    (void *)t->iqt_iwp, (void *)t->iqt_iwp_name,
+		    (void *)t->iqt_cpu, (void *)t->iqt_immu);
+	}
+}
+
+static void
+immu_qinv_intr_postsync(immu_t *immu)
+{
+	int delay_us = 0;
+
+	if (immu_qinv_strict_intr_sync) {
+		membar_producer();
+		delay_us = immu_qinv_strict_intr_delay_us;
+	}
+
+	if (immu_qinv_haswell_quirk && immu_qinv_haswell_extra_delay_us > delay_us)
+		delay_us = immu_qinv_haswell_extra_delay_us;
+
+	if (delay_us > 0)
+		drv_usecwait((clock_t)delay_us);
+}
 
 /* helper macro for making queue invalidation descriptor */
 #define	INV_DSC_TYPE(dsc)	((dsc)->lo & 0xF)
@@ -167,8 +288,6 @@ static void qinv_iec_common(immu_t *immu, uint_t iidx,
     uint_t im, uint_t g);
 static void immu_qinv_inv_wait(immu_inv_wait_t *iwp);
 static void qinv_wait_sync(immu_t *immu, immu_inv_wait_t *iwp);
-static void qinv_wait_slot_alloc(immu_t *immu, immu_inv_wait_t *iwp,
-    volatile uint32_t **statusp, uint64_t *paddrp);
 /*LINTED*/
 static void qinv_dev_iotlb_common(immu_t *immu, uint16_t sid,
     uint64_t addr, uint_t size, uint_t max_invs_pd);
@@ -301,43 +420,6 @@ qinv_iec_common(immu_t *immu, uint_t iidx, uint_t im, uint_t g)
 	qinv_submit_inv_dsc(immu, &dsc);
 }
 
-/*
- * queued invalidation interface -- invalidation wait descriptor
- *   wait until the invalidation request finished
- */
-static void
-qinv_wait_slot_alloc(immu_t *immu, immu_inv_wait_t *iwp,
-    volatile uint32_t **statusp, uint64_t *paddrp)
-{
-	qinv_t *qinv;
-	qinv_mem_t *qinv_sync;
-	uint_t slot;
-
-	if (!iwp->iwp_sync || immu->immu_qinv == NULL) {
-		*statusp = (iwp->iwp_statusp != NULL) ?
-		    iwp->iwp_statusp : &iwp->iwp_vstatus;
-		*paddrp = iwp->iwp_pstatus;
-		return;
-	}
-
-	qinv = (qinv_t *)immu->immu_qinv;
-	qinv_sync = &qinv->qinv_sync;
-
-	mutex_enter(&qinv_sync->qinv_mem_lock);
-	slot = qinv_sync->qinv_mem_tail++;
-	if (qinv_sync->qinv_mem_tail == qinv_sync->qinv_mem_size)
-		qinv_sync->qinv_mem_tail = 0;
-	mutex_exit(&qinv_sync->qinv_mem_lock);
-
-	*statusp = (volatile uint32_t *)(qinv_sync->qinv_mem_vaddr +
-	    slot * QINV_SYNC_DATA_SIZE);
-	*paddrp = qinv_sync->qinv_mem_paddr +
-	    slot * QINV_SYNC_DATA_SIZE;
-
-	iwp->iwp_statusp = *statusp;
-	iwp->iwp_pstatus = *paddrp;
-}
-
 static void
 qinv_wait_sync(immu_t *immu, immu_inv_wait_t *iwp)
 {
@@ -348,7 +430,8 @@ qinv_wait_sync(immu_t *immu, immu_inv_wait_t *iwp)
 	uint_t count;
 #endif
 
-	qinv_wait_slot_alloc(immu, iwp, &status, &paddr);
+	status = &iwp->iwp_vstatus;
+	paddr = iwp->iwp_pstatus;
 
 	*status = IMMU_INV_DATA_PENDING;
 	membar_producer();
@@ -383,8 +466,7 @@ qinv_wait_sync(immu_t *immu, immu_inv_wait_t *iwp)
 static void
 immu_qinv_inv_wait(immu_inv_wait_t *iwp)
 {
-	volatile uint32_t *status = (iwp->iwp_statusp != NULL) ?
-	    iwp->iwp_statusp : &iwp->iwp_vstatus;
+	volatile uint32_t *status = &iwp->iwp_vstatus;
 #ifdef DEBUG
 	uint_t count;
 
@@ -592,15 +674,6 @@ immu_qinv_startup(immu_t *immu)
 	qinv = (qinv_t *)immu->immu_qinv;
 	qinv_reg_value = qinv->qinv_table.qinv_mem_paddr | qinv_iqa_qs;
 	immu_regs_qinv_enable(immu, qinv_reg_value);
-	/*
-	 * Interrupt-remap wait descriptors are written back by hardware, so
-	 * keep their status in the DMA-consistent sync area instead of normal
-	 * kernel memory.
-	 */
-	immu->immu_intrmap_inv_wait.iwp_statusp =
-	    (volatile uint32_t *)qinv->qinv_sync.qinv_mem_vaddr;
-	immu->immu_intrmap_inv_wait.iwp_pstatus =
-	    qinv->qinv_sync.qinv_mem_paddr;
 	immu->immu_flushops = &immu_qinv_flushops;
 	immu->immu_qinv_running = B_TRUE;
 }
@@ -704,16 +777,27 @@ immu_qinv_iotlb_gbl(immu_t *immu, immu_inv_wait_t *iwp)
 void
 immu_qinv_intr_global(immu_t *immu, immu_inv_wait_t *iwp)
 {
+	immu_qinv_intr_trace_record(immu, 'g', 's', 0, 0, iwp);
 	qinv_iec_common(immu, 0, 0, IEC_INV_GLOBAL);
 	qinv_wait_sync(immu, iwp);
+	immu_qinv_intr_postsync(immu);
+	immu_qinv_intr_trace_record(immu, 'g', 'c', 0, 0, iwp);
 }
 
 /* queued invalidation interface -- invalidate single interrupt entry cache */
 void
 immu_qinv_intr_one_cache(immu_t *immu, uint_t iidx, immu_inv_wait_t *iwp)
 {
+	if (immu_qinv_haswell_quirk && immu_qinv_haswell_force_global_iec) {
+		immu_qinv_intr_global(immu, iwp);
+		return;
+	}
+
+	immu_qinv_intr_trace_record(immu, 'o', 's', iidx, 1, iwp);
 	qinv_iec_common(immu, iidx, 0, IEC_INV_INDEX);
 	qinv_wait_sync(immu, iwp);
+	immu_qinv_intr_postsync(immu);
+	immu_qinv_intr_trace_record(immu, 'o', 'c', iidx, 1, iwp);
 }
 
 /* queued invalidation interface -- invalidate interrupt entry caches */
@@ -725,12 +809,21 @@ immu_qinv_intr_caches(immu_t *immu, uint_t iidx, uint_t cnt,
 
 	ASSERT(cnt != 0);
 
+	if (immu_qinv_haswell_quirk && immu_qinv_haswell_force_global_iec) {
+		immu_qinv_intr_global(immu, iwp);
+		return;
+	}
+
+	immu_qinv_intr_trace_record(immu, 'r', 's', iidx, cnt, iwp);
+
 	/* requested interrupt count is not a power of 2 */
 	if (!ISP2(cnt)) {
 		for (i = 0; i < cnt; i++) {
 			qinv_iec_common(immu, iidx + cnt, 0, IEC_INV_INDEX);
 		}
 		qinv_wait_sync(immu, iwp);
+		immu_qinv_intr_postsync(immu);
+		immu_qinv_intr_trace_record(immu, 'r', 'c', iidx, cnt, iwp);
 		return;
 	}
 
@@ -743,12 +836,15 @@ immu_qinv_intr_caches(immu_t *immu, uint_t iidx, uint_t cnt,
 			qinv_iec_common(immu, iidx + cnt, 0, IEC_INV_INDEX);
 		}
 		qinv_wait_sync(immu, iwp);
+		immu_qinv_intr_postsync(immu);
+		immu_qinv_intr_trace_record(immu, 'r', 'c', iidx, cnt, iwp);
 		return;
 	}
 
 	qinv_iec_common(immu, iidx, mask, IEC_INV_INDEX);
-
 	qinv_wait_sync(immu, iwp);
+	immu_qinv_intr_postsync(immu);
+	immu_qinv_intr_trace_record(immu, 'r', 'c', iidx, cnt, iwp);
 }
 
 void
