@@ -1680,10 +1680,25 @@ pptintr(caddr_t arg, caddr_t unused)
 		    (u_longlong_t)intr_count, ppt->msi.is_fixed ? 1 : 0,
 		    (u_longlong_t)pptarg->addr, (u_longlong_t)pptarg->msg_data,
 		    (void *)ppt->vm);
+		if (bdf == 0x200) {
+			prom_printf("PPT-INTR-TU102: enter bdf=0x%x count=%llu "
+			    "is_fixed=%d addr=0x%llx msg=0x%llx vm=%p\n",
+			    bdf, (u_longlong_t)intr_count,
+			    ppt->msi.is_fixed ? 1 : 0,
+			    (u_longlong_t)pptarg->addr,
+			    (u_longlong_t)pptarg->msg_data,
+			    (void *)ppt->vm);
+		}
 	}
 
 	if (ppt->vm != NULL) {
 		lapic_intr_msi(ppt->vm, pptarg->addr, pptarg->msg_data);
+		if (bdf == 0x200 &&
+		    (intr_count <= 8 || (intr_count & (intr_count - 1)) == 0)) {
+			prom_printf("PPT-INTR-TU102: done bdf=0x%x count=%llu "
+			    "vm=%p\n", bdf, (u_longlong_t)intr_count,
+			    (void *)ppt->vm);
+		}
 	} else {
 		/*
 		 * XXX
