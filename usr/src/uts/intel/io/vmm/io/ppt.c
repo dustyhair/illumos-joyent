@@ -1910,8 +1910,6 @@ ppt_setup_intx(struct vm *vm, int pptfd, int ioapic_irq, boolean_t enable)
 	}
 
 	err = ppt_setup_intx_locked(ppt, ioapic_irq, enable);
-
-done:
 	releasef(pptfd);
 	mutex_exit(&pptdev_mtx);
 	return (err);
