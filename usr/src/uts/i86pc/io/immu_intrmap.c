@@ -1157,8 +1157,8 @@ immu_intrmap_alloc(void **intrmap_private_tbl, dev_info_t *dip,
 	if (immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
 		char pathbuf[256];
 
-		cmn_err(CE_NOTE, "immu_intrmap: tu102 alloc dip=%s type=0x%x "
-		    "count=%d idx=%u sid=0x%x immu=%s",
+		prom_printf("IRMAP-TU102: alloc dip=%s type=0x%x "
+		    "count=%d idx=%u sid=0x%x immu=%s\n",
 		    immu_intrmap_dip_path(dip, pathbuf, sizeof (pathbuf)), type,
 		    count, idx, sid_svt_sq,
 		    immu->immu_name ? immu->immu_name : "<noname>");
@@ -1326,8 +1326,8 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data,
 	if (immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
 		char pathbuf[256];
 
-		cmn_err(CE_NOTE, "immu_intrmap: tu102 map dip=%s type=0x%x count=%d "
-		    "idx=%u sid=0x%x vector=0x%x dst=0x%x raw_data=0x%x",
+		prom_printf("IRMAP-TU102: map dip=%s type=0x%x count=%d "
+		    "idx=%u sid=0x%x vector=0x%x dst=0x%x raw_data=0x%x\n",
 		    immu_intrmap_dip_path(INTRMAP_PRIVATE(intrmap_private)->ir_dip,
 		    pathbuf, sizeof (pathbuf)), type, count, idx, sid,
 		    (uint_t)vector, dst,
@@ -1539,8 +1539,8 @@ immu_intrmap_free(void **intrmap_privatep)
 	    INTRMAP_PRIVATE(*intrmap_privatep)->ir_sid_svt_sq)) {
 		char pathbuf[256];
 
-		cmn_err(CE_NOTE, "immu_intrmap: tu102 free dip=%s idx=%u sid=0x%x "
-		    "immu=%s",
+		prom_printf("IRMAP-TU102: free dip=%s idx=%u sid=0x%x "
+		    "immu=%s\n",
 		    immu_intrmap_dip_path(INTRMAP_PRIVATE(*intrmap_privatep)->ir_dip,
 		    pathbuf, sizeof (pathbuf)), idx,
 		    INTRMAP_PRIVATE(*intrmap_privatep)->ir_sid_svt_sq,
