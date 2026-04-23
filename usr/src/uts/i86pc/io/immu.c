@@ -1065,6 +1065,12 @@ immu_init(void)
 	read_boot_options();
 
 	/*
+	 * IR-off A/B for TU102 passthrough debugging: keep the runtime the same
+	 * otherwise and force interrupt remapping off after all tunables load.
+	 */
+	immu_intrmap_enable = B_FALSE;
+
+	/*
 	 * Check the IOMMU enable boot-option first.
 	 * This is so that we can skip parsing the ACPI table
 	 * if necessary because that may cause problems in
