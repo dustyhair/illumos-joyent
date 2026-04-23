@@ -1445,6 +1445,18 @@ vm_disable_pptdev_msix(struct vmctx *ctx, int pptfd)
 	pptdev.pptfd = pptfd;
 	return (ioctl(ctx->fd, VM_PPTDEV_DISABLE_MSIX, &pptdev));
 }
+
+int
+vm_setup_pptdev_intx(struct vmctx *ctx, int pptfd, int ioapic_irq, int enable)
+{
+	struct vm_pptdev_intx pptintx;
+
+	bzero(&pptintx, sizeof (pptintx));
+	pptintx.pptfd = pptfd;
+	pptintx.ioapic_irq = ioapic_irq;
+	pptintx.enable = enable;
+	return (ioctl(ctx->fd, VM_PPTDEV_INTX, &pptintx));
+}
 #endif /* __FreeBSD__ */
 
 uint64_t *

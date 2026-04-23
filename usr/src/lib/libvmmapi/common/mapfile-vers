@@ -120,6 +120,7 @@ SYMBOL_VERSION ILLUMOSprivate {
 		vm_set_x2apic_state;
 		vm_setup_memory;
 		vm_setup_pptdev_msi;
+		vm_setup_pptdev_intx;
 		vm_setup_pptdev_msix;
 		vm_suspend;
 		vm_suspend_all_cpus;

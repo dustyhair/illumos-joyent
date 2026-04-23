@@ -275,6 +275,8 @@ int	vm_setup_pptdev_msi(struct vmctx *ctx, int pptfd, uint64_t addr,
 int	vm_setup_pptdev_msix(struct vmctx *ctx, int pptfd, int idx, uint64_t
     addr, uint64_t msg, uint32_t vector_control);
 int	vm_disable_pptdev_msix(struct vmctx *ctx, int pptfd);
+int	vm_setup_pptdev_intx(struct vmctx *ctx, int pptfd, int ioapic_irq,
+    int enable);
 int	vm_get_pptdev_limits(struct vmctx *ctx, int pptfd, int *msi_limit,
     int *msix_limit);
 #endif /* __FreeBSD__ */

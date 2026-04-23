@@ -53,6 +53,7 @@
 #include <machine/vmm.h>
 #include <vmmapi.h>
 #include <sys/ppt_dev.h>
+#include <sys/vmm_dev.h>
 
 #include "config.h"
 #include "debug.h"
@@ -76,6 +77,9 @@ struct passthru_softc {
 	struct {
 		int		capoff;
 	} psc_msix;
+	int psc_intx_configured;
+	int psc_intx_enabled;
+	int psc_intx_irq;
 	int pptfd;
 	int msi_limit;
 	int msix_limit;
@@ -131,6 +135,18 @@ passthru_write_config(const struct passthru_softc *sc, long reg, int width,
 	pi.pci_data = data;
 
 	(void) ioctl(sc->pptfd, PPT_CFG_WRITE, &pi);
+}
+
+static int
+passthru_setup_intx(struct vmctx *ctx, int pptfd, int ioapic_irq, int enable)
+{
+	struct vm_pptdev_intx pptintx;
+
+	bzero(&pptintx, sizeof (pptintx));
+	pptintx.pptfd = pptfd;
+	pptintx.ioapic_irq = ioapic_irq;
+	pptintx.enable = enable;
+	return (ioctl(vm_get_device_fd(ctx), VM_PPTDEV_INTX, &pptintx));
 }
 
 static int
@@ -1018,6 +1034,10 @@ passthru_cfgwrite_default(struct passthru_softc *sc, struct pci_devinst *pi,
 		    pi->pi_msi.addr, pi->pi_msi.msg_data, pi->pi_msi.maxmsgnum);
 		if (error != 0)
 			err(1, "vm_setup_pptdev_msi");
+		if (sc->psc_intx_configured && sc->psc_intx_enabled) {
+			(void) passthru_setup_intx(ctx, sc->pptfd, 0, 0);
+			sc->psc_intx_enabled = 0;
+		}
 		return (PE_CFGRW_DROP);
 	}
 
@@ -1041,6 +1061,10 @@ passthru_cfgwrite_default(struct passthru_softc *sc, struct pci_devinst *pi,
 			if (error)
 				err(1, "vm_disable_pptdev_msix");
 		}
+		if (sc->psc_intx_configured && sc->psc_intx_enabled) {
+			(void) passthru_setup_intx(ctx, sc->pptfd, 0, 0);
+			sc->psc_intx_enabled = 0;
+		}
 		return (PE_CFGRW_DROP);
 	}
 
@@ -1048,17 +1072,41 @@ passthru_cfgwrite_default(struct passthru_softc *sc, struct pci_devinst *pi,
 	 * The command register is emulated, but the status register
 	 * is passed through.
 	 */
-	if (coff == PCIR_COMMAND) {
-		if (bytes <= 2)
-			return (PE_CFGRW_DEFAULT);
+	if (coff == PCIR_COMMAND && bytes >= 2) {
+		uint16_t newval = val & 0xffff;
 
-		/* Update the physical status register. */
-		passthru_write_config(sc, PCIR_STATUS, 2, val >> 16);
+		if (bytes > 2)
+			passthru_write_config(sc, PCIR_STATUS, 2, val >> 16);
 
-		/* Update the virtual command register. */
 		cmd_old = pci_get_cfgdata16(pi, PCIR_COMMAND);
-		pci_set_cfgdata16(pi, PCIR_COMMAND, val & 0xffff);
+		pci_set_cfgdata16(pi, PCIR_COMMAND, newval);
 		pci_emul_cmd_changed(pi, cmd_old);
+
+		if (pi->pi_lintr.pin > 0 && pi->pi_lintr.ioapic_irq > 0) {
+			const int intx_enable =
+			    (!pi->pi_msi.enabled && !pi->pi_msix.enabled &&
+			    ((newval & PCIM_CMD_INTxDIS) == 0)) ? 1 : 0;
+			const int need_cfg = (!sc->psc_intx_configured ||
+			    sc->psc_intx_enabled != intx_enable ||
+			    (intx_enable != 0 &&
+			    sc->psc_intx_irq != pi->pi_lintr.ioapic_irq));
+
+			if (need_cfg) {
+				error = passthru_setup_intx(ctx, sc->pptfd,
+				    intx_enable ? pi->pi_lintr.ioapic_irq : 0,
+				    intx_enable);
+				if (error == 0) {
+					sc->psc_intx_configured = 1;
+					sc->psc_intx_enabled = intx_enable;
+					sc->psc_intx_irq = pi->pi_lintr.ioapic_irq;
+				} else {
+					warnx("vm_setup_pptdev_intx failed "
+					    "pptfd=%d irq=%d enable=%d rc=%d",
+					    sc->pptfd, pi->pi_lintr.ioapic_irq,
+					    intx_enable, error);
+				}
+			}
+		}
 		return (PE_CFGRW_DROP);
 	}
 

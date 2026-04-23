@@ -511,6 +511,7 @@ vmmdev_do_ioctl(vmm_softc_t *sc, int cmd, intptr_t arg, int md,
 	case VM_RTC_SETTIME:
 	case VM_RTC_GETTIME:
 	case VM_PPTDEV_DISABLE_MSIX:
+	case VM_PPTDEV_INTX:
 	case VM_DEVMEM_GETOFFSET:
 	case VM_TRACK_DIRTY_PAGES:
 	case VM_NPT_OPERATION:
@@ -677,6 +678,17 @@ vmmdev_do_ioctl(vmm_softc_t *sc, int cmd, intptr_t arg, int md,
 			break;
 		}
 		error = ppt_disable_msix(sc->vmm_vm, pptdev.pptfd);
+		break;
+	}
+	case VM_PPTDEV_INTX: {
+		struct vm_pptdev_intx pptintx;
+
+		if (ddi_copyin(datap, &pptintx, sizeof (pptintx), md)) {
+			error = EFAULT;
+			break;
+		}
+		error = ppt_setup_intx(sc->vmm_vm, pptintx.pptfd,
+		    pptintx.ioapic_irq, pptintx.enable != 0);
 		break;
 	}
 	case VM_MAP_PPTDEV_MMIO: {
