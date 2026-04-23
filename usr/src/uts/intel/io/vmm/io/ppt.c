@@ -1468,11 +1468,8 @@ ppt_assign_device(struct vm *vm, int pptfd)
 	pf_set_passthru(ppt->pptd_dip, B_TRUE);
 
 done:
-	if (ppt != NULL) {
-		cmn_err(CE_NOTE, "ppt: assign done bdf=0x%x vm=%p pptfd=%d "
-		    "err=%d", pci_get_bdf(ppt->pptd_dip), (void *)vm, pptfd,
-		    err);
-	}
+	cmn_err(CE_NOTE, "ppt: assign done bdf=0x%x vm=%p pptfd=%d "
+	    "err=%d", pci_get_bdf(ppt->pptd_dip), (void *)vm, pptfd, err);
 	releasef(pptfd);
 	mutex_exit(&pptdev_mtx);
 	return (err);
