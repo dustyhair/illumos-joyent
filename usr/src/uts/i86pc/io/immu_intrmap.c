@@ -196,7 +196,7 @@ static void immu_intrmap_drhd_map_exit(int unit);
 static void immu_intrmap_irte_trace_record(intrmap_private_t *priv, immu_t *immu,
     uint_t unit, uint_t idx, uint16_t type, int count, uchar_t vector, uint_t dlm,
     uint_t tm, uint_t rh, uint_t dm, uint_t dst, uint_t sid, intrmap_rte_t *irte);
-static boolean_t immu_intrmap_trace_ppt_entry(dev_info_t *dip);
+static boolean_t immu_intrmap_trace_tu102_sid(uint32_t sid_svt_sq);
 static const char *immu_intrmap_dip_path(dev_info_t *dip, char *buf, size_t buflen);
 
 static struct apic_intrmap_ops intrmap_ops = {
@@ -260,15 +260,12 @@ immu_intrmap_drhd_map_exit(int unit)
 }
 
 static boolean_t
-immu_intrmap_trace_ppt_entry(dev_info_t *dip)
+immu_intrmap_trace_tu102_sid(uint32_t sid_svt_sq)
 {
-	const char *driver;
+	uint16_t sid;
 
-	if (dip == NULL)
-		return (B_FALSE);
-
-	driver = ddi_driver_name(dip);
-	return (driver != NULL && strcmp(driver, "ppt") == 0);
+	sid = sid_svt_sq & 0xffff;
+	return ((sid & ~0x7) == 0x200);
 }
 
 static const char *
@@ -1157,10 +1154,10 @@ immu_intrmap_alloc(void **intrmap_private_tbl, dev_info_t *dip,
 	    (DDI_INTR_IS_MSI_OR_MSIX(type) ? "MSI/MSI-X" : "IOAPIC"),
 	    count, idx, sid_svt_sq,
 	    immu->immu_name ? immu->immu_name : "<noname>");
-	if (immu_intrmap_trace_ppt_entry(dip)) {
+	if (immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
 		char pathbuf[256];
 
-		cmn_err(CE_NOTE, "immu_intrmap: ppt alloc dip=%s type=0x%x "
+		cmn_err(CE_NOTE, "immu_intrmap: tu102 alloc dip=%s type=0x%x "
 		    "count=%d idx=%u sid=0x%x immu=%s",
 		    immu_intrmap_dip_path(dip, pathbuf, sizeof (pathbuf)), type,
 		    count, idx, sid_svt_sq,
@@ -1326,10 +1323,10 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data,
 	if (intrmap_apic_mode == LOCAL_APIC)
 		dst = (dst & 0xFF) << 8;
 
-	if (immu_intrmap_trace_ppt_entry(INTRMAP_PRIVATE(intrmap_private)->ir_dip)) {
+	if (immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
 		char pathbuf[256];
 
-		cmn_err(CE_NOTE, "immu_intrmap: ppt map dip=%s type=0x%x count=%d "
+		cmn_err(CE_NOTE, "immu_intrmap: tu102 map dip=%s type=0x%x count=%d "
 		    "idx=%u sid=0x%x vector=0x%x dst=0x%x raw_data=0x%x",
 		    immu_intrmap_dip_path(INTRMAP_PRIVATE(intrmap_private)->ir_dip,
 		    pathbuf, sizeof (pathbuf)), type, count, idx, sid,
@@ -1538,10 +1535,11 @@ immu_intrmap_free(void **intrmap_privatep)
 	iwp = &INTRMAP_PRIVATE(*intrmap_privatep)->ir_inv_wait;
 	intrmap = immu->immu_intrmap;
 	idx = INTRMAP_PRIVATE(*intrmap_privatep)->ir_idx;
-	if (immu_intrmap_trace_ppt_entry(INTRMAP_PRIVATE(*intrmap_privatep)->ir_dip)) {
+	if (immu_intrmap_trace_tu102_sid(
+	    INTRMAP_PRIVATE(*intrmap_privatep)->ir_sid_svt_sq)) {
 		char pathbuf[256];
 
-		cmn_err(CE_NOTE, "immu_intrmap: ppt free dip=%s idx=%u sid=0x%x "
+		cmn_err(CE_NOTE, "immu_intrmap: tu102 free dip=%s idx=%u sid=0x%x "
 		    "immu=%s",
 		    immu_intrmap_dip_path(INTRMAP_PRIVATE(*intrmap_privatep)->ir_dip,
 		    pathbuf, sizeof (pathbuf)), idx,
