@@ -1262,29 +1262,29 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data,
 				") raw 0x%" PRIx64, shifted_dst, raw_dst);
 		}
 
-			cmn_err(CE_CONT,
-				"!immu_intrmap_map: MSI setup idx=%u vector=0x%x "
-				"raw_dst=0x%" PRIx64 " shifted_dst=0x%" PRIx64 " "
-				"msi_addr=0x%" PRIx64 " msi_data=0x%" PRIx32 " (count=%d)",
-				idx, (unsigned int)vector,
-				raw_dst, shifted_dst,
-				(uint64_t)mregs->mr_addr, (uint32_t)mregs->mr_data,
-				count);
+		cmn_err(CE_CONT,
+		    "!immu_intrmap_map: MSI setup idx=%u vector=0x%x "
+		    "raw_dst=0x%" PRIx64 " shifted_dst=0x%" PRIx64 " "
+		    "msi_addr=0x%" PRIx64 " msi_data=0x%" PRIx32 " (count=%d)",
+		    idx, (unsigned int)vector,
+		    raw_dst, shifted_dst,
+		    (uint64_t)mregs->mr_addr, (uint32_t)mregs->mr_data,
+		    count);
 
-			if (count == 1) {
-				uint32_t map_count;
+		if (count == 1) {
+			uint32_t map_count;
 
-				map_count = atomic_inc_32_nv(&immu_intrmap_msi_program_count);
-				if (map_count <= 16 || (map_count & (map_count - 1)) == 0) {
-					cmn_err(CE_NOTE, "immu_intrmap: map_msi unit=%d idx=%u "
-					    "sid=0x%x vector=0x%x raw_dst=0x%" PRIx64
-					    " shifted_dst=0x%" PRIx64 " final_dst=0x%x "
-					    "count=%d dip=%p",
-					    unit, idx, sid, (unsigned int)vector, raw_dst,
-					    shifted_dst, dst, count,
-					    (void *)INTRMAP_PRIVATE(intrmap_private)->ir_dip);
-				}
+			map_count = atomic_inc_32_nv(&immu_intrmap_msi_program_count);
+			if (map_count <= 16 || (map_count & (map_count - 1)) == 0) {
+				cmn_err(CE_NOTE, "immu_intrmap: map_msi unit=%d idx=%u "
+				    "sid=0x%x vector=0x%x raw_dst=0x%" PRIx64
+				    " shifted_dst=0x%" PRIx64 " final_dst=0x%x "
+				    "count=%d dip=%p",
+				    unit, idx, sid, (unsigned int)vector, raw_dst,
+				    shifted_dst, dst, count,
+				    (void *)INTRMAP_PRIVATE(intrmap_private)->ir_dip);
 			}
+		}
 		}
 
 	if (intrmap_apic_mode == LOCAL_APIC)
