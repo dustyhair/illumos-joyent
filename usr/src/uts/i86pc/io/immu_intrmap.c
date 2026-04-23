@@ -1388,10 +1388,25 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data,
 		    idx, (uint64_t)irte.lo, (uint64_t)irte.hi);
 
 		/* set interrupt remapping table entry */
+		if (immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
+			prom_printf("IRMAP-TU102: pre-bcopy idx=%u sid=0x%x "
+			    "vector=0x%x dst=0x%x\n",
+			    idx, sid, (uint_t)vector, dst);
+		}
 		bcopy(&irte, intrmap->intrmap_vaddr + idx * INTRMAP_RTE_SIZE,
 		    INTRMAP_RTE_SIZE);
+		if (immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
+			prom_printf("IRMAP-TU102: post-bcopy idx=%u sid=0x%x "
+			    "vector=0x%x dst=0x%x\n",
+			    idx, sid, (uint_t)vector, dst);
+		}
 
 		membar_producer();
+		if (immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
+			prom_printf("IRMAP-TU102: pre-qinv idx=%u sid=0x%x "
+			    "vector=0x%x dst=0x%x\n",
+			    idx, sid, (uint_t)vector, dst);
+		}
 		immu_qinv_intr_one_cache(immu, idx, iwp);
 		if (immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
 			prom_printf("IRMAP-TU102: map-post idx=%u sid=0x%x "

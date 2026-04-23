@@ -789,15 +789,22 @@ void
 immu_qinv_intr_one_cache(immu_t *immu, uint_t iidx, immu_inv_wait_t *iwp)
 {
 	if (immu_qinv_haswell_quirk && immu_qinv_haswell_force_global_iec) {
+		prom_printf("QINV-TU102: one-cache global idx=%u\n", iidx);
 		immu_qinv_intr_global(immu, iwp);
 		return;
 	}
 
+	prom_printf("QINV-TU102: one-cache start idx=%u\n", iidx);
 	immu_qinv_intr_trace_record(immu, 'o', 's', iidx, 1, iwp);
+	prom_printf("QINV-TU102: one-cache post-trace idx=%u\n", iidx);
 	qinv_iec_common(immu, iidx, 0, IEC_INV_INDEX);
+	prom_printf("QINV-TU102: one-cache post-iec idx=%u\n", iidx);
 	qinv_wait_sync(immu, iwp);
+	prom_printf("QINV-TU102: one-cache post-wait idx=%u\n", iidx);
 	immu_qinv_intr_postsync(immu);
+	prom_printf("QINV-TU102: one-cache post-sync idx=%u\n", iidx);
 	immu_qinv_intr_trace_record(immu, 'o', 'c', iidx, 1, iwp);
+	prom_printf("QINV-TU102: one-cache done idx=%u\n", iidx);
 }
 
 /* queued invalidation interface -- invalidate interrupt entry caches */
