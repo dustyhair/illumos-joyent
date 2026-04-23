@@ -43,6 +43,18 @@
 /* Flag to turn off intel error handling workarounds */
 int pcieb_intel_workaround_disable = 0;
 
+static boolean_t
+pcieb_trace_tu102_child(dev_info_t *rdip)
+{
+	char path[MAXPATHLEN];
+
+	if (rdip == NULL)
+		return (B_FALSE);
+
+	ddi_pathname(rdip, path);
+	return (strstr(path, "/pci8086,c09@1,2/display@0") != NULL);
+}
+
 void
 pcieb_peekpoke_cb(dev_info_t *dip, ddi_fm_error_t *derr)
 {
@@ -105,7 +117,25 @@ int
 pcieb_plat_intr_ops(dev_info_t *dip, dev_info_t *rdip, ddi_intr_op_t intr_op,
     ddi_intr_handle_impl_t *hdlp, void *result)
 {
-	return (i_ddi_intr_ops(dip, rdip, intr_op, hdlp, result));
+	int ret;
+
+	if ((intr_op == DDI_INTROP_ENABLE || intr_op == DDI_INTROP_BLOCKENABLE) &&
+	    pcieb_trace_tu102_child(rdip)) {
+		prom_printf("PCIEB-MSI-TU102: forward enter dip=%p rdip=%p "
+		    "op=0x%x inum=%u\n", (void *)dip, (void *)rdip, intr_op,
+		    hdlp != NULL ? hdlp->ih_inum : 0);
+	}
+
+	ret = i_ddi_intr_ops(dip, rdip, intr_op, hdlp, result);
+
+	if ((intr_op == DDI_INTROP_ENABLE || intr_op == DDI_INTROP_BLOCKENABLE) &&
+	    pcieb_trace_tu102_child(rdip)) {
+		prom_printf("PCIEB-MSI-TU102: forward done rdip=%p op=0x%x "
+		    "ret=%d vector=0x%x\n", (void *)rdip, intr_op, ret,
+		    hdlp != NULL ? hdlp->ih_vector : 0);
+	}
+
+	return (ret);
 }
 
 /* shpc is not supported on x86 */

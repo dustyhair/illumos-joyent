@@ -100,6 +100,18 @@ int rootnex_sync_check_parms = 0;
 
 boolean_t rootnex_dmar_not_setup;
 
+static boolean_t
+rootnex_trace_tu102(dev_info_t *rdip)
+{
+	char path[MAXPATHLEN];
+
+	if (rdip == NULL)
+		return (B_FALSE);
+
+	ddi_pathname(rdip, path);
+	return (strstr(path, "/pci8086,c09@1,2/display@0") != NULL);
+}
+
 /* Master Abort and Target Abort panic flag */
 int rootnex_fm_ma_ta_panic_flag = 0;
 
@@ -1434,8 +1446,7 @@ rootnex_intr_ops(dev_info_t *pdip, dev_info_t *rdip, ddi_intr_op_t intr_op,
 		ispec->intrspec_func = (uint_t (*)()) 0;
 		break;
 	case DDI_INTROP_ENABLE:
-		if (ddi_driver_name(rdip) != NULL &&
-		    strcmp(ddi_driver_name(rdip), "ppt") == 0) {
+		if (rootnex_trace_tu102(rdip)) {
 			prom_printf("ROOTNEX-MSI-PPT: enable enter rdip=%p "
 			    "inum=%u\n", (void *)rdip, hdlp->ih_inum);
 		}
@@ -1448,8 +1459,7 @@ rootnex_intr_ops(dev_info_t *pdip, dev_info_t *rdip, ddi_intr_op_t intr_op,
 			return (DDI_FAILURE);
 
 		((ihdl_plat_t *)hdlp->ih_private)->ip_ispecp = ispec;
-		if (ddi_driver_name(rdip) != NULL &&
-		    strcmp(ddi_driver_name(rdip), "ppt") == 0) {
+		if (rootnex_trace_tu102(rdip)) {
 			prom_printf("ROOTNEX-MSI-PPT: pre-xlate rdip=%p "
 			    "inum=%u pri=%d\n", (void *)rdip, hdlp->ih_inum,
 			    ispec->intrspec_pri);
@@ -1457,16 +1467,14 @@ rootnex_intr_ops(dev_info_t *pdip, dev_info_t *rdip, ddi_intr_op_t intr_op,
 		if ((*psm_intr_ops)(rdip, hdlp, PSM_INTR_OP_XLATE_VECTOR,
 		    (int *)&hdlp->ih_vector) == PSM_FAILURE)
 			return (DDI_FAILURE);
-		if (ddi_driver_name(rdip) != NULL &&
-		    strcmp(ddi_driver_name(rdip), "ppt") == 0) {
+		if (rootnex_trace_tu102(rdip)) {
 			prom_printf("ROOTNEX-MSI-PPT: post-xlate rdip=%p "
 			    "vector=0x%x pri=%d\n", (void *)rdip, hdlp->ih_vector,
 			    ispec->intrspec_pri);
 		}
 
 		/* Add the interrupt handler */
-		if (ddi_driver_name(rdip) != NULL &&
-		    strcmp(ddi_driver_name(rdip), "ppt") == 0) {
+		if (rootnex_trace_tu102(rdip)) {
 			prom_printf("ROOTNEX-MSI-PPT: pre-add_avintr rdip=%p "
 			    "vector=0x%x pri=%d\n", (void *)rdip, hdlp->ih_vector,
 			    ispec->intrspec_pri);
@@ -1475,8 +1483,7 @@ rootnex_intr_ops(dev_info_t *pdip, dev_info_t *rdip, ddi_intr_op_t intr_op,
 		    hdlp->ih_cb_func, DEVI(rdip)->devi_name, hdlp->ih_vector,
 		    hdlp->ih_cb_arg1, hdlp->ih_cb_arg2, NULL, rdip))
 			return (DDI_FAILURE);
-		if (ddi_driver_name(rdip) != NULL &&
-		    strcmp(ddi_driver_name(rdip), "ppt") == 0) {
+		if (rootnex_trace_tu102(rdip)) {
 			prom_printf("ROOTNEX-MSI-PPT: post-add_avintr rdip=%p "
 			    "vector=0x%x\n", (void *)rdip, hdlp->ih_vector);
 		}
