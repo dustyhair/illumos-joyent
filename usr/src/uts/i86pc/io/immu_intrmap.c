@@ -1393,6 +1393,11 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data,
 
 		membar_producer();
 		immu_qinv_intr_one_cache(immu, idx, iwp);
+		if (immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
+			prom_printf("IRMAP-TU102: map-post idx=%u sid=0x%x "
+			    "vector=0x%x dst=0x%x count=%d stage=qinv-one\n",
+			    idx, sid, (uint_t)vector, dst, count);
+		}
 
 	} else {
 		if (immu_intrmap_two_phase_irte_update) {
@@ -1432,8 +1437,18 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data,
 
 		membar_producer();
 		immu_qinv_intr_caches(immu, idx, count, iwp);
+		if (immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
+			prom_printf("IRMAP-TU102: map-post idx=%u sid=0x%x "
+			    "vector=0x%x dst=0x%x count=%d stage=qinv-many\n",
+			    idx, sid, (uint_t)vector, dst, count);
+		}
 	}
 out:
+	if (immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
+		prom_printf("IRMAP-TU102: map-return idx=%u sid=0x%x "
+		    "count=%d unit=%d entered=%d\n",
+		    idx, sid, count, unit, unit_entered ? 1 : 0);
+	}
 	if (unit_entered)
 		immu_intrmap_drhd_map_exit(unit);
 }
