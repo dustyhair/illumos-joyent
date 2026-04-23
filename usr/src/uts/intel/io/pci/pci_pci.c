@@ -37,6 +37,8 @@
 #include <sys/modctl.h>
 #include <sys/autoconf.h>
 #include <sys/ddi_impldefs.h>
+#include <sys/systm.h>
+#include <sys/promif.h>
 #include <sys/pci.h>
 #include <sys/pci_impl.h>
 #include <sys/pcie_impl.h>
@@ -879,10 +881,27 @@ ppb_intr_ops(dev_info_t *pdip, dev_info_t *rdip, ddi_intr_op_t intr_op,
     ddi_intr_handle_impl_t *hdlp, void *result)
 {
 	ddi_acc_handle_t cfg_hdl;
+	const char *drv = ddi_driver_name(rdip);
 	int rv = DDI_SUCCESS;
 
-	if (intr_op != DDI_INTROP_SUPPORTED_TYPES)
-		return (i_ddi_intr_ops(pdip, rdip, intr_op, hdlp, result));
+	if (intr_op != DDI_INTROP_SUPPORTED_TYPES) {
+		if (drv != NULL && strcmp(drv, "ppt") == 0 &&
+		    (intr_op == DDI_INTROP_ENABLE ||
+		    intr_op == DDI_INTROP_BLOCKENABLE)) {
+			prom_printf("PPB-MSI-PPT: forward enter pdip=%p rdip=%p "
+			    "op=0x%x inum=%u\n", (void *)pdip, (void *)rdip,
+			    intr_op, hdlp != NULL ? hdlp->ih_inum : 0);
+		}
+		rv = i_ddi_intr_ops(pdip, rdip, intr_op, hdlp, result);
+		if (drv != NULL && strcmp(drv, "ppt") == 0 &&
+		    (intr_op == DDI_INTROP_ENABLE ||
+		    intr_op == DDI_INTROP_BLOCKENABLE)) {
+			prom_printf("PPB-MSI-PPT: forward done rdip=%p op=0x%x "
+			    "ret=%d vector=0x%x\n", (void *)rdip, intr_op, rv,
+			    hdlp != NULL ? hdlp->ih_vector : 0);
+		}
+		return (rv);
+	}
 
 	DDI_INTR_NEXDBG((CE_CONT,
 	    "ppb_intr_ops: pdip 0x%p, rdip 0x%p, op %x handle 0x%p\n",
