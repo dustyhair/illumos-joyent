@@ -48,6 +48,7 @@
 #include <sys/cdefs.h>
 
 #include <sys/param.h>
+#include <sys/promif.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/kmem.h>
@@ -1341,6 +1342,11 @@ vmx_inject_vlapic(struct vmx *vmx, int vcpu, struct vlapic *vlapic)
 	if (!vlapic_pending_intr(vlapic, &vector)) {
 		return (EIS_CAN_INJECT);
 	}
+	if (vector == 0x23) {
+		prom_printf("VMX-INJ-TU102: enter vm=%p vcpu=%d vec=0x%x "
+		    "apicv=%d\n", (void *)vmx->vm, vcpu, vector,
+		    vmx_cap_en(vmx, VMX_CAP_APICV) ? 1 : 0);
+	}
 
 	/*
 	 * From the Intel SDM, Volume 3, Section "Maskable
@@ -1354,6 +1360,12 @@ vmx_inject_vlapic(struct vmx *vmx, int vcpu, struct vlapic *vlapic)
 	if (vmx_cap_en(vmx, VMX_CAP_APICV)) {
 		uint16_t status_old = vmcs_read(VMCS_GUEST_INTR_STATUS);
 		uint16_t status_new = (status_old & 0xff00) | vector;
+		if (vector == 0x23) {
+			prom_printf("VMX-INJ-TU102: apicv pre vm=%p vcpu=%d "
+			    "vec=0x%x status_old=0x%x status_new=0x%x\n",
+			    (void *)vmx->vm, vcpu, vector, status_old,
+			    status_new);
+		}
 
 		/*
 		 * The APICv state will have been synced into the vLAPIC
@@ -1362,6 +1374,10 @@ vmx_inject_vlapic(struct vmx *vmx, int vcpu, struct vlapic *vlapic)
 		 */
 		if (status_new > status_old) {
 			vmcs_write(VMCS_GUEST_INTR_STATUS, status_new);
+			if (vector == 0x23) {
+				prom_printf("VMX-INJ-TU102: apicv wrote "
+				    "guest_intr_status=0x%x\n", status_new);
+			}
 		}
 
 		/*
@@ -1369,6 +1385,12 @@ vmx_inject_vlapic(struct vmx *vmx, int vcpu, struct vlapic *vlapic)
 		 * with the TMRs in the vlapic.
 		 */
 		vmx_apicv_sync_tmr(vlapic);
+		if (vector == 0x23) {
+			prom_printf("VMX-INJ-TU102: apicv done vm=%p vcpu=%d "
+			    "vec=0x%x status_cur=0x%x\n", (void *)vmx->vm,
+			    vcpu, vector,
+			    (uint16_t)vmcs_read(VMCS_GUEST_INTR_STATUS));
+		}
 
 		/*
 		 * The rest of the injection process for injecting the
@@ -1383,15 +1405,31 @@ vmx_inject_vlapic(struct vmx *vmx, int vcpu, struct vlapic *vlapic)
 	/* Does guest interruptability block injection? */
 	if ((vmcs_read(VMCS_GUEST_INTERRUPTIBILITY) & HWINTR_BLOCKING) != 0 ||
 	    (vmcs_read(VMCS_GUEST_RFLAGS) & PSL_I) == 0) {
+		if (vector == 0x23) {
+			prom_printf("VMX-INJ-TU102: blocked vm=%p vcpu=%d "
+			    "vec=0x%x gi=0x%x rflags=0x%llx\n",
+			    (void *)vmx->vm, vcpu, vector,
+			    (uint32_t)vmcs_read(VMCS_GUEST_INTERRUPTIBILITY),
+			    (u_longlong_t)vmcs_read(VMCS_GUEST_RFLAGS));
+		}
 		return (EIS_GI_BLOCK);
 	}
 
 	/* Inject the interrupt */
 	vmcs_write(VMCS_ENTRY_INTR_INFO,
 	    VMCS_INTR_T_HWINTR | VMCS_INTR_VALID | vector);
+	if (vector == 0x23) {
+		prom_printf("VMX-INJ-TU102: entry-info vm=%p vcpu=%d vec=0x%x "
+		    "entry=0x%llx\n", (void *)vmx->vm, vcpu, vector,
+		    (u_longlong_t)vmcs_read(VMCS_ENTRY_INTR_INFO));
+	}
 
 	/* Update the Local APIC ISR */
 	vlapic_intr_accepted(vlapic, vector);
+	if (vector == 0x23) {
+		prom_printf("VMX-INJ-TU102: accepted vm=%p vcpu=%d vec=0x%x\n",
+		    (void *)vmx->vm, vcpu, vector);
+	}
 
 	return (EIS_EV_INJECTED);
 }
