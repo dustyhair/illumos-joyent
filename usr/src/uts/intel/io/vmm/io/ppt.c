@@ -1807,8 +1807,13 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 
 	ppt->msi.inth_sz = numvec * sizeof (ddi_intr_handle_t);
 	ppt->msi.inth = kmem_zalloc(ppt->msi.inth_sz, KM_SLEEP);
-	if (ddi_intr_alloc(ppt->pptd_dip, ppt->msi.inth, intr_type, 0,
-	    numvec, &msi_count, 0) != DDI_SUCCESS) {
+	err = ddi_intr_alloc(ppt->pptd_dip, ppt->msi.inth, intr_type, 0,
+	    numvec, &msi_count, 0);
+	cmn_err(CE_NOTE, "ppt: setup_msi ddi_intr_alloc bdf=0x%x intr_type=%s "
+	    "requested=%d got=%d err=%d",
+	    bdf, intr_type == DDI_INTR_TYPE_MSI ? "msi" : "fixed",
+	    numvec, msi_count, err);
+	if (err != DDI_SUCCESS) {
 		kmem_free(ppt->msi.inth, ppt->msi.inth_sz);
 		err = EINVAL;
 		goto done;
@@ -1830,8 +1835,12 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 		ppt->msi.arg[i].addr = addr;
 		ppt->msi.arg[i].msg_data = msg + i;
 
-		if (ddi_intr_add_handler(ppt->msi.inth[i], pptintr,
-		    &ppt->msi.arg[i], NULL) != DDI_SUCCESS)
+		res = ddi_intr_add_handler(ppt->msi.inth[i], pptintr,
+		    &ppt->msi.arg[i], NULL);
+		cmn_err(CE_NOTE, "ppt: setup_msi add_handler bdf=0x%x vec=%d "
+		    "guest_msg=0x%llx handle=%p err=%d",
+		    bdf, i, (u_longlong_t)(msg + i), (void *)ppt->msi.inth[i], res);
+		if (res != DDI_SUCCESS)
 			break;
 
 		if (numvec == 1)
@@ -1842,6 +1851,10 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 			res = ddi_intr_block_enable(&ppt->msi.inth[i], 1);
 		else
 			res = ddi_intr_enable(ppt->msi.inth[i]);
+		cmn_err(CE_NOTE, "ppt: setup_msi enable bdf=0x%x vec=%d "
+		    "guest_msg=0x%llx handle=%p caps=0x%x err=%d",
+		    bdf, i, (u_longlong_t)(msg + i), (void *)ppt->msi.inth[i],
+		    intr_cap, res);
 
 		if (res != DDI_SUCCESS)
 			break;
