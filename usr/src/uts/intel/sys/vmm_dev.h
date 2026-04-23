@@ -174,12 +174,6 @@ struct vm_pptdev_limits {
 	int		msix_limit;
 };
 
-struct vm_pptdev_intx {
-	int		pptfd;
-	int		ioapic_irq;
-	int		enable;
-};
-
 struct vm_nmi {
 	int		cpuid;
 };
@@ -607,7 +601,6 @@ struct vm_legacy_cpuid {
 
 #define	VM_VCPU_BARRIER			(VMM_IOC_BASE | 0x27)
 #define	VM_NPT_OPERATION		(VMM_IOC_BASE | 0x28)
-#define	VM_PPTDEV_INTX			(VMM_IOC_BASE | 0x29)
 
 #define	VM_DEVMEM_GETOFFSET		(VMM_IOC_BASE | 0xff)
 

@@ -47,7 +47,6 @@ SYMBOL_VERSION ILLUMOSprivate {
 	ppt_unassign_all;
 	ppt_map_mmio;
 	ppt_unmap_mmio;
-	ppt_setup_intx;
 	ppt_setup_msi;
 	ppt_setup_msix;
 	ppt_get_limits;

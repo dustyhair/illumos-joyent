@@ -1143,7 +1143,6 @@ fcnname##_info:							\
 	WSTUB(ppt, ppt_unmap_mmio,		nomod_einval);
 	WSTUB(ppt, ppt_setup_msi,		nomod_einval);
 	WSTUB(ppt, ppt_setup_msix,		nomod_einval);
-	WSTUB(ppt, ppt_setup_intx,		nomod_einval);
 	WSTUB(ppt, ppt_disable_msix,		nomod_einval);
 	WSTUB(ppt, ppt_assigned_devices,	nomod_zero);
 	WSTUB(ppt, ppt_is_mmio,			nomod_zero);
