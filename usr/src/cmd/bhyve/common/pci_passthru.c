@@ -44,6 +44,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
+#include <stdbool.h>
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -82,10 +84,16 @@ struct passthru_softc {
 	int pptfd;
 	int msi_limit;
 	int msix_limit;
+	uint32_t psc_trace_cfgread_count;
+	uint32_t psc_trace_cfgwrite_count;
+	uint32_t psc_trace_map_count;
 
 	cfgread_handler psc_pcir_rhandler[PCI_REGMAX + 1];
 	cfgwrite_handler psc_pcir_whandler[PCI_REGMAX + 1];
 };
+
+#define	PASSTHRU_TRACE_CFG_LIMIT	64
+#define	PASSTHRU_TRACE_MAP_LIMIT	32
 
 static int
 msi_caplen(int msgctrl)
@@ -957,6 +965,75 @@ msixcap_access(struct passthru_softc *sc, int coff)
 	        coff < sc->psc_msix.capoff + MSIX_CAPLEN);
 }
 
+static void
+passthru_trace(struct passthru_softc *sc, const char *phase, const char *fmt, ...)
+{
+	struct pci_devinst *pi = sc->psc_pi;
+	va_list ap;
+
+	fprintf(stderr, "pci_passthru %d/%d/%d pptfd=%d %s ",
+	    pi->pi_bus, pi->pi_slot, pi->pi_func, sc->pptfd, phase);
+	va_start(ap, fmt);
+	(void) vfprintf(stderr, fmt, ap);
+	va_end(ap);
+	fputc('\n', stderr);
+}
+
+static bool
+passthru_trace_cfg_interesting(struct passthru_softc *sc, int coff)
+{
+	if (coff == PCIR_COMMAND)
+		return (true);
+
+	if (coff >= PCIR_BAR(0) && coff <= PCIR_BAR(5) + 4)
+		return (true);
+
+	if (msicap_access(sc, coff) || msixcap_access(sc, coff))
+		return (true);
+
+	return (false);
+}
+
+static void
+passthru_trace_cfgread(struct passthru_softc *sc, int coff, int bytes,
+    uint32_t rv, const char *src)
+{
+	if (!passthru_trace_cfg_interesting(sc, coff) ||
+	    sc->psc_trace_cfgread_count >= PASSTHRU_TRACE_CFG_LIMIT)
+		return;
+
+	sc->psc_trace_cfgread_count++;
+	passthru_trace(sc, "cfgread", "coff=0x%x bytes=%d rv=0x%x src=%s "
+	    "count=%u", coff, bytes, rv, src, sc->psc_trace_cfgread_count);
+}
+
+static void
+passthru_trace_cfgwrite(struct passthru_softc *sc, int coff, int bytes,
+    uint32_t val, const char *phase)
+{
+	if (!passthru_trace_cfg_interesting(sc, coff) ||
+	    sc->psc_trace_cfgwrite_count >= PASSTHRU_TRACE_CFG_LIMIT)
+		return;
+
+	sc->psc_trace_cfgwrite_count++;
+	passthru_trace(sc, "cfgwrite", "coff=0x%x bytes=%d val=0x%x phase=%s "
+	    "count=%u", coff, bytes, val, phase, sc->psc_trace_cfgwrite_count);
+}
+
+static void
+passthru_trace_map(struct passthru_softc *sc, int baridx, int enabled,
+    uint64_t address, uint64_t size, uint64_t hpa, int err, const char *kind)
+{
+	if (sc->psc_trace_map_count >= PASSTHRU_TRACE_MAP_LIMIT)
+		return;
+
+	sc->psc_trace_map_count++;
+	passthru_trace(sc, "map", "kind=%s bar=%d enabled=%d gpa=0x%llx "
+	    "size=0x%llx hpa=0x%llx err=%d count=%u", kind, baridx, enabled,
+	    (u_longlong_t)address, (u_longlong_t)size, (u_longlong_t)hpa, err,
+	    sc->psc_trace_map_count);
+}
+
 static int
 passthru_cfgread_default(struct passthru_softc *sc,
     struct pci_devinst *pi __unused, int coff, int bytes, uint32_t *rv)
@@ -984,11 +1061,13 @@ passthru_cfgread_default(struct passthru_softc *sc,
 			return (PE_CFGRW_DEFAULT);
 		*rv = passthru_read_config(sc, PCIR_STATUS, 2) << 16 |
 		    pci_get_cfgdata16(pi, PCIR_COMMAND);
+		passthru_trace_cfgread(sc, coff, bytes, *rv, "command-emul");
 		return (PE_CFGRW_DROP);
 	}
 
 	/* Everything else just read from the device's config space */
 	*rv = passthru_read_config(sc, coff, bytes);
+	passthru_trace_cfgread(sc, coff, bytes, *rv, "device");
 
 	return (PE_CFGRW_DROP);
 }
@@ -1026,10 +1105,19 @@ passthru_cfgwrite_default(struct passthru_softc *sc, struct pci_devinst *pi,
 	 * MSI capability is emulated
 	 */
 	if (msicap_access(sc, coff)) {
+		passthru_trace_cfgwrite(sc, coff, bytes, val, "msi-cap-enter");
 		pci_emul_capwrite(pi, coff, bytes, val, sc->psc_msi.capoff,
 		    PCIY_MSI);
+		passthru_trace(sc, "msi", "enabled=%d addr=0x%llx data=0x%x "
+		    "maxmsgnum=%d", pi->pi_msi.enabled ? 1 : 0,
+		    (u_longlong_t)pi->pi_msi.addr, pi->pi_msi.msg_data,
+		    pi->pi_msi.maxmsgnum);
 		error = vm_setup_pptdev_msi(ctx, sc->pptfd,
 		    pi->pi_msi.addr, pi->pi_msi.msg_data, pi->pi_msi.maxmsgnum);
+		passthru_trace(sc, "msi", "vm_setup_pptdev_msi err=%d "
+		    "enabled=%d addr=0x%llx data=0x%x maxmsgnum=%d", error,
+		    pi->pi_msi.enabled ? 1 : 0, (u_longlong_t)pi->pi_msi.addr,
+		    pi->pi_msi.msg_data, pi->pi_msi.maxmsgnum);
 		if (error != 0)
 			err(1, "vm_setup_pptdev_msi");
 		if (sc->psc_intx_configured && sc->psc_intx_enabled) {
@@ -1040,6 +1128,7 @@ passthru_cfgwrite_default(struct passthru_softc *sc, struct pci_devinst *pi,
 	}
 
 	if (msixcap_access(sc, coff)) {
+		passthru_trace_cfgwrite(sc, coff, bytes, val, "msix-cap-enter");
 		pci_emul_capwrite(pi, coff, bytes, val, sc->psc_msix.capoff,
 		    PCIY_MSIX);
 		if (pi->pi_msix.enabled) {
@@ -1076,9 +1165,16 @@ passthru_cfgwrite_default(struct passthru_softc *sc, struct pci_devinst *pi,
 		if (bytes > 2)
 			passthru_write_config(sc, PCIR_STATUS, 2, val >> 16);
 
+		passthru_trace_cfgwrite(sc, coff, bytes, val, "command-enter");
 		cmd_old = pci_get_cfgdata16(pi, PCIR_COMMAND);
 		pci_set_cfgdata16(pi, PCIR_COMMAND, newval);
 		pci_emul_cmd_changed(pi, cmd_old);
+		passthru_trace(sc, "command", "old=0x%x new=0x%x mem=%d io=%d "
+		    "busmaster=%d msi=%d msix=%d", cmd_old, newval,
+		    (newval & PCIM_CMD_MEMEN) != 0,
+		    (newval & PCIM_CMD_PORTEN) != 0,
+		    (newval & PCIM_CMD_BUSMASTEREN) != 0,
+		    pi->pi_msi.enabled ? 1 : 0, pi->pi_msix.enabled ? 1 : 0);
 
 		if (pi->pi_lintr.pin > 0 && pi->pi_lintr.ioapic_irq > 0) {
 			const int intx_enable =
@@ -1108,6 +1204,7 @@ passthru_cfgwrite_default(struct passthru_softc *sc, struct pci_devinst *pi,
 		return (PE_CFGRW_DROP);
 	}
 
+	passthru_trace_cfgwrite(sc, coff, bytes, val, "device-write");
 	passthru_write_config(sc, coff, bytes, val);
 
 	return (PE_CFGRW_DROP);
@@ -1194,12 +1291,20 @@ passthru_msix_addr(struct vmctx *ctx, struct pci_devinst *pi, int baridx,
 	table_offset = rounddown2(pi->pi_msix.table_offset, 4096);
 	if (table_offset > 0) {
 		if (!enabled) {
-			if (vm_unmap_pptdev_mmio(ctx, sc->pptfd, address,
-			    table_offset) != 0)
+			int error = vm_unmap_pptdev_mmio(ctx, sc->pptfd, address,
+			    table_offset);
+			passthru_trace_map(sc, baridx, enabled, address,
+			    table_offset, sc->psc_bar[baridx].addr, error,
+			    "msix-pre");
+			if (error != 0)
 				warnx("pci_passthru: unmap_pptdev_mmio failed");
 		} else {
-			if (vm_map_pptdev_mmio(ctx, sc->pptfd, address,
-			    table_offset, sc->psc_bar[baridx].addr) != 0)
+			int error = vm_map_pptdev_mmio(ctx, sc->pptfd, address,
+			    table_offset, sc->psc_bar[baridx].addr);
+			passthru_trace_map(sc, baridx, enabled, address,
+			    table_offset, sc->psc_bar[baridx].addr, error,
+			    "msix-pre");
+			if (error != 0)
 				warnx("pci_passthru: map_pptdev_mmio failed");
 		}
 	}
@@ -1210,13 +1315,21 @@ passthru_msix_addr(struct vmctx *ctx, struct pci_devinst *pi, int baridx,
 	if (remaining > 0) {
 		address += table_offset + table_size;
 		if (!enabled) {
-			if (vm_unmap_pptdev_mmio(ctx, sc->pptfd, address,
-			    remaining) != 0)
+			int error = vm_unmap_pptdev_mmio(ctx, sc->pptfd, address,
+			    remaining);
+			passthru_trace_map(sc, baridx, enabled, address,
+			    remaining, sc->psc_bar[baridx].addr +
+			    table_offset + table_size, error, "msix-post");
+			if (error != 0)
 				warnx("pci_passthru: unmap_pptdev_mmio failed");
 		} else {
-			if (vm_map_pptdev_mmio(ctx, sc->pptfd, address,
+			int error = vm_map_pptdev_mmio(ctx, sc->pptfd, address,
 			    remaining, sc->psc_bar[baridx].addr +
-			    table_offset + table_size) != 0)
+			    table_offset + table_size);
+			passthru_trace_map(sc, baridx, enabled, address,
+			    remaining, sc->psc_bar[baridx].addr +
+			    table_offset + table_size, error, "msix-post");
+			if (error != 0)
 				warnx("pci_passthru: map_pptdev_mmio failed");
 		}
 	}
@@ -1230,12 +1343,20 @@ passthru_mmio_addr(struct vmctx *ctx, struct pci_devinst *pi, int baridx,
 
 	sc = pi->pi_arg;
 	if (!enabled) {
-		if (vm_unmap_pptdev_mmio(ctx, sc->pptfd, address,
-		    sc->psc_bar[baridx].size) != 0)
+		int error = vm_unmap_pptdev_mmio(ctx, sc->pptfd, address,
+		    sc->psc_bar[baridx].size);
+		passthru_trace_map(sc, baridx, enabled, address,
+		    sc->psc_bar[baridx].size, sc->psc_bar[baridx].addr, error,
+		    "mmio");
+		if (error != 0)
 			warnx("pci_passthru: unmap_pptdev_mmio failed");
 	} else {
-		if (vm_map_pptdev_mmio(ctx, sc->pptfd, address,
-		    sc->psc_bar[baridx].size, sc->psc_bar[baridx].addr) != 0)
+		int error = vm_map_pptdev_mmio(ctx, sc->pptfd, address,
+		    sc->psc_bar[baridx].size, sc->psc_bar[baridx].addr);
+		passthru_trace_map(sc, baridx, enabled, address,
+		    sc->psc_bar[baridx].size, sc->psc_bar[baridx].addr, error,
+		    "mmio");
+		if (error != 0)
 			warnx("pci_passthru: map_pptdev_mmio failed");
 	}
 }
