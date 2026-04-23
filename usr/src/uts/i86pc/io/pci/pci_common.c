@@ -36,6 +36,7 @@
 #include <sys/conf.h>
 #include <sys/pci.h>
 #include <sys/sunndi.h>
+#include <sys/systm.h>
 #include <sys/mach_intr.h>
 #include <sys/pci_intr_lib.h>
 #include <sys/psm.h>
@@ -65,6 +66,7 @@ static int	pci_alloc_intr_fixed(dev_info_t *, dev_info_t *,
 static int	pci_free_intr_fixed(dev_info_t *, dev_info_t *,
 		    ddi_intr_handle_impl_t *);
 static boolean_t pci_common_is_tu102(dev_info_t *);
+static boolean_t pci_common_trace_ppt(dev_info_t *);
 
 /* Extern declarations for PSM module */
 extern int	(*psm_intr_ops)(dev_info_t *, ddi_intr_handle_impl_t *,
@@ -84,6 +86,14 @@ pci_common_is_tu102(dev_info_t *dip)
 
 	return (pci_config_get16(handle, PCI_CONF_VENID) == 0x10de &&
 	    pci_config_get16(handle, PCI_CONF_DEVID) == 0x1e07);
+}
+
+static boolean_t
+pci_common_trace_ppt(dev_info_t *dip)
+{
+	const char *drv = ddi_driver_name(dip);
+
+	return (drv != NULL && strcmp(drv, "ppt") == 0);
 }
 
 /*
@@ -598,9 +608,21 @@ SUPPORTED_TYPES_OUT:
 		if (psm_intr_ops == NULL)
 			return (DDI_FAILURE);
 
+		if (pci_common_trace_ppt(rdip)) {
+			prom_printf("PCI-MSI-PPT: intr_ops ENABLE enter pdip=%p "
+			    "rdip=%p inum=%u type=0x%x\n", (void *)pdip,
+			    (void *)rdip, hdlp->ih_inum, hdlp->ih_type);
+		}
+
 		if (pci_enable_intr(pdip, rdip, hdlp, hdlp->ih_inum) !=
 		    DDI_SUCCESS)
 			return (DDI_FAILURE);
+
+		if (pci_common_trace_ppt(rdip)) {
+			prom_printf("PCI-MSI-PPT: intr_ops ENABLE done rdip=%p "
+			    "inum=%u vector=0x%x\n", (void *)rdip, hdlp->ih_inum,
+			    hdlp->ih_vector);
+		}
 
 		DDI_INTR_NEXDBG((CE_CONT, "pci_common_intr_ops: ENABLE "
 		    "vector=0x%x\n", hdlp->ih_vector));

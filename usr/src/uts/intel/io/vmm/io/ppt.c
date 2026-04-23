@@ -71,6 +71,7 @@
 #include <sys/ppt_dev.h>
 #include <sys/mkdev.h>
 #include <sys/sysmacros.h>
+#include <sys/promif.h>
 
 #include "vmm_lapic.h"
 #include "vioapic.h"
@@ -1846,8 +1847,18 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 		(void) ddi_intr_get_cap(ppt->msi.inth[i], &intr_cap);
 		if ((intr_cap & DDI_INTR_FLAG_BLOCK) && numvec > 1)
 			res = ddi_intr_block_enable(&ppt->msi.inth[i], 1);
-		else
+		else {
+			prom_printf("PPT-MSI-ENABLE: enter bdf=0x%x vec=%d "
+			    "guest_msg=0x%llx caps=0x%x handle=%p\n", bdf, i,
+			    (u_longlong_t)(msg + i), intr_cap,
+			    (void *)ppt->msi.inth[i]);
 			res = ddi_intr_enable(ppt->msi.inth[i]);
+			prom_printf("PPT-MSI-ENABLE: done bdf=0x%x vec=%d "
+			    "guest_msg=0x%llx err=%d vector=0x%x\n", bdf, i,
+			    (u_longlong_t)(msg + i), res,
+			    ((ddi_intr_handle_impl_t *)ppt->msi.inth[i])->
+			    ih_vector);
+		}
 		cmn_err(CE_NOTE, "ppt: setup_msi enable bdf=0x%x vec=%d "
 		    "guest_msg=0x%llx handle=%p caps=0x%x err=%d",
 		    bdf, i, (u_longlong_t)(msg + i), (void *)ppt->msi.inth[i],
