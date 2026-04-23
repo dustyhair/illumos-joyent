@@ -178,6 +178,7 @@ static void ppt_bus_reset(dev_info_t *);
 static void ppt_reset_pci_power_state(dev_info_t *);
 static int ppt_reset_device_method_locked(struct pptdev *, ppt_reset_flags_t,
     ppt_reset_type_t, ppt_reset_type_t *);
+static int ppt_setup_intx_locked(struct pptdev *, int, boolean_t);
 static uint_t pptintr_intx(caddr_t arg, caddr_t unused);
 static void ppt_teardown_intx(struct pptdev *ppt);
 
@@ -430,6 +431,25 @@ ppt_ioctl(dev_t dev, int cmd, intptr_t arg, int md, cred_t *cr, int *rv)
 		if (ddi_copyout(&req, data, sizeof (req), md) != 0) {
 			return (EFAULT);
 		}
+		return (err);
+	}
+	case PPT_INTX_SETUP: {
+		struct ppt_intx_req req;
+		int err;
+
+		if (ddi_copyin(data, &req, sizeof (req), md) != 0) {
+			return (EFAULT);
+		}
+
+		mutex_enter(&pptdev_mtx);
+		if (ppt->vm == NULL) {
+			mutex_exit(&pptdev_mtx);
+			return (ENXIO);
+		}
+
+		err = ppt_setup_intx_locked(ppt, req.pir_ioapic_irq,
+		    req.pir_enable != 0);
+		mutex_exit(&pptdev_mtx);
 		return (err);
 	}
 
@@ -1889,20 +1909,36 @@ ppt_setup_intx(struct vm *vm, int pptfd, int ioapic_irq, boolean_t enable)
 		return (err);
 	}
 
+	err = ppt_setup_intx_locked(ppt, ioapic_irq, enable);
+
+done:
+	releasef(pptfd);
+	mutex_exit(&pptdev_mtx);
+	return (err);
+}
+
+static int
+ppt_setup_intx_locked(struct pptdev *ppt, int ioapic_irq, boolean_t enable)
+{
+	int err = 0;
+	struct vm *vm = ppt->vm;
+
+	ASSERT(MUTEX_HELD(&pptdev_mtx));
+
+	if (vm == NULL)
+		return (ENXIO);
+
 	if (!enable) {
 		ppt_teardown_intx(ppt);
-		goto done;
+		return (0);
 	}
 
-	if (ioapic_irq < 0 || ioapic_irq >= vioapic_pincount(vm)) {
-		err = EINVAL;
-		goto done;
-	}
+	if (ioapic_irq < 0 || ioapic_irq >= vioapic_pincount(vm))
+		return (EINVAL);
 
 	if (ppt->intx.inth != NULL && ppt->intx.enabled &&
-	    ppt->intx.ioapic_irq == ioapic_irq) {
-		goto done;
-	}
+	    ppt->intx.ioapic_irq == ioapic_irq)
+		return (0);
 
 	ppt_teardown_intx(ppt);
 
@@ -1955,8 +1991,6 @@ ppt_setup_intx(struct vm *vm, int pptfd, int ioapic_irq, boolean_t enable)
 	ppt->intx.ioapic_irq = ioapic_irq;
 
 done:
-	releasef(pptfd);
-	mutex_exit(&pptdev_mtx);
 	return (err);
 }
 

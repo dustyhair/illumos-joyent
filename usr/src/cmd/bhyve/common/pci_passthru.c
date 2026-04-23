@@ -53,7 +53,6 @@
 #include <machine/vmm.h>
 #include <vmmapi.h>
 #include <sys/ppt_dev.h>
-#include <sys/vmm_dev.h>
 
 #include "config.h"
 #include "debug.h"
@@ -138,15 +137,14 @@ passthru_write_config(const struct passthru_softc *sc, long reg, int width,
 }
 
 static int
-passthru_setup_intx(struct vmctx *ctx, int pptfd, int ioapic_irq, int enable)
+passthru_setup_intx(int pptfd, int ioapic_irq, int enable)
 {
-	struct vm_pptdev_intx pptintx;
+	struct ppt_intx_req intx;
 
-	bzero(&pptintx, sizeof (pptintx));
-	pptintx.pptfd = pptfd;
-	pptintx.ioapic_irq = ioapic_irq;
-	pptintx.enable = enable;
-	return (ioctl(vm_get_device_fd(ctx), VM_PPTDEV_INTX, &pptintx));
+	bzero(&intx, sizeof (intx));
+	intx.pir_ioapic_irq = ioapic_irq;
+	intx.pir_enable = enable;
+	return (ioctl(pptfd, PPT_INTX_SETUP, &intx));
 }
 
 static int
@@ -1035,7 +1033,7 @@ passthru_cfgwrite_default(struct passthru_softc *sc, struct pci_devinst *pi,
 		if (error != 0)
 			err(1, "vm_setup_pptdev_msi");
 		if (sc->psc_intx_configured && sc->psc_intx_enabled) {
-			(void) passthru_setup_intx(ctx, sc->pptfd, 0, 0);
+			(void) passthru_setup_intx(sc->pptfd, 0, 0);
 			sc->psc_intx_enabled = 0;
 		}
 		return (PE_CFGRW_DROP);
@@ -1062,7 +1060,7 @@ passthru_cfgwrite_default(struct passthru_softc *sc, struct pci_devinst *pi,
 				err(1, "vm_disable_pptdev_msix");
 		}
 		if (sc->psc_intx_configured && sc->psc_intx_enabled) {
-			(void) passthru_setup_intx(ctx, sc->pptfd, 0, 0);
+			(void) passthru_setup_intx(sc->pptfd, 0, 0);
 			sc->psc_intx_enabled = 0;
 		}
 		return (PE_CFGRW_DROP);
@@ -1092,7 +1090,7 @@ passthru_cfgwrite_default(struct passthru_softc *sc, struct pci_devinst *pi,
 			    sc->psc_intx_irq != pi->pi_lintr.ioapic_irq));
 
 			if (need_cfg) {
-				error = passthru_setup_intx(ctx, sc->pptfd,
+				error = passthru_setup_intx(sc->pptfd,
 				    intx_enable ? pi->pi_lintr.ioapic_irq : 0,
 				    intx_enable);
 				if (error == 0) {

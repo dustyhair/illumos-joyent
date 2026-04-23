@@ -29,6 +29,7 @@ extern "C" {
 #define	PPT_BAR_READ		(PPT_IOC | 0x04)
 #define	PPT_BAR_WRITE		(PPT_IOC | 0x05)
 #define	PPT_RESET_DEVICE	(PPT_IOC | 0x06)
+#define	PPT_INTX_SETUP		(PPT_IOC | 0x07)
 
 #define	PPT_MAXNAMELEN	32
 
@@ -73,6 +74,11 @@ struct ppt_reset_req {
 	uint32_t prr_flags;
 	uint32_t prr_result_method;
 	int32_t prr_result_error;
+};
+
+struct ppt_intx_req {
+	int32_t pir_ioapic_irq;
+	uint32_t pir_enable;
 };
 
 #ifdef __cplusplus
