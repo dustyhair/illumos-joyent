@@ -32,6 +32,7 @@
 #include <sys/sysmacros.h>
 #include <sys/sunddi.h>
 #include <sys/sunndi.h>
+#include <sys/promif.h>
 #include <sys/pcie.h>
 #include <sys/pci_cap.h>
 #include <sys/pcie_impl.h>
