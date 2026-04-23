@@ -51,7 +51,9 @@ pcieb_trace_tu102_child(dev_info_t *rdip)
 	if (rdip == NULL)
 		return (B_FALSE);
 
-	ddi_pathname(rdip, path);
+	if (ddi_pathname(rdip, path) != DDI_SUCCESS)
+		return (B_FALSE);
+
 	return (strstr(path, "/pci8086,c09@1,2/display@0") != NULL);
 }
 
