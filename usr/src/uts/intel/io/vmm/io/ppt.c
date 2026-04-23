@@ -128,6 +128,8 @@ struct pptdev {
 		boolean_t is_fixed;
 		size_t	inth_sz;
 		ddi_intr_handle_t *inth;
+		uint64_t intr_count;
+		uint64_t setup_count;
 		struct pptintr_arg arg[MAX_MSIMSGS];
 	} msi;
 
@@ -1280,9 +1282,16 @@ static void
 ppt_teardown_msi(struct pptdev *ppt)
 {
 	int i;
+	uint16_t bdf;
 
 	if (ppt->msi.num_msgs == 0)
 		return;
+
+	bdf = pci_get_bdf(ppt->pptd_dip);
+	cmn_err(CE_NOTE, "ppt: teardown_msi bdf=0x%x msgs=%d is_fixed=%d "
+	    "intr_count=%llu setup_count=%llu", bdf, ppt->msi.num_msgs,
+	    ppt->msi.is_fixed ? 1 : 0, (u_longlong_t)ppt->msi.intr_count,
+	    (u_longlong_t)ppt->msi.setup_count);
 
 	for (i = 0; i < ppt->msi.num_msgs; i++) {
 		int intr_cap;
@@ -1304,6 +1313,7 @@ ppt_teardown_msi(struct pptdev *ppt)
 	ppt->msi.inth = NULL;
 	ppt->msi.inth_sz = 0;
 	ppt->msi.is_fixed = B_FALSE;
+	ppt->msi.intr_count = 0;
 
 	ppt->msi.num_msgs = 0;
 }
@@ -1634,6 +1644,18 @@ pptintr(caddr_t arg, caddr_t unused)
 {
 	struct pptintr_arg *pptarg = (struct pptintr_arg *)arg;
 	struct pptdev *ppt = pptarg->pptdev;
+	uint64_t intr_count;
+	uint16_t bdf;
+
+	intr_count = ++ppt->msi.intr_count;
+	bdf = pci_get_bdf(ppt->pptd_dip);
+	if (intr_count <= 8 || (intr_count & (intr_count - 1)) == 0) {
+		cmn_err(CE_NOTE, "ppt: intr bdf=0x%x count=%llu is_fixed=%d "
+		    "addr=0x%llx msg=0x%llx vm=%p", bdf,
+		    (u_longlong_t)intr_count, ppt->msi.is_fixed ? 1 : 0,
+		    (u_longlong_t)pptarg->addr, (u_longlong_t)pptarg->msg_data,
+		    (void *)ppt->vm);
+	}
 
 	if (ppt->vm != NULL) {
 		lapic_intr_msi(ppt->vm, pptarg->addr, pptarg->msg_data);
@@ -1670,6 +1692,7 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 	struct pptdev *ppt;
 	int err = 0;
 	boolean_t same_request = B_TRUE;
+	uint16_t bdf = 0;
 
 	if (numvec < 0 || numvec > MAX_MSIMSGS)
 		return (EINVAL);
@@ -1680,6 +1703,15 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 		mutex_exit(&pptdev_mtx);
 		return (err);
 	}
+
+	bdf = pci_get_bdf(ppt->pptd_dip);
+	cmn_err(CE_NOTE, "ppt: setup_msi enter bdf=0x%x vcpu=%d numvec=%d "
+	    "addr=0x%llx msg=0x%llx existing_msgs=%d is_fixed=%d "
+	    "setup_count=%llu intr_count=%llu",
+	    bdf, vcpu, numvec, (u_longlong_t)addr, (u_longlong_t)msg,
+	    ppt->msi.num_msgs, ppt->msi.is_fixed ? 1 : 0,
+	    (u_longlong_t)ppt->msi.setup_count,
+	    (u_longlong_t)ppt->msi.intr_count);
 
 	/* Reject attempts to enable MSI while MSI-X is active. */
 	if (ppt->msix.num_msgs != 0 && numvec != 0) {
@@ -1702,15 +1734,21 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 				break;
 			}
 		}
-		if (same_request)
+		if (same_request) {
+			cmn_err(CE_NOTE, "ppt: setup_msi reuse bdf=0x%x "
+			    "numvec=%d addr=0x%llx msg=0x%llx", bdf, numvec,
+			    (u_longlong_t)addr, (u_longlong_t)msg);
 			goto done;
+		}
 	}
 
 	/* Free any allocated resources */
 	ppt_teardown_msi(ppt);
 
-	if (numvec == 0)
+	if (numvec == 0) {
+		cmn_err(CE_NOTE, "ppt: setup_msi disable bdf=0x%x", bdf);
 		goto done;
+	}
 
 	if (ddi_intr_get_navail(ppt->pptd_dip, DDI_INTR_TYPE_MSI,
 	    &msi_count) != DDI_SUCCESS) {
@@ -1725,6 +1763,11 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 	} else {
 		intr_type = DDI_INTR_TYPE_MSI;
 	}
+
+	cmn_err(CE_NOTE, "ppt: setup_msi alloc bdf=0x%x intr_type=%s "
+	    "avail=%d requested=%d", bdf,
+	    intr_type == DDI_INTR_TYPE_MSI ? "msi" : "fixed", msi_count,
+	    numvec);
 
 	/*
 	 * The device must be capable of supporting the number of vectors
@@ -1779,9 +1822,20 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 	if (i < numvec) {
 		ppt_teardown_msi(ppt);
 		err = ENXIO;
+	} else {
+		ppt->msi.setup_count++;
+		cmn_err(CE_NOTE, "ppt: setup_msi armed bdf=0x%x numvec=%d "
+		    "intr_type=%s setup_count=%llu", bdf, numvec,
+		    ppt->msi.is_fixed ? "fixed" : "msi",
+		    (u_longlong_t)ppt->msi.setup_count);
 	}
 
 done:
+	cmn_err(CE_NOTE, "ppt: setup_msi exit bdf=0x%x err=%d msgs=%d "
+	    "is_fixed=%d intr_count=%llu setup_count=%llu", bdf, err,
+	    ppt->msi.num_msgs, ppt->msi.is_fixed ? 1 : 0,
+	    (u_longlong_t)ppt->msi.intr_count,
+	    (u_longlong_t)ppt->msi.setup_count);
 	releasef(pptfd);
 	mutex_exit(&pptdev_mtx);
 	return (err);
