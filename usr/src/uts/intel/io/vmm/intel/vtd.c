@@ -2004,7 +2004,7 @@ vtd_create_domain(vm_paddr_t maxaddr)
 {
 	struct domain *dom;
 	vm_paddr_t addr;
-	int tmp, i, gaw, agaw, res, pt_levels, addrwidth;
+	int i, gaw, agaw, res, pt_levels, addrwidth;
 	uint32_t spsmask;
 
 	if (drhd_num <= 0)
