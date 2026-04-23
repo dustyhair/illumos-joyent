@@ -141,6 +141,8 @@ static int immu_intrmap_trace_recent_irte_dump = 0;
 static int immu_intrmap_trace_recent_irte_dump_count = 16;
 static uint32_t immu_intrmap_irte_trace_seq = 0;
 static uint32_t immu_intrmap_irte_trace_dumped = 0;
+static uint32_t immu_intrmap_msi_encode_count = 0;
+static uint32_t immu_intrmap_msi_program_count = 0;
 static immu_intrmap_irte_trace_t
     immu_intrmap_irte_trace_ring[IMMU_INTRMAP_IRTE_TRACE_RING_SZ];
 
@@ -1260,15 +1262,30 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data,
 				") raw 0x%" PRIx64, shifted_dst, raw_dst);
 		}
 
-		cmn_err(CE_CONT,
-			"!immu_intrmap_map: MSI setup idx=%u vector=0x%x "
-			"raw_dst=0x%" PRIx64 " shifted_dst=0x%" PRIx64 " "
-			"msi_addr=0x%" PRIx64 " msi_data=0x%" PRIx32 " (count=%d)",
-			idx, (unsigned int)vector,
-			raw_dst, shifted_dst,
-			(uint64_t)mregs->mr_addr, (uint32_t)mregs->mr_data,
-			count);
-	}
+			cmn_err(CE_CONT,
+				"!immu_intrmap_map: MSI setup idx=%u vector=0x%x "
+				"raw_dst=0x%" PRIx64 " shifted_dst=0x%" PRIx64 " "
+				"msi_addr=0x%" PRIx64 " msi_data=0x%" PRIx32 " (count=%d)",
+				idx, (unsigned int)vector,
+				raw_dst, shifted_dst,
+				(uint64_t)mregs->mr_addr, (uint32_t)mregs->mr_data,
+				count);
+
+			if (count == 1) {
+				uint32_t map_count;
+
+				map_count = atomic_inc_32_nv(&immu_intrmap_msi_program_count);
+				if (map_count <= 16 || (map_count & (map_count - 1)) == 0) {
+					cmn_err(CE_NOTE, "immu_intrmap: map_msi unit=%d idx=%u "
+					    "sid=0x%x vector=0x%x raw_dst=0x%" PRIx64
+					    " shifted_dst=0x%" PRIx64 " final_dst=0x%x "
+					    "count=%d dip=%p",
+					    unit, idx, sid, (unsigned int)vector, raw_dst,
+					    shifted_dst, dst, count,
+					    (void *)INTRMAP_PRIVATE(intrmap_private)->ir_dip);
+				}
+			}
+		}
 
 	if (intrmap_apic_mode == LOCAL_APIC)
 		dst = (dst & 0xFF) << 8;
@@ -1520,10 +1537,22 @@ static void
 immu_intrmap_msi(void *intrmap_private, msi_regs_t *mregs)
 {
 	uint_t	idx;
+	uint64_t old_addr;
+	uint32_t old_data;
+	uint32_t sid;
+	int unit = -1;
+	uint32_t enc_count;
+	immu_t *immu = NULL;
 
 	if (intrmap_private != INTRMAP_DISABLE && intrmap_private != NULL) {
 		/* Interrupt Remapping case: use IR-format MSI address encoding */
 		idx = INTRMAP_PRIVATE(intrmap_private)->ir_idx;
+		old_addr = mregs->mr_addr;
+		old_data = mregs->mr_data;
+		sid = INTRMAP_PRIVATE(intrmap_private)->ir_sid_svt_sq & 0xffff;
+		immu = INTRMAP_PRIVATE(intrmap_private)->ir_immu;
+		if (immu != NULL)
+			unit = immu_intrmap_unit_index(immu);
 
 		mregs->mr_data = 0;
 		mregs->mr_addr = MSI_ADDR_HDR |
@@ -1536,8 +1565,19 @@ immu_intrmap_msi(void *intrmap_private, msi_regs_t *mregs)
 		    "!immu_intrmap_msi(IR): idx=%u mr_addr=0x%" PRIx64
 		    " mr_data=0x%x (IR-format encoding)",
 		    idx, (uint64_t)mregs->mr_addr, mregs->mr_data);
+
+		enc_count = atomic_inc_32_nv(&immu_intrmap_msi_encode_count);
+		if (enc_count <= 16 || (enc_count & (enc_count - 1)) == 0) {
+			cmn_err(CE_NOTE, "immu_intrmap: encode_msi unit=%d idx=%u "
+			    "sid=0x%x old_addr=0x%" PRIx64 " old_data=0x%x "
+			    "ir_addr=0x%" PRIx64 " ir_data=0x%x",
+			    unit, idx, sid, old_addr, old_data,
+			    (uint64_t)mregs->mr_addr, mregs->mr_data);
+		}
 	} else {
 		/* Compatibility / non-remapped format */
+		old_addr = mregs->mr_addr;
+		old_data = mregs->mr_data;
 		mregs->mr_addr = MSI_ADDR_HDR |
 		    (MSI_ADDR_RH_FIXED << MSI_ADDR_RH_SHIFT) |
 		    (MSI_ADDR_DM_PHYSICAL << MSI_ADDR_DM_SHIFT) |
@@ -1549,6 +1589,14 @@ immu_intrmap_msi(void *intrmap_private, msi_regs_t *mregs)
 		    "!immu_intrmap_msi(compat): mr_addr=0x%" PRIx64
 		    " mr_data=0x%x",
 		    (uint64_t)mregs->mr_addr, mregs->mr_data);
+		enc_count = atomic_inc_32_nv(&immu_intrmap_msi_encode_count);
+		if (enc_count <= 16 || (enc_count & (enc_count - 1)) == 0) {
+			cmn_err(CE_NOTE, "immu_intrmap: encode_msi compat "
+			    "old_addr=0x%" PRIx64 " old_data=0x%x addr=0x%" PRIx64
+			    " data=0x%x",
+			    old_addr, old_data, (uint64_t)mregs->mr_addr,
+			    mregs->mr_data);
+		}
 	}
 }
 

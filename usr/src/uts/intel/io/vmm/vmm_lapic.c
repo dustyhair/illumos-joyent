@@ -118,6 +118,8 @@ lapic_intr_msi(struct vm *vm, uint64_t addr, uint64_t msg)
 	int delmode, vec;
 	uint32_t dest;
 	bool phys;
+	static uint32_t lapic_msi_deliver_count;
+	uint32_t deliver_count;
 
 	if ((addr & MSI_X86_ADDR_MASK) != MSI_X86_ADDR_BASE) {
 		/* Invalid MSI address */
@@ -139,6 +141,13 @@ lapic_intr_msi(struct vm *vm, uint64_t addr, uint64_t msg)
 	phys = (addr & MSI_X86_ADDR_LOG) == 0;
 	delmode = msg & APIC_DELMODE_MASK;
 	vec = msg & 0xff;
+	deliver_count = atomic_inc_32_nv(&lapic_msi_deliver_count);
+	if (deliver_count <= 16 || (deliver_count & (deliver_count - 1)) == 0) {
+		cmn_err(CE_NOTE, "lapic: msi deliver vm=%p addr=0x%llx msg=0x%llx "
+		    "dest=0x%x phys=%d delmode=0x%x vec=0x%x count=%u",
+		    (void *)vm, (u_longlong_t)addr, (u_longlong_t)msg, dest,
+		    phys ? 1 : 0, delmode, vec, deliver_count);
+	}
 
 	vlapic_deliver_intr(vm, LAPIC_TRIG_EDGE, dest, phys, delmode, vec);
 	return (0);
