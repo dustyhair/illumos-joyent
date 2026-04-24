@@ -208,6 +208,7 @@ static enum vmx_caps vmx_capabilities;
 
 /* APICv posted interrupt vector */
 static int pirvec = -1;
+static uint32_t vmx_tu102_enter_count;
 static uint32_t vmx_tu102_block_count;
 
 static uint_t vpid_alloc_failed;
@@ -1345,9 +1346,15 @@ vmx_inject_vlapic(struct vmx *vmx, int vcpu, struct vlapic *vlapic)
 		return (EIS_CAN_INJECT);
 	}
 	if (vector == 0x23) {
-		prom_printf("VMX-INJ-TU102: enter vm=%p vcpu=%d vec=0x%x "
-		    "apicv=%d\n", (void *)vmx->vm, vcpu, vector,
-		    vmx_cap_en(vmx, VMX_CAP_APICV) ? 1 : 0);
+		uint32_t enter_count = atomic_inc_32_nv(&vmx_tu102_enter_count);
+
+		if (enter_count <= 16 || powerof2(enter_count)) {
+			prom_printf("VMX-INJ-TU102: enter vm=%p vcpu=%d "
+			    "vec=0x%x apicv=%d count=%u\n",
+			    (void *)vmx->vm, vcpu, vector,
+			    vmx_cap_en(vmx, VMX_CAP_APICV) ? 1 : 0,
+			    enter_count);
+		}
 	}
 
 	/*
