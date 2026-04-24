@@ -210,6 +210,7 @@ static enum vmx_caps vmx_capabilities;
 static int pirvec = -1;
 static uint32_t vmx_tu102_enter_count;
 static uint32_t vmx_tu102_block_count;
+static uint32_t vmx_tu102_postrun_count;
 
 static uint_t vpid_alloc_failed;
 
@@ -2994,6 +2995,21 @@ vmx_run(void *arg, int vcpu, uint64_t rip)
 		    vmcs_read(VMCS_EXIT_QUALIFICATION);
 		/* Update 'nextrip' */
 		vmx->state[vcpu].nextrip = rip;
+
+		if (rc == VMX_GUEST_VMEXIT) {
+			uint32_t postrun_count =
+			    atomic_inc_32_nv(&vmx_tu102_postrun_count);
+
+			if (postrun_count <= 16 || powerof2(postrun_count)) {
+				prom_printf("VMX-RUN-TU102: postrun vm=%p "
+				    "vcpu=%d rip=0x%llx reason=0x%x qual=0x%llx "
+				    "instlen=%u count=%u\n",
+				    (void *)vmx->vm, vcpu,
+				    (u_longlong_t)rip, exit_reason,
+				    (u_longlong_t)vmexit->u.vmx.exit_qualification,
+				    vmexit->inst_length, postrun_count);
+			}
+		}
 
 		if (rc == VMX_GUEST_VMEXIT) {
 			vmx_exit_handle_possible_nmi(vmexit);
