@@ -210,9 +210,9 @@ static enum vmx_caps vmx_capabilities;
 static int pirvec = -1;
 static uint32_t vmx_tu102_enter_count;
 static uint32_t vmx_tu102_block_count;
-static uint32_t vmx_tu102_runenter_count;
-static uint32_t vmx_tu102_postrun_count;
-static uint32_t vmx_tu102_runreturn_count;
+static uint32_t vmx_tu102_vcpu1_runenter_count;
+static uint32_t vmx_tu102_vcpu1_postrun_count;
+static uint32_t vmx_tu102_vcpu1_runreturn_count;
 
 static uint_t vpid_alloc_failed;
 
@@ -2974,9 +2974,9 @@ vmx_run(void *arg, int vcpu, uint64_t rip)
 
 		vcpu_ustate_change(vm, vcpu, VU_RUN);
 
-		{
+		if (vcpu == 1) {
 			uint32_t runenter_count =
-			    atomic_inc_32_nv(&vmx_tu102_runenter_count);
+			    atomic_inc_32_nv(&vmx_tu102_vcpu1_runenter_count);
 
 			if (runenter_count <= 16 || powerof2(runenter_count)) {
 				prom_printf("VMX-RUN-TU102: preenter vm=%p "
@@ -3012,9 +3012,9 @@ vmx_run(void *arg, int vcpu, uint64_t rip)
 		/* Update 'nextrip' */
 		vmx->state[vcpu].nextrip = rip;
 
-		{
+		if (vcpu == 1) {
 			uint32_t runreturn_count =
-			    atomic_inc_32_nv(&vmx_tu102_runreturn_count);
+			    atomic_inc_32_nv(&vmx_tu102_vcpu1_runreturn_count);
 
 			if (runreturn_count <= 16 || powerof2(runreturn_count)) {
 				prom_printf("VMX-RUN-TU102: return vm=%p "
@@ -3027,9 +3027,9 @@ vmx_run(void *arg, int vcpu, uint64_t rip)
 			}
 		}
 
-		if (rc == VMX_GUEST_VMEXIT) {
+		if (rc == VMX_GUEST_VMEXIT && vcpu == 1) {
 			uint32_t postrun_count =
-			    atomic_inc_32_nv(&vmx_tu102_postrun_count);
+			    atomic_inc_32_nv(&vmx_tu102_vcpu1_postrun_count);
 
 			if (postrun_count <= 16 || powerof2(postrun_count)) {
 				prom_printf("VMX-RUN-TU102: postrun vm=%p "
