@@ -47,6 +47,7 @@
 
 #include <sys/cdefs.h>
 
+#include <sys/atomic.h>
 #include <sys/param.h>
 #include <sys/promif.h>
 #include <sys/systm.h>
@@ -207,6 +208,7 @@ static enum vmx_caps vmx_capabilities;
 
 /* APICv posted interrupt vector */
 static int pirvec = -1;
+static uint32_t vmx_tu102_block_count;
 
 static uint_t vpid_alloc_failed;
 
@@ -1406,11 +1408,20 @@ vmx_inject_vlapic(struct vmx *vmx, int vcpu, struct vlapic *vlapic)
 	if ((vmcs_read(VMCS_GUEST_INTERRUPTIBILITY) & HWINTR_BLOCKING) != 0 ||
 	    (vmcs_read(VMCS_GUEST_RFLAGS) & PSL_I) == 0) {
 		if (vector == 0x23) {
-			prom_printf("VMX-INJ-TU102: blocked vm=%p vcpu=%d "
-			    "vec=0x%x gi=0x%x rflags=0x%llx\n",
-			    (void *)vmx->vm, vcpu, vector,
-			    (uint32_t)vmcs_read(VMCS_GUEST_INTERRUPTIBILITY),
-			    (u_longlong_t)vmcs_read(VMCS_GUEST_RFLAGS));
+			uint32_t blocked_count =
+			    atomic_inc_32_nv(&vmx_tu102_block_count);
+
+			if (blocked_count <= 16 || powerof2(blocked_count)) {
+				prom_printf("VMX-INJ-TU102: blocked vm=%p "
+				    "vcpu=%d vec=0x%x gi=0x%x rflags=0x%llx "
+				    "rip=0x%llx count=%u\n",
+				    (void *)vmx->vm, vcpu, vector,
+				    (uint32_t)vmcs_read(
+				    VMCS_GUEST_INTERRUPTIBILITY),
+				    (u_longlong_t)vmcs_read(VMCS_GUEST_RFLAGS),
+				    (u_longlong_t)vmcs_read(VMCS_GUEST_RIP),
+				    blocked_count);
+			}
 		}
 		return (EIS_GI_BLOCK);
 	}
