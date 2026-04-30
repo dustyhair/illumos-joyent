@@ -56,6 +56,7 @@
 #include <sys/pcpu.h>
 #include <sys/mutex.h>
 #include <sys/proc.h>
+#include <sys/promif.h>
 #include <sys/rwlock.h>
 #include <sys/sched.h>
 #include <sys/systm.h>
