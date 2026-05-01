@@ -288,6 +288,8 @@ static void qinv_iec_common(immu_t *immu, uint_t iidx,
     uint_t im, uint_t g);
 static void immu_qinv_inv_wait(immu_inv_wait_t *iwp);
 static void qinv_wait_sync(immu_t *immu, immu_inv_wait_t *iwp);
+static void qinv_wait_slot_alloc(immu_t *immu, immu_inv_wait_t *iwp,
+    volatile uint32_t **statusp, uint64_t *paddrp);
 /*LINTED*/
 static void qinv_dev_iotlb_common(immu_t *immu, uint16_t sid,
     uint64_t addr, uint_t size, uint_t max_invs_pd);
@@ -421,6 +423,39 @@ qinv_iec_common(immu_t *immu, uint_t iidx, uint_t im, uint_t g)
 }
 
 static void
+qinv_wait_slot_alloc(immu_t *immu, immu_inv_wait_t *iwp,
+    volatile uint32_t **statusp, uint64_t *paddrp)
+{
+	qinv_t *qinv;
+	qinv_mem_t *qinv_sync;
+	uint_t slot;
+
+	if (!iwp->iwp_sync || immu->immu_qinv == NULL) {
+		*statusp = (iwp->iwp_statusp != NULL) ?
+		    iwp->iwp_statusp : &iwp->iwp_vstatus;
+		*paddrp = iwp->iwp_pstatus;
+		return;
+	}
+
+	qinv = (qinv_t *)immu->immu_qinv;
+	qinv_sync = &qinv->qinv_sync;
+
+	mutex_enter(&qinv_sync->qinv_mem_lock);
+	slot = qinv_sync->qinv_mem_tail++;
+	if (qinv_sync->qinv_mem_tail == qinv_sync->qinv_mem_size)
+		qinv_sync->qinv_mem_tail = 0;
+	mutex_exit(&qinv_sync->qinv_mem_lock);
+
+	*statusp = (volatile uint32_t *)(qinv_sync->qinv_mem_vaddr +
+	    slot * QINV_SYNC_DATA_SIZE);
+	*paddrp = qinv_sync->qinv_mem_paddr +
+	    slot * QINV_SYNC_DATA_SIZE;
+
+	iwp->iwp_statusp = *statusp;
+	iwp->iwp_pstatus = *paddrp;
+}
+
+static void
 qinv_wait_sync(immu_t *immu, immu_inv_wait_t *iwp)
 {
 	qinv_dsc_t dsc;
@@ -430,8 +465,7 @@ qinv_wait_sync(immu_t *immu, immu_inv_wait_t *iwp)
 	uint_t count;
 #endif
 
-	status = &iwp->iwp_vstatus;
-	paddr = iwp->iwp_pstatus;
+	qinv_wait_slot_alloc(immu, iwp, &status, &paddr);
 
 	*status = IMMU_INV_DATA_PENDING;
 	membar_producer();
@@ -466,7 +500,8 @@ qinv_wait_sync(immu_t *immu, immu_inv_wait_t *iwp)
 static void
 immu_qinv_inv_wait(immu_inv_wait_t *iwp)
 {
-	volatile uint32_t *status = &iwp->iwp_vstatus;
+	volatile uint32_t *status = (iwp->iwp_statusp != NULL) ?
+	    iwp->iwp_statusp : &iwp->iwp_vstatus;
 #ifdef DEBUG
 	uint_t count;
 
@@ -674,6 +709,10 @@ immu_qinv_startup(immu_t *immu)
 	qinv = (qinv_t *)immu->immu_qinv;
 	qinv_reg_value = qinv->qinv_table.qinv_mem_paddr | qinv_iqa_qs;
 	immu_regs_qinv_enable(immu, qinv_reg_value);
+	immu->immu_intrmap_inv_wait.iwp_statusp =
+	    (volatile uint32_t *)qinv->qinv_sync.qinv_mem_vaddr;
+	immu->immu_intrmap_inv_wait.iwp_pstatus =
+	    qinv->qinv_sync.qinv_mem_paddr;
 	immu->immu_flushops = &immu_qinv_flushops;
 	immu->immu_qinv_running = B_TRUE;
 }
