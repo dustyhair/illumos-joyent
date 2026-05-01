@@ -1198,6 +1198,12 @@ ppt_reset_run_locked(struct pptdev *ppt, ppt_reset_type_t want_method,
 	}
 
 	ppt_reset_pci_power_state(ppt->pptd_dip);
+	/*
+	 * A manual reset can run before assignment.  Leave the device in the
+	 * saved host configuration so ppt_assign_device() does not snapshot a
+	 * reset-default config image as its pristine state.
+	 */
+	(void) pci_restore_config_regs(ppt->pptd_dip);
 	(void) ppt_wait_link_active(ppt->pptd_dip);
 
 	if (actual_methodp != NULL)
