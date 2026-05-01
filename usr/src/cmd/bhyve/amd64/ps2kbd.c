@@ -35,6 +35,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <strings.h>
 #include <pthread.h>
 #include <pthread_np.h>
@@ -67,6 +68,21 @@
 #define	PS2KBD_LAYOUT_BASEDIR	"/usr/share/bhyve/kbdlayout/"
 
 #define	MAX_PATHNAME		256
+
+static bool
+ps2kbd_trace_unhandled(void)
+{
+	static int cached = -1;
+	const char *env;
+
+	if (cached != -1)
+		return (cached != 0);
+
+	env = getenv("BHYVE_UNHANDLED_TRACE");
+	cached = (env != NULL && strcmp(env, "0") != 0 &&
+	    strcasecmp(env, "false") != 0);
+	return (cached != 0);
+}
 
 struct fifo {
 	uint8_t	buf[PS2KBD_FIFOSZ];
@@ -283,8 +299,10 @@ ps2kbd_write(struct ps2kbd_softc *sc, uint8_t val)
 			fifo_put(sc, PS2KC_ACK);
 			break;
 		default:
-			EPRINTLN("Unhandled ps2 keyboard current "
-			    "command byte 0x%02x", val);
+			if (ps2kbd_trace_unhandled()) {
+				EPRINTLN("Unhandled ps2 keyboard current "
+				    "command byte 0x%02x", val);
+			}
 			break;
 		}
 		sc->curcmd = 0;
@@ -332,8 +350,10 @@ ps2kbd_write(struct ps2kbd_softc *sc, uint8_t val)
 			fifo_put(sc, PS2KC_ACK);
 			break;
 		default:
-			EPRINTLN("Unhandled ps2 keyboard command "
-			    "0x%02x", val);
+			if (ps2kbd_trace_unhandled()) {
+				EPRINTLN("Unhandled ps2 keyboard command "
+				    "0x%02x", val);
+			}
 			break;
 		}
 	}
@@ -377,7 +397,8 @@ ps2kbd_keysym_queue(struct ps2kbd_softc *sc,
 	}
 
 	if (!found) {
-		EPRINTLN("Unhandled ps2 keyboard keysym 0x%x", keysym);
+		if (ps2kbd_trace_unhandled())
+			EPRINTLN("Unhandled ps2 keyboard keysym 0x%x", keysym);
 		return;
 	}
 
@@ -501,4 +522,3 @@ ps2kbd_init(struct atkbdc_softc *atkbdc_sc)
 
 	return (sc);
 }
-

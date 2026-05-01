@@ -34,6 +34,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <strings.h>
 #include <pthread.h>
 #include <pthread_np.h>
@@ -83,6 +84,21 @@
 #define	PS2M_STS_LEFT_BUTTON	0x01
 
 #define	PS2MOUSE_FIFOSZ		16
+
+static bool
+ps2mouse_trace_unhandled(void)
+{
+	static int cached = -1;
+	const char *env;
+
+	if (cached != -1)
+		return (cached != 0);
+
+	env = getenv("BHYVE_UNHANDLED_TRACE");
+	cached = (env != NULL && strcmp(env, "0") != 0 &&
+	    strcasecmp(env, "false") != 0);
+	return (cached != 0);
+}
 
 struct fifo {
 	uint8_t	buf[PS2MOUSE_FIFOSZ];
@@ -289,8 +305,10 @@ ps2mouse_write(struct ps2mouse_softc *sc, uint8_t val, int insert)
 			fifo_put(sc, PS2MC_ACK);
 			break;
 		default:
-			EPRINTLN("Unhandled ps2 mouse current "
-			    "command byte 0x%02x", val);
+			if (ps2mouse_trace_unhandled()) {
+				EPRINTLN("Unhandled ps2 mouse current "
+				    "command byte 0x%02x", val);
+			}
 			break;
 		}
 		sc->curcmd = 0;
@@ -358,8 +376,10 @@ ps2mouse_write(struct ps2mouse_softc *sc, uint8_t val, int insert)
 			break;
 		default:
 			fifo_put(sc, PS2MC_ACK);
-			EPRINTLN("Unhandled ps2 mouse command "
-			    "0x%02x", val);
+			if (ps2mouse_trace_unhandled()) {
+				EPRINTLN("Unhandled ps2 mouse command "
+				    "0x%02x", val);
+			}
 			break;
 		}
 	}
@@ -414,5 +434,3 @@ ps2mouse_init(struct atkbdc_softc *atkbdc_sc)
 
 	return (sc);
 }
-
-

@@ -83,6 +83,21 @@
 #ifndef __FreeBSD__
 static struct vm_entry *vmentry;
 
+static bool
+trace_unhandled_vmexit(void)
+{
+	static int cached = -1;
+	const char *env;
+
+	if (cached != -1)
+		return (cached != 0);
+
+	env = getenv("BHYVE_UNHANDLED_TRACE");
+	cached = (env != NULL && strcmp(env, "0") != 0 &&
+	    strcasecmp(env, "false") != 0);
+	return (cached != 0);
+}
+
 int
 vmentry_init(int ncpus)
 {
@@ -216,8 +231,10 @@ vmexit_rdmsr(struct vmctx *ctx __unused, struct vcpu *vcpu, struct vm_exit *vme)
 	val = 0;
 	error = emulate_rdmsr(vcpu, vme->u.msr.code, &val);
 	if (error != 0) {
-		EPRINTLN("rdmsr to register %#x on vcpu %d",
-		    vme->u.msr.code, vcpu_id(vcpu));
+		if (trace_unhandled_vmexit()) {
+			EPRINTLN("rdmsr to register %#x on vcpu %d",
+			    vme->u.msr.code, vcpu_id(vcpu));
+		}
 		if (get_config_bool("x86.strictmsr")) {
 			vm_inject_gp(vcpu);
 			return (VMEXIT_CONTINUE);
@@ -242,8 +259,10 @@ vmexit_wrmsr(struct vmctx *ctx __unused, struct vcpu *vcpu, struct vm_exit *vme)
 
 	error = emulate_wrmsr(vcpu, vme->u.msr.code, vme->u.msr.wval);
 	if (error != 0) {
-		EPRINTLN("wrmsr to register %#x(%#lx) on vcpu %d",
-		    vme->u.msr.code, vme->u.msr.wval, vcpu_id(vcpu));
+		if (trace_unhandled_vmexit()) {
+			EPRINTLN("wrmsr to register %#x(%#lx) on vcpu %d",
+			    vme->u.msr.code, vme->u.msr.wval, vcpu_id(vcpu));
+		}
 		if (get_config_bool("x86.strictmsr")) {
 			vm_inject_gp(vcpu);
 			return (VMEXIT_CONTINUE);
