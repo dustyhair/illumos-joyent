@@ -139,6 +139,7 @@ typedef struct immu_intrmap_irte_trace {
 static int immu_intrmap_trace_recent_irte = 0;
 static int immu_intrmap_trace_recent_irte_dump = 0;
 static int immu_intrmap_trace_recent_irte_dump_count = 16;
+int immu_intrmap_diag_enable = 0;
 static uint32_t immu_intrmap_irte_trace_seq = 0;
 static uint32_t immu_intrmap_irte_trace_dumped = 0;
 static uint32_t immu_intrmap_msi_encode_count = 0;
@@ -273,13 +274,18 @@ immu_intrmap_sync_cache(immu_t *immu, uint_t idx, uint_t count,
     immu_inv_wait_t *iwp, boolean_t use_irta_sync, const char *reason)
 {
 	if (use_irta_sync) {
-		prom_printf("IRMAP-TU102: sync-irta start idx=%u count=%u "
-		    "reason=%s immu=%s\n", idx, count,
-		    reason != NULL ? reason : "?",
-		    immu->immu_name ? immu->immu_name : "<noname>");
+		if (immu_intrmap_diag_enable != 0) {
+			prom_printf("IRMAP-TU102: sync-irta start idx=%u "
+			    "count=%u reason=%s immu=%s\n", idx, count,
+			    reason != NULL ? reason : "?",
+			    immu->immu_name ? immu->immu_name : "<noname>");
+		}
 		immu_regs_intrmap_sync(immu);
-		prom_printf("IRMAP-TU102: sync-irta done idx=%u count=%u "
-		    "reason=%s\n", idx, count, reason != NULL ? reason : "?");
+		if (immu_intrmap_diag_enable != 0) {
+			prom_printf("IRMAP-TU102: sync-irta done idx=%u "
+			    "count=%u reason=%s\n", idx, count,
+			    reason != NULL ? reason : "?");
+		}
 		return;
 	}
 
@@ -327,8 +333,10 @@ immu_intrmap_drhd_transition_set(int unit, boolean_t enter)
 			}
 		}
 		mutex_exit(&immu_intrmap_drhd_gate_lock[unit]);
-		cmn_err(CE_NOTE, "immu_intrmap: drhd=%d transition enter depth=%u",
-		    unit, depth);
+		if (immu_intrmap_diag_enable != 0) {
+			cmn_err(CE_NOTE, "immu_intrmap: drhd=%d transition "
+			    "enter depth=%u", unit, depth);
+		}
 	} else {
 		mutex_enter(&immu_intrmap_drhd_gate_lock[unit]);
 		if (immu_intrmap_drhd_transition_depth[unit] == 0) {
@@ -343,8 +351,10 @@ immu_intrmap_drhd_transition_set(int unit, boolean_t enter)
 			}
 		}
 		mutex_exit(&immu_intrmap_drhd_gate_lock[unit]);
-		cmn_err(CE_NOTE, "immu_intrmap: drhd=%d transition exit depth=%u",
-		    unit, depth);
+		if (immu_intrmap_diag_enable != 0) {
+			cmn_err(CE_NOTE, "immu_intrmap: drhd=%d transition "
+			    "exit depth=%u", unit, depth);
+		}
 	}
 }
 
@@ -726,9 +736,11 @@ init_unit(immu_t *immu)
 
 	immu->immu_intrmap = intrmap;
 
-	cmn_err(CE_CONT, "!init_unit: immu %s IR table initialized, size=%u",
-	    immu->immu_name ? immu->immu_name : "<noname>",
-	    intrmap->intrmap_size);
+	if (immu_intrmap_diag_enable != 0) {
+		cmn_err(CE_CONT, "!init_unit: immu %s IR table initialized, "
+		    "size=%u", immu->immu_name ? immu->immu_name : "<noname>",
+		    intrmap->intrmap_size);
+	}
 
 	return (DDI_SUCCESS);
 }
@@ -1141,10 +1153,12 @@ immu_intrmap_alloc(void **intrmap_private_tbl, dev_info_t *dip,
 		intrmap_private->ir_immu = immu;
 		intrmap_private->ir_dip = dip;
 	} else {
-		prom_printf("IRMAP: alloc failed for dip=%p type=0x%x "
-		    "(immu=%p, running=%d)\n",
-		    (void *)dip, type, (void *)immu,
-		    immu ? immu->immu_intrmap_running : -1);
+		if (immu_intrmap_diag_enable != 0) {
+			prom_printf("IRMAP: alloc failed for dip=%p type=0x%x "
+			    "(immu=%p, running=%d)\n",
+			    (void *)dip, type, (void *)immu,
+			    immu ? immu->immu_intrmap_running : -1);
+		}
 		goto intrmap_disable;
 	}
 
@@ -1157,8 +1171,10 @@ immu_intrmap_alloc(void **intrmap_private_tbl, dev_info_t *dip,
 	}
 
 	if (idx == INTRMAP_IDX_FULL) {
-		prom_printf("IRMAP: allocation FULL for dip=%p type=0x%x count=%d\n",
-		    (void *)dip, type, count);
+		if (immu_intrmap_diag_enable != 0) {
+			prom_printf("IRMAP: allocation FULL for dip=%p "
+			    "type=0x%x count=%d\n", (void *)dip, type, count);
+		}
 		goto intrmap_disable;
 	}
 
@@ -1169,13 +1185,15 @@ immu_intrmap_alloc(void **intrmap_private_tbl, dev_info_t *dip,
 	iwp = &intrmap_private->ir_inv_wait;
 	immu_init_inv_wait(iwp, "intrmaplocal", B_TRUE);
 
-	/* 🔎 Log the allocation */
-	prom_printf("IRMAP: dip=%p type=%s count=%d idx=%u (sid=0x%x) immu=%s\n",
-	    (void *)dip,
-	    (DDI_INTR_IS_MSI_OR_MSIX(type) ? "MSI/MSI-X" : "IOAPIC"),
-	    count, idx, sid_svt_sq,
-	    immu->immu_name ? immu->immu_name : "<noname>");
-	if (immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
+	if (immu_intrmap_diag_enable != 0) {
+		prom_printf("IRMAP: dip=%p type=%s count=%d idx=%u "
+		    "(sid=0x%x) immu=%s\n", (void *)dip,
+		    (DDI_INTR_IS_MSI_OR_MSIX(type) ? "MSI/MSI-X" : "IOAPIC"),
+		    count, idx, sid_svt_sq,
+		    immu->immu_name ? immu->immu_name : "<noname>");
+	}
+	if (immu_intrmap_diag_enable != 0 &&
+	    immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
 		char pathbuf[256];
 
 		prom_printf("IRMAP-TU102: alloc dip=%s type=0x%x "
@@ -1205,7 +1223,10 @@ immu_intrmap_alloc(void **intrmap_private_tbl, dev_info_t *dip,
 		    sid_svt_sq;
 		INTRMAP_PRIVATE(intrmap_private_tbl[i])->ir_idx = idx + i;
 
-		prom_printf("IRMAP:   multi-idx=%u for dip=%p\n", idx+i, (void*)dip);
+		if (immu_intrmap_diag_enable != 0) {
+			prom_printf("IRMAP:   multi-idx=%u for dip=%p\n",
+			    idx + i, (void *)dip);
+		}
 	}
 
 	if (IMMU_CAP_GET_CM(immu->immu_regs_cap)) {
@@ -1318,20 +1339,23 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data,
 				") raw 0x%" PRIx64, shifted_dst, raw_dst);
 		}
 
-		cmn_err(CE_CONT,
-		    "!immu_intrmap_map: MSI setup idx=%u vector=0x%x "
-		    "raw_dst=0x%" PRIx64 " shifted_dst=0x%" PRIx64 " "
-		    "msi_addr=0x%" PRIx64 " msi_data=0x%" PRIx32 " (count=%d)",
-		    idx, (unsigned int)vector,
-		    raw_dst, shifted_dst,
-		    (uint64_t)mregs->mr_addr, (uint32_t)mregs->mr_data,
-		    count);
+		if (immu_intrmap_diag_enable != 0) {
+			cmn_err(CE_CONT,
+			    "!immu_intrmap_map: MSI setup idx=%u vector=0x%x "
+			    "raw_dst=0x%" PRIx64 " shifted_dst=0x%" PRIx64 " "
+			    "msi_addr=0x%" PRIx64 " msi_data=0x%" PRIx32
+			    " (count=%d)", idx, (unsigned int)vector,
+			    raw_dst, shifted_dst, (uint64_t)mregs->mr_addr,
+			    (uint32_t)mregs->mr_data, count);
+		}
 
 		if (count == 1) {
 			uint32_t map_count;
 
 			map_count = atomic_inc_32_nv(&immu_intrmap_msi_program_count);
-			if (map_count <= 16 || (map_count & (map_count - 1)) == 0) {
+			if (immu_intrmap_diag_enable != 0 &&
+			    (map_count <= 16 ||
+			    (map_count & (map_count - 1)) == 0)) {
 				cmn_err(CE_NOTE, "immu_intrmap: map_msi unit=%d idx=%u "
 				    "sid=0x%x vector=0x%x raw_dst=0x%" PRIx64
 				    " shifted_dst=0x%" PRIx64 " final_dst=0x%x "
@@ -1346,7 +1370,8 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data,
 	if (intrmap_apic_mode == LOCAL_APIC)
 		dst = (dst & 0xFF) << 8;
 
-	if (immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
+	if (immu_intrmap_diag_enable != 0 &&
+	    immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
 		char pathbuf[256];
 
 		prom_printf("IRMAP-TU102: map dip=%s type=0x%x count=%d "
@@ -1405,33 +1430,39 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data,
 		    INTRMAP_PRIVATE(intrmap_private), immu, unit, idx, type,
 		    count, vector, dlm, tm, rh, dm, dst, sid, &irte);
 
-		cmn_err(CE_CONT,
-		    "!IRTE[%u]: lo=0x%" PRIx64 " hi=0x%" PRIx64,
-		    idx, (uint64_t)irte.lo, (uint64_t)irte.hi);
+		if (immu_intrmap_diag_enable != 0) {
+			cmn_err(CE_CONT,
+			    "!IRTE[%u]: lo=0x%" PRIx64 " hi=0x%" PRIx64,
+			    idx, (uint64_t)irte.lo, (uint64_t)irte.hi);
+		}
 
 		/* set interrupt remapping table entry */
-		if (immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
+		if (immu_intrmap_diag_enable != 0 &&
+		    immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
 			prom_printf("IRMAP-TU102: pre-bcopy idx=%u sid=0x%x "
 			    "vector=0x%x dst=0x%x\n",
 			    idx, sid, (uint_t)vector, dst);
 		}
 		bcopy(&irte, intrmap->intrmap_vaddr + idx * INTRMAP_RTE_SIZE,
 		    INTRMAP_RTE_SIZE);
-		if (immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
+		if (immu_intrmap_diag_enable != 0 &&
+		    immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
 			prom_printf("IRMAP-TU102: post-bcopy idx=%u sid=0x%x "
 			    "vector=0x%x dst=0x%x\n",
 			    idx, sid, (uint_t)vector, dst);
 		}
 
 		membar_producer();
-		if (immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
+		if (immu_intrmap_diag_enable != 0 &&
+		    immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
 			prom_printf("IRMAP-TU102: pre-qinv idx=%u sid=0x%x "
 			    "vector=0x%x dst=0x%x\n",
 			    idx, sid, (uint_t)vector, dst);
 		}
 		immu_intrmap_sync_cache(immu, idx, count, iwp,
 		    immu_intrmap_trace_tu102_sid(sid_svt_sq), "map-one");
-		if (immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
+		if (immu_intrmap_diag_enable != 0 &&
+		    immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
 			prom_printf("IRMAP-TU102: map-post idx=%u sid=0x%x "
 			    "vector=0x%x dst=0x%x count=%d stage=sync-one\n",
 			    idx, sid, (uint_t)vector, dst, count);
@@ -1464,9 +1495,11 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data,
 			    idx + i, type, count, vector, dlm, tm, rh, dm,
 			    dst, sid, &irte);
 
-			cmn_err(CE_CONT,
-			    "!IRTE[%u]: lo=0x%" PRIx64 " hi=0x%" PRIx64,
-			    idx + i, (uint64_t)irte.lo, (uint64_t)irte.hi);
+			if (immu_intrmap_diag_enable != 0) {
+				cmn_err(CE_CONT,
+				    "!IRTE[%u]: lo=0x%" PRIx64 " hi=0x%" PRIx64,
+				    idx + i, (uint64_t)irte.lo, (uint64_t)irte.hi);
+			}
 
 			/* set interrupt remapping table entry */
 			bcopy(&irte, intrmap->intrmap_vaddr +
@@ -1478,14 +1511,16 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data,
 		membar_producer();
 		immu_intrmap_sync_cache(immu, idx, count, iwp,
 		    immu_intrmap_trace_tu102_sid(sid_svt_sq), "map-many");
-		if (immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
+		if (immu_intrmap_diag_enable != 0 &&
+		    immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
 			prom_printf("IRMAP-TU102: map-post idx=%u sid=0x%x "
 			    "vector=0x%x dst=0x%x count=%d stage=sync-many\n",
 			    idx, sid, (uint_t)vector, dst, count);
 		}
 	}
 out:
-	if (immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
+	if (immu_intrmap_diag_enable != 0 &&
+	    immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
 		prom_printf("IRMAP-TU102: map-return idx=%u sid=0x%x "
 		    "count=%d unit=%d entered=%d\n",
 		    idx, sid, count, unit, unit_entered ? 1 : 0);
@@ -1591,7 +1626,7 @@ immu_intrmap_free(void **intrmap_privatep)
 	iwp = &INTRMAP_PRIVATE(*intrmap_privatep)->ir_inv_wait;
 	intrmap = immu->immu_intrmap;
 	idx = INTRMAP_PRIVATE(*intrmap_privatep)->ir_idx;
-	if (immu_intrmap_trace_tu102_sid(
+	if (immu_intrmap_diag_enable != 0 && immu_intrmap_trace_tu102_sid(
 	    INTRMAP_PRIVATE(*intrmap_privatep)->ir_sid_svt_sq)) {
 		char pathbuf[256];
 
@@ -1674,13 +1709,16 @@ immu_intrmap_msi(void *intrmap_private, msi_regs_t *mregs)
 		    (1 << INTRMAP_MSI_SHV_SHIFT) |
 		    ((idx >> 15) << INTRMAP_MSI_IDX15_SHIFT);
 
-		cmn_err(CE_CONT,
-		    "!immu_intrmap_msi(IR): idx=%u mr_addr=0x%" PRIx64
-		    " mr_data=0x%x (IR-format encoding)",
-		    idx, (uint64_t)mregs->mr_addr, mregs->mr_data);
+		if (immu_intrmap_diag_enable != 0) {
+			cmn_err(CE_CONT,
+			    "!immu_intrmap_msi(IR): idx=%u mr_addr=0x%" PRIx64
+			    " mr_data=0x%x (IR-format encoding)",
+			    idx, (uint64_t)mregs->mr_addr, mregs->mr_data);
+		}
 
 		enc_count = atomic_inc_32_nv(&immu_intrmap_msi_encode_count);
-		if (enc_count <= 16 || (enc_count & (enc_count - 1)) == 0) {
+		if (immu_intrmap_diag_enable != 0 &&
+		    (enc_count <= 16 || (enc_count & (enc_count - 1)) == 0)) {
 			cmn_err(CE_NOTE, "immu_intrmap: encode_msi unit=%d idx=%u "
 			    "sid=0x%x old_addr=0x%" PRIx64 " old_data=0x%x "
 			    "ir_addr=0x%" PRIx64 " ir_data=0x%x",
@@ -1698,12 +1736,15 @@ immu_intrmap_msi(void *intrmap_private, msi_regs_t *mregs)
 		mregs->mr_data = (MSI_DATA_TM_EDGE << MSI_DATA_TM_SHIFT) |
 		    mregs->mr_data;
 
-		cmn_err(CE_CONT,
-		    "!immu_intrmap_msi(compat): mr_addr=0x%" PRIx64
-		    " mr_data=0x%x",
-		    (uint64_t)mregs->mr_addr, mregs->mr_data);
+		if (immu_intrmap_diag_enable != 0) {
+			cmn_err(CE_CONT,
+			    "!immu_intrmap_msi(compat): mr_addr=0x%" PRIx64
+			    " mr_data=0x%x",
+			    (uint64_t)mregs->mr_addr, mregs->mr_data);
+		}
 		enc_count = atomic_inc_32_nv(&immu_intrmap_msi_encode_count);
-		if (enc_count <= 16 || (enc_count & (enc_count - 1)) == 0) {
+		if (immu_intrmap_diag_enable != 0 &&
+		    (enc_count <= 16 || (enc_count & (enc_count - 1)) == 0)) {
 			cmn_err(CE_NOTE, "immu_intrmap: encode_msi compat "
 			    "old_addr=0x%" PRIx64 " old_data=0x%x addr=0x%" PRIx64
 			    " data=0x%x",

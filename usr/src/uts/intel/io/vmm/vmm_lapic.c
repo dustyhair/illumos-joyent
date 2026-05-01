@@ -64,6 +64,8 @@
 #define	MSI_X86_ADDR_RH		0x00000008	/* Redirection Hint */
 #define	MSI_X86_ADDR_LOG	0x00000004	/* Destination Mode */
 
+int vmm_lapic_diag_enable = 0;
+
 int
 lapic_set_intr(struct vm *vm, int cpu, int vector, bool level)
 {
@@ -81,17 +83,17 @@ lapic_set_intr(struct vm *vm, int cpu, int vector, bool level)
 		return (EINVAL);
 
 	vlapic = vm_lapic(vm, cpu);
-	if (vector == 0x23) {
+	if (vmm_lapic_diag_enable != 0 && vector == 0x23) {
 		prom_printf("LAPIC-SET-TU102: enter vm=%p cpu=%d vec=0x%x "
 		    "level=%d\n", (void *)vm, cpu, vector, level ? 1 : 0);
 	}
 	notify = vlapic_set_intr_ready(vlapic, vector, level);
-	if (vector == 0x23) {
+	if (vmm_lapic_diag_enable != 0 && vector == 0x23) {
 		prom_printf("LAPIC-SET-TU102: post-ready vm=%p cpu=%d vec=0x%x "
 		    "notify=%d\n", (void *)vm, cpu, vector, notify);
 	}
 	vcpu_notify_event_type(vm, cpu, notify);
-	if (vector == 0x23) {
+	if (vmm_lapic_diag_enable != 0 && vector == 0x23) {
 		prom_printf("LAPIC-SET-TU102: done vm=%p cpu=%d vec=0x%x "
 		    "notify=%d\n", (void *)vm, cpu, vector, notify);
 	}
@@ -155,7 +157,8 @@ lapic_intr_msi(struct vm *vm, uint64_t addr, uint64_t msg)
 	delmode = msg & APIC_DELMODE_MASK;
 	vec = msg & 0xff;
 	deliver_count = atomic_inc_32_nv(&lapic_msi_deliver_count);
-	if (deliver_count <= 16 || (deliver_count & (deliver_count - 1)) == 0) {
+	if (vmm_lapic_diag_enable != 0 &&
+	    (deliver_count <= 16 || (deliver_count & (deliver_count - 1)) == 0)) {
 		cmn_err(CE_NOTE, "lapic: msi deliver vm=%p addr=0x%llx msg=0x%llx "
 		    "dest=0x%x phys=%d delmode=0x%x vec=0x%x count=%u",
 		    (void *)vm, (u_longlong_t)addr, (u_longlong_t)msg, dest,
@@ -168,7 +171,8 @@ lapic_intr_msi(struct vm *vm, uint64_t addr, uint64_t msg)
 	}
 
 	vlapic_deliver_intr(vm, LAPIC_TRIG_EDGE, dest, phys, delmode, vec);
-	if (deliver_count <= 16 || (deliver_count & (deliver_count - 1)) == 0) {
+	if (vmm_lapic_diag_enable != 0 &&
+	    (deliver_count <= 16 || (deliver_count & (deliver_count - 1)) == 0)) {
 		prom_printf("LAPIC-MSI-TU102: done vm=%p vec=0x%x count=%u\n",
 		    (void *)vm, vec, deliver_count);
 	}

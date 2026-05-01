@@ -79,6 +79,7 @@ static kmutex_t		vmm_mtx;
 static list_t		vmm_list;
 static id_space_t	*vmm_minors;
 static void		*vmm_statep;
+int			vmm_ppt_diag_enable = 0;
 
 /*
  * Until device emulation in bhyve had been adequately scrutinized and tested,
@@ -653,15 +654,20 @@ vmmdev_do_ioctl(vmm_softc_t *sc, int cmd, intptr_t arg, int md,
 			error = EFAULT;
 			break;
 		}
-		cmn_err(CE_NOTE, "vmm: VM_PPTDEV_MSI vm=%p pptfd=%d vcpu=%d "
-		    "addr=0x%llx msg=0x%llx numvec=%d",
-		    (void *)sc->vmm_vm, pptmsi.pptfd, pptmsi.vcpu,
-		    (u_longlong_t)pptmsi.addr, (u_longlong_t)pptmsi.msg,
-		    pptmsi.numvec);
+		if (vmm_ppt_diag_enable != 0) {
+			cmn_err(CE_NOTE, "vmm: VM_PPTDEV_MSI vm=%p pptfd=%d "
+			    "vcpu=%d addr=0x%llx msg=0x%llx numvec=%d",
+			    (void *)sc->vmm_vm, pptmsi.pptfd, pptmsi.vcpu,
+			    (u_longlong_t)pptmsi.addr, (u_longlong_t)pptmsi.msg,
+			    pptmsi.numvec);
+		}
 		error = ppt_setup_msi(sc->vmm_vm, pptmsi.vcpu, pptmsi.pptfd,
 		    pptmsi.addr, pptmsi.msg, pptmsi.numvec);
-		cmn_err(CE_NOTE, "vmm: VM_PPTDEV_MSI done vm=%p pptfd=%d err=%d",
-		    (void *)sc->vmm_vm, pptmsi.pptfd, error);
+		if (vmm_ppt_diag_enable != 0 || error != 0) {
+			cmn_err(error == 0 ? CE_NOTE : CE_WARN,
+			    "vmm: VM_PPTDEV_MSI done vm=%p pptfd=%d err=%d",
+			    (void *)sc->vmm_vm, pptmsi.pptfd, error);
+		}
 		break;
 	}
 	case VM_PPTDEV_MSIX: {
@@ -693,15 +699,22 @@ vmmdev_do_ioctl(vmm_softc_t *sc, int cmd, intptr_t arg, int md,
 			error = EFAULT;
 			break;
 		}
-		cmn_err(CE_NOTE, "vmm: VM_MAP_PPTDEV_MMIO vm=%p pptfd=%d "
-		    "gpa=0x%llx len=0x%llx hpa=0x%llx",
-		    (void *)sc->vmm_vm, pptmmio.pptfd,
-		    (u_longlong_t)pptmmio.gpa, (u_longlong_t)pptmmio.len,
-		    (u_longlong_t)pptmmio.hpa);
+		if (vmm_ppt_diag_enable != 0) {
+			cmn_err(CE_NOTE, "vmm: VM_MAP_PPTDEV_MMIO vm=%p "
+			    "pptfd=%d gpa=0x%llx len=0x%llx hpa=0x%llx",
+			    (void *)sc->vmm_vm, pptmmio.pptfd,
+			    (u_longlong_t)pptmmio.gpa,
+			    (u_longlong_t)pptmmio.len,
+			    (u_longlong_t)pptmmio.hpa);
+		}
 		error = ppt_map_mmio(sc->vmm_vm, pptmmio.pptfd, pptmmio.gpa,
 		    pptmmio.len, pptmmio.hpa);
-		cmn_err(CE_NOTE, "vmm: VM_MAP_PPTDEV_MMIO done vm=%p pptfd=%d "
-		    "err=%d", (void *)sc->vmm_vm, pptmmio.pptfd, error);
+		if (vmm_ppt_diag_enable != 0 || error != 0) {
+			cmn_err(error == 0 ? CE_NOTE : CE_WARN,
+			    "vmm: VM_MAP_PPTDEV_MMIO done vm=%p pptfd=%d "
+			    "err=%d", (void *)sc->vmm_vm, pptmmio.pptfd,
+			    error);
+		}
 		break;
 	}
 	case VM_UNMAP_PPTDEV_MMIO: {
@@ -722,11 +735,16 @@ vmmdev_do_ioctl(vmm_softc_t *sc, int cmd, intptr_t arg, int md,
 			error = EFAULT;
 			break;
 		}
-		cmn_err(CE_NOTE, "vmm: VM_BIND_PPTDEV vm=%p pptfd=%d",
-		    (void *)sc->vmm_vm, pptdev.pptfd);
+		if (vmm_ppt_diag_enable != 0) {
+			cmn_err(CE_NOTE, "vmm: VM_BIND_PPTDEV vm=%p pptfd=%d",
+			    (void *)sc->vmm_vm, pptdev.pptfd);
+		}
 		error = vm_assign_pptdev(sc->vmm_vm, pptdev.pptfd);
-		cmn_err(CE_NOTE, "vmm: VM_BIND_PPTDEV done vm=%p pptfd=%d err=%d",
-		    (void *)sc->vmm_vm, pptdev.pptfd, error);
+		if (vmm_ppt_diag_enable != 0 || error != 0) {
+			cmn_err(error == 0 ? CE_NOTE : CE_WARN,
+			    "vmm: VM_BIND_PPTDEV done vm=%p pptfd=%d err=%d",
+			    (void *)sc->vmm_vm, pptdev.pptfd, error);
+		}
 		break;
 	}
 	case VM_UNBIND_PPTDEV: {
