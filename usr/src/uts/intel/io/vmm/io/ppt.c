@@ -699,6 +699,9 @@ ppt_ddi_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	if (ppt_bar_crawl(ppt) != 0) {
 		goto fail;
 	}
+	if (pci_save_config_regs(dip) != DDI_SUCCESS) {
+		goto fail;
+	}
 	if (ddi_create_minor_node(dip, PPT_MINOR_NAME, S_IFCHR, inst,
 	    DDI_PSEUDO, 0) != DDI_SUCCESS) {
 		goto fail;
