@@ -114,6 +114,9 @@ int immu_qinv_strict_intr_delay_us = 0;
 int immu_qinv_haswell_quirk = 1;
 int immu_qinv_haswell_force_global_iec = 0;
 int immu_qinv_haswell_extra_delay_us = 4;
+int immu_qinv_wait_timeout_loops = 50000000;
+int immu_qinv_wait_timeout_maxdump = 16;
+static uint32_t immu_qinv_wait_timeout_dumped;
 
 static void immu_qinv_intr_trace_record(immu_t *, uint8_t, uint8_t, uint_t,
     uint_t, immu_inv_wait_t *);
@@ -456,14 +459,37 @@ qinv_wait_slot_alloc(immu_t *immu, immu_inv_wait_t *iwp,
 }
 
 static void
+qinv_wait_timeout_report(immu_t *immu, immu_inv_wait_t *iwp,
+    volatile uint32_t *status, uint64_t paddr, uint64_t count)
+{
+	uint32_t dumped;
+
+	dumped = atomic_inc_32_nv(&immu_qinv_wait_timeout_dumped);
+	if (dumped > (uint32_t)immu_qinv_wait_timeout_maxdump)
+		return;
+
+	prom_printf("QINV-WAIT-TU102: timeout immu=%p iwp=%p name=%s "
+	    "statusp=%p paddr=0x%llx status=0x%x loops=%llu "
+	    "qh=0x%llx qt=0x%llx qar=0x%llx ics=0x%x fsts=0x%x\n",
+	    (void *)immu, (void *)iwp,
+	    (iwp != NULL && iwp->iwp_name != NULL) ? iwp->iwp_name : "?",
+	    (void *)status, (unsigned long long)paddr, *status,
+	    (unsigned long long)count,
+	    (unsigned long long)immu_regs_get64(immu, IMMU_REG_INVAL_QH),
+	    (unsigned long long)immu_regs_get64(immu, IMMU_REG_INVAL_QT),
+	    (unsigned long long)immu_regs_get64(immu, IMMU_REG_INVAL_QAR),
+	    immu_regs_get32(immu, IMMU_REG_INVAL_CSR),
+	    immu_regs_get32(immu, IMMU_REG_FAULT_STS));
+	immu_qinv_debug_dump_recent_intr("qinv-wait-timeout");
+}
+
+static void
 qinv_wait_sync(immu_t *immu, immu_inv_wait_t *iwp)
 {
 	qinv_dsc_t dsc;
 	volatile uint32_t *status;
 	uint64_t paddr;
-#ifdef DEBUG
-	uint_t count;
-#endif
+	uint64_t count;
 
 	qinv_wait_slot_alloc(immu, iwp, &status, &paddr);
 
@@ -482,17 +508,19 @@ qinv_wait_sync(immu_t *immu, immu_inv_wait_t *iwp)
 	qinv_submit_inv_dsc(immu, &dsc);
 
 	if (iwp->iwp_sync) {
-#ifdef DEBUG
 		count = 0;
 		while (*status != IMMU_INV_DATA_DONE) {
-			count++;
 			ht_pause();
+			if (immu_qinv_wait_timeout_loops > 0 &&
+			    ++count >= (uint64_t)immu_qinv_wait_timeout_loops) {
+				qinv_wait_timeout_report(immu, iwp, status,
+				    paddr, count);
+				break;
+			}
 		}
+#ifdef DEBUG
 		DTRACE_PROBE2(immu__wait__sync, const char *, iwp->iwp_name,
 		    uint_t, count);
-#else
-		while (*status != IMMU_INV_DATA_DONE)
-			ht_pause();
 #endif
 	}
 }
