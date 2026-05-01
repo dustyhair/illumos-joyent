@@ -789,8 +789,23 @@ void
 immu_qinv_intr_one_cache(immu_t *immu, uint_t iidx, immu_inv_wait_t *iwp)
 {
 	if (immu_qinv_haswell_quirk && immu_qinv_haswell_force_global_iec) {
-		prom_printf("QINV-TU102: one-cache global idx=%u\n", iidx);
-		immu_qinv_intr_global(immu, iwp);
+		prom_printf("QINV-TU102: one-cache global-start idx=%u\n",
+		    iidx);
+		immu_qinv_intr_trace_record(immu, 'g', 's', 0, 0, iwp);
+		prom_printf("QINV-TU102: one-cache global-post-trace "
+		    "idx=%u\n", iidx);
+		qinv_iec_common(immu, 0, 0, IEC_INV_GLOBAL);
+		prom_printf("QINV-TU102: one-cache global-post-iec idx=%u\n",
+		    iidx);
+		qinv_wait_sync(immu, iwp);
+		prom_printf("QINV-TU102: one-cache global-post-wait "
+		    "idx=%u\n", iidx);
+		immu_qinv_intr_postsync(immu);
+		prom_printf("QINV-TU102: one-cache global-post-sync "
+		    "idx=%u\n", iidx);
+		immu_qinv_intr_trace_record(immu, 'g', 'c', 0, 0, iwp);
+		prom_printf("QINV-TU102: one-cache global-done idx=%u\n",
+		    iidx);
 		return;
 	}
 
