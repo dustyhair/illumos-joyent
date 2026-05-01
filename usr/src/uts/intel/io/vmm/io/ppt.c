@@ -154,6 +154,7 @@ static major_t		ppt_major;
 static void		*ppt_state;
 static kmutex_t		pptdev_mtx;
 static list_t		pptdev_list;
+int			ppt_diag_enable = 0;
 
 #ifndef PCI_PMCSR_STATE_D0
 #define	PCI_PMCSR_STATE_D0	0x0000
@@ -1280,7 +1281,7 @@ ppt_reset_device_method_locked(struct pptdev *ppt, ppt_reset_flags_t flags,
 		cmn_err(CE_WARN, "ppt_reset_device: bdf=0x%x failed method=%u err=%d",
 		    pci_get_bdf(ppt->pptd_dip),
 		    actual_methodp != NULL ? *actual_methodp : PPT_RESET_NONE, err);
-	} else {
+	} else if (ppt_diag_enable != 0) {
 		cmn_err(CE_NOTE, "ppt_reset_device: bdf=0x%x complete method=%u",
 		    pci_get_bdf(ppt->pptd_dip),
 		    actual_methodp != NULL ? *actual_methodp : PPT_RESET_NONE);
@@ -1353,10 +1354,13 @@ ppt_teardown_msi(struct pptdev *ppt)
 		return;
 
 	bdf = pci_get_bdf(ppt->pptd_dip);
-	cmn_err(CE_NOTE, "ppt: teardown_msi bdf=0x%x msgs=%d is_fixed=%d "
-	    "intr_count=%llu setup_count=%llu", bdf, ppt->msi.num_msgs,
-	    ppt->msi.is_fixed ? 1 : 0, (u_longlong_t)ppt->msi.intr_count,
-	    (u_longlong_t)ppt->msi.setup_count);
+	if (ppt_diag_enable != 0) {
+		cmn_err(CE_NOTE, "ppt: teardown_msi bdf=0x%x msgs=%d "
+		    "is_fixed=%d intr_count=%llu setup_count=%llu", bdf,
+		    ppt->msi.num_msgs, ppt->msi.is_fixed ? 1 : 0,
+		    (u_longlong_t)ppt->msi.intr_count,
+		    (u_longlong_t)ppt->msi.setup_count);
+	}
 
 	for (i = 0; i < ppt->msi.num_msgs; i++) {
 		int intr_cap;
@@ -1510,8 +1514,10 @@ ppt_assign_device(struct vm *vm, int pptfd)
 		err = EIO;
 		goto done;
 	}
-	cmn_err(CE_NOTE, "ppt: assign enter bdf=0x%x vm=%p pptfd=%d",
-	    pci_get_bdf(ppt->pptd_dip), (void *)vm, pptfd);
+	if (ppt_diag_enable != 0) {
+		cmn_err(CE_NOTE, "ppt: assign enter bdf=0x%x vm=%p pptfd=%d",
+		    pci_get_bdf(ppt->pptd_dip), (void *)vm, pptfd);
+	}
 	ppt_flr(ppt->pptd_dip, B_TRUE);
 
 	/*
@@ -1533,8 +1539,11 @@ ppt_assign_device(struct vm *vm, int pptfd)
 	pf_set_passthru(ppt->pptd_dip, B_TRUE);
 
 done:
-	cmn_err(CE_NOTE, "ppt: assign done bdf=0x%x vm=%p pptfd=%d "
-	    "err=%d", pci_get_bdf(ppt->pptd_dip), (void *)vm, pptfd, err);
+	if (ppt_diag_enable != 0 || err != 0) {
+		cmn_err(err == 0 ? CE_NOTE : CE_WARN, "ppt: assign done "
+		    "bdf=0x%x vm=%p pptfd=%d err=%d",
+		    pci_get_bdf(ppt->pptd_dip), (void *)vm, pptfd, err);
+	}
 	releasef(pptfd);
 	mutex_exit(&pptdev_mtx);
 	return (err);
@@ -1667,19 +1676,26 @@ ppt_map_mmio(struct vm *vm, int pptfd, vm_paddr_t gpa, size_t len,
 		struct pptseg *seg = &ppt->mmio[i];
 
 		if (seg->len == 0) {
-			cmn_err(CE_NOTE, "ppt: map_mmio enter bdf=0x%x vm=%p "
-			    "pptfd=%d gpa=0x%llx len=0x%llx hpa=0x%llx seg=%u",
-			    pci_get_bdf(ppt->pptd_dip), (void *)vm, pptfd,
-			    (u_longlong_t)gpa, (u_longlong_t)len,
-			    (u_longlong_t)hpa, i);
+			if (ppt_diag_enable != 0) {
+				cmn_err(CE_NOTE, "ppt: map_mmio enter "
+				    "bdf=0x%x vm=%p pptfd=%d gpa=0x%llx "
+				    "len=0x%llx hpa=0x%llx seg=%u",
+				    pci_get_bdf(ppt->pptd_dip), (void *)vm,
+				    pptfd, (u_longlong_t)gpa,
+				    (u_longlong_t)len, (u_longlong_t)hpa, i);
+			}
 			err = vm_map_mmio(vm, gpa, len, hpa);
 			if (err == 0) {
 				seg->gpa = gpa;
 				seg->len = len;
 			}
-			cmn_err(CE_NOTE, "ppt: map_mmio done bdf=0x%x vm=%p "
-			    "pptfd=%d seg=%u err=%d", pci_get_bdf(ppt->pptd_dip),
-			    (void *)vm, pptfd, i, err);
+			if (ppt_diag_enable != 0 || err != 0) {
+				cmn_err(err == 0 ? CE_NOTE : CE_WARN,
+				    "ppt: map_mmio done bdf=0x%x vm=%p "
+				    "pptfd=%d seg=%u err=%d",
+				    pci_get_bdf(ppt->pptd_dip), (void *)vm,
+				    pptfd, i, err);
+			}
 			goto done;
 		}
 	}
@@ -1738,7 +1754,8 @@ pptintr(caddr_t arg, caddr_t unused)
 
 	intr_count = ++ppt->msi.intr_count;
 	bdf = pci_get_bdf(ppt->pptd_dip);
-	if (intr_count <= 8 || (intr_count & (intr_count - 1)) == 0) {
+	if (ppt_diag_enable != 0 &&
+	    (intr_count <= 8 || (intr_count & (intr_count - 1)) == 0)) {
 		cmn_err(CE_NOTE, "ppt: intr bdf=0x%x count=%llu is_fixed=%d "
 		    "addr=0x%llx msg=0x%llx vm=%p", bdf,
 		    (u_longlong_t)intr_count, ppt->msi.is_fixed ? 1 : 0,
@@ -1757,7 +1774,7 @@ pptintr(caddr_t arg, caddr_t unused)
 
 	if (ppt->vm != NULL) {
 		lapic_intr_msi(ppt->vm, pptarg->addr, pptarg->msg_data);
-		if (bdf == 0x200 &&
+		if (ppt_diag_enable != 0 && bdf == 0x200 &&
 		    (intr_count <= 8 || (intr_count & (intr_count - 1)) == 0)) {
 			prom_printf("PPT-INTR-TU102: done bdf=0x%x count=%llu "
 			    "vm=%p\n", bdf, (u_longlong_t)intr_count,
@@ -1809,13 +1826,15 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 	}
 
 	bdf = pci_get_bdf(ppt->pptd_dip);
-	cmn_err(CE_NOTE, "ppt: setup_msi enter bdf=0x%x vcpu=%d numvec=%d "
-	    "addr=0x%llx msg=0x%llx existing_msgs=%d is_fixed=%d "
-	    "setup_count=%llu intr_count=%llu",
-	    bdf, vcpu, numvec, (u_longlong_t)addr, (u_longlong_t)msg,
-	    ppt->msi.num_msgs, ppt->msi.is_fixed ? 1 : 0,
-	    (u_longlong_t)ppt->msi.setup_count,
-	    (u_longlong_t)ppt->msi.intr_count);
+	if (ppt_diag_enable != 0) {
+		cmn_err(CE_NOTE, "ppt: setup_msi enter bdf=0x%x vcpu=%d "
+		    "numvec=%d addr=0x%llx msg=0x%llx existing_msgs=%d "
+		    "is_fixed=%d setup_count=%llu intr_count=%llu",
+		    bdf, vcpu, numvec, (u_longlong_t)addr, (u_longlong_t)msg,
+		    ppt->msi.num_msgs, ppt->msi.is_fixed ? 1 : 0,
+		    (u_longlong_t)ppt->msi.setup_count,
+		    (u_longlong_t)ppt->msi.intr_count);
+	}
 
 	/* Reject attempts to enable MSI while MSI-X is active. */
 	if (ppt->msix.num_msgs != 0 && numvec != 0) {
@@ -1839,9 +1858,12 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 			}
 		}
 		if (same_request) {
-			cmn_err(CE_NOTE, "ppt: setup_msi reuse bdf=0x%x "
-			    "numvec=%d addr=0x%llx msg=0x%llx", bdf, numvec,
-			    (u_longlong_t)addr, (u_longlong_t)msg);
+			if (ppt_diag_enable != 0) {
+				cmn_err(CE_NOTE, "ppt: setup_msi reuse "
+				    "bdf=0x%x numvec=%d addr=0x%llx "
+				    "msg=0x%llx", bdf, numvec,
+				    (u_longlong_t)addr, (u_longlong_t)msg);
+			}
 			goto done;
 		}
 	}
@@ -1850,7 +1872,9 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 	ppt_teardown_msi(ppt);
 
 	if (numvec == 0) {
-		cmn_err(CE_NOTE, "ppt: setup_msi disable bdf=0x%x", bdf);
+		if (ppt_diag_enable != 0)
+			cmn_err(CE_NOTE, "ppt: setup_msi disable bdf=0x%x",
+			    bdf);
 		goto done;
 	}
 
@@ -1868,10 +1892,12 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 		intr_type = DDI_INTR_TYPE_MSI;
 	}
 
-	cmn_err(CE_NOTE, "ppt: setup_msi alloc bdf=0x%x intr_type=%s "
-	    "avail=%d requested=%d", bdf,
-	    intr_type == DDI_INTR_TYPE_MSI ? "msi" : "fixed", msi_count,
-	    numvec);
+	if (ppt_diag_enable != 0) {
+		cmn_err(CE_NOTE, "ppt: setup_msi alloc bdf=0x%x intr_type=%s "
+		    "avail=%d requested=%d", bdf,
+		    intr_type == DDI_INTR_TYPE_MSI ? "msi" : "fixed",
+		    msi_count, numvec);
+	}
 
 	/*
 	 * The device must be capable of supporting the number of vectors
@@ -1886,10 +1912,13 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 	ppt->msi.inth = kmem_zalloc(ppt->msi.inth_sz, KM_SLEEP);
 	err = ddi_intr_alloc(ppt->pptd_dip, ppt->msi.inth, intr_type, 0,
 	    numvec, &msi_count, 0);
-	cmn_err(CE_NOTE, "ppt: setup_msi ddi_intr_alloc bdf=0x%x intr_type=%s "
-	    "requested=%d got=%d err=%d",
-	    bdf, intr_type == DDI_INTR_TYPE_MSI ? "msi" : "fixed",
-	    numvec, msi_count, err);
+	if (ppt_diag_enable != 0 || err != DDI_SUCCESS) {
+		cmn_err(err == DDI_SUCCESS ? CE_NOTE : CE_WARN,
+		    "ppt: setup_msi ddi_intr_alloc bdf=0x%x intr_type=%s "
+		    "requested=%d got=%d err=%d", bdf,
+		    intr_type == DDI_INTR_TYPE_MSI ? "msi" : "fixed",
+		    numvec, msi_count, err);
+	}
 	if (err != DDI_SUCCESS) {
 		kmem_free(ppt->msi.inth, ppt->msi.inth_sz);
 		err = EINVAL;
@@ -1914,9 +1943,13 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 
 		res = ddi_intr_add_handler(ppt->msi.inth[i], pptintr,
 		    &ppt->msi.arg[i], NULL);
-		cmn_err(CE_NOTE, "ppt: setup_msi add_handler bdf=0x%x vec=%d "
-		    "guest_msg=0x%llx handle=%p err=%d",
-		    bdf, i, (u_longlong_t)(msg + i), (void *)ppt->msi.inth[i], res);
+		if (ppt_diag_enable != 0 || res != DDI_SUCCESS) {
+			cmn_err(res == DDI_SUCCESS ? CE_NOTE : CE_WARN,
+			    "ppt: setup_msi add_handler bdf=0x%x vec=%d "
+			    "guest_msg=0x%llx handle=%p err=%d", bdf, i,
+			    (u_longlong_t)(msg + i),
+			    (void *)ppt->msi.inth[i], res);
+		}
 		if (res != DDI_SUCCESS)
 			break;
 
@@ -1927,21 +1960,30 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 		if ((intr_cap & DDI_INTR_FLAG_BLOCK) && numvec > 1)
 			res = ddi_intr_block_enable(&ppt->msi.inth[i], 1);
 		else {
-			prom_printf("PPT-MSI-ENABLE: enter bdf=0x%x vec=%d "
-			    "guest_msg=0x%llx caps=0x%x handle=%p\n", bdf, i,
-			    (u_longlong_t)(msg + i), intr_cap,
-			    (void *)ppt->msi.inth[i]);
+			if (ppt_diag_enable != 0) {
+				prom_printf("PPT-MSI-ENABLE: enter bdf=0x%x "
+				    "vec=%d guest_msg=0x%llx caps=0x%x "
+				    "handle=%p\n", bdf, i,
+				    (u_longlong_t)(msg + i), intr_cap,
+				    (void *)ppt->msi.inth[i]);
+			}
 			res = ddi_intr_enable(ppt->msi.inth[i]);
-			prom_printf("PPT-MSI-ENABLE: done bdf=0x%x vec=%d "
-			    "guest_msg=0x%llx err=%d vector=0x%x\n", bdf, i,
-			    (u_longlong_t)(msg + i), res,
-			    ((ddi_intr_handle_impl_t *)ppt->msi.inth[i])->
-			    ih_vector);
+			if (ppt_diag_enable != 0 || res != DDI_SUCCESS) {
+				prom_printf("PPT-MSI-ENABLE: done bdf=0x%x "
+				    "vec=%d guest_msg=0x%llx err=%d "
+				    "vector=0x%x\n", bdf, i,
+				    (u_longlong_t)(msg + i), res,
+				    ((ddi_intr_handle_impl_t *)ppt->msi.inth[i])->
+				    ih_vector);
+			}
 		}
-		cmn_err(CE_NOTE, "ppt: setup_msi enable bdf=0x%x vec=%d "
-		    "guest_msg=0x%llx handle=%p caps=0x%x err=%d",
-		    bdf, i, (u_longlong_t)(msg + i), (void *)ppt->msi.inth[i],
-		    intr_cap, res);
+		if (ppt_diag_enable != 0 || res != DDI_SUCCESS) {
+			cmn_err(res == DDI_SUCCESS ? CE_NOTE : CE_WARN,
+			    "ppt: setup_msi enable bdf=0x%x vec=%d "
+			    "guest_msg=0x%llx handle=%p caps=0x%x err=%d",
+			    bdf, i, (u_longlong_t)(msg + i),
+			    (void *)ppt->msi.inth[i], intr_cap, res);
+		}
 
 		if (res != DDI_SUCCESS)
 			break;
@@ -1951,18 +1993,23 @@ ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr, uint64_t msg,
 		err = ENXIO;
 	} else {
 		ppt->msi.setup_count++;
-		cmn_err(CE_NOTE, "ppt: setup_msi armed bdf=0x%x numvec=%d "
-		    "intr_type=%s setup_count=%llu", bdf, numvec,
-		    ppt->msi.is_fixed ? "fixed" : "msi",
-		    (u_longlong_t)ppt->msi.setup_count);
+		if (ppt_diag_enable != 0) {
+			cmn_err(CE_NOTE, "ppt: setup_msi armed bdf=0x%x "
+			    "numvec=%d intr_type=%s setup_count=%llu", bdf,
+			    numvec, ppt->msi.is_fixed ? "fixed" : "msi",
+			    (u_longlong_t)ppt->msi.setup_count);
+		}
 	}
 
 done:
-	cmn_err(CE_NOTE, "ppt: setup_msi exit bdf=0x%x err=%d msgs=%d "
-	    "is_fixed=%d intr_count=%llu setup_count=%llu", bdf, err,
-	    ppt->msi.num_msgs, ppt->msi.is_fixed ? 1 : 0,
-	    (u_longlong_t)ppt->msi.intr_count,
-	    (u_longlong_t)ppt->msi.setup_count);
+	if (ppt_diag_enable != 0 || err != 0) {
+		cmn_err(err == 0 ? CE_NOTE : CE_WARN, "ppt: setup_msi exit "
+		    "bdf=0x%x err=%d msgs=%d is_fixed=%d intr_count=%llu "
+		    "setup_count=%llu", bdf, err, ppt->msi.num_msgs,
+		    ppt->msi.is_fixed ? 1 : 0,
+		    (u_longlong_t)ppt->msi.intr_count,
+		    (u_longlong_t)ppt->msi.setup_count);
+	}
 	releasef(pptfd);
 	mutex_exit(&pptdev_mtx);
 	return (err);

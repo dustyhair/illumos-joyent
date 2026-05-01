@@ -44,6 +44,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <err.h>
@@ -970,6 +971,17 @@ passthru_trace(struct passthru_softc *sc, const char *phase, const char *fmt, ..
 {
 	struct pci_devinst *pi = sc->psc_pi;
 	va_list ap;
+	const char *env;
+	static int enabled = -1;
+
+	if (enabled == -1) {
+		env = getenv("BHYVE_PASSTHRU_TRACE");
+		enabled = (env != NULL && strcmp(env, "0") != 0 &&
+		    strcasecmp(env, "false") != 0) ? 1 : 0;
+	}
+
+	if (enabled == 0)
+		return;
 
 	fprintf(stderr, "pci_passthru %d/%d/%d pptfd=%d %s ",
 	    pi->pi_bus, pi->pi_slot, pi->pi_func, sc->pptfd, phase);
