@@ -268,6 +268,27 @@ immu_intrmap_trace_tu102_sid(uint32_t sid_svt_sq)
 	return ((sid & ~0x7) == 0x200);
 }
 
+static void
+immu_intrmap_sync_cache(immu_t *immu, uint_t idx, uint_t count,
+    immu_inv_wait_t *iwp, boolean_t use_irta_sync, const char *reason)
+{
+	if (use_irta_sync) {
+		prom_printf("IRMAP-TU102: sync-irta start idx=%u count=%u "
+		    "reason=%s immu=%s\n", idx, count,
+		    reason != NULL ? reason : "?",
+		    immu->immu_name ? immu->immu_name : "<noname>");
+		immu_regs_intrmap_sync(immu);
+		prom_printf("IRMAP-TU102: sync-irta done idx=%u count=%u "
+		    "reason=%s\n", idx, count, reason != NULL ? reason : "?");
+		return;
+	}
+
+	if (count == 1)
+		immu_qinv_intr_one_cache(immu, idx, iwp);
+	else
+		immu_qinv_intr_caches(immu, idx, count, iwp);
+}
+
 static const char *
 immu_intrmap_dip_path(dev_info_t *dip, char *buf, size_t buflen)
 {
@@ -1166,7 +1187,8 @@ immu_intrmap_alloc(void **intrmap_private_tbl, dev_info_t *dip,
 
 	if (count == 1) {
 		if (IMMU_CAP_GET_CM(immu->immu_regs_cap)) {
-			immu_qinv_intr_one_cache(immu, idx, iwp);
+			immu_intrmap_sync_cache(immu, idx, count, iwp,
+			    immu_intrmap_trace_tu102_sid(sid_svt_sq), "alloc-one");
 		} else {
 			immu_regs_wbf_flush(immu);
 		}
@@ -1187,7 +1209,8 @@ immu_intrmap_alloc(void **intrmap_private_tbl, dev_info_t *dip,
 	}
 
 	if (IMMU_CAP_GET_CM(immu->immu_regs_cap)) {
-		immu_qinv_intr_caches(immu, idx, count, iwp);
+		immu_intrmap_sync_cache(immu, idx, count, iwp,
+		    immu_intrmap_trace_tu102_sid(sid_svt_sq), "alloc-many");
 	} else {
 		immu_regs_wbf_flush(immu);
 	}
@@ -1360,11 +1383,8 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data,
 		    APIC_BASE_VECT);
 		bzero(intrmap->intrmap_vaddr + idx * INTRMAP_RTE_SIZE,
 		    (size_t)count * INTRMAP_RTE_SIZE);
-		if (count == 1) {
-			immu_qinv_intr_one_cache(immu, idx, iwp);
-		} else {
-			immu_qinv_intr_caches(immu, idx, count, iwp);
-		}
+		immu_intrmap_sync_cache(immu, idx, count, iwp,
+		    immu_intrmap_trace_tu102_sid(sid_svt_sq), "illegal-vector");
 		goto out;
 		}
 
@@ -1377,7 +1397,9 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data,
 			bcopy(&irte_np, intrmap->intrmap_vaddr + idx * INTRMAP_RTE_SIZE,
 			    INTRMAP_RTE_SIZE);
 			membar_producer();
-			immu_qinv_intr_one_cache(immu, idx, iwp);
+			immu_intrmap_sync_cache(immu, idx, count, iwp,
+			    immu_intrmap_trace_tu102_sid(sid_svt_sq),
+			    "one-phase-clear");
 		}
 		immu_intrmap_irte_trace_record(
 		    INTRMAP_PRIVATE(intrmap_private), immu, unit, idx, type,
@@ -1407,10 +1429,11 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data,
 			    "vector=0x%x dst=0x%x\n",
 			    idx, sid, (uint_t)vector, dst);
 		}
-		immu_qinv_intr_one_cache(immu, idx, iwp);
+		immu_intrmap_sync_cache(immu, idx, count, iwp,
+		    immu_intrmap_trace_tu102_sid(sid_svt_sq), "map-one");
 		if (immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
 			prom_printf("IRMAP-TU102: map-post idx=%u sid=0x%x "
-			    "vector=0x%x dst=0x%x count=%d stage=qinv-one\n",
+			    "vector=0x%x dst=0x%x count=%d stage=sync-one\n",
 			    idx, sid, (uint_t)vector, dst, count);
 		}
 
@@ -1429,7 +1452,9 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data,
 				pvec++;
 			}
 			membar_producer();
-			immu_qinv_intr_caches(immu, idx, count, iwp);
+			immu_intrmap_sync_cache(immu, idx, count, iwp,
+			    immu_intrmap_trace_tu102_sid(sid_svt_sq),
+			    "many-phase-clear");
 		}
 		for (i = 0; i < count; i++) {
 			irte.lo = IRTE_LOW(dst, vector, dlm, tm, rh, dm, 0, 1);
@@ -1451,10 +1476,11 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data,
 		}
 
 		membar_producer();
-		immu_qinv_intr_caches(immu, idx, count, iwp);
+		immu_intrmap_sync_cache(immu, idx, count, iwp,
+		    immu_intrmap_trace_tu102_sid(sid_svt_sq), "map-many");
 		if (immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
 			prom_printf("IRMAP-TU102: map-post idx=%u sid=0x%x "
-			    "vector=0x%x dst=0x%x count=%d stage=qinv-many\n",
+			    "vector=0x%x dst=0x%x count=%d stage=sync-many\n",
 			    idx, sid, (uint_t)vector, dst, count);
 		}
 	}
@@ -1580,7 +1606,9 @@ immu_intrmap_free(void **intrmap_privatep)
 	bzero(intrmap->intrmap_vaddr + idx * INTRMAP_RTE_SIZE,
 	    INTRMAP_RTE_SIZE);
 
-	immu_qinv_intr_one_cache(immu, idx, iwp);
+	immu_intrmap_sync_cache(immu, idx, 1, iwp,
+	    immu_intrmap_trace_tu102_sid(
+	    INTRMAP_PRIVATE(*intrmap_privatep)->ir_sid_svt_sq), "free-one");
 
 	mutex_enter(&intrmap->intrmap_lock);
 	bitset_del(&intrmap->intrmap_map, idx);
