@@ -179,6 +179,7 @@ static boolean_t ppt_wait_link_active(dev_info_t *);
 static boolean_t ppt_pm_reset(dev_info_t *);
 static void ppt_bus_reset(dev_info_t *);
 static void ppt_reset_pci_power_state(dev_info_t *);
+static void ppt_restore_reset_config_locked(struct pptdev *, ppt_reset_type_t);
 static int ppt_reset_device_method_locked(struct pptdev *, ppt_reset_flags_t,
     ppt_reset_type_t, ppt_reset_type_t *);
 static int ppt_setup_intx_locked(struct pptdev *, int, boolean_t);
@@ -1138,6 +1139,32 @@ ppt_nvidia_gpu_bus_reset_quirk_active(struct pptdev *ppt)
 	return (vid == 0x10de && did == 0x1e07);
 }
 
+static void
+ppt_restore_reset_config_locked(struct pptdev *ppt, ppt_reset_type_t method)
+{
+	struct pptdev *peer;
+	uint16_t base_bdf;
+
+	ASSERT(MUTEX_HELD(&pptdev_mtx));
+
+	base_bdf = pci_get_bdf(ppt->pptd_dip) & ~0x7u;
+
+	for (peer = list_head(&pptdev_list); peer != NULL;
+	    peer = list_next(&pptdev_list, peer)) {
+		if (method != PPT_RESET_BUS && peer != ppt) {
+			continue;
+		}
+		if (method == PPT_RESET_BUS &&
+		    ((pci_get_bdf(peer->pptd_dip) & ~0x7u) != base_bdf)) {
+			continue;
+		}
+
+		ppt_reset_pci_power_state(peer->pptd_dip);
+		(void) pci_restore_config_regs(peer->pptd_dip);
+		(void) ppt_wait_link_active(peer->pptd_dip);
+	}
+}
+
 static int
 ppt_reset_run_locked(struct pptdev *ppt, ppt_reset_type_t want_method,
     ppt_reset_flags_t flags, ppt_reset_type_t *actual_methodp)
@@ -1200,14 +1227,13 @@ ppt_reset_run_locked(struct pptdev *ppt, ppt_reset_type_t want_method,
 		return (EIO);
 	}
 
-	ppt_reset_pci_power_state(ppt->pptd_dip);
 	/*
-	 * A manual reset can run before assignment.  Leave the device in the
-	 * saved host configuration so ppt_assign_device() does not snapshot a
-	 * reset-default config image as its pristine state.
+	 * A manual reset can run before assignment.  Leave the affected
+	 * function(s) in the saved host configuration so ppt_assign_device()
+	 * does not snapshot a reset-default config image as its pristine state.
+	 * A secondary-bus reset affects every function in the device.
 	 */
-	(void) pci_restore_config_regs(ppt->pptd_dip);
-	(void) ppt_wait_link_active(ppt->pptd_dip);
+	ppt_restore_reset_config_locked(ppt, method);
 
 	if (actual_methodp != NULL)
 		*actual_methodp = method;
