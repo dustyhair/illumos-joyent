@@ -112,7 +112,7 @@ int immu_qinv_strict_intr_delay_us = 0;
  * force broader IEC invalidation with extra settle time after IRTE updates.
  */
 int immu_qinv_haswell_quirk = 1;
-int immu_qinv_haswell_force_global_iec = 1;
+int immu_qinv_haswell_force_global_iec = 0;
 int immu_qinv_haswell_extra_delay_us = 4;
 
 static void immu_qinv_intr_trace_record(immu_t *, uint8_t, uint8_t, uint_t,
