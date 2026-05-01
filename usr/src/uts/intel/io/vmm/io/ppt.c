@@ -174,7 +174,9 @@ static list_t		pptdev_list;
 
 #define	LINK_POLL_INTERVAL_US	10000
 #define	LINK_POLL_TIMEOUT_US	1000000
+#define	DEVICE_PRESENT_TIMEOUT_US	5000000
 
+static boolean_t ppt_wait_device_present_locked(struct pptdev *);
 static boolean_t ppt_wait_link_active(dev_info_t *);
 static boolean_t ppt_pm_reset(dev_info_t *);
 static void ppt_bus_reset(dev_info_t *);
@@ -964,6 +966,28 @@ out:
 }
 
 static boolean_t
+ppt_wait_device_present_locked(struct pptdev *ppt)
+{
+	hrtime_t start;
+
+	ASSERT(MUTEX_HELD(&pptdev_mtx));
+
+	start = gethrtime();
+	do {
+		uint16_t vid = pci_config_get16(ppt->pptd_cfg, PCI_CONF_VENID);
+		uint16_t did = pci_config_get16(ppt->pptd_cfg, PCI_CONF_DEVID);
+
+		if (vid != 0xffff && did != 0xffff && vid != 0 && did != 0) {
+			return (B_TRUE);
+		}
+		delay(drv_usectohz(LINK_POLL_INTERVAL_US));
+	} while ((gethrtime() - start) <
+	    (hrtime_t)USEC2NSEC(DEVICE_PRESENT_TIMEOUT_US));
+
+	return (B_FALSE);
+}
+
+static boolean_t
 ppt_wait_link_active(dev_info_t *dip)
 {
 	ddi_acc_handle_t hdl;
@@ -1248,6 +1272,12 @@ ppt_restore_reset_config_locked(struct pptdev *ppt, ppt_reset_type_t method)
 		}
 
 		ppt_reset_diag_log_locked(peer, "restore-before", method);
+		if (!ppt_wait_device_present_locked(peer)) {
+			cmn_err(CE_WARN, "ppt: reset restore timed out waiting "
+			    "for bdf=0x%x method=%u",
+			    pci_get_bdf(peer->pptd_dip), method);
+		}
+		ppt_reset_diag_log_locked(peer, "restore-present", method);
 		ppt_reset_pci_power_state(peer->pptd_dip);
 		(void) pci_restore_config_regs(peer->pptd_dip);
 		(void) ppt_wait_link_active(peer->pptd_dip);
