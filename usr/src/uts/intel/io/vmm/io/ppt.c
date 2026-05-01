@@ -179,6 +179,10 @@ static boolean_t ppt_wait_link_active(dev_info_t *);
 static boolean_t ppt_pm_reset(dev_info_t *);
 static void ppt_bus_reset(dev_info_t *);
 static void ppt_reset_pci_power_state(dev_info_t *);
+static void ppt_reset_diag_log_locked(struct pptdev *, const char *,
+    ppt_reset_type_t);
+static void ppt_reset_diag_group_log_locked(struct pptdev *, const char *,
+    ppt_reset_type_t);
 static void ppt_restore_reset_config_locked(struct pptdev *, ppt_reset_type_t);
 static int ppt_reset_device_method_locked(struct pptdev *, ppt_reset_flags_t,
     ppt_reset_type_t, ppt_reset_type_t *);
@@ -1140,6 +1144,90 @@ ppt_nvidia_gpu_bus_reset_quirk_active(struct pptdev *ppt)
 }
 
 static void
+ppt_reset_diag_log_locked(struct pptdev *ppt, const char *tag,
+    ppt_reset_type_t method)
+{
+	ddi_acc_handle_t cfg = ppt->pptd_cfg;
+	uint16_t bdf, venid, devid, cmd, stat;
+	uint16_t pmcsr = 0xffff;
+	uint16_t msi_ctrl = 0xffff, msi_data = 0xffff;
+	uint16_t pcie_devctl = 0xffff, pcie_devsts = 0xffff;
+	uint16_t pcie_linksts = 0xffff;
+	uint32_t bars[PCI_BASE_NUM];
+	uint32_t rom, msi_addr_lo = 0xffffffff, msi_addr_hi = 0xffffffff;
+	uint16_t cap;
+
+	ASSERT(MUTEX_HELD(&pptdev_mtx));
+
+	bdf = pci_get_bdf(ppt->pptd_dip);
+	venid = pci_config_get16(cfg, PCI_CONF_VENID);
+	devid = pci_config_get16(cfg, PCI_CONF_DEVID);
+	cmd = pci_config_get16(cfg, PCI_CONF_COMM);
+	stat = pci_config_get16(cfg, PCI_CONF_STAT);
+	for (uint_t i = 0; i < PCI_BASE_NUM; i++) {
+		bars[i] = pci_config_get32(cfg, PCI_CONF_BASE0 +
+		    (i * PCI_BAR_SZ_32));
+	}
+	rom = pci_config_get32(cfg, PCI_CONF_ROM);
+
+	if (PCI_CAP_LOCATE(cfg, PCI_CAP_ID_PM, &cap) == DDI_SUCCESS) {
+		pmcsr = PCI_CAP_GET16(cfg, 0, cap, PCI_PMCSR);
+	}
+	if (PCI_CAP_LOCATE(cfg, PCI_CAP_ID_MSI, &cap) == DDI_SUCCESS) {
+		msi_ctrl = PCI_CAP_GET16(cfg, 0, cap, PCI_MSI_CTRL);
+		msi_addr_lo = PCI_CAP_GET32(cfg, 0, cap, PCI_MSI_ADDR_OFFSET);
+		if ((msi_ctrl & PCI_MSI_64BIT_MASK) != 0) {
+			msi_addr_hi = PCI_CAP_GET32(cfg, 0, cap,
+			    PCI_MSI_ADDR_OFFSET + sizeof (uint32_t));
+			msi_data = PCI_CAP_GET16(cfg, 0, cap,
+			    PCI_MSI_ADDR_OFFSET + (2 * sizeof (uint32_t)));
+		} else {
+			msi_data = PCI_CAP_GET16(cfg, 0, cap,
+			    PCI_MSI_ADDR_OFFSET + sizeof (uint32_t));
+		}
+	}
+	if (PCI_CAP_LOCATE(cfg, PCI_CAP_ID_PCI_E, &cap) == DDI_SUCCESS) {
+		pcie_devctl = PCI_CAP_GET16(cfg, 0, cap, PCIE_DEVCTL);
+		pcie_devsts = PCI_CAP_GET16(cfg, 0, cap, PCIE_DEVSTS);
+		pcie_linksts = PCI_CAP_GET16(cfg, 0, cap, PCIE_LINKSTS);
+	}
+
+	cmn_err(CE_NOTE, "ppt-reset-diag: tag=%s method=%u bdf=0x%x "
+	    "venid=0x%x devid=0x%x cmd=0x%x stat=0x%x "
+	    "bar0=0x%x bar1=0x%x bar2=0x%x bar3=0x%x bar4=0x%x "
+	    "bar5=0x%x rom=0x%x pmcsr=0x%x msi_ctrl=0x%x "
+	    "msi_addr=0x%x:%x msi_data=0x%x pcie_devctl=0x%x "
+	    "pcie_devsts=0x%x pcie_linksts=0x%x",
+	    tag, method, bdf, venid, devid, cmd, stat, bars[0], bars[1],
+	    bars[2], bars[3], bars[4], bars[5], rom, pmcsr, msi_ctrl,
+	    msi_addr_hi, msi_addr_lo, msi_data, pcie_devctl, pcie_devsts,
+	    pcie_linksts);
+}
+
+static void
+ppt_reset_diag_group_log_locked(struct pptdev *ppt, const char *tag,
+    ppt_reset_type_t method)
+{
+	struct pptdev *peer;
+	uint16_t base_bdf;
+
+	ASSERT(MUTEX_HELD(&pptdev_mtx));
+
+	if (method != PPT_RESET_BUS) {
+		ppt_reset_diag_log_locked(ppt, tag, method);
+		return;
+	}
+
+	base_bdf = pci_get_bdf(ppt->pptd_dip) & ~0x7u;
+	for (peer = list_head(&pptdev_list); peer != NULL;
+	    peer = list_next(&pptdev_list, peer)) {
+		if ((pci_get_bdf(peer->pptd_dip) & ~0x7u) == base_bdf) {
+			ppt_reset_diag_log_locked(peer, tag, method);
+		}
+	}
+}
+
+static void
 ppt_restore_reset_config_locked(struct pptdev *ppt, ppt_reset_type_t method)
 {
 	struct pptdev *peer;
@@ -1159,9 +1247,11 @@ ppt_restore_reset_config_locked(struct pptdev *ppt, ppt_reset_type_t method)
 			continue;
 		}
 
+		ppt_reset_diag_log_locked(peer, "restore-before", method);
 		ppt_reset_pci_power_state(peer->pptd_dip);
 		(void) pci_restore_config_regs(peer->pptd_dip);
 		(void) ppt_wait_link_active(peer->pptd_dip);
+		ppt_reset_diag_log_locked(peer, "restore-after", method);
 	}
 }
 
@@ -1177,43 +1267,79 @@ ppt_reset_run_locked(struct pptdev *ppt, ppt_reset_type_t want_method,
 
 	switch (want_method) {
 	case PPT_RESET_FLR:
+		ppt_reset_diag_group_log_locked(ppt, "manual-before",
+		    PPT_RESET_FLR);
 		ok = ppt_flr(ppt->pptd_dip, B_TRUE);
 		method = PPT_RESET_FLR;
+		ppt_reset_diag_group_log_locked(ppt, "manual-after-raw",
+		    method);
 		if (!ok && (flags & PPT_RESET_F_ALLOW_FALLBACK) != 0) {
+			ppt_reset_diag_group_log_locked(ppt,
+			    "manual-fallback-before", PPT_RESET_PM);
 			ok = ppt_pm_reset(ppt->pptd_dip);
 			method = ok ? PPT_RESET_PM : method;
+			ppt_reset_diag_group_log_locked(ppt,
+			    "manual-fallback-after-raw", method);
 			if (!ok && func == 0) {
+				ppt_reset_diag_group_log_locked(ppt,
+				    "manual-fallback-before", PPT_RESET_BUS);
 				ppt_bus_reset(ppt->pptd_dip);
 				ok = B_TRUE;
 				method = PPT_RESET_BUS;
+				ppt_reset_diag_group_log_locked(ppt,
+				    "manual-fallback-after-raw", method);
 			}
 		}
 		break;
 	case PPT_RESET_PM:
+		ppt_reset_diag_group_log_locked(ppt, "manual-before",
+		    PPT_RESET_PM);
 		ok = ppt_pm_reset(ppt->pptd_dip);
 		method = PPT_RESET_PM;
+		ppt_reset_diag_group_log_locked(ppt, "manual-after-raw",
+		    method);
 		break;
 	case PPT_RESET_BUS:
+		ppt_reset_diag_group_log_locked(ppt, "manual-before",
+		    PPT_RESET_BUS);
 		ppt_bus_reset(ppt->pptd_dip);
 		ok = B_TRUE;
 		method = PPT_RESET_BUS;
+		ppt_reset_diag_group_log_locked(ppt, "manual-after-raw",
+		    method);
 		break;
 	case PPT_RESET_NONE:
 		if (ppt_nvidia_gpu_bus_reset_quirk_active(ppt)) {
+			ppt_reset_diag_group_log_locked(ppt, "manual-before",
+			    PPT_RESET_BUS);
 			ppt_bus_reset(ppt->pptd_dip);
 			ok = B_TRUE;
 			method = PPT_RESET_BUS;
+			ppt_reset_diag_group_log_locked(ppt, "manual-after-raw",
+			    method);
 			break;
 		}
+		ppt_reset_diag_group_log_locked(ppt, "manual-before",
+		    PPT_RESET_FLR);
 		ok = ppt_flr(ppt->pptd_dip, B_TRUE);
 		method = PPT_RESET_FLR;
+		ppt_reset_diag_group_log_locked(ppt, "manual-after-raw",
+		    method);
 		if (!ok && (flags & PPT_RESET_F_ALLOW_FALLBACK) != 0) {
+			ppt_reset_diag_group_log_locked(ppt,
+			    "manual-fallback-before", PPT_RESET_PM);
 			ok = ppt_pm_reset(ppt->pptd_dip);
 			method = ok ? PPT_RESET_PM : method;
+			ppt_reset_diag_group_log_locked(ppt,
+			    "manual-fallback-after-raw", method);
 			if (!ok && func == 0) {
+				ppt_reset_diag_group_log_locked(ppt,
+				    "manual-fallback-before", PPT_RESET_BUS);
 				ppt_bus_reset(ppt->pptd_dip);
 				ok = B_TRUE;
 				method = PPT_RESET_BUS;
+				ppt_reset_diag_group_log_locked(ppt,
+				    "manual-fallback-after-raw", method);
 			}
 		}
 		break;
@@ -1234,6 +1360,7 @@ ppt_reset_run_locked(struct pptdev *ppt, ppt_reset_type_t want_method,
 	 * A secondary-bus reset affects every function in the device.
 	 */
 	ppt_restore_reset_config_locked(ppt, method);
+	ppt_reset_diag_group_log_locked(ppt, "manual-after-restore", method);
 
 	if (actual_methodp != NULL)
 		*actual_methodp = method;
@@ -1477,13 +1604,16 @@ ppt_assign_device(struct vm *vm, int pptfd)
 		return (err);
 	}
 
+	ppt_reset_diag_log_locked(ppt, "assign-before-save", PPT_RESET_FLR);
 	if (pci_save_config_regs(ppt->pptd_dip) != DDI_SUCCESS) {
 		err = EIO;
 		goto done;
 	}
 	cmn_err(CE_NOTE, "ppt: assign enter bdf=0x%x vm=%p pptfd=%d",
 	    pci_get_bdf(ppt->pptd_dip), (void *)vm, pptfd);
+	ppt_reset_diag_log_locked(ppt, "assign-before-flr", PPT_RESET_FLR);
 	ppt_flr(ppt->pptd_dip, B_TRUE);
+	ppt_reset_diag_log_locked(ppt, "assign-after-flr", PPT_RESET_FLR);
 
 	/*
 	 * Restore the device state after reset and then perform another save
@@ -1495,6 +1625,8 @@ ppt_assign_device(struct vm *vm, int pptfd)
 		err = EIO;
 		goto done;
 	}
+	ppt_reset_diag_log_locked(ppt, "assign-after-restore",
+	    PPT_RESET_FLR);
 
 	ppt_toggle_bar(ppt, B_TRUE);
 
