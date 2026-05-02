@@ -441,7 +441,9 @@ ppt_ioctl(dev_t dev, int cmd, intptr_t arg, int md, cred_t *cr, int *rv)
 			return (EINVAL);
 		}
 
-		mutex_enter(&pptdev_mtx);
+		if (!mutex_tryenter(&pptdev_mtx)) {
+			return (EBUSY);
+		}
 		if (ppt->vm != NULL) {
 			mutex_exit(&pptdev_mtx);
 			return (EBUSY);
@@ -1768,28 +1770,37 @@ static void
 ppt_do_unassign(struct pptdev *ppt)
 {
 	struct vm *vm = ppt->vm;
+	uint16_t cmd;
 
 	ASSERT3P(vm, !=, NULL);
 	ASSERT(MUTEX_HELD(&pptdev_mtx));
 
-	ppt_flr(ppt->pptd_dip, B_TRUE);
-
 	/*
-	 * Restore from the state saved during device assignment.
-	 * If the device power state has been altered, that must be remedied
-	 * first, as it will reset register state during the transition.
+	 * VM destruction must not block behind a device reset while holding the
+	 * global ppt mutex.  Quiesce host-visible decode and interrupts here;
+	 * the next assignment path performs the selected reset method before the
+	 * device is handed to another guest.
 	 */
-	ppt_reset_pci_power_state(ppt->pptd_dip);
-	(void) pci_restore_config_regs(ppt->pptd_dip);
+	cmd = pci_config_get16(ppt->pptd_cfg, PCI_CONF_COMM);
+	cmd &= ~(PCI_COMM_ME | PCI_COMM_MAE | PCI_COMM_IO);
+	pci_config_put16(ppt->pptd_cfg, PCI_CONF_COMM, cmd);
 
-	pf_set_passthru(ppt->pptd_dip, B_FALSE);
-
-	ppt_unmap_all_mmio(vm, ppt);
 	ppt_teardown_msi(ppt);
 	ppt_teardown_msix(ppt);
 	ppt_teardown_intx(ppt);
+	ppt_unmap_all_mmio(vm, ppt);
+
 	iommu_remove_device(vm_iommu_domain(vm), pci_get_bdf(ppt->pptd_dip));
 	iommu_add_device(iommu_host_domain(), pci_get_bdf(ppt->pptd_dip));
+	pf_set_passthru(ppt->pptd_dip, B_FALSE);
+
+	/*
+	 * Restore from the state saved during device assignment.  If the device
+	 * power state has been altered, bring it back to D0 first because the
+	 * transition itself may reset config state.
+	 */
+	ppt_reset_pci_power_state(ppt->pptd_dip);
+	(void) pci_restore_config_regs(ppt->pptd_dip);
 	ppt->vm = NULL;
 }
 
