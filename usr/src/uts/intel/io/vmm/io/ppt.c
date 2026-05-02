@@ -155,7 +155,7 @@ static void		*ppt_state;
 static kmutex_t		pptdev_mtx;
 static list_t		pptdev_list;
 int			ppt_diag_enable = 0;
-int			ppt_unassign_diag_enable = 1;
+int			ppt_unassign_diag_enable = 0;
 int			ppt_unassign_flr_quiesce = 0;
 
 #ifndef PCI_PMCSR_STATE_D0

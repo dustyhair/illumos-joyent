@@ -221,7 +221,7 @@ uint32_t vtd_trace_domid = 0xffffffffU;
  * leaves the DRHD invalidate engine wedged, toggle translation on that DRHD
  * under the rootnex interrupt-remap transition gate and retry invalidation.
  */
-uint32_t vtd_rearm_on_remove_timeout = 0;
+uint32_t vtd_rearm_on_remove_timeout = 1;
 /*
  * Debug/mitigation knob: quiesce host interrupt-remap updates while vmm_vtd is
  * updating or invalidating DMA mappings for a non-host domain. This widens the
@@ -1748,7 +1748,8 @@ vtd_add_device(void *arg, uint16_t rid)
 	}
 
 	if (!vtd_context_changed_invalidate(vtdmap)) {
-		if (dom->id != VTD_HOST_DOMAIN_ID &&
+		if (vtd_rearm_on_remove_timeout != 0 &&
+		    dom->id != VTD_HOST_DOMAIN_ID &&
 		    vtd_rearm_unit_and_invalidate(vtdmap)) {
 			cmn_err(CE_NOTE, "vtd_add_device: invalidate recovered "
 			    "after DRHD rearm rid=0x%x domid=%u", rid, dom->id);

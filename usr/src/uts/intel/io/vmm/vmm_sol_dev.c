@@ -80,7 +80,7 @@ static list_t		vmm_list;
 static id_space_t	*vmm_minors;
 static void		*vmm_statep;
 int			vmm_ppt_diag_enable = 0;
-int			vmm_destroy_diag_enable = 1;
+int			vmm_destroy_diag_enable = 0;
 
 /*
  * Until device emulation in bhyve had been adequately scrutinized and tested,
