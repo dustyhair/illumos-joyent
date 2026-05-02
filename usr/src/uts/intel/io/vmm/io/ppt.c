@@ -156,6 +156,7 @@ static kmutex_t		pptdev_mtx;
 static list_t		pptdev_list;
 int			ppt_diag_enable = 0;
 int			ppt_unassign_diag_enable = 1;
+int			ppt_unassign_flr_quiesce = 0;
 
 #ifndef PCI_PMCSR_STATE_D0
 #define	PCI_PMCSR_STATE_D0	0x0000
@@ -1811,6 +1812,21 @@ ppt_do_unassign(struct pptdev *ppt)
 		cmn_err(CE_NOTE, "ppt: unassign step=intx-done bdf=0x%x",
 		    bdf);
 	}
+
+	/*
+	 * Optional diagnostic mitigation: after guest-visible decode and
+	 * interrupts are quiesced, issue an FLR on function 0 before removing
+	 * the device from the guest IOMMU domain.  This tests whether the VT-d
+	 * invalidate timeout is caused by a still-active device at teardown.
+	 */
+	if (ppt_unassign_flr_quiesce != 0 && PCI_RID2FUNC(bdf) == 0) {
+		ppt_flr(ppt->pptd_dip, B_TRUE);
+		if (ppt_unassign_diag_enable != 0) {
+			cmn_err(CE_NOTE,
+			    "ppt: unassign step=flr-quiesce bdf=0x%x", bdf);
+		}
+	}
+
 	ppt_unmap_all_mmio(vm, ppt);
 	if (ppt_unassign_diag_enable != 0) {
 		cmn_err(CE_NOTE, "ppt: unassign step=mmio-unmapped bdf=0x%x",
