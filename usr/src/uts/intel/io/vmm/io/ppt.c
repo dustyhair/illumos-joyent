@@ -177,11 +177,32 @@ int			ppt_diag_enable = 0;
 #define	LINK_POLL_TIMEOUT_US	1000000
 #define	DEVICE_PRESENT_TIMEOUT_US	5000000
 
+struct ppt_reset_state {
+	uint16_t	prs_bdf;
+	uint16_t	prs_venid;
+	uint16_t	prs_devid;
+	uint16_t	prs_cmd;
+	uint16_t	prs_stat;
+	uint16_t	prs_pmcsr;
+	uint16_t	prs_msictl;
+	uint16_t	prs_msidata;
+	uint32_t	prs_bar0;
+	uint32_t	prs_bar1;
+	uint32_t	prs_bar3;
+	uint32_t	prs_msiaddr_lo;
+	uint32_t	prs_msiaddr_hi;
+	boolean_t	prs_present;
+	boolean_t	prs_has_pm;
+	boolean_t	prs_has_msi;
+};
+
 static boolean_t ppt_wait_device_present_locked(struct pptdev *);
 static boolean_t ppt_wait_link_active(dev_info_t *);
 static boolean_t ppt_pm_reset(dev_info_t *, boolean_t);
 static void ppt_bus_reset(dev_info_t *);
 static void ppt_reset_pci_power_state(dev_info_t *);
+static void ppt_reset_log_state_locked(struct pptdev *, ppt_reset_type_t,
+    const char *);
 static void ppt_restore_reset_config_locked(struct pptdev *, ppt_reset_type_t);
 static int ppt_reset_device_method_locked(struct pptdev *, ppt_reset_flags_t,
     ppt_reset_type_t, ppt_reset_type_t *);
@@ -1016,8 +1037,9 @@ ppt_wait_link_active(dev_info_t *dip)
 static boolean_t
 ppt_pm_reset(dev_info_t *dip, boolean_t force)
 {
-	uint16_t cap_ptr, csr;
+	uint16_t cap_ptr, csr, csr_before, csr_d3, csr_after;
 	uint16_t cmd;
+	uint16_t bdf;
 	ddi_acc_handle_t hdl;
 
 	if (pci_config_setup(dip, &hdl) != DDI_SUCCESS)
@@ -1033,6 +1055,7 @@ ppt_pm_reset(dev_info_t *dip, boolean_t force)
 	pci_config_put16(hdl, PCI_CONF_COMM, cmd);
 
 	csr = PCI_CAP_GET16(hdl, 0, cap_ptr, PCI_PMCSR);
+	csr_before = csr;
 	if ((csr & PCI_PMCSR_NO_SOFT_RESET) != 0 && !force) {
 		pci_config_teardown(&hdl);
 		return (B_FALSE);
@@ -1052,10 +1075,21 @@ ppt_pm_reset(dev_info_t *dip, boolean_t force)
 	csr = (csr & ~PCI_PMCSR_STATE_MASK) | PCI_PMCSR_STATE_D3HOT;
 	(void) PCI_CAP_PUT16(hdl, 0, cap_ptr, PCI_PMCSR, csr);
 	delay(drv_usectohz(100000));
+	csr_d3 = PCI_CAP_GET16(hdl, 0, cap_ptr, PCI_PMCSR);
 
 	csr = (csr & ~PCI_PMCSR_STATE_MASK) | PCI_PMCSR_STATE_D0;
 	(void) PCI_CAP_PUT16(hdl, 0, cap_ptr, PCI_PMCSR, csr);
 	delay(drv_usectohz(50000));
+	csr_after = PCI_CAP_GET16(hdl, 0, cap_ptr, PCI_PMCSR);
+
+	if (ppt_diag_enable != 0) {
+		bdf = pci_get_bdf(dip);
+		cmn_err(CE_NOTE, "ppt-reset-pm: bdf=0x%x force=%u "
+		    "no_soft_reset=%u pmcsr_before=0x%x pmcsr_d3=0x%x "
+		    "pmcsr_after=0x%x", bdf, force,
+		    (csr_before & PCI_PMCSR_NO_SOFT_RESET) != 0,
+		    csr_before, csr_d3, csr_after);
+	}
 
 	pci_config_teardown(&hdl);
 	return (B_TRUE);
@@ -1165,6 +1199,92 @@ ppt_nvidia_gpu_bus_reset_quirk_active(struct pptdev *ppt)
 }
 
 static void
+ppt_reset_capture_state(struct pptdev *ppt, struct ppt_reset_state *st)
+{
+	uint16_t cap;
+
+	bzero(st, sizeof (*st));
+	st->prs_bdf = pci_get_bdf(ppt->pptd_dip);
+	st->prs_venid = pci_config_get16(ppt->pptd_cfg, PCI_CONF_VENID);
+	st->prs_devid = pci_config_get16(ppt->pptd_cfg, PCI_CONF_DEVID);
+	st->prs_present = (st->prs_venid != 0xffff);
+	st->prs_cmd = pci_config_get16(ppt->pptd_cfg, PCI_CONF_COMM);
+	st->prs_stat = pci_config_get16(ppt->pptd_cfg, PCI_CONF_STAT);
+	st->prs_bar0 = pci_config_get32(ppt->pptd_cfg, PCI_CONF_BASE0);
+	st->prs_bar1 = pci_config_get32(ppt->pptd_cfg, PCI_CONF_BASE1);
+	st->prs_bar3 = pci_config_get32(ppt->pptd_cfg, PCI_CONF_BASE3);
+
+	if (!st->prs_present)
+		return;
+
+	if (PCI_CAP_LOCATE(ppt->pptd_cfg, PCI_CAP_ID_PM, &cap) == DDI_SUCCESS) {
+		st->prs_has_pm = B_TRUE;
+		st->prs_pmcsr = PCI_CAP_GET16(ppt->pptd_cfg, 0, cap,
+		    PCI_PMCSR);
+	}
+
+	if (PCI_CAP_LOCATE(ppt->pptd_cfg, PCI_CAP_ID_MSI, &cap) == DDI_SUCCESS) {
+		st->prs_has_msi = B_TRUE;
+		st->prs_msictl = PCI_CAP_GET16(ppt->pptd_cfg, 0, cap,
+		    PCI_MSI_CTRL);
+		st->prs_msiaddr_lo = PCI_CAP_GET32(ppt->pptd_cfg, 0, cap,
+		    PCI_MSI_ADDR_OFFSET);
+		if ((st->prs_msictl & PCI_MSI_64BIT_MASK) != 0) {
+			st->prs_msiaddr_hi = PCI_CAP_GET32(ppt->pptd_cfg, 0,
+			    cap, PCI_MSI_64BIT_ADDR);
+			st->prs_msidata = PCI_CAP_GET16(ppt->pptd_cfg, 0,
+			    cap, PCI_MSI_64BIT_DATA);
+		} else {
+			st->prs_msidata = PCI_CAP_GET16(ppt->pptd_cfg, 0,
+			    cap, PCI_MSI_32BIT_DATA);
+		}
+	}
+}
+
+static void
+ppt_reset_log_one_state(struct pptdev *ppt, ppt_reset_type_t method,
+    const char *phase)
+{
+	struct ppt_reset_state st;
+
+	ppt_reset_capture_state(ppt, &st);
+	cmn_err(CE_NOTE, "ppt-reset-state: phase=%s method=%u bdf=0x%x "
+	    "present=%u ven=0x%x dev=0x%x cmd=0x%x stat=0x%x "
+	    "bar0=0x%x bar1=0x%x bar3=0x%x pm=%u pmcsr=0x%x "
+	    "msi=%u msictl=0x%x msiaddr=0x%x:%x msidata=0x%x",
+	    phase, method, st.prs_bdf, st.prs_present, st.prs_venid,
+	    st.prs_devid, st.prs_cmd, st.prs_stat, st.prs_bar0,
+	    st.prs_bar1, st.prs_bar3, st.prs_has_pm, st.prs_pmcsr,
+	    st.prs_has_msi, st.prs_msictl, st.prs_msiaddr_hi,
+	    st.prs_msiaddr_lo, st.prs_msidata);
+}
+
+static void
+ppt_reset_log_state_locked(struct pptdev *ppt, ppt_reset_type_t method,
+    const char *phase)
+{
+	struct pptdev *peer;
+	uint16_t base_bdf;
+
+	ASSERT(MUTEX_HELD(&pptdev_mtx));
+
+	if (ppt_diag_enable == 0)
+		return;
+
+	base_bdf = pci_get_bdf(ppt->pptd_dip) & ~0x7u;
+	for (peer = list_head(&pptdev_list); peer != NULL;
+	    peer = list_next(&pptdev_list, peer)) {
+		if (method != PPT_RESET_BUS && peer != ppt)
+			continue;
+		if (method == PPT_RESET_BUS &&
+		    ((pci_get_bdf(peer->pptd_dip) & ~0x7u) != base_bdf)) {
+			continue;
+		}
+		ppt_reset_log_one_state(peer, method, phase);
+	}
+}
+
+static void
 ppt_restore_reset_config_locked(struct pptdev *ppt, ppt_reset_type_t method)
 {
 	struct pptdev *peer;
@@ -1205,6 +1325,8 @@ ppt_reset_run_locked(struct pptdev *ppt, ppt_reset_type_t want_method,
 	uint_t func;
 
 	func = pci_get_bdf(ppt->pptd_dip) & 0x7u;
+
+	ppt_reset_log_state_locked(ppt, want_method, "before");
 
 	switch (want_method) {
 	case PPT_RESET_FLR:
@@ -1253,10 +1375,13 @@ ppt_reset_run_locked(struct pptdev *ppt, ppt_reset_type_t want_method,
 	}
 
 	if (!ok) {
+		ppt_reset_log_state_locked(ppt, method, "failed");
 		if (actual_methodp != NULL)
 			*actual_methodp = method;
 		return (EIO);
 	}
+
+	ppt_reset_log_state_locked(ppt, method, "after-reset");
 
 	/*
 	 * A manual reset can run before assignment.  Leave the affected
@@ -1265,6 +1390,7 @@ ppt_reset_run_locked(struct pptdev *ppt, ppt_reset_type_t want_method,
 	 * A secondary-bus reset affects every function in the device.
 	 */
 	ppt_restore_reset_config_locked(ppt, method);
+	ppt_reset_log_state_locked(ppt, method, "after-restore");
 
 	if (actual_methodp != NULL)
 		*actual_methodp = method;
