@@ -218,6 +218,7 @@ uint32_t vtd_trace_map_verbose = 0;
 uint32_t vtd_trace_domid = 0xffffffffU;
 uint32_t vtd_trace_remove_state = 0;
 uint32_t vtd_wbflush_before_ctxinv = 0;
+uint32_t vtd_intrmap_quiesce_on_remove = 0;
 /*
  * Diagnostic recovery knob: if removing a non-host device from a domain
  * leaves the DRHD invalidate engine wedged, toggle translation on that DRHD
@@ -1836,11 +1837,15 @@ vtd_remove_device(void *arg, uint16_t rid)
 	struct domain *dom = arg;
 	struct vtdmap *vtdmap;
 	boolean_t ok;
+	int drhd_idx = -1;
+	boolean_t intrmap_gate = B_FALSE;
 
 	bus = PCI_RID2BUS(rid);
 	ctxp = ctx_tables[bus];
 	idx = VTD_RID2IDX(rid);
 	vtdmap = vtd_device_scope(rid);
+	if (vtdmap != NULL)
+		drhd_idx = vtd_drhd_index(vtdmap);
 
 	if (vtd_trace_lifecycle != 0 && vtd_trace_domain_enabled(dom)) {
 		cmn_err(CE_NOTE, "vtd_remove_device: rid=0x%x domid=%u",
@@ -1878,7 +1883,28 @@ vtd_remove_device(void *arg, uint16_t rid)
 	}
 
 	/* Keep remove/add invalidation policy in a single helper. */
+	if (vtd_intrmap_quiesce_on_remove != 0 && dom != NULL &&
+	    dom->id != VTD_HOST_DOMAIN_ID && drhd_idx >= 0) {
+		immu_intrmap_drhd_transition_set(drhd_idx, B_TRUE);
+		intrmap_gate = B_TRUE;
+		if (vtd_trace_remove_state != 0 &&
+		    vtd_trace_domain_enabled(dom)) {
+			cmn_err(CE_NOTE, "vtd_remove_state: "
+			    "phase=intrmap-gate-enter rid=0x%x domid=%u "
+			    "drhd=%d", rid, dom->id, drhd_idx);
+		}
+	}
 	ok = vtd_context_changed_invalidate(NULL);
+	if (intrmap_gate) {
+		if (vtd_trace_remove_state != 0 &&
+		    vtd_trace_domain_enabled(dom)) {
+			cmn_err(CE_NOTE, "vtd_remove_state: "
+			    "phase=intrmap-gate-exit rid=0x%x domid=%u "
+			    "drhd=%d ok=%d", rid, dom->id, drhd_idx,
+			    ok ? 1 : 0);
+		}
+		immu_intrmap_drhd_transition_set(drhd_idx, B_FALSE);
+	}
 	if (!ok) {
 		cmn_err(CE_WARN, "vtd_remove_device: invalidate timed out for "
 		    "rid=0x%x", rid);
