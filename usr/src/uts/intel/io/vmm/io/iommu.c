@@ -282,26 +282,6 @@ iommu_remove_device(void *domain, uint16_t rid)
 }
 
 void
-iommu_remove_devices(void *domain, const uint16_t *rids, uint_t nrids)
-{
-	uint_t i;
-
-	ASSERT3P(domain, !=, NULL);
-	ASSERT3P(rids, !=, NULL);
-
-	if (nrids == 0)
-		return;
-
-	if (ops->remove_devices != NULL) {
-		ops->remove_devices(domain, rids, nrids);
-		return;
-	}
-
-	for (i = 0; i < nrids; i++)
-		ops->remove_device(domain, rids[i]);
-}
-
-void
 iommu_invalidate_tlb(void *domain)
 {
 	ASSERT3P(domain, !=, NULL);

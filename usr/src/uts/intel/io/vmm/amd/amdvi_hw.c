@@ -1364,15 +1364,6 @@ amdvi_invalidate_tlb(void *arg)
 	amdvi_do_inv_domain(domain->id, false);
 }
 
-static void
-amdvi_remove_devices(void *arg, const uint16_t *devids, uint_t ndevs)
-{
-	uint_t i;
-
-	for (i = 0; i < ndevs; i++)
-		amdvi_remove_device(arg, devids[i]);
-}
-
 const struct iommu_ops iommu_ops_amd = {
 	.init = amdvi_init,
 	.cleanup = amdvi_cleanup,
@@ -1384,6 +1375,5 @@ const struct iommu_ops iommu_ops_amd = {
 	.remove_mapping = amdvi_remove_mapping,
 	.add_device = amdvi_add_device,
 	.remove_device = amdvi_remove_device,
-	.remove_devices = amdvi_remove_devices,
 	.invalidate_tlb = amdvi_invalidate_tlb
 };
