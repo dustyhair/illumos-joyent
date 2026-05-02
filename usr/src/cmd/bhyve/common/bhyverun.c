@@ -595,6 +595,14 @@ do_open(const char *vmname)
 		exit(4);
 	}
 
+#ifndef __FreeBSD__
+	if (get_config_bool_default("destroy_on_close", false) &&
+	    vm_set_autodestruct(ctx, true) != 0) {
+		perror("VM_SET_AUTODESTRUCT");
+		exit(4);
+	}
+#endif
+
 #ifndef WITHOUT_CAPSICUM
 	if (vm_limit_rights(ctx) != 0)
 		err(EX_OSERR, "vm_limit_rights");

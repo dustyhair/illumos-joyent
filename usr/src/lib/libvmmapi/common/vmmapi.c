@@ -244,6 +244,15 @@ vm_destroy(struct vmctx *vm)
 
 	free(vm);
 }
+
+int
+vm_set_autodestruct(struct vmctx *vm, bool enabled)
+{
+	assert(vm != NULL);
+	assert(vm->fd >= 0);
+
+	return (ioctl(vm->fd, VM_SET_AUTODESTRUCT, enabled ? 1 : 0));
+}
 #endif
 
 struct vcpu *

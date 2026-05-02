@@ -152,6 +152,9 @@ int	vm_create(const char *name, uint64_t flags);
 struct vmctx *vm_open(const char *name);
 void	vm_close(struct vmctx *ctx);
 void	vm_destroy(struct vmctx *ctx);
+#ifndef	__FreeBSD__
+int	vm_set_autodestruct(struct vmctx *ctx, bool enabled);
+#endif
 #ifdef	__FreeBSD__
 int	vm_limit_rights(struct vmctx *ctx);
 #endif
