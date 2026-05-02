@@ -155,6 +155,7 @@ static void		*ppt_state;
 static kmutex_t		pptdev_mtx;
 static list_t		pptdev_list;
 int			ppt_diag_enable = 0;
+int			ppt_unassign_diag_enable = 1;
 
 #ifndef PCI_PMCSR_STATE_D0
 #define	PCI_PMCSR_STATE_D0	0x0000
@@ -1771,9 +1772,15 @@ ppt_do_unassign(struct pptdev *ppt)
 {
 	struct vm *vm = ppt->vm;
 	uint16_t cmd;
+	uint16_t bdf = pci_get_bdf(ppt->pptd_dip);
 
 	ASSERT3P(vm, !=, NULL);
 	ASSERT(MUTEX_HELD(&pptdev_mtx));
+
+	if (ppt_unassign_diag_enable != 0) {
+		cmn_err(CE_NOTE, "ppt: unassign step=start bdf=0x%x vm=%p",
+		    bdf, (void *)vm);
+	}
 
 	/*
 	 * VM destruction must not block behind a device reset while holding the
@@ -1784,15 +1791,47 @@ ppt_do_unassign(struct pptdev *ppt)
 	cmd = pci_config_get16(ppt->pptd_cfg, PCI_CONF_COMM);
 	cmd &= ~(PCI_COMM_ME | PCI_COMM_MAE | PCI_COMM_IO);
 	pci_config_put16(ppt->pptd_cfg, PCI_CONF_COMM, cmd);
+	if (ppt_unassign_diag_enable != 0) {
+		cmn_err(CE_NOTE, "ppt: unassign step=decode-off bdf=0x%x",
+		    bdf);
+	}
 
 	ppt_teardown_msi(ppt);
+	if (ppt_unassign_diag_enable != 0) {
+		cmn_err(CE_NOTE, "ppt: unassign step=msi-done bdf=0x%x",
+		    bdf);
+	}
 	ppt_teardown_msix(ppt);
+	if (ppt_unassign_diag_enable != 0) {
+		cmn_err(CE_NOTE, "ppt: unassign step=msix-done bdf=0x%x",
+		    bdf);
+	}
 	ppt_teardown_intx(ppt);
+	if (ppt_unassign_diag_enable != 0) {
+		cmn_err(CE_NOTE, "ppt: unassign step=intx-done bdf=0x%x",
+		    bdf);
+	}
 	ppt_unmap_all_mmio(vm, ppt);
+	if (ppt_unassign_diag_enable != 0) {
+		cmn_err(CE_NOTE, "ppt: unassign step=mmio-unmapped bdf=0x%x",
+		    bdf);
+	}
 
 	iommu_remove_device(vm_iommu_domain(vm), pci_get_bdf(ppt->pptd_dip));
+	if (ppt_unassign_diag_enable != 0) {
+		cmn_err(CE_NOTE, "ppt: unassign step=iommu-vm-removed "
+		    "bdf=0x%x", bdf);
+	}
 	iommu_add_device(iommu_host_domain(), pci_get_bdf(ppt->pptd_dip));
+	if (ppt_unassign_diag_enable != 0) {
+		cmn_err(CE_NOTE, "ppt: unassign step=iommu-host-added "
+		    "bdf=0x%x", bdf);
+	}
 	pf_set_passthru(ppt->pptd_dip, B_FALSE);
+	if (ppt_unassign_diag_enable != 0) {
+		cmn_err(CE_NOTE, "ppt: unassign step=passthru-off bdf=0x%x",
+		    bdf);
+	}
 
 	/*
 	 * Restore from the state saved during device assignment.  If the device
@@ -1800,8 +1839,18 @@ ppt_do_unassign(struct pptdev *ppt)
 	 * transition itself may reset config state.
 	 */
 	ppt_reset_pci_power_state(ppt->pptd_dip);
+	if (ppt_unassign_diag_enable != 0) {
+		cmn_err(CE_NOTE, "ppt: unassign step=d0 bdf=0x%x", bdf);
+	}
 	(void) pci_restore_config_regs(ppt->pptd_dip);
+	if (ppt_unassign_diag_enable != 0) {
+		cmn_err(CE_NOTE, "ppt: unassign step=config-restored "
+		    "bdf=0x%x", bdf);
+	}
 	ppt->vm = NULL;
+	if (ppt_unassign_diag_enable != 0) {
+		cmn_err(CE_NOTE, "ppt: unassign step=done bdf=0x%x", bdf);
+	}
 }
 
 int
@@ -1830,11 +1879,19 @@ ppt_unassign_all(struct vm *vm)
 	struct pptdev *ppt;
 
 	mutex_enter(&pptdev_mtx);
+	if (ppt_unassign_diag_enable != 0) {
+		cmn_err(CE_NOTE, "ppt: unassign_all enter vm=%p",
+		    (void *)vm);
+	}
 	for (ppt = list_head(&pptdev_list); ppt != NULL;
 	    ppt = list_next(&pptdev_list, ppt)) {
 		if (ppt->vm == vm) {
 			ppt_do_unassign(ppt);
 		}
+	}
+	if (ppt_unassign_diag_enable != 0) {
+		cmn_err(CE_NOTE, "ppt: unassign_all exit vm=%p",
+		    (void *)vm);
 	}
 	mutex_exit(&pptdev_mtx);
 }
