@@ -70,8 +70,6 @@
 #include <unistd.h>
 #include <assert.h>
 #ifndef __FreeBSD__
-#include <fcntl.h>
-#include <limits.h>
 #include <sys/ioctl.h>
 #include <machine/vmm_dev.h>
 #endif
@@ -126,25 +124,9 @@ static cpuset_t cpumask;
 
 #ifndef __FreeBSD__
 static int
-bhyve_set_autodestruct(const char *vmname)
+bhyve_set_autodestruct(struct vmctx *ctx)
 {
-	char vmfile[PATH_MAX];
-	int fd, rc;
-
-	if (snprintf(vmfile, sizeof (vmfile), "/dev/vmm/%s", vmname) >=
-	    sizeof (vmfile)) {
-		errno = ENAMETOOLONG;
-		return (-1);
-	}
-
-	fd = open(vmfile, O_RDWR);
-	if (fd < 0) {
-		return (-1);
-	}
-
-	rc = ioctl(fd, VM_SET_AUTODESTRUCT, 1);
-	(void) close(fd);
-	return (rc);
+	return (ioctl(vm_get_device_fd(ctx), VM_SET_AUTODESTRUCT, 1));
 }
 #endif
 
@@ -627,7 +609,7 @@ do_open(const char *vmname)
 
 #ifndef __FreeBSD__
 	if (get_config_bool_default("destroy_on_close", false) &&
-	    bhyve_set_autodestruct(vmname) != 0) {
+	    bhyve_set_autodestruct(ctx) != 0) {
 		perror("VM_SET_AUTODESTRUCT");
 		exit(4);
 	}
