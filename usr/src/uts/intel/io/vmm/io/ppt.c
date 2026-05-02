@@ -179,7 +179,7 @@ int			ppt_diag_enable = 0;
 
 static boolean_t ppt_wait_device_present_locked(struct pptdev *);
 static boolean_t ppt_wait_link_active(dev_info_t *);
-static boolean_t ppt_pm_reset(dev_info_t *);
+static boolean_t ppt_pm_reset(dev_info_t *, boolean_t);
 static void ppt_bus_reset(dev_info_t *);
 static void ppt_reset_pci_power_state(dev_info_t *);
 static void ppt_restore_reset_config_locked(struct pptdev *, ppt_reset_type_t);
@@ -1014,7 +1014,7 @@ ppt_wait_link_active(dev_info_t *dip)
 }
 
 static boolean_t
-ppt_pm_reset(dev_info_t *dip)
+ppt_pm_reset(dev_info_t *dip, boolean_t force)
 {
 	uint16_t cap_ptr, csr;
 	uint16_t cmd;
@@ -1033,7 +1033,7 @@ ppt_pm_reset(dev_info_t *dip)
 	pci_config_put16(hdl, PCI_CONF_COMM, cmd);
 
 	csr = PCI_CAP_GET16(hdl, 0, cap_ptr, PCI_PMCSR);
-	if ((csr & PCI_PMCSR_NO_SOFT_RESET) != 0) {
+	if ((csr & PCI_PMCSR_NO_SOFT_RESET) != 0 && !force) {
 		pci_config_teardown(&hdl);
 		return (B_FALSE);
 	}
@@ -1051,11 +1051,11 @@ ppt_pm_reset(dev_info_t *dip)
 
 	csr = (csr & ~PCI_PMCSR_STATE_MASK) | PCI_PMCSR_STATE_D3HOT;
 	(void) PCI_CAP_PUT16(hdl, 0, cap_ptr, PCI_PMCSR, csr);
-	delay(drv_usectohz(10000));
+	delay(drv_usectohz(100000));
 
 	csr = (csr & ~PCI_PMCSR_STATE_MASK) | PCI_PMCSR_STATE_D0;
 	(void) PCI_CAP_PUT16(hdl, 0, cap_ptr, PCI_PMCSR, csr);
-	delay(drv_usectohz(10000));
+	delay(drv_usectohz(50000));
 
 	pci_config_teardown(&hdl);
 	return (B_TRUE);
@@ -1201,6 +1201,7 @@ ppt_reset_run_locked(struct pptdev *ppt, ppt_reset_type_t want_method,
 {
 	ppt_reset_type_t method = PPT_RESET_NONE;
 	boolean_t ok = B_FALSE;
+	boolean_t force = (flags & PPT_RESET_F_FORCE) != 0;
 	uint_t func;
 
 	func = pci_get_bdf(ppt->pptd_dip) & 0x7u;
@@ -1210,7 +1211,7 @@ ppt_reset_run_locked(struct pptdev *ppt, ppt_reset_type_t want_method,
 		ok = ppt_flr(ppt->pptd_dip, B_TRUE);
 		method = PPT_RESET_FLR;
 		if (!ok && (flags & PPT_RESET_F_ALLOW_FALLBACK) != 0) {
-			ok = ppt_pm_reset(ppt->pptd_dip);
+			ok = ppt_pm_reset(ppt->pptd_dip, force);
 			method = ok ? PPT_RESET_PM : method;
 			if (!ok && func == 0) {
 				ppt_bus_reset(ppt->pptd_dip);
@@ -1220,7 +1221,7 @@ ppt_reset_run_locked(struct pptdev *ppt, ppt_reset_type_t want_method,
 		}
 		break;
 	case PPT_RESET_PM:
-		ok = ppt_pm_reset(ppt->pptd_dip);
+		ok = ppt_pm_reset(ppt->pptd_dip, force);
 		method = PPT_RESET_PM;
 		break;
 	case PPT_RESET_BUS:
@@ -1238,7 +1239,7 @@ ppt_reset_run_locked(struct pptdev *ppt, ppt_reset_type_t want_method,
 		ok = ppt_flr(ppt->pptd_dip, B_TRUE);
 		method = PPT_RESET_FLR;
 		if (!ok && (flags & PPT_RESET_F_ALLOW_FALLBACK) != 0) {
-			ok = ppt_pm_reset(ppt->pptd_dip);
+			ok = ppt_pm_reset(ppt->pptd_dip, force);
 			method = ok ? PPT_RESET_PM : method;
 			if (!ok && func == 0) {
 				ppt_bus_reset(ppt->pptd_dip);
