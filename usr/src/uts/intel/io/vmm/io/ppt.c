@@ -203,7 +203,8 @@ static void ppt_bus_reset(dev_info_t *);
 static void ppt_reset_pci_power_state(dev_info_t *);
 static void ppt_reset_log_state_locked(struct pptdev *, ppt_reset_type_t,
     const char *);
-static void ppt_restore_reset_config_locked(struct pptdev *, ppt_reset_type_t);
+static int ppt_save_reset_config_locked(struct pptdev *, ppt_reset_type_t);
+static int ppt_restore_reset_config_locked(struct pptdev *, ppt_reset_type_t);
 static int ppt_reset_device_method_locked(struct pptdev *, ppt_reset_flags_t,
     ppt_reset_type_t, ppt_reset_type_t *);
 static int ppt_setup_intx_locked(struct pptdev *, int, boolean_t);
@@ -1284,11 +1285,43 @@ ppt_reset_log_state_locked(struct pptdev *ppt, ppt_reset_type_t method,
 	}
 }
 
-static void
+static int
+ppt_save_reset_config_locked(struct pptdev *ppt, ppt_reset_type_t method)
+{
+	struct pptdev *peer;
+	uint16_t base_bdf;
+
+	ASSERT(MUTEX_HELD(&pptdev_mtx));
+
+	base_bdf = pci_get_bdf(ppt->pptd_dip) & ~0x7u;
+
+	for (peer = list_head(&pptdev_list); peer != NULL;
+	    peer = list_next(&pptdev_list, peer)) {
+		if (method != PPT_RESET_BUS && peer != ppt) {
+			continue;
+		}
+		if (method == PPT_RESET_BUS &&
+		    ((pci_get_bdf(peer->pptd_dip) & ~0x7u) != base_bdf)) {
+			continue;
+		}
+
+		if (pci_save_config_regs(peer->pptd_dip) != DDI_SUCCESS) {
+			cmn_err(CE_WARN, "ppt: reset save failed for "
+			    "bdf=0x%x method=%u",
+			    pci_get_bdf(peer->pptd_dip), method);
+			return (EIO);
+		}
+	}
+
+	return (0);
+}
+
+static int
 ppt_restore_reset_config_locked(struct pptdev *ppt, ppt_reset_type_t method)
 {
 	struct pptdev *peer;
 	uint16_t base_bdf;
+	int err = 0;
 
 	ASSERT(MUTEX_HELD(&pptdev_mtx));
 
@@ -1308,11 +1341,31 @@ ppt_restore_reset_config_locked(struct pptdev *ppt, ppt_reset_type_t method)
 			cmn_err(CE_WARN, "ppt: reset restore timed out waiting "
 			    "for bdf=0x%x method=%u",
 			    pci_get_bdf(peer->pptd_dip), method);
+			err = EIO;
 		}
 		ppt_reset_pci_power_state(peer->pptd_dip);
-		(void) pci_restore_config_regs(peer->pptd_dip);
+		if (pci_restore_config_regs(peer->pptd_dip) != DDI_SUCCESS) {
+			cmn_err(CE_WARN, "ppt: reset restore failed for "
+			    "bdf=0x%x method=%u",
+			    pci_get_bdf(peer->pptd_dip), method);
+			err = EIO;
+			continue;
+		}
+		/*
+		 * pci_restore_config_regs() consumes the saved config property.
+		 * Keep a fresh host-state image for later manual resets and for
+		 * the assignment path.
+		 */
+		if (pci_save_config_regs(peer->pptd_dip) != DDI_SUCCESS) {
+			cmn_err(CE_WARN, "ppt: reset resave failed for "
+			    "bdf=0x%x method=%u",
+			    pci_get_bdf(peer->pptd_dip), method);
+			err = EIO;
+		}
 		(void) ppt_wait_link_active(peer->pptd_dip);
 	}
+
+	return (err);
 }
 
 static int
@@ -1327,6 +1380,14 @@ ppt_reset_run_locked(struct pptdev *ppt, ppt_reset_type_t want_method,
 	func = pci_get_bdf(ppt->pptd_dip) & 0x7u;
 
 	ppt_reset_log_state_locked(ppt, want_method, "before");
+
+	/*
+	 * Save all sibling functions before any manual reset.  A requested FLR
+	 * or auto reset can fall back to a secondary-bus reset, and the bus
+	 * reset path must have valid saved config for every affected function.
+	 */
+	if (ppt_save_reset_config_locked(ppt, PPT_RESET_BUS) != 0)
+		return (EIO);
 
 	switch (want_method) {
 	case PPT_RESET_FLR:
@@ -1389,7 +1450,11 @@ ppt_reset_run_locked(struct pptdev *ppt, ppt_reset_type_t want_method,
 	 * does not snapshot a reset-default config image as its pristine state.
 	 * A secondary-bus reset affects every function in the device.
 	 */
-	ppt_restore_reset_config_locked(ppt, method);
+	if (ppt_restore_reset_config_locked(ppt, method) != 0) {
+		if (actual_methodp != NULL)
+			*actual_methodp = method;
+		return (EIO);
+	}
 	ppt_reset_log_state_locked(ppt, method, "after-restore");
 
 	if (actual_methodp != NULL)
