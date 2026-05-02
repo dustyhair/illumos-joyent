@@ -1927,6 +1927,150 @@ vtd_remove_device(void *arg, uint16_t rid)
 	}
 }
 
+static void
+vtd_remove_devices(void *arg, const uint16_t *rids, uint_t nrids)
+{
+	struct domain *dom = arg;
+	uint32_t gate_mask = 0;
+	uint32_t rearm_mask = 0;
+	boolean_t gate_entered = B_FALSE;
+	boolean_t ok;
+	uint_t i;
+	int bit;
+
+	if (nrids == 0)
+		return;
+
+	if (vtd_trace_lifecycle != 0 && vtd_trace_domain_enabled(dom)) {
+		cmn_err(CE_NOTE, "vtd_remove_devices: nrids=%u domid=%u",
+		    nrids, dom != NULL ? dom->id : 0);
+	}
+
+	for (i = 0; i < nrids; i++) {
+		uint16_t rid = rids[i];
+		uint8_t bus = PCI_RID2BUS(rid);
+		uint64_t *ctxp = ctx_tables[bus];
+		int idx = VTD_RID2IDX(rid);
+		struct vtdmap *vtdmap = vtd_device_scope(rid);
+		int drhd_idx = -1;
+
+		if (vtdmap != NULL)
+			drhd_idx = vtd_drhd_index(vtdmap);
+
+		if (vtd_trace_remove_state != 0 &&
+		    vtd_trace_domain_enabled(dom)) {
+			cmn_err(CE_NOTE, "vtd_remove_state: "
+			    "phase=batch-before-clear rid=0x%x domid=%u "
+			    "drhd=%d ctxlo=0x%llx ctxhi=0x%llx "
+			    "gsr=0x%x ccr=0x%llx rta=0x%llx",
+			    rid, dom != NULL ? dom->id : 0, drhd_idx,
+			    (unsigned long long)ctxp[idx],
+			    (unsigned long long)ctxp[idx + 1],
+			    vtdmap != NULL ? vtdmap->gsr : 0,
+			    (unsigned long long)(vtdmap != NULL ?
+			    vtdmap->ccr : 0),
+			    (unsigned long long)(vtdmap != NULL ?
+			    vtdmap->rta : 0));
+		}
+
+		ctxp[idx] = 0;
+		ctxp[idx + 1] = 0;
+
+		if (vtd_trace_remove_state != 0 &&
+		    vtd_trace_domain_enabled(dom)) {
+			cmn_err(CE_NOTE, "vtd_remove_state: "
+			    "phase=batch-after-clear rid=0x%x domid=%u "
+			    "drhd=%d ctxlo=0x%llx ctxhi=0x%llx "
+			    "gsr=0x%x ccr=0x%llx rta=0x%llx",
+			    rid, dom != NULL ? dom->id : 0, drhd_idx,
+			    (unsigned long long)ctxp[idx],
+			    (unsigned long long)ctxp[idx + 1],
+			    vtdmap != NULL ? vtdmap->gsr : 0,
+			    (unsigned long long)(vtdmap != NULL ?
+			    vtdmap->ccr : 0),
+			    (unsigned long long)(vtdmap != NULL ?
+			    vtdmap->rta : 0));
+		}
+
+		if (vtd_intrmap_quiesce_on_remove != 0 && dom != NULL &&
+		    dom->id != VTD_HOST_DOMAIN_ID && drhd_idx >= 0 &&
+		    drhd_idx < 32) {
+			gate_mask |= 1u << drhd_idx;
+		}
+	}
+
+	for (bit = 0; bit < 32; bit++) {
+		if ((gate_mask & (1u << bit)) == 0)
+			continue;
+		immu_intrmap_drhd_transition_set(bit, B_TRUE);
+		gate_entered = B_TRUE;
+		if (vtd_trace_remove_state != 0 &&
+		    vtd_trace_domain_enabled(dom)) {
+			cmn_err(CE_NOTE, "vtd_remove_state: "
+			    "phase=batch-intrmap-gate-enter domid=%u "
+			    "drhd=%d nrids=%u", dom->id, bit, nrids);
+		}
+	}
+
+	ok = vtd_context_changed_invalidate(NULL);
+
+	for (bit = 0; bit < 32; bit++) {
+		if ((gate_mask & (1u << bit)) == 0)
+			continue;
+		if (vtd_trace_remove_state != 0 &&
+		    vtd_trace_domain_enabled(dom)) {
+			cmn_err(CE_NOTE, "vtd_remove_state: "
+			    "phase=batch-intrmap-gate-exit domid=%u "
+			    "drhd=%d ok=%d", dom->id, bit, ok ? 1 : 0);
+		}
+		immu_intrmap_drhd_transition_set(bit, B_FALSE);
+	}
+
+	if (!ok) {
+		cmn_err(CE_WARN, "vtd_remove_devices: invalidate timed out "
+		    "for nrids=%u first_rid=0x%x", nrids, rids[0]);
+		if (vtd_rearm_on_remove_timeout != 0 && dom != NULL &&
+		    dom->id != VTD_HOST_DOMAIN_ID) {
+			for (i = 0; i < nrids; i++) {
+				struct vtdmap *vtdmap =
+				    vtd_device_scope(rids[i]);
+				int drhd_idx;
+
+				if (vtdmap == NULL)
+					continue;
+				drhd_idx = vtd_drhd_index(vtdmap);
+				if (drhd_idx < 0 || drhd_idx >= 32 ||
+				    (rearm_mask & (1u << drhd_idx)) != 0) {
+					continue;
+				}
+				rearm_mask |= 1u << drhd_idx;
+				if (vtd_rearm_unit_and_invalidate(vtdmap)) {
+					cmn_err(CE_NOTE,
+					    "vtd_remove_devices: recovered "
+					    "remove invalidate after DRHD "
+					    "rearm drhd=%d domid=%u",
+					    drhd_idx, dom->id);
+				} else {
+					cmn_err(CE_WARN,
+					    "vtd_remove_devices: DRHD rearm "
+					    "did not recover remove invalidate "
+					    "drhd=%d domid=%u",
+					    drhd_idx, dom->id);
+				}
+			}
+		}
+	}
+	if (gate_entered && vtd_trace_remove_state != 0 &&
+	    vtd_trace_domain_enabled(dom)) {
+		cmn_err(CE_NOTE, "vtd_remove_state: phase=batch-gates-done "
+		    "domid=%u mask=0x%x", dom->id, gate_mask);
+	}
+	if (vtd_trace_lifecycle != 0 && vtd_trace_domain_enabled(dom)) {
+		cmn_err(CE_NOTE, "vtd_remove_devices: completed nrids=%u "
+		    "domid=%u", nrids, dom != NULL ? dom->id : 0);
+	}
+}
+
 #define	CREATE_MAPPING	0
 #define	REMOVE_MAPPING	1
 
@@ -2248,6 +2392,7 @@ const struct iommu_ops vmm_iommu_ops = {
 	.remove_mapping = vtd_remove_mapping,
 	.add_device = vtd_add_device,
 	.remove_device = vtd_remove_device,
+	.remove_devices = vtd_remove_devices,
 	.invalidate_tlb = vtd_invalidate_tlb,
 };
 

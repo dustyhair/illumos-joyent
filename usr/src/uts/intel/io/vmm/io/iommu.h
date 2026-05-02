@@ -56,6 +56,8 @@ typedef uint64_t (*iommu_remove_mapping_t)(void *domain, vm_paddr_t gpa,
     uint64_t len);
 typedef void (*iommu_add_device_t)(void *domain, uint16_t rid);
 typedef void (*iommu_remove_device_t)(void *domain, uint16_t rid);
+typedef void (*iommu_remove_devices_t)(void *domain, const uint16_t *rids,
+    uint_t nrids);
 typedef void (*iommu_invalidate_tlb_t)(void *domain);
 
 struct iommu_ops {
@@ -70,6 +72,7 @@ struct iommu_ops {
 	iommu_remove_mapping_t	remove_mapping;
 	iommu_add_device_t	add_device;
 	iommu_remove_device_t	remove_device;
+	iommu_remove_devices_t	remove_devices;
 	iommu_invalidate_tlb_t	invalidate_tlb;
 };
 
@@ -83,6 +86,7 @@ void iommu_create_mapping(void *domain, vm_paddr_t gpa, vm_paddr_t hpa,
 void iommu_remove_mapping(void *domain, vm_paddr_t gpa, size_t len);
 void iommu_add_device(void *domain, uint16_t rid);
 void iommu_remove_device(void *domain, uint16_t rid);
+void iommu_remove_devices(void *domain, const uint16_t *rids, uint_t nrids);
 void iommu_invalidate_tlb(void *domain);
 
 /* Glue functions used by iommu provider(s) */

@@ -159,6 +159,7 @@ int			ppt_unassign_diag_enable = 0;
 int			ppt_unassign_flr_quiesce = 0;
 int			ppt_unassign_preremove_diag_enable = 0;
 int			ppt_unassign_allfunc_quiesce = 0;
+int			ppt_unassign_batch_iommu_remove = 0;
 
 #ifndef PCI_PMCSR_STATE_D0
 #define	PCI_PMCSR_STATE_D0	0x0000
@@ -1889,7 +1890,7 @@ ppt_unassign_quiesce_vm_locked(struct vm *vm)
 }
 
 static void
-ppt_do_unassign(struct pptdev *ppt)
+ppt_do_unassign_pre_iommu(struct pptdev *ppt)
 {
 	struct vm *vm = ppt->vm;
 	uint16_t cmd;
@@ -1962,7 +1963,15 @@ ppt_do_unassign(struct pptdev *ppt)
 	}
 
 	ppt_unassign_log_vm_state_locked(vm, "pre-iommu-remove");
-	iommu_remove_device(vm_iommu_domain(vm), pci_get_bdf(ppt->pptd_dip));
+}
+
+static void
+ppt_do_unassign_post_iommu(struct pptdev *ppt)
+{
+	uint16_t bdf = pci_get_bdf(ppt->pptd_dip);
+
+	ASSERT(MUTEX_HELD(&pptdev_mtx));
+
 	if (ppt_unassign_diag_enable != 0) {
 		cmn_err(CE_NOTE, "ppt: unassign step=iommu-vm-removed "
 		    "bdf=0x%x", bdf);
@@ -1998,6 +2007,19 @@ ppt_do_unassign(struct pptdev *ppt)
 	}
 }
 
+static void
+ppt_do_unassign(struct pptdev *ppt)
+{
+	struct vm *vm = ppt->vm;
+
+	ASSERT3P(vm, !=, NULL);
+	ASSERT(MUTEX_HELD(&pptdev_mtx));
+
+	ppt_do_unassign_pre_iommu(ppt);
+	iommu_remove_device(vm_iommu_domain(vm), pci_get_bdf(ppt->pptd_dip));
+	ppt_do_unassign_post_iommu(ppt);
+}
+
 int
 ppt_unassign_device(struct vm *vm, int pptfd)
 {
@@ -2018,6 +2040,53 @@ ppt_unassign_device(struct vm *vm, int pptfd)
 	return (err);
 }
 
+static void
+ppt_unassign_all_batched_iommu_locked(struct vm *vm)
+{
+	struct pptdev *ppt;
+	struct pptdev **ppts;
+	uint16_t *rids;
+	uint_t count = 0;
+	uint_t idx = 0;
+	uint_t i;
+
+	ASSERT(MUTEX_HELD(&pptdev_mtx));
+
+	for (ppt = list_head(&pptdev_list); ppt != NULL;
+	    ppt = list_next(&pptdev_list, ppt)) {
+		if (ppt->vm == vm)
+			count++;
+	}
+	if (count == 0)
+		return;
+
+	ppts = kmem_alloc(sizeof (*ppts) * count, KM_SLEEP);
+	rids = kmem_alloc(sizeof (*rids) * count, KM_SLEEP);
+
+	for (ppt = list_head(&pptdev_list); ppt != NULL;
+	    ppt = list_next(&pptdev_list, ppt)) {
+		if (ppt->vm != vm)
+			continue;
+		ppt_do_unassign_pre_iommu(ppt);
+		ppts[idx] = ppt;
+		rids[idx] = pci_get_bdf(ppt->pptd_dip);
+		idx++;
+	}
+
+	ASSERT3U(idx, ==, count);
+	if (ppt_unassign_diag_enable != 0) {
+		cmn_err(CE_NOTE, "ppt: unassign_all batch-iommu-remove "
+		    "vm=%p count=%u", (void *)vm, count);
+	}
+	iommu_remove_devices(vm_iommu_domain(vm), rids, count);
+
+	for (i = 0; i < count; i++)
+		ppt_do_unassign_post_iommu(ppts[i]);
+
+	kmem_free(rids, sizeof (*rids) * count);
+	kmem_free(ppts, sizeof (*ppts) * count);
+}
+
 void
 ppt_unassign_all(struct vm *vm)
 {
@@ -2028,10 +2097,14 @@ ppt_unassign_all(struct vm *vm)
 		cmn_err(CE_NOTE, "ppt: unassign_all enter vm=%p",
 		    (void *)vm);
 	}
-	for (ppt = list_head(&pptdev_list); ppt != NULL;
-	    ppt = list_next(&pptdev_list, ppt)) {
-		if (ppt->vm == vm) {
-			ppt_do_unassign(ppt);
+	if (ppt_unassign_batch_iommu_remove != 0) {
+		ppt_unassign_all_batched_iommu_locked(vm);
+	} else {
+		for (ppt = list_head(&pptdev_list); ppt != NULL;
+		    ppt = list_next(&pptdev_list, ppt)) {
+			if (ppt->vm == vm) {
+				ppt_do_unassign(ppt);
+			}
 		}
 	}
 	if (ppt_unassign_diag_enable != 0) {
