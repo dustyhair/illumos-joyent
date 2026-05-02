@@ -157,6 +157,8 @@ static list_t		pptdev_list;
 int			ppt_diag_enable = 0;
 int			ppt_unassign_diag_enable = 0;
 int			ppt_unassign_flr_quiesce = 0;
+int			ppt_unassign_preremove_diag_enable = 0;
+int			ppt_unassign_allfunc_quiesce = 0;
 
 #ifndef PCI_PMCSR_STATE_D0
 #define	PCI_PMCSR_STATE_D0	0x0000
@@ -188,6 +190,7 @@ struct ppt_reset_state {
 	uint16_t	prs_pmcsr;
 	uint16_t	prs_msictl;
 	uint16_t	prs_msidata;
+	uint16_t	prs_msixctl;
 	uint32_t	prs_bar0;
 	uint32_t	prs_bar1;
 	uint32_t	prs_bar3;
@@ -196,6 +199,7 @@ struct ppt_reset_state {
 	boolean_t	prs_present;
 	boolean_t	prs_has_pm;
 	boolean_t	prs_has_msi;
+	boolean_t	prs_has_msix;
 };
 
 static boolean_t ppt_wait_device_present_locked(struct pptdev *);
@@ -1244,6 +1248,13 @@ ppt_reset_capture_state(struct pptdev *ppt, struct ppt_reset_state *st)
 			    cap, PCI_MSI_32BIT_DATA);
 		}
 	}
+
+	if (PCI_CAP_LOCATE(ppt->pptd_cfg, PCI_CAP_ID_MSI_X, &cap) ==
+	    DDI_SUCCESS) {
+		st->prs_has_msix = B_TRUE;
+		st->prs_msixctl = PCI_CAP_GET16(ppt->pptd_cfg, 0, cap,
+		    PCI_MSIX_CTRL);
+	}
 }
 
 static void
@@ -1256,12 +1267,14 @@ ppt_reset_log_one_state(struct pptdev *ppt, ppt_reset_type_t method,
 	cmn_err(CE_NOTE, "ppt-reset-state: phase=%s method=%u bdf=0x%x "
 	    "present=%u ven=0x%x dev=0x%x cmd=0x%x stat=0x%x "
 	    "bar0=0x%x bar1=0x%x bar3=0x%x pm=%u pmcsr=0x%x "
-	    "msi=%u msictl=0x%x msiaddr=0x%x:%x msidata=0x%x",
+	    "msi=%u msictl=0x%x msiaddr=0x%x:%x msidata=0x%x "
+	    "msix=%u msixctl=0x%x",
 	    phase, method, st.prs_bdf, st.prs_present, st.prs_venid,
 	    st.prs_devid, st.prs_cmd, st.prs_stat, st.prs_bar0,
 	    st.prs_bar1, st.prs_bar3, st.prs_has_pm, st.prs_pmcsr,
 	    st.prs_has_msi, st.prs_msictl, st.prs_msiaddr_hi,
-	    st.prs_msiaddr_lo, st.prs_msidata);
+	    st.prs_msiaddr_lo, st.prs_msidata, st.prs_has_msix,
+	    st.prs_msixctl);
 }
 
 static void
@@ -1769,6 +1782,113 @@ ppt_reset_pci_power_state(dev_info_t *dip)
 }
 
 static void
+ppt_unassign_log_one_state(struct pptdev *ppt, const char *phase)
+{
+	struct ppt_reset_state st;
+
+	ppt_reset_capture_state(ppt, &st);
+	cmn_err(CE_NOTE, "ppt-unassign-state: phase=%s bdf=0x%x vm=%p "
+	    "present=%u ven=0x%x dev=0x%x cmd=0x%x stat=0x%x "
+	    "bar0=0x%x bar1=0x%x bar3=0x%x pm=%u pmcsr=0x%x "
+	    "msi=%u msictl=0x%x msiaddr=0x%x:%x msidata=0x%x "
+	    "msix=%u msixctl=0x%x host_msi_msgs=%d host_msix_msgs=%d "
+	    "intx=%u",
+	    phase, st.prs_bdf, (void *)ppt->vm, st.prs_present,
+	    st.prs_venid, st.prs_devid, st.prs_cmd, st.prs_stat,
+	    st.prs_bar0, st.prs_bar1, st.prs_bar3, st.prs_has_pm,
+	    st.prs_pmcsr, st.prs_has_msi, st.prs_msictl,
+	    st.prs_msiaddr_hi, st.prs_msiaddr_lo, st.prs_msidata,
+	    st.prs_has_msix, st.prs_msixctl, ppt->msi.num_msgs,
+	    ppt->msix.num_msgs, ppt->intx.enabled ? 1 : 0);
+}
+
+static void
+ppt_unassign_log_vm_state_locked(struct vm *vm, const char *phase)
+{
+	struct pptdev *peer;
+
+	ASSERT(MUTEX_HELD(&pptdev_mtx));
+
+	if (ppt_unassign_preremove_diag_enable == 0)
+		return;
+
+	for (peer = list_head(&pptdev_list); peer != NULL;
+	    peer = list_next(&pptdev_list, peer)) {
+		if (peer->vm == vm)
+			ppt_unassign_log_one_state(peer, phase);
+	}
+}
+
+static void
+ppt_unassign_disable_config_intrs(struct pptdev *ppt)
+{
+	uint16_t cap;
+
+	if (PCI_CAP_LOCATE(ppt->pptd_cfg, PCI_CAP_ID_MSI, &cap) ==
+	    DDI_SUCCESS) {
+		uint16_t ctl = PCI_CAP_GET16(ppt->pptd_cfg, 0, cap,
+		    PCI_MSI_CTRL);
+
+		if ((ctl & PCI_MSI_ENABLE_BIT) != 0) {
+			(void) PCI_CAP_PUT16(ppt->pptd_cfg, 0, cap,
+			    PCI_MSI_CTRL, ctl & ~PCI_MSI_ENABLE_BIT);
+		}
+	}
+
+	if (PCI_CAP_LOCATE(ppt->pptd_cfg, PCI_CAP_ID_MSI_X, &cap) ==
+	    DDI_SUCCESS) {
+		uint16_t ctl = PCI_CAP_GET16(ppt->pptd_cfg, 0, cap,
+		    PCI_MSIX_CTRL);
+
+		if ((ctl & PCI_MSIX_ENABLE_BIT) != 0) {
+			(void) PCI_CAP_PUT16(ppt->pptd_cfg, 0, cap,
+			    PCI_MSIX_CTRL, ctl & ~PCI_MSIX_ENABLE_BIT);
+		}
+	}
+}
+
+static void
+ppt_unassign_quiesce_one_locked(struct pptdev *ppt, const char *phase)
+{
+	uint16_t cmd;
+	uint16_t bdf = pci_get_bdf(ppt->pptd_dip);
+
+	ASSERT(MUTEX_HELD(&pptdev_mtx));
+
+	if (ppt_unassign_preremove_diag_enable != 0)
+		ppt_unassign_log_one_state(ppt, phase);
+
+	cmd = pci_config_get16(ppt->pptd_cfg, PCI_CONF_COMM);
+	cmd &= ~(PCI_COMM_ME | PCI_COMM_MAE | PCI_COMM_IO);
+	pci_config_put16(ppt->pptd_cfg, PCI_CONF_COMM, cmd);
+	ppt_unassign_disable_config_intrs(ppt);
+
+	ppt_teardown_msi(ppt);
+	ppt_teardown_msix(ppt);
+	ppt_teardown_intx(ppt);
+
+	if (ppt_unassign_preremove_diag_enable != 0) {
+		cmn_err(CE_NOTE, "ppt-unassign-state: phase=%s-done "
+		    "bdf=0x%x", phase, bdf);
+		ppt_unassign_log_one_state(ppt, "post-quiesce");
+	}
+}
+
+static void
+ppt_unassign_quiesce_vm_locked(struct vm *vm)
+{
+	struct pptdev *peer;
+
+	ASSERT(MUTEX_HELD(&pptdev_mtx));
+
+	for (peer = list_head(&pptdev_list); peer != NULL;
+	    peer = list_next(&pptdev_list, peer)) {
+		if (peer->vm == vm)
+			ppt_unassign_quiesce_one_locked(peer, "allfunc-quiesce");
+	}
+}
+
+static void
 ppt_do_unassign(struct pptdev *ppt)
 {
 	struct vm *vm = ppt->vm;
@@ -1813,6 +1933,14 @@ ppt_do_unassign(struct pptdev *ppt)
 		    bdf);
 	}
 
+	if (ppt_unassign_allfunc_quiesce != 0) {
+		ppt_unassign_quiesce_vm_locked(vm);
+		if (ppt_unassign_diag_enable != 0) {
+			cmn_err(CE_NOTE, "ppt: unassign step=allfunc-quiesce "
+			    "bdf=0x%x", bdf);
+		}
+	}
+
 	/*
 	 * Optional diagnostic mitigation: after guest-visible decode and
 	 * interrupts are quiesced, issue an FLR on function 0 before removing
@@ -1833,6 +1961,7 @@ ppt_do_unassign(struct pptdev *ppt)
 		    bdf);
 	}
 
+	ppt_unassign_log_vm_state_locked(vm, "pre-iommu-remove");
 	iommu_remove_device(vm_iommu_domain(vm), pci_get_bdf(ppt->pptd_dip));
 	if (ppt_unassign_diag_enable != 0) {
 		cmn_err(CE_NOTE, "ppt: unassign step=iommu-vm-removed "

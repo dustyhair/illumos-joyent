@@ -216,6 +216,7 @@ uint32_t vtd_trace_init_order = 0;
 uint32_t vtd_trace_map = 0;
 uint32_t vtd_trace_map_verbose = 0;
 uint32_t vtd_trace_domid = 0xffffffffU;
+uint32_t vtd_trace_remove_state = 0;
 /*
  * Diagnostic recovery knob: if removing a non-host device from a domain
  * leaves the DRHD invalidate engine wedged, toggle translation on that DRHD
@@ -1836,10 +1837,23 @@ vtd_remove_device(void *arg, uint16_t rid)
 	bus = PCI_RID2BUS(rid);
 	ctxp = ctx_tables[bus];
 	idx = VTD_RID2IDX(rid);
+	vtdmap = vtd_device_scope(rid);
 
 	if (vtd_trace_lifecycle != 0 && vtd_trace_domain_enabled(dom)) {
 		cmn_err(CE_NOTE, "vtd_remove_device: rid=0x%x domid=%u",
 		    rid, dom != NULL ? dom->id : 0);
+	}
+	if (vtd_trace_remove_state != 0 && vtd_trace_domain_enabled(dom)) {
+		cmn_err(CE_NOTE, "vtd_remove_state: phase=before-clear "
+		    "rid=0x%x domid=%u drhd=%d ctxlo=0x%llx ctxhi=0x%llx "
+		    "gsr=0x%x ccr=0x%llx rta=0x%llx",
+		    rid, dom != NULL ? dom->id : 0,
+		    vtdmap != NULL ? vtd_drhd_index(vtdmap) : -1,
+		    (unsigned long long)ctxp[idx],
+		    (unsigned long long)ctxp[idx + 1],
+		    vtdmap != NULL ? vtdmap->gsr : 0,
+		    (unsigned long long)(vtdmap != NULL ? vtdmap->ccr : 0),
+		    (unsigned long long)(vtdmap != NULL ? vtdmap->rta : 0));
 	}
 
 	/*
@@ -1847,6 +1861,18 @@ vtd_remove_device(void *arg, uint16_t rid)
 	 */
 	ctxp[idx] = 0;
 	ctxp[idx + 1] = 0;
+	if (vtd_trace_remove_state != 0 && vtd_trace_domain_enabled(dom)) {
+		cmn_err(CE_NOTE, "vtd_remove_state: phase=after-clear "
+		    "rid=0x%x domid=%u drhd=%d ctxlo=0x%llx ctxhi=0x%llx "
+		    "gsr=0x%x ccr=0x%llx rta=0x%llx",
+		    rid, dom != NULL ? dom->id : 0,
+		    vtdmap != NULL ? vtd_drhd_index(vtdmap) : -1,
+		    (unsigned long long)ctxp[idx],
+		    (unsigned long long)ctxp[idx + 1],
+		    vtdmap != NULL ? vtdmap->gsr : 0,
+		    (unsigned long long)(vtdmap != NULL ? vtdmap->ccr : 0),
+		    (unsigned long long)(vtdmap != NULL ? vtdmap->rta : 0));
+	}
 
 	/* Keep remove/add invalidation policy in a single helper. */
 	ok = vtd_context_changed_invalidate(NULL);
@@ -1855,7 +1881,7 @@ vtd_remove_device(void *arg, uint16_t rid)
 		    "rid=0x%x", rid);
 		if (vtd_rearm_on_remove_timeout != 0 && dom != NULL &&
 		    dom->id != VTD_HOST_DOMAIN_ID &&
-		    (vtdmap = vtd_device_scope(rid)) != NULL) {
+		    vtdmap != NULL) {
 			if (vtd_rearm_unit_and_invalidate(vtdmap)) {
 				cmn_err(CE_NOTE, "vtd_remove_device: recovered "
 				    "remove invalidate after DRHD rearm "
