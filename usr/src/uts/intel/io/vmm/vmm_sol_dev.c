@@ -80,6 +80,7 @@ static list_t		vmm_list;
 static id_space_t	*vmm_minors;
 static void		*vmm_statep;
 int			vmm_ppt_diag_enable = 0;
+int			vmm_destroy_diag_enable = 1;
 
 /*
  * Until device emulation in bhyve had been adequately scrutinized and tested,
@@ -146,6 +147,37 @@ static void vmm_lease_unblock(vmm_softc_t *);
 static int vmm_kstat_alloc(vmm_softc_t *, minor_t, const cred_t *);
 static void vmm_kstat_init(vmm_softc_t *);
 static void vmm_kstat_fini(vmm_softc_t *);
+
+static uint_t
+vmm_hold_count(vmm_softc_t *sc)
+{
+	uint_t count = 0;
+	vmm_hold_t *hold;
+
+	ASSERT(MUTEX_HELD(&vmm_mtx));
+
+	for (hold = list_head(&sc->vmm_holds); hold != NULL;
+	    hold = list_next(&sc->vmm_holds, hold)) {
+		count++;
+	}
+
+	return (count);
+}
+
+static void
+vmm_destroy_diag(vmm_softc_t *sc, const char *event, vmm_destroy_opts_t opts)
+{
+	if (vmm_destroy_diag_enable == 0) {
+		return;
+	}
+
+	ASSERT(MUTEX_HELD(&vmm_mtx));
+
+	cmn_err(CE_NOTE, "vmm: destroy diag vm=%s event=%s flags=0x%x "
+	    "opts=0x%x holds=%u waiters=%u",
+	    sc->vmm_name, event, sc->vmm_flags, opts, vmm_hold_count(sc),
+	    sc->vmm_destroy_waiters);
+}
 
 /*
  * The 'devmem' hack:
@@ -925,6 +957,7 @@ vmmdev_do_ioctl(vmm_softc_t *sc, int cmd, intptr_t arg, int md,
 		} else {
 			sc->vmm_flags &= ~VMM_AUTODESTROY;
 		}
+		vmm_destroy_diag(sc, "set-autodestruct", VDO_DEFAULT);
 		mutex_exit(&vmm_mtx);
 		break;
 	}
@@ -2731,7 +2764,9 @@ vmm_destroy_begin(vmm_softc_t *sc, vmm_destroy_opts_t opts)
 	ASSERT(MUTEX_HELD(&vmm_mtx));
 	ASSERT0(sc->vmm_flags & VMM_DESTROY);
 
+	vmm_destroy_diag(sc, "destroy-begin-enter", opts);
 	sc->vmm_flags |= VMM_DESTROY;
+	vmm_destroy_diag(sc, "destroy-begin-marked", opts);
 
 	/*
 	 * Lock and unlock all of the vCPUs to ensure that they are kicked out
@@ -2756,6 +2791,7 @@ vmm_destroy_begin(vmm_softc_t *sc, vmm_destroy_opts_t opts)
 	zone_rele(sc->vmm_zone);
 
 	vmm_drv_purge(sc);
+	vmm_destroy_diag(sc, "destroy-begin-purged", opts);
 }
 
 static bool
@@ -2813,6 +2849,7 @@ vmm_destroy_locked(vmm_softc_t *sc, vmm_destroy_opts_t opts,
 	}
 
 	if (vmm_destroy_ready(sc)) {
+		vmm_destroy_diag(sc, "destroy-ready", opts);
 
 		/*
 		 * Notify anyone waiting for the destruction to finish.  They
@@ -2831,12 +2868,14 @@ vmm_destroy_locked(vmm_softc_t *sc, vmm_destroy_opts_t opts,
 		 *
 		 * With destruction complete, the HMA hold can be released
 		 */
+		vmm_destroy_diag(sc, "destroy-finish", opts);
 		vmm_destroy_finish(sc);
 		*hma_release = true;
 		return (0);
 	} else if ((opts & VDO_ATTEMPT_WAIT) != 0) {
 		int err = 0;
 
+		vmm_destroy_diag(sc, "destroy-wait", opts);
 		sc->vmm_destroy_waiters++;
 		while (!vmm_destroy_ready(sc) && err == 0) {
 			if (cv_wait_sig(&sc->vmm_cv, &vmm_mtx) <= 0) {
@@ -2844,6 +2883,8 @@ vmm_destroy_locked(vmm_softc_t *sc, vmm_destroy_opts_t opts,
 			}
 		}
 		sc->vmm_destroy_waiters--;
+		vmm_destroy_diag(sc, err == 0 ? "destroy-wait-ready" :
+		    "destroy-wait-interrupted", opts);
 
 		if (sc->vmm_destroy_waiters == 0) {
 			/*
@@ -2859,6 +2900,7 @@ vmm_destroy_locked(vmm_softc_t *sc, vmm_destroy_opts_t opts,
 		 * Since the instance is not ready for destruction, and the
 		 * caller did not ask to wait, consider it a success for now.
 		 */
+		vmm_destroy_diag(sc, "destroy-not-ready", opts);
 		return (0);
 	}
 }
@@ -3074,6 +3116,7 @@ vmm_open(dev_t *devp, int flag, int otyp, cred_t *credp)
 	}
 
 	sc->vmm_flags |= VMM_IS_OPEN;
+	vmm_destroy_diag(sc, "open", VDO_DEFAULT);
 	mutex_exit(&vmm_mtx);
 
 	return (0);
@@ -3097,8 +3140,10 @@ vmm_close(dev_t dev, int flag, int otyp, cred_t *credp)
 		return (ENXIO);
 	}
 
+	vmm_destroy_diag(sc, "close-enter", VDO_DEFAULT);
 	VERIFY3U(sc->vmm_flags & VMM_IS_OPEN, !=, 0);
 	sc->vmm_flags &= ~VMM_IS_OPEN;
+	vmm_destroy_diag(sc, "close-cleared-open", VDO_DEFAULT);
 
 	/*
 	 * If instance was marked for auto-destruction begin that now.  Instance
@@ -3107,6 +3152,7 @@ vmm_close(dev_t dev, int flag, int otyp, cred_t *credp)
 	 */
 	if ((sc->vmm_flags & VMM_DESTROY) != 0 ||
 	    (sc->vmm_flags & VMM_AUTODESTROY) != 0) {
+		vmm_destroy_diag(sc, "close-destroy-request", VDO_DEFAULT);
 		VERIFY0(vmm_destroy_locked(sc, VDO_DEFAULT, &hma_release));
 	}
 	mutex_exit(&vmm_mtx);
