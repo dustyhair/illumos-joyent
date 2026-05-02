@@ -31,7 +31,7 @@ PRE_INC_PATH	= \
 INC_PATH	+= -I$(UTSBASE)/intel/io/vmm -I$(UTSBASE)/intel/io/vmm/io
 AS_INC_PATH	+= -I$(UTSBASE)/intel/io/vmm -I$(OBJS_DIR)
 
-LDFLAGS		+= -N drv/vmm -N misc/acpica -N misc/pcie
+LDFLAGS		+= -N drv/vmm -N drv/rootnex -N misc/acpica -N misc/pcie
 LDFLAGS		+= -M $(MAPFILE)
 
 include $(UTSBASE)/intel/Makefile.intel
