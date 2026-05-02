@@ -217,6 +217,7 @@ uint32_t vtd_trace_map = 0;
 uint32_t vtd_trace_map_verbose = 0;
 uint32_t vtd_trace_domid = 0xffffffffU;
 uint32_t vtd_trace_remove_state = 0;
+uint32_t vtd_wbflush_before_ctxinv = 0;
 /*
  * Diagnostic recovery knob: if removing a non-host device from a domain
  * leaves the DRHD invalidate engine wedged, toggle translation on that DRHD
@@ -871,6 +872,8 @@ vtd_ctx_global_invalidate(struct vtdmap *vtdmap)
 		return (B_FALSE);
 
 	vtd_invalidate_lock_enter(vtdmap);
+	if (vtd_wbflush_before_ctxinv != 0)
+		vtd_wbflush(vtdmap);
 	before = vtdmap->ccr;
 	if ((before & VTD_CCR_ICC) != 0) {
 		vtd_inv_prebusy_log_once(vtdmap, &vtd_ctxcmd_prebusy_dumped_mask,
