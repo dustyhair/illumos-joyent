@@ -217,6 +217,12 @@ uint32_t vtd_trace_map = 0;
 uint32_t vtd_trace_map_verbose = 0;
 uint32_t vtd_trace_domid = 0xffffffffU;
 /*
+ * Diagnostic recovery knob: if removing a non-host device from a domain
+ * leaves the DRHD invalidate engine wedged, toggle translation on that DRHD
+ * under the rootnex interrupt-remap transition gate and retry invalidation.
+ */
+uint32_t vtd_rearm_on_remove_timeout = 0;
+/*
  * Debug/mitigation knob: quiesce host interrupt-remap updates while vmm_vtd is
  * updating or invalidating DMA mappings for a non-host domain. This widens the
  * existing DRHD transition gate beyond vtd_enable() and targets the
@@ -1032,10 +1038,23 @@ vtd_translation_disable(struct vtdmap *vtdmap)
 static boolean_t
 vtd_rearm_unit_and_invalidate(struct vtdmap *vtdmap)
 {
+	int idx;
+	boolean_t gate_entered = B_FALSE;
+	boolean_t ok = B_FALSE;
+
+	if (vtdmap == NULL)
+		return (B_FALSE);
+
+	idx = vtd_drhd_index(vtdmap);
 	if (vtd_trace_invalidate != 0) {
-		cmn_err(CE_NOTE, "vtd: rearm start drhd=%d",
-		    vtd_drhd_index(vtdmap));
+		cmn_err(CE_NOTE, "vtd: rearm start drhd=%d", idx);
 	}
+
+	if (idx >= 0) {
+		immu_intrmap_drhd_transition_set(idx, B_TRUE);
+		gate_entered = B_TRUE;
+	}
+
 	/*
 	 * Recover from a potentially wedged invalidate engine by toggling
 	 * translation and re-issuing invalidate commands.
@@ -1045,16 +1064,20 @@ vtd_rearm_unit_and_invalidate(struct vtdmap *vtdmap)
 	vtdmap->gcr = VTD_GCR_SRTP;
 	if (!vtd_wait_reg32(&vtdmap->gsr, VTD_GSR_RTPS, VTD_GSR_RTPS,
 	    vtdmap, "set-root-table (RTPS set)")) {
-		return (B_FALSE);
+		goto out;
 	}
 	if (!vtd_translation_enable(vtdmap))
-		return (B_FALSE);
+		goto out;
 	vtd_invalidate_clear_skip(vtdmap);
 	if (vtd_trace_invalidate != 0) {
-		cmn_err(CE_NOTE, "vtd: rearm done drhd=%d",
-		    vtd_drhd_index(vtdmap));
+		cmn_err(CE_NOTE, "vtd: rearm done drhd=%d", idx);
 	}
-	return (vtd_context_changed_invalidate(vtdmap));
+	ok = vtd_context_changed_invalidate(vtdmap);
+
+out:
+	if (gate_entered)
+		immu_intrmap_drhd_transition_set(idx, B_FALSE);
+	return (ok);
 }
 
 static boolean_t
@@ -1806,6 +1829,8 @@ vtd_remove_device(void *arg, uint16_t rid)
 	uint64_t *ctxp;
 	uint8_t bus;
 	struct domain *dom = arg;
+	struct vtdmap *vtdmap;
+	boolean_t ok;
 
 	bus = PCI_RID2BUS(rid);
 	ctxp = ctx_tables[bus];
@@ -1823,9 +1848,23 @@ vtd_remove_device(void *arg, uint16_t rid)
 	ctxp[idx + 1] = 0;
 
 	/* Keep remove/add invalidation policy in a single helper. */
-	if (!vtd_context_changed_invalidate(NULL)) {
+	ok = vtd_context_changed_invalidate(NULL);
+	if (!ok) {
 		cmn_err(CE_WARN, "vtd_remove_device: invalidate timed out for "
 		    "rid=0x%x", rid);
+		if (vtd_rearm_on_remove_timeout != 0 && dom != NULL &&
+		    dom->id != VTD_HOST_DOMAIN_ID &&
+		    (vtdmap = vtd_device_scope(rid)) != NULL) {
+			if (vtd_rearm_unit_and_invalidate(vtdmap)) {
+				cmn_err(CE_NOTE, "vtd_remove_device: recovered "
+				    "remove invalidate after DRHD rearm "
+				    "rid=0x%x domid=%u", rid, dom->id);
+			} else {
+				cmn_err(CE_WARN, "vtd_remove_device: DRHD "
+				    "rearm did not recover remove invalidate "
+				    "rid=0x%x domid=%u", rid, dom->id);
+			}
+		}
 	}
 	if (vtd_trace_lifecycle != 0 && vtd_trace_domain_enabled(dom)) {
 		cmn_err(CE_NOTE, "vtd_remove_device: completed rid=0x%x", rid);
