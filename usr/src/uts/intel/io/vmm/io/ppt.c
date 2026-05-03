@@ -159,7 +159,7 @@ int			ppt_unassign_diag_enable = 0;
 int			ppt_unassign_flr_quiesce = 0;
 int			ppt_unassign_preremove_diag_enable = 0;
 int			ppt_unassign_allfunc_quiesce = 0;
-int			ppt_tu102_xhci_diag_enable = 1;
+int			ppt_tu102_xhci_diag_enable = 0;
 
 #ifndef PCI_PMCSR_STATE_D0
 #define	PCI_PMCSR_STATE_D0	0x0000
@@ -181,6 +181,8 @@ int			ppt_tu102_xhci_diag_enable = 1;
 #define	LINK_POLL_INTERVAL_US	10000
 #define	LINK_POLL_TIMEOUT_US	1000000
 #define	DEVICE_PRESENT_TIMEOUT_US	5000000
+#define	TU102_XHCI_BAR0_POLL_US	10000
+#define	TU102_XHCI_BAR0_TIMEOUT_US	100000
 
 struct ppt_reset_state {
 	uint16_t	prs_bdf;
@@ -210,10 +212,7 @@ static void ppt_bus_reset(dev_info_t *);
 static void ppt_reset_pci_power_state(dev_info_t *);
 static void ppt_reset_log_state_locked(struct pptdev *, ppt_reset_type_t,
     const char *);
-static void ppt_tu102_xhci_bar0_log(struct pptdev *, ppt_reset_type_t,
-    const char *);
-static void ppt_tu102_xhci_bar0_log_group_locked(struct pptdev *,
-    ppt_reset_type_t, const char *);
+static void ppt_tu102_xhci_after_decode(struct pptdev *, const char *);
 static int ppt_save_reset_config_locked(struct pptdev *, ppt_reset_type_t);
 static int ppt_restore_reset_config_locked(struct pptdev *, ppt_reset_type_t);
 static int ppt_reset_device_method_locked(struct pptdev *, ppt_reset_flags_t,
@@ -1283,21 +1282,18 @@ ppt_reset_log_one_state(struct pptdev *ppt, ppt_reset_type_t method,
 }
 
 static void
-ppt_tu102_xhci_bar0_log(struct pptdev *ppt, ppt_reset_type_t method,
-    const char *phase)
+ppt_tu102_xhci_after_decode(struct pptdev *ppt, const char *phase)
 {
 	ddi_acc_handle_t hdl;
 	caddr_t ptr;
 	struct pptbar *bar;
+	hrtime_t start;
 	uint16_t bdf;
 	uint16_t cmd;
 	uint16_t pmcsr = 0;
 	uint16_t cap;
 	uint32_t cap0, hcs1, hcs2, hcc1, usbcmd, usbsts;
 	uint_t caplen;
-
-	if (ppt_tu102_xhci_diag_enable == 0)
-		return;
 
 	if (pci_config_get16(ppt->pptd_cfg, PCI_CONF_VENID) != 0x10de ||
 	    pci_config_get16(ppt->pptd_cfg, PCI_CONF_DEVID) != 0x1ad6) {
@@ -1311,25 +1307,43 @@ ppt_tu102_xhci_bar0_log(struct pptdev *ppt, ppt_reset_type_t method,
 		pmcsr = PCI_CAP_GET16(ppt->pptd_cfg, 0, cap, PCI_PMCSR);
 
 	if (bar->base == 0 || bar->size < 0x20 || bar->ddireg == 0) {
-		cmn_err(CE_NOTE, "ppt-xhci-bar0: phase=%s method=%u "
-		    "bdf=0x%x unavailable base=0x%llx size=0x%llx "
-		    "ddireg=%u cmd=0x%x pmcsr=0x%x",
-		    phase, method, bdf, (u_longlong_t)bar->base,
-		    (u_longlong_t)bar->size, bar->ddireg, cmd, pmcsr);
+		if (ppt_tu102_xhci_diag_enable != 0) {
+			cmn_err(CE_NOTE, "ppt-xhci-bar0: phase=%s "
+			    "bdf=0x%x unavailable base=0x%llx size=0x%llx "
+			    "ddireg=%u cmd=0x%x pmcsr=0x%x", phase, bdf,
+			    (u_longlong_t)bar->base, (u_longlong_t)bar->size,
+			    bar->ddireg, cmd, pmcsr);
+		}
 		return;
 	}
 
 	if (ddi_regs_map_setup(ppt->pptd_dip, bar->ddireg, &ptr, 0, 0,
 	    &ppt_attr, &hdl) != DDI_SUCCESS) {
-		cmn_err(CE_NOTE, "ppt-xhci-bar0: phase=%s method=%u "
-		    "bdf=0x%x map-failed base=0x%llx size=0x%llx "
-		    "ddireg=%u cmd=0x%x pmcsr=0x%x",
-		    phase, method, bdf, (u_longlong_t)bar->base,
-		    (u_longlong_t)bar->size, bar->ddireg, cmd, pmcsr);
+		if (ppt_tu102_xhci_diag_enable != 0) {
+			cmn_err(CE_NOTE, "ppt-xhci-bar0: phase=%s "
+			    "bdf=0x%x map-failed base=0x%llx size=0x%llx "
+			    "ddireg=%u cmd=0x%x pmcsr=0x%x", phase, bdf,
+			    (u_longlong_t)bar->base, (u_longlong_t)bar->size,
+			    bar->ddireg, cmd, pmcsr);
+		}
 		return;
 	}
 
-	cap0 = ddi_get32(hdl, (void *)(ptr + 0x0));
+	/*
+	 * TU102 xHCI can read as all ones immediately after assignment if the
+	 * device has not finished responding after memory decoding is enabled.
+	 * A bounded BAR0 read/poll here gives the device a chance to become
+	 * visible before the guest xHCI driver performs early handoff.
+	 */
+	start = gethrtime();
+	do {
+		cap0 = ddi_get32(hdl, (void *)(ptr + 0x0));
+		if (cap0 != PCI_EINVAL32)
+			break;
+		delay(drv_usectohz(TU102_XHCI_BAR0_POLL_US));
+	} while ((gethrtime() - start) <
+	    (hrtime_t)USEC2NSEC(TU102_XHCI_BAR0_TIMEOUT_US));
+
 	hcs1 = ddi_get32(hdl, (void *)(ptr + 0x4));
 	hcs2 = ddi_get32(hdl, (void *)(ptr + 0x8));
 	hcc1 = ddi_get32(hdl, (void *)(ptr + 0x10));
@@ -1341,36 +1355,17 @@ ppt_tu102_xhci_bar0_log(struct pptdev *ppt, ppt_reset_type_t method,
 		usbsts = ddi_get32(hdl, (void *)(ptr + caplen + 0x4));
 	}
 
-	cmn_err(CE_NOTE, "ppt-xhci-bar0: phase=%s method=%u bdf=0x%x "
-	    "base=0x%llx size=0x%llx ddireg=%u cmd=0x%x pmcsr=0x%x "
-	    "cap0=0x%x hcs1=0x%x hcs2=0x%x hcc1=0x%x caplen=0x%x "
-	    "usbcmd=0x%x usbsts=0x%x",
-	    phase, method, bdf, (u_longlong_t)bar->base,
-	    (u_longlong_t)bar->size, bar->ddireg, cmd, pmcsr, cap0,
-	    hcs1, hcs2, hcc1, caplen, usbcmd, usbsts);
+	if (ppt_tu102_xhci_diag_enable != 0 || cap0 == PCI_EINVAL32) {
+		cmn_err(CE_NOTE, "ppt-xhci-bar0: phase=%s bdf=0x%x "
+		    "base=0x%llx size=0x%llx ddireg=%u cmd=0x%x "
+		    "pmcsr=0x%x cap0=0x%x hcs1=0x%x hcs2=0x%x "
+		    "hcc1=0x%x caplen=0x%x usbcmd=0x%x usbsts=0x%x",
+		    phase, bdf, (u_longlong_t)bar->base,
+		    (u_longlong_t)bar->size, bar->ddireg, cmd, pmcsr, cap0,
+		    hcs1, hcs2, hcc1, caplen, usbcmd, usbsts);
+	}
 
 	ddi_regs_map_free(&hdl);
-}
-
-static void
-ppt_tu102_xhci_bar0_log_group_locked(struct pptdev *ppt,
-    ppt_reset_type_t method, const char *phase)
-{
-	struct pptdev *peer;
-	uint16_t base_bdf;
-
-	ASSERT(MUTEX_HELD(&pptdev_mtx));
-
-	if (ppt_tu102_xhci_diag_enable == 0)
-		return;
-
-	base_bdf = pci_get_bdf(ppt->pptd_dip) & ~0x7u;
-	for (peer = list_head(&pptdev_list); peer != NULL;
-	    peer = list_next(&pptdev_list, peer)) {
-		if ((pci_get_bdf(peer->pptd_dip) & ~0x7u) != base_bdf)
-			continue;
-		ppt_tu102_xhci_bar0_log(peer, method, phase);
-	}
 }
 
 static void
@@ -1493,7 +1488,6 @@ ppt_reset_run_locked(struct pptdev *ppt, ppt_reset_type_t want_method,
 	func = pci_get_bdf(ppt->pptd_dip) & 0x7u;
 
 	ppt_reset_log_state_locked(ppt, want_method, "before");
-	ppt_tu102_xhci_bar0_log_group_locked(ppt, want_method, "before");
 
 	/*
 	 * Save all sibling functions before any manual reset.  A requested FLR
@@ -1557,7 +1551,6 @@ ppt_reset_run_locked(struct pptdev *ppt, ppt_reset_type_t want_method,
 	}
 
 	ppt_reset_log_state_locked(ppt, method, "after-reset");
-	ppt_tu102_xhci_bar0_log_group_locked(ppt, method, "after-reset");
 
 	/*
 	 * A manual reset can run before assignment.  Leave the affected
@@ -1571,7 +1564,6 @@ ppt_reset_run_locked(struct pptdev *ppt, ppt_reset_type_t want_method,
 		return (EIO);
 	}
 	ppt_reset_log_state_locked(ppt, method, "after-restore");
-	ppt_tu102_xhci_bar0_log_group_locked(ppt, method, "after-restore");
 
 	if (actual_methodp != NULL)
 		*actual_methodp = method;
@@ -1840,7 +1832,7 @@ ppt_assign_device(struct vm *vm, int pptfd)
 	}
 
 	ppt_toggle_bar(ppt, B_TRUE);
-	ppt_tu102_xhci_bar0_log(ppt, PPT_RESET_NONE, "assign-after-toggle");
+	ppt_tu102_xhci_after_decode(ppt, "assign-after-toggle");
 
 	ppt->vm = vm;
 	iommu_remove_device(iommu_host_domain(), pci_get_bdf(ppt->pptd_dip));
