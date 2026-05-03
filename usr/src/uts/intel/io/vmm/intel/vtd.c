@@ -1486,20 +1486,12 @@ vtd_ir_unit_ok(int unit, struct vtdmap *vtdmap)
 	if (vtd_manage_ire == 0)
 		return (B_FALSE);
 
-	/*
-	 * Temporary policy function in a real tree you'd probably make
-	 * this check for quirks, errata, or even a tunable to skip/force
-	 * certain units.
-	 *
-	 * For example, you might blacklist DRHD0 explicitly if you know it
-	 * storms when IR is enabled.
-	 */
+	/* Honor the explicit DRHD skip mask before allowing VMM-managed IRE. */
 	if (!vtd_drhd_enabled(unit)) {
-		/* Explicitly skipped by policy/tunable */
 		return (B_FALSE);
 	}
 
-	/* Require that ECAP advertises IR support */
+	/* Require that ECAP advertises IR support. */
 	if (VTD_ECAP_IR(vtdmap->ext_cap) == 0)
 		return (B_FALSE);
 
@@ -2004,16 +1996,7 @@ vtd_create_domain(vm_paddr_t maxaddr)
 	if (agaw > 64)
 		agaw = 64;
 
-	/*
-	* Simplest approach: force using computed AGAW and derive page table levels.
-	* Page table levels = (agaw - 12)/9 + 1, minimum 2.
-	*/
-//	pt_levels = ((agaw - 12) / 9) + 1;
-//	if (pt_levels < 2)
-//		pt_levels = 2;
-//	addrwidth = pt_levels - 2;
-
-	/* Force AGAW=39-bit, 3-level page tables */
+	/* Force AGAW=48-bit, 4-level page tables. */
 	agaw = 48;
 	pt_levels = 4;
 	addrwidth = pt_levels - 2;
