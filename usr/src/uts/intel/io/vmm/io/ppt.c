@@ -159,6 +159,7 @@ int			ppt_unassign_diag_enable = 0;
 int			ppt_unassign_flr_quiesce = 0;
 int			ppt_unassign_preremove_diag_enable = 0;
 int			ppt_unassign_allfunc_quiesce = 0;
+int			ppt_tu102_xhci_diag_enable = 1;
 
 #ifndef PCI_PMCSR_STATE_D0
 #define	PCI_PMCSR_STATE_D0	0x0000
@@ -211,6 +212,8 @@ static void ppt_reset_log_state_locked(struct pptdev *, ppt_reset_type_t,
     const char *);
 static void ppt_tu102_xhci_bar0_log(struct pptdev *, ppt_reset_type_t,
     const char *);
+static void ppt_tu102_xhci_bar0_log_group_locked(struct pptdev *,
+    ppt_reset_type_t, const char *);
 static int ppt_save_reset_config_locked(struct pptdev *, ppt_reset_type_t);
 static int ppt_restore_reset_config_locked(struct pptdev *, ppt_reset_type_t);
 static int ppt_reset_device_method_locked(struct pptdev *, ppt_reset_flags_t,
@@ -1277,8 +1280,6 @@ ppt_reset_log_one_state(struct pptdev *ppt, ppt_reset_type_t method,
 	    st.prs_has_msi, st.prs_msictl, st.prs_msiaddr_hi,
 	    st.prs_msiaddr_lo, st.prs_msidata, st.prs_has_msix,
 	    st.prs_msixctl);
-
-	ppt_tu102_xhci_bar0_log(ppt, method, phase);
 }
 
 static void
@@ -1295,7 +1296,7 @@ ppt_tu102_xhci_bar0_log(struct pptdev *ppt, ppt_reset_type_t method,
 	uint32_t cap0, hcs1, hcs2, hcc1, usbcmd, usbsts;
 	uint_t caplen;
 
-	if (ppt_diag_enable == 0)
+	if (ppt_tu102_xhci_diag_enable == 0)
 		return;
 
 	if (pci_config_get16(ppt->pptd_cfg, PCI_CONF_VENID) != 0x10de ||
@@ -1349,6 +1350,27 @@ ppt_tu102_xhci_bar0_log(struct pptdev *ppt, ppt_reset_type_t method,
 	    hcs1, hcs2, hcc1, caplen, usbcmd, usbsts);
 
 	ddi_regs_map_free(&hdl);
+}
+
+static void
+ppt_tu102_xhci_bar0_log_group_locked(struct pptdev *ppt,
+    ppt_reset_type_t method, const char *phase)
+{
+	struct pptdev *peer;
+	uint16_t base_bdf;
+
+	ASSERT(MUTEX_HELD(&pptdev_mtx));
+
+	if (ppt_tu102_xhci_diag_enable == 0)
+		return;
+
+	base_bdf = pci_get_bdf(ppt->pptd_dip) & ~0x7u;
+	for (peer = list_head(&pptdev_list); peer != NULL;
+	    peer = list_next(&pptdev_list, peer)) {
+		if ((pci_get_bdf(peer->pptd_dip) & ~0x7u) != base_bdf)
+			continue;
+		ppt_tu102_xhci_bar0_log(peer, method, phase);
+	}
 }
 
 static void
@@ -1471,6 +1493,7 @@ ppt_reset_run_locked(struct pptdev *ppt, ppt_reset_type_t want_method,
 	func = pci_get_bdf(ppt->pptd_dip) & 0x7u;
 
 	ppt_reset_log_state_locked(ppt, want_method, "before");
+	ppt_tu102_xhci_bar0_log_group_locked(ppt, want_method, "before");
 
 	/*
 	 * Save all sibling functions before any manual reset.  A requested FLR
@@ -1534,6 +1557,7 @@ ppt_reset_run_locked(struct pptdev *ppt, ppt_reset_type_t want_method,
 	}
 
 	ppt_reset_log_state_locked(ppt, method, "after-reset");
+	ppt_tu102_xhci_bar0_log_group_locked(ppt, method, "after-reset");
 
 	/*
 	 * A manual reset can run before assignment.  Leave the affected
@@ -1547,6 +1571,7 @@ ppt_reset_run_locked(struct pptdev *ppt, ppt_reset_type_t want_method,
 		return (EIO);
 	}
 	ppt_reset_log_state_locked(ppt, method, "after-restore");
+	ppt_tu102_xhci_bar0_log_group_locked(ppt, method, "after-restore");
 
 	if (actual_methodp != NULL)
 		*actual_methodp = method;
