@@ -90,8 +90,7 @@ struct vtdmap {
 #define	VTD_CAP_SAGAW(cap)	(((cap) >> 8) & 0x1F)
 #define	VTD_CAP_ND(cap)		((cap) & 0x7)
 #define	VTD_CAP_CM(cap)		(((cap) >> 7) & 0x1)
-//XXX this is sus
-//#define	VTD_CAP_SPS(cap)	(((cap) >> 34) & 0x7)
+/* Supported super-page sizes occupy CAP bits 37:34. */
 #define	VTD_CAP_SPS(cap)	(((cap) >> 34) & 0xF)
 #define	VTD_CAP_RWBF(cap)	(((cap) >> 4) & 0x1)
 
@@ -1543,37 +1542,6 @@ vtd_enable(void)
 	vtd_host_domain_bootstrap_active = B_FALSE;
 }
 
-// static void
-// vtd_enable(void)
-// {
-// 	int i;
-// 	struct vtdmap *vtdmap;
-// 	cmn_err(CE_NOTE, "vtd_enable: IN ENABLE!");
-// 	//HACKING!!!!
-// 	for (i = 1; i < drhd_num; i++) {
-// 		vtdmap = vtdmaps[i];
-// 		vtd_wbflush(vtdmap);
-// 
-// 		/* Update the root table address */
-// 		vtdmap->rta = vtophys(root_table);
-// 		vtdmap->gcr = VTD_GCR_SRTP;
-// 		while ((vtdmap->gsr & VTD_GSR_RTPS) == 0)
-// 			;
-// 
-// 		vtd_ctx_global_invalidate(vtdmap);
-// 		vtd_iotlb_global_invalidate(vtdmap);
-// 
-// 		vtd_translation_enable(vtdmap);
-// 	
-// 		cmn_err(CE_NOTE, "vtd_enable: DRHD %d TE bit now %s (GSR=0x%x)",
-// 			i,
-// 			(vtdmap->gsr & VTD_GSR_TES) ? "ENABLED" : "DISABLED",
-// 			vtdmap->gsr);
-// 	}
-// 
-// 	
-// }
-
 static void
 vtd_disable(void)
 {
@@ -1592,79 +1560,6 @@ vtd_disable(void)
  * with a domain (guest or host). Each RID (bus:devfn) corresponds
  * to two 64-bit context entry slots (low + high).
  */
-// static void
-// vtd_add_device(void *arg, uint16_t rid)
-// {
-// 	int idx;
-// 	uint64_t *ctxp;
-// 	struct domain *dom = arg;
-// 	vm_paddr_t pt_paddr;
-// 	struct vtdmap *vtdmap;
-// 	uint8_t bus;
-// 
-// 	cmn_err(CE_NOTE, "VT-d: entering vtd_add_device for RID=0x%x (bus=%u dev=%u fn=%u) domid=%u",
-// 	    rid,
-// 	    PCI_RID2BUS(rid), PCI_RID2DEV(rid), PCI_RID2FUNC(rid),
-// 	    dom->id);
-// 
-// 	bus = PCI_RID2BUS(rid);
-// 
-// 	/* Base pointer for the context-table this bus maps to */
-// 	ctxp = ctx_tables[bus];
-// 
-// 	/* Physical addr of root of the domain’s page table */
-// 	pt_paddr = vtophys(dom->ptp);
-// 
-// 	/* Index into context table (two entries per RID) */
-// 	idx = VTD_RID2IDX(rid);
-// 
-// 	cmn_err(CE_NOTE, "VT-d: domid=%u ptp=%p ptp_phys=0x%llx addrwidth=%d pt_levels=%d",
-// 	    dom->id, dom->ptp,
-// 	    (unsigned long long)pt_paddr,
-// 	    dom->addrwidth, dom->pt_levels);
-// 
-// 	/* Sanity check: device RID already mapped? */
-// 	if (ctxp[idx] & VTD_CTX_PRESENT) {
-// 		panic("vtd_add_device: device RID=0x%x already owned by domain %d",
-// 		    rid, (uint16_t)(ctxp[idx + 1] >> 8));
-// 	}
-// 
-// 	/* Which DRHD controls this rid? */
-// 	if ((vtdmap = vtd_device_scope(rid)) == NULL)
-// 		panic("vtd_add_device: RID=0x%x not in scope of any DRHD", rid);
-// 
-// 	/*
-// 	 * Order is important:
-// 	 *  hi dword: Domain ID, AGAW bits
-// 	 *  lo dword: root page table addr + TT bits + PRESENT
-// 	 */
-// 	ctxp[idx + 1] = (uint64_t)dom->addrwidth | ((uint64_t)dom->id << 8);
-// 
-// 	if (VTD_ECAP_DI(vtdmap->ext_cap))
-// 		ctxp[idx] = VTD_CTX_TT_ALL;   /* DMA translates all addr spaces */
-// 	else
-// 		ctxp[idx] = 0;
-// 
-// 	ctxp[idx] |= pt_paddr | VTD_CTX_PRESENT;
-// 
-// 	cmn_err(CE_NOTE,
-// 	    "VT-d: wrote CTX[%d] for RID=0x%x: LO=0x%llx HI=0x%llx (domid=%u)",
-// 	    idx, rid,
-// 	    (unsigned long long)ctxp[idx],
-// 	    (unsigned long long)ctxp[idx + 1],
-// 	    dom->id);
-// 
-// 	/*
-// 	 * Normally: must flush context cache + IOTLB for this domain
-// 	 * so that hardware uses updated entries.
-// 	 */
-// 	// vtd_invalidate_context(vtdmap, rid, dom->id);
-// 	// vtd_invalidate_iotlb(vtdmap, dom->id);
-// 
-// 	cmn_err(CE_NOTE, "VT-d: completed vtd_add_device for RID=0x%x on DRHD=%p",
-// 	    rid, (void *)vtdmap);
-// }
-
 static void
 vtd_add_device(void *arg, uint16_t rid)
 {
@@ -1811,62 +1706,6 @@ out:
 	}
 }
 
-// THIS WORKS GOOD!!!
-// static void
-// vtd_add_device(void *arg, uint16_t rid)
-// {
-// 	int idx;
-// 	uint64_t *ctxp;
-// 	struct domain *dom = arg;
-// 	vm_paddr_t pt_paddr;
-// 	struct vtdmap *vtdmap;
-// 	uint8_t bus;
-// 
-// 	cmn_err(CE_NOTE, "vtd_add_device: entering for rid=0x%x domid=%u", 
-// 		rid, dom->id);
-// 
-// 	bus = PCI_RID2BUS(rid);
-// 	ctxp = ctx_tables[bus];
-// 	pt_paddr = vtophys(dom->ptp);
-// 	idx = VTD_RID2IDX(rid);
-// 
-// 	cmn_err(CE_NOTE, "vtd_add_device: dom->ptp=%p pt_paddr=0x%llx addrwidth=%d",
-// 		dom->ptp, (unsigned long long)pt_paddr, dom->addrwidth);
-// 
-// 	if (ctxp[idx] & VTD_CTX_PRESENT) {
-// 		panic("vtd_add_device: device %x is already owned by "
-// 		    "domain %d", rid, (uint16_t)(ctxp[idx + 1] >> 8));
-// 	}
-// 
-// 	if ((vtdmap = vtd_device_scope(rid)) == NULL)
-// 		panic("vtd_add_device: device %x is not in scope for "
-// 		    "any DMA remapping unit", rid);
-// 
-// 	/*
-// 	 * Order is important. The 'present' bit is set only after all fields
-// 	 * of the context pointer are initialized.
-// 	 */
-// 	ctxp[idx + 1] = dom->addrwidth | (dom->id << 8);
-// 
-// 	if (VTD_ECAP_DI(vtdmap->ext_cap))
-// 		ctxp[idx] = VTD_CTX_TT_ALL;
-// 	else
-// 		ctxp[idx] = 0;
-// 
-// 	ctxp[idx] |= pt_paddr | VTD_CTX_PRESENT;
-// 
-// 	cmn_err(CE_NOTE, "vtd_add_device: wrote ctx[%d]: low=0x%llx high=0x%llx",
-// 			idx,
-// 			(unsigned long long)ctxp[idx],
-// 			(unsigned long long)ctxp[idx+1]);
-// 
-// 	cmn_err(CE_NOTE, "vtd_add_device: completed for rid=0x%x", rid);
-// 	/*
-// 	 * 'Not Present' entries are not cached in either the Context Cache
-// 	 * or in the IOTLB, so there is no need to invalidate either of them.
-// 	 */
-// }
-
 static void
 vtd_remove_device(void *arg, uint16_t rid)
 {
@@ -1904,9 +1743,7 @@ vtd_remove_device(void *arg, uint16_t rid)
 		    (unsigned long long)(vtdmap != NULL ? vtdmap->rta : 0));
 	}
 
-	/*
-	 * Order is important. The 'present' bit is must be cleared first.
-	 */
+	/* Order is important: clear the present bit first. */
 	ctxp[idx] = 0;
 	ctxp[idx + 1] = 0;
 	if (vtd_trace_remove_state != 0 && vtd_trace_domain_enabled(dom)) {
