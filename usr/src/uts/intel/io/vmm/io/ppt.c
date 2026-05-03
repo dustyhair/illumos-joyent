@@ -1847,6 +1847,19 @@ ppt_assign_device(struct vm *vm, int pptfd)
 		    pci_get_bdf(ppt->pptd_dip), (void *)vm, pptfd);
 	}
 	ppt_flr(ppt->pptd_dip, B_TRUE);
+	if (ppt_tu102_xhci_dev(ppt)) {
+		/*
+		 * After repeated bus resets, the TU102 xHCI function can be
+		 * config-present but MMIO-dead immediately after its assign-time
+		 * FLR.  Force a PM cycle before restoring the saved config image.
+		 */
+		if (!ppt_pm_reset(ppt->pptd_dip, B_TRUE)) {
+			cmn_err(CE_WARN, "ppt: TU102 xHCI assign PM recovery "
+			    "failed for bdf=0x%x", pci_get_bdf(ppt->pptd_dip));
+			err = EIO;
+			goto done;
+		}
+	}
 
 	/*
 	 * Restore the device state after reset and then perform another save
