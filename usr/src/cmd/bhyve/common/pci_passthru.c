@@ -1051,16 +1051,10 @@ passthru_cfgread_default(struct passthru_softc *sc,
     struct pci_devinst *pi __unused, int coff, int bytes, uint32_t *rv)
 {
 	/*
-	 * MSI capability is emulated.
+	 * MSI and MSI-X capabilities are emulated.  MSI-X may also be capped
+	 * below the device's native vector count by the host.
 	 */
 	if (msicap_access(sc, coff) || msixcap_access(sc, coff))
-		return (PE_CFGRW_DEFAULT);
-
-	/*
-	 * MSI-X is also emulated since a limit on interrupts may be imposed by
-	 * the OS, altering the perceived register state.
-	 */
-	if (msixcap_access(sc, coff))
 		return (PE_CFGRW_DEFAULT);
 
 	/*
