@@ -631,7 +631,7 @@ vtd_invalidate_skip_check(uint32_t *skip_mask, uint32_t *warned_mask,
 
 static void
 vtd_invalidate_mark_skip(uint32_t *skip_mask, struct vtdmap *vtdmap,
-    const char *which)
+    const char *which, boolean_t quiet)
 {
 	int idx;
 	uint32_t bit;
@@ -641,7 +641,7 @@ vtd_invalidate_mark_skip(uint32_t *skip_mask, struct vtdmap *vtdmap,
 		return;
 
 	bit = (1u << idx);
-	if ((*skip_mask & bit) == 0) {
+	if ((*skip_mask & bit) == 0 && !quiet) {
 		cmn_err(CE_WARN, "vtd: DRHD %d %s invalidate timed out; "
 		    "future %s invalidations will be skipped on this DRHD",
 		    idx, which, which);
@@ -675,8 +675,9 @@ vtd_invalidate_clear_skip(struct vtdmap *vtdmap)
 }
 
 static boolean_t
-vtd_wait_reg32(volatile uint32_t *reg, uint32_t mask, uint32_t expect,
-    struct vtdmap *vtdmap, const char *what)
+vtd_wait_reg32_common(volatile uint32_t *reg, uint32_t mask,
+    uint32_t expect, struct vtdmap *vtdmap, const char *what,
+    boolean_t quiet)
 {
 	uint32_t val;
 	uint32_t wait_us, step;
@@ -690,17 +691,28 @@ vtd_wait_reg32(volatile uint32_t *reg, uint32_t mask, uint32_t expect,
 	}
 
 	val = *reg;
-	cmn_err(CE_WARN, "vtd: timeout waiting for %s on DRHD %d "
-	    "(reg=0x%x mask=0x%x expect=0x%x timeout=%uus)",
-	    what, vtd_drhd_index(vtdmap), val, mask, expect,
-	    vtd_wait_timeout_us);
-	vtd_dump_timeout_state_once(vtdmap, what);
+	if (!quiet) {
+		cmn_err(CE_WARN, "vtd: timeout waiting for %s on DRHD %d "
+		    "(reg=0x%x mask=0x%x expect=0x%x timeout=%uus)",
+		    what, vtd_drhd_index(vtdmap), val, mask, expect,
+		    vtd_wait_timeout_us);
+		vtd_dump_timeout_state_once(vtdmap, what);
+	}
 	return (B_FALSE);
 }
 
 static boolean_t
-vtd_wait_reg64(volatile uint64_t *reg, uint64_t mask, uint64_t expect,
+vtd_wait_reg32(volatile uint32_t *reg, uint32_t mask, uint32_t expect,
     struct vtdmap *vtdmap, const char *what)
+{
+	return (vtd_wait_reg32_common(reg, mask, expect, vtdmap, what,
+	    B_FALSE));
+}
+
+static boolean_t
+vtd_wait_reg64_common(volatile uint64_t *reg, uint64_t mask,
+    uint64_t expect, struct vtdmap *vtdmap, const char *what,
+    boolean_t quiet)
 {
 	uint64_t val;
 	uint32_t wait_us, step;
@@ -714,12 +726,14 @@ vtd_wait_reg64(volatile uint64_t *reg, uint64_t mask, uint64_t expect,
 	}
 
 	val = *reg;
-	cmn_err(CE_WARN, "vtd: timeout waiting for %s on DRHD %d "
-	    "(reg=0x%llx mask=0x%llx expect=0x%llx timeout=%uus)",
-	    what, vtd_drhd_index(vtdmap),
-	    (unsigned long long)val, (unsigned long long)mask,
-	    (unsigned long long)expect, vtd_wait_timeout_us);
-	vtd_dump_timeout_state_once(vtdmap, what);
+	if (!quiet) {
+		cmn_err(CE_WARN, "vtd: timeout waiting for %s on DRHD %d "
+		    "(reg=0x%llx mask=0x%llx expect=0x%llx timeout=%uus)",
+		    what, vtd_drhd_index(vtdmap),
+		    (unsigned long long)val, (unsigned long long)mask,
+		    (unsigned long long)expect, vtd_wait_timeout_us);
+		vtd_dump_timeout_state_once(vtdmap, what);
+	}
 	return (B_FALSE);
 }
 
@@ -855,7 +869,7 @@ vtd_wbflush(struct vtdmap *vtdmap)
 }
 
 static boolean_t
-vtd_ctx_global_invalidate(struct vtdmap *vtdmap)
+vtd_ctx_global_invalidate_common(struct vtdmap *vtdmap, boolean_t quiet)
 {
 	boolean_t ok;
 	uint64_t before, cmdv, after;
@@ -885,19 +899,25 @@ vtd_ctx_global_invalidate(struct vtdmap *vtdmap)
 	after = vtdmap->ccr;
 	vtd_inv_cmd_log_once(vtdmap, &vtd_ctxcmd_first_dumped_mask, "ctx",
 	    before, cmdv, after);
-	ok = vtd_wait_reg64(&vtdmap->ccr, VTD_CCR_ICC, 0, vtdmap,
-	    "context cache invalidate (ICC clear)");
+	ok = vtd_wait_reg64_common(&vtdmap->ccr, VTD_CCR_ICC, 0, vtdmap,
+	    "context cache invalidate (ICC clear)", quiet);
 	vtd_invalidate_lock_exit(vtdmap);
 	if (!ok)
 		vtd_invalidate_mark_skip(&vtd_ctxinv_skip_mask, vtdmap,
-		    "context-cache");
+		    "context-cache", quiet);
 	else if (vtd_trace_invalidate != 0)
 		cmn_err(CE_NOTE, "vtd: ctx invalidate done drhd=%d", drhd_idx);
 	return (ok);
 }
 
 static boolean_t
-vtd_iotlb_global_invalidate(struct vtdmap *vtdmap)
+vtd_ctx_global_invalidate(struct vtdmap *vtdmap)
+{
+	return (vtd_ctx_global_invalidate_common(vtdmap, B_FALSE));
+}
+
+static boolean_t
+vtd_iotlb_global_invalidate_common(struct vtdmap *vtdmap, boolean_t quiet)
 {
 	int offset;
 	volatile uint64_t *iotlb_reg;
@@ -933,16 +953,18 @@ vtd_iotlb_global_invalidate(struct vtdmap *vtdmap)
 	after = *iotlb_reg;
 	vtd_inv_cmd_log_once(vtdmap, &vtd_iotlbcmd_first_dumped_mask, "iotlb",
 	    before, cmdv, after);
-	ok = vtd_wait_reg64(iotlb_reg, VTD_IIR_IVT, 0, vtdmap,
-	    "IOTLB invalidate (IVT clear)");
+	ok = vtd_wait_reg64_common(iotlb_reg, VTD_IIR_IVT, 0, vtdmap,
+	    "IOTLB invalidate (IVT clear)", quiet);
 	vtd_invalidate_lock_exit(vtdmap);
 	if (!ok) {
 		val = *iotlb_reg;
-		cmn_err(CE_WARN, "vtd: IOTLB register after timeout on DRHD %d "
-		    "(reg=0x%llx)", drhd_idx,
-		    (unsigned long long)val);
+		if (!quiet) {
+			cmn_err(CE_WARN, "vtd: IOTLB register after timeout on "
+			    "DRHD %d (reg=0x%llx)", drhd_idx,
+			    (unsigned long long)val);
+		}
 		vtd_invalidate_mark_skip(&vtd_iotlbinv_skip_mask, vtdmap,
-		    "IOTLB");
+		    "IOTLB", quiet);
 		return (B_FALSE);
 	}
 
@@ -953,13 +975,20 @@ vtd_iotlb_global_invalidate(struct vtdmap *vtdmap)
 	return (B_TRUE);
 }
 
+static boolean_t
+vtd_iotlb_global_invalidate(struct vtdmap *vtdmap)
+{
+	return (vtd_iotlb_global_invalidate_common(vtdmap, B_FALSE));
+}
+
 /*
  * Synchronize hardware caches after context-entry ownership changes.
  * If 'scope' is non-NULL, invalidate only that remapping unit; otherwise
  * invalidate all enabled units.
  */
 static boolean_t
-vtd_context_changed_invalidate(struct vtdmap *scope)
+vtd_context_changed_invalidate_common(struct vtdmap *scope,
+    struct vtdmap *quiet_scope)
 {
 	int i;
 	boolean_t ok = B_TRUE;
@@ -969,9 +998,11 @@ vtd_context_changed_invalidate(struct vtdmap *scope)
 			cmn_err(CE_NOTE, "vtd: invalidate scope=drhd%d",
 			    vtd_drhd_index(scope));
 		}
-		if (!vtd_ctx_global_invalidate(scope))
+		if (!vtd_ctx_global_invalidate_common(scope,
+		    scope == quiet_scope))
 			ok = B_FALSE;
-		if (!vtd_iotlb_global_invalidate(scope))
+		if (!vtd_iotlb_global_invalidate_common(scope,
+		    scope == quiet_scope))
 			ok = B_FALSE;
 		return (ok);
 	}
@@ -986,9 +1017,11 @@ vtd_context_changed_invalidate(struct vtdmap *scope)
 		if (!vtd_drhd_enabled(i))
 			continue;
 		vtdmap = vtdmaps[i];
-		if (!vtd_ctx_global_invalidate(vtdmap))
+		if (!vtd_ctx_global_invalidate_common(vtdmap,
+		    vtdmap == quiet_scope))
 			ok = B_FALSE;
-		if (!vtd_iotlb_global_invalidate(vtdmap))
+		if (!vtd_iotlb_global_invalidate_common(vtdmap,
+		    vtdmap == quiet_scope))
 			ok = B_FALSE;
 	}
 
@@ -998,6 +1031,12 @@ vtd_context_changed_invalidate(struct vtdmap *scope)
 	}
 
 	return (ok);
+}
+
+static boolean_t
+vtd_context_changed_invalidate(struct vtdmap *scope)
+{
+	return (vtd_context_changed_invalidate_common(scope, NULL));
 }
 
 static boolean_t
@@ -1836,6 +1875,7 @@ vtd_remove_device(void *arg, uint16_t rid)
 	uint8_t bus;
 	struct domain *dom = arg;
 	struct vtdmap *vtdmap;
+	struct vtdmap *quiet_vtdmap = NULL;
 	boolean_t ok;
 	int drhd_idx = -1;
 	boolean_t intrmap_gate = B_FALSE;
@@ -1894,7 +1934,11 @@ vtd_remove_device(void *arg, uint16_t rid)
 			    "drhd=%d", rid, dom->id, drhd_idx);
 		}
 	}
-	ok = vtd_context_changed_invalidate(NULL);
+	if (vtd_rearm_on_remove_timeout != 0 && dom != NULL &&
+	    dom->id != VTD_HOST_DOMAIN_ID && vtdmap != NULL)
+		quiet_vtdmap = vtdmap;
+	ok = vtd_context_changed_invalidate_common(NULL,
+	    quiet_vtdmap);
 	if (intrmap_gate) {
 		if (vtd_trace_remove_state != 0 &&
 		    vtd_trace_domain_enabled(dom)) {
@@ -1906,8 +1950,6 @@ vtd_remove_device(void *arg, uint16_t rid)
 		immu_intrmap_drhd_transition_set(drhd_idx, B_FALSE);
 	}
 	if (!ok) {
-		cmn_err(CE_WARN, "vtd_remove_device: invalidate timed out for "
-		    "rid=0x%x", rid);
 		if (vtd_rearm_on_remove_timeout != 0 && dom != NULL &&
 		    dom->id != VTD_HOST_DOMAIN_ID &&
 		    vtdmap != NULL) {
@@ -1920,6 +1962,9 @@ vtd_remove_device(void *arg, uint16_t rid)
 				    "rearm did not recover remove invalidate "
 				    "rid=0x%x domid=%u", rid, dom->id);
 			}
+		} else {
+			cmn_err(CE_WARN, "vtd_remove_device: invalidate timed "
+			    "out for rid=0x%x", rid);
 		}
 	}
 	if (vtd_trace_lifecycle != 0 && vtd_trace_domain_enabled(dom)) {
