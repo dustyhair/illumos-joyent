@@ -1695,8 +1695,12 @@ vtd_add_device(void *arg, uint16_t rid)
 		if (vtd_rearm_on_remove_timeout != 0 &&
 		    dom->id != VTD_HOST_DOMAIN_ID &&
 		    vtd_rearm_unit_and_invalidate(vtdmap)) {
-			cmn_err(CE_NOTE, "vtd_add_device: invalidate recovered "
-			    "after DRHD rearm rid=0x%x domid=%u", rid, dom->id);
+			if (vtd_trace_lifecycle != 0 &&
+			    vtd_trace_domain_enabled(dom)) {
+				cmn_err(CE_NOTE, "vtd_add_device: invalidate "
+				    "recovered after DRHD rearm rid=0x%x "
+				    "domid=%u", rid, dom->id);
+			}
 		} else {
 			cmn_err(CE_WARN, "vtd_add_device: invalidate timed out "
 			    "for rid=0x%x domid=%u", rid, dom->id);
@@ -1796,9 +1800,13 @@ vtd_remove_device(void *arg, uint16_t rid)
 		    dom->id != VTD_HOST_DOMAIN_ID &&
 		    vtdmap != NULL) {
 			if (vtd_rearm_unit_and_invalidate(vtdmap)) {
-				cmn_err(CE_NOTE, "vtd_remove_device: recovered "
-				    "remove invalidate after DRHD rearm "
-				    "rid=0x%x domid=%u", rid, dom->id);
+				if (vtd_trace_lifecycle != 0 &&
+				    vtd_trace_domain_enabled(dom)) {
+					cmn_err(CE_NOTE, "vtd_remove_device: "
+					    "recovered remove invalidate after "
+					    "DRHD rearm rid=0x%x domid=%u",
+					    rid, dom->id);
+				}
 			} else {
 				cmn_err(CE_WARN, "vtd_remove_device: DRHD "
 				    "rearm did not recover remove invalidate "
