@@ -155,7 +155,6 @@ static void		*ppt_state;
 static kmutex_t		pptdev_mtx;
 static list_t		pptdev_list;
 int			ppt_diag_enable = 0;
-int			ppt_tu102_xhci_diag_enable = 0;
 
 #ifndef PCI_PMCSR_STATE_D0
 #define	PCI_PMCSR_STATE_D0	0x0000
@@ -1310,25 +1309,11 @@ ppt_tu102_xhci_after_decode(struct pptdev *ppt, const char *phase)
 		pmcsr = PCI_CAP_GET16(ppt->pptd_cfg, 0, cap, PCI_PMCSR);
 
 	if (bar->base == 0 || bar->size < 0x20 || bar->ddireg == 0) {
-		if (ppt_tu102_xhci_diag_enable != 0) {
-			cmn_err(CE_NOTE, "ppt-xhci-bar0: phase=%s "
-			    "bdf=0x%x unavailable base=0x%llx size=0x%llx "
-			    "ddireg=%u cmd=0x%x pmcsr=0x%x", phase, bdf,
-			    (u_longlong_t)bar->base, (u_longlong_t)bar->size,
-			    bar->ddireg, cmd, pmcsr);
-		}
 		return;
 	}
 
 	if (ddi_regs_map_setup(ppt->pptd_dip, bar->ddireg, &ptr, 0, 0,
 	    &ppt_attr, &hdl) != DDI_SUCCESS) {
-		if (ppt_tu102_xhci_diag_enable != 0) {
-			cmn_err(CE_NOTE, "ppt-xhci-bar0: phase=%s "
-			    "bdf=0x%x map-failed base=0x%llx size=0x%llx "
-			    "ddireg=%u cmd=0x%x pmcsr=0x%x", phase, bdf,
-			    (u_longlong_t)bar->base, (u_longlong_t)bar->size,
-			    bar->ddireg, cmd, pmcsr);
-		}
 		return;
 	}
 
@@ -1358,7 +1343,7 @@ ppt_tu102_xhci_after_decode(struct pptdev *ppt, const char *phase)
 		usbsts = ddi_get32(hdl, (void *)(ptr + caplen + 0x4));
 	}
 
-	if (ppt_tu102_xhci_diag_enable != 0 || cap0 == PCI_EINVAL32) {
+	if (cap0 == PCI_EINVAL32) {
 		cmn_err(CE_NOTE, "ppt-xhci-bar0: phase=%s bdf=0x%x "
 		    "base=0x%llx size=0x%llx ddireg=%u cmd=0x%x "
 		    "pmcsr=0x%x cap0=0x%x hcs1=0x%x hcs2=0x%x "
