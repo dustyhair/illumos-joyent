@@ -209,6 +209,8 @@ static void ppt_bus_reset(dev_info_t *);
 static void ppt_reset_pci_power_state(dev_info_t *);
 static void ppt_reset_log_state_locked(struct pptdev *, ppt_reset_type_t,
     const char *);
+static void ppt_tu102_xhci_bar0_log(struct pptdev *, ppt_reset_type_t,
+    const char *);
 static int ppt_save_reset_config_locked(struct pptdev *, ppt_reset_type_t);
 static int ppt_restore_reset_config_locked(struct pptdev *, ppt_reset_type_t);
 static int ppt_reset_device_method_locked(struct pptdev *, ppt_reset_flags_t,
@@ -1275,6 +1277,78 @@ ppt_reset_log_one_state(struct pptdev *ppt, ppt_reset_type_t method,
 	    st.prs_has_msi, st.prs_msictl, st.prs_msiaddr_hi,
 	    st.prs_msiaddr_lo, st.prs_msidata, st.prs_has_msix,
 	    st.prs_msixctl);
+
+	ppt_tu102_xhci_bar0_log(ppt, method, phase);
+}
+
+static void
+ppt_tu102_xhci_bar0_log(struct pptdev *ppt, ppt_reset_type_t method,
+    const char *phase)
+{
+	ddi_acc_handle_t hdl;
+	caddr_t ptr;
+	struct pptbar *bar;
+	uint16_t bdf;
+	uint16_t cmd;
+	uint16_t pmcsr = 0;
+	uint16_t cap;
+	uint32_t cap0, hcs1, hcs2, hcc1, usbcmd, usbsts;
+	uint_t caplen;
+
+	if (ppt_diag_enable == 0)
+		return;
+
+	if (pci_config_get16(ppt->pptd_cfg, PCI_CONF_VENID) != 0x10de ||
+	    pci_config_get16(ppt->pptd_cfg, PCI_CONF_DEVID) != 0x1ad6) {
+		return;
+	}
+
+	bar = &ppt->pptd_bars[0];
+	bdf = pci_get_bdf(ppt->pptd_dip);
+	cmd = pci_config_get16(ppt->pptd_cfg, PCI_CONF_COMM);
+	if (PCI_CAP_LOCATE(ppt->pptd_cfg, PCI_CAP_ID_PM, &cap) == DDI_SUCCESS)
+		pmcsr = PCI_CAP_GET16(ppt->pptd_cfg, 0, cap, PCI_PMCSR);
+
+	if (bar->base == 0 || bar->size < 0x20 || bar->ddireg == 0) {
+		cmn_err(CE_NOTE, "ppt-xhci-bar0: phase=%s method=%u "
+		    "bdf=0x%x unavailable base=0x%llx size=0x%llx "
+		    "ddireg=%u cmd=0x%x pmcsr=0x%x",
+		    phase, method, bdf, (u_longlong_t)bar->base,
+		    (u_longlong_t)bar->size, bar->ddireg, cmd, pmcsr);
+		return;
+	}
+
+	if (ddi_regs_map_setup(ppt->pptd_dip, bar->ddireg, &ptr, 0, 0,
+	    &ppt_attr, &hdl) != DDI_SUCCESS) {
+		cmn_err(CE_NOTE, "ppt-xhci-bar0: phase=%s method=%u "
+		    "bdf=0x%x map-failed base=0x%llx size=0x%llx "
+		    "ddireg=%u cmd=0x%x pmcsr=0x%x",
+		    phase, method, bdf, (u_longlong_t)bar->base,
+		    (u_longlong_t)bar->size, bar->ddireg, cmd, pmcsr);
+		return;
+	}
+
+	cap0 = ddi_get32(hdl, (void *)(ptr + 0x0));
+	hcs1 = ddi_get32(hdl, (void *)(ptr + 0x4));
+	hcs2 = ddi_get32(hdl, (void *)(ptr + 0x8));
+	hcc1 = ddi_get32(hdl, (void *)(ptr + 0x10));
+	caplen = cap0 & 0xff;
+	usbcmd = PCI_EINVAL32;
+	usbsts = PCI_EINVAL32;
+	if (caplen >= 0x20 && caplen + 0x8 <= bar->size) {
+		usbcmd = ddi_get32(hdl, (void *)(ptr + caplen));
+		usbsts = ddi_get32(hdl, (void *)(ptr + caplen + 0x4));
+	}
+
+	cmn_err(CE_NOTE, "ppt-xhci-bar0: phase=%s method=%u bdf=0x%x "
+	    "base=0x%llx size=0x%llx ddireg=%u cmd=0x%x pmcsr=0x%x "
+	    "cap0=0x%x hcs1=0x%x hcs2=0x%x hcc1=0x%x caplen=0x%x "
+	    "usbcmd=0x%x usbsts=0x%x",
+	    phase, method, bdf, (u_longlong_t)bar->base,
+	    (u_longlong_t)bar->size, bar->ddireg, cmd, pmcsr, cap0,
+	    hcs1, hcs2, hcc1, caplen, usbcmd, usbsts);
+
+	ddi_regs_map_free(&hdl);
 }
 
 static void
@@ -1741,6 +1815,7 @@ ppt_assign_device(struct vm *vm, int pptfd)
 	}
 
 	ppt_toggle_bar(ppt, B_TRUE);
+	ppt_tu102_xhci_bar0_log(ppt, PPT_RESET_NONE, "assign-after-toggle");
 
 	ppt->vm = vm;
 	iommu_remove_device(iommu_host_domain(), pci_get_bdf(ppt->pptd_dip));
