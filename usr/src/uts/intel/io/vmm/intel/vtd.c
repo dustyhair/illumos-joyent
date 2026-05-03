@@ -1156,7 +1156,8 @@ vtd_ensure_unit_enabled(struct vtdmap *vtdmap)
 	if (vtd_unit_init_complete(vtdmap))
 		return (B_TRUE);
 
-	cmn_err(CE_NOTE, "vtd: ensure-unit-enable drhd=%d begin", idx);
+	if (vtd_trace_lifecycle != 0)
+		cmn_err(CE_NOTE, "vtd: ensure-unit-enable drhd=%d begin", idx);
 	immu_intrmap_drhd_transition_set(idx, B_TRUE);
 	gate_entered = B_TRUE;
 
@@ -1189,24 +1190,33 @@ vtd_ensure_unit_enabled(struct vtdmap *vtdmap)
 
 	if (vtd_ir_unit_ok(idx, vtdmap)) {
 		vtdmap->gcr = VTD_GCR_TE | VTD_GCR_IRE;
-		cmn_err(CE_NOTE,
-		    "vtd_enable: DRHD %d translation=ENABLED, interrupt remap=ENABLED "
-		    "(vmm_vtd-managed)", idx);
+		if (vtd_trace_lifecycle != 0) {
+			cmn_err(CE_NOTE,
+			    "vtd_enable: DRHD %d translation=ENABLED, "
+			    "interrupt remap=ENABLED (vmm_vtd-managed)", idx);
+		}
 	} else if (VTD_ECAP_IR(vtdmap->ext_cap) != 0) {
-		cmn_err(CE_NOTE,
-		    "vtd_enable: DRHD %d translation=ENABLED, interrupt remap=HOST-OWNED "
-		    "(immu_intrmap), gsr.ires=%d", idx,
-		    ((vtdmap->gsr & VTD_GCR_IRE) != 0) ? 1 : 0);
+		if (vtd_trace_lifecycle != 0) {
+			cmn_err(CE_NOTE,
+			    "vtd_enable: DRHD %d translation=ENABLED, "
+			    "interrupt remap=HOST-OWNED (immu_intrmap), "
+			    "gsr.ires=%d", idx,
+			    ((vtdmap->gsr & VTD_GCR_IRE) != 0) ? 1 : 0);
+		}
 	} else {
-		cmn_err(CE_NOTE,
-		    "vtd_enable: DRHD %d translation=ENABLED, interrupt remap=UNSUPPORTED",
-		    idx);
+		if (vtd_trace_lifecycle != 0) {
+			cmn_err(CE_NOTE,
+			    "vtd_enable: DRHD %d translation=ENABLED, "
+			    "interrupt remap=UNSUPPORTED", idx);
+		}
 	}
 
-	cmn_err(CE_NOTE, "vtd_enable: DRHD %d TE bit %s (GSR=0x%x)",
-	    idx, (vtdmap->gsr & VTD_GSR_TES) ? "ENABLED" : "DISABLED",
-	    vtdmap->gsr);
-	cmn_err(CE_NOTE, "vtd: ensure-unit-enable drhd=%d done", idx);
+	if (vtd_trace_lifecycle != 0) {
+		cmn_err(CE_NOTE, "vtd_enable: DRHD %d TE bit %s (GSR=0x%x)",
+		    idx, (vtdmap->gsr & VTD_GSR_TES) ? "ENABLED" : "DISABLED",
+		    vtdmap->gsr);
+		cmn_err(CE_NOTE, "vtd: ensure-unit-enable drhd=%d done", idx);
+	}
 	ok = B_TRUE;
 out:
 	if (gate_entered)
@@ -1438,8 +1448,10 @@ skip_dmar:
 		root_table[i * 2] = ctx_paddr | VTD_ROOT_PRESENT;
 	}
 
-	cmn_err(CE_NOTE, "vtd_init: found %d DRHD units", units);
-	cmn_err(CE_NOTE, "vtd_init: max_domains=%d", max_domains);
+	if (vtd_trace_lifecycle != 0) {
+		cmn_err(CE_NOTE, "vtd_init: found %d DRHD units", units);
+		cmn_err(CE_NOTE, "vtd_init: max_domains=%d", max_domains);
+	}
 	
 	return (0);
 
@@ -1503,7 +1515,8 @@ vtd_enable(void)
 {
 	int i;
 
-	cmn_err(CE_NOTE, "vtd_enable: enabling VT-d units");
+	if (vtd_trace_lifecycle != 0)
+		cmn_err(CE_NOTE, "vtd_enable: enabling VT-d units");
 
 	/*
 	 * Coordinate with host interrupt-remap programming across the full VT-d
@@ -2047,9 +2060,12 @@ vtd_create_domain(vm_paddr_t maxaddr)
 		uint_t devtlb    = VTD_ECAP_DEV_IOTLB(ecap);
 		uint_t mgaw      = VTD_ECAP_MGAW(ecap);
 
-		cmn_err(CE_NOTE,
-			"VT-d: DRHD %d CAP.SPS=0x%x ECAP.IR=%u ECAP.DEV-IOTLB=%u ECAP.MGAW=%u",
-			i, cap_sps, ir, devtlb, mgaw);
+		if (vtd_trace_lifecycle != 0) {
+			cmn_err(CE_NOTE,
+			    "VT-d: DRHD %d CAP.SPS=0x%x ECAP.IR=%u "
+			    "ECAP.DEV-IOTLB=%u ECAP.MGAW=%u",
+			    i, cap_sps, ir, devtlb, mgaw);
+		}
 
 		spsmask &= cap_sps;
 	}
