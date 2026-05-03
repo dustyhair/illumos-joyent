@@ -1184,8 +1184,8 @@ ppt_flr(dev_info_t *dip, boolean_t force)
 
 fail:
 	/*
-	 * TODO: If the FLR fails for some reason, we should attempt a reset
-	 * using the PCI power management facilities (if possible).
+	 * Higher-level reset selection is responsible for trying an alternate
+	 * reset method when FLR is unavailable or fails.
 	 */
 	pci_config_teardown(&hdl);
 	return (B_FALSE);
@@ -1942,10 +1942,9 @@ ppt_do_unassign(struct pptdev *ppt)
 	}
 
 	/*
-	 * Optional diagnostic mitigation: after guest-visible decode and
+	 * Optional teardown quiesce path: after guest-visible decode and
 	 * interrupts are quiesced, issue an FLR on function 0 before removing
-	 * the device from the guest IOMMU domain.  This tests whether the VT-d
-	 * invalidate timeout is caused by a still-active device at teardown.
+	 * the device from the guest IOMMU domain.
 	 */
 	if (ppt_unassign_flr_quiesce != 0 && PCI_RID2FUNC(bdf) == 0) {
 		ppt_flr(ppt->pptd_dip, B_TRUE);
