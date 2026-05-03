@@ -213,6 +213,7 @@ static void ppt_reset_pci_power_state(dev_info_t *);
 static void ppt_reset_log_state_locked(struct pptdev *, ppt_reset_type_t,
     const char *);
 static void ppt_tu102_xhci_after_decode(struct pptdev *, const char *);
+static boolean_t ppt_tu102_xhci_dev(struct pptdev *);
 static int ppt_save_reset_config_locked(struct pptdev *, ppt_reset_type_t);
 static int ppt_restore_reset_config_locked(struct pptdev *, ppt_reset_type_t);
 static int ppt_reset_device_method_locked(struct pptdev *, ppt_reset_flags_t,
@@ -1196,6 +1197,13 @@ fail:
 }
 
 static boolean_t
+ppt_tu102_xhci_dev(struct pptdev *ppt)
+{
+	return (pci_config_get16(ppt->pptd_cfg, PCI_CONF_VENID) == 0x10de &&
+	    pci_config_get16(ppt->pptd_cfg, PCI_CONF_DEVID) == 0x1ad6);
+}
+
+static boolean_t
 ppt_nvidia_gpu_bus_reset_quirk_active(struct pptdev *ppt)
 {
 	uint16_t bdf;
@@ -1295,8 +1303,7 @@ ppt_tu102_xhci_after_decode(struct pptdev *ppt, const char *phase)
 	uint32_t cap0, hcs1, hcs2, hcc1, usbcmd, usbsts;
 	uint_t caplen;
 
-	if (pci_config_get16(ppt->pptd_cfg, PCI_CONF_VENID) != 0x10de ||
-	    pci_config_get16(ppt->pptd_cfg, PCI_CONF_DEVID) != 0x1ad6) {
+	if (!ppt_tu102_xhci_dev(ppt)) {
 		return;
 	}
 
@@ -1458,6 +1465,27 @@ ppt_restore_reset_config_locked(struct pptdev *ppt, ppt_reset_type_t method)
 			    pci_get_bdf(peer->pptd_dip), method);
 			err = EIO;
 			continue;
+		}
+		if (method == PPT_RESET_BUS && ppt_tu102_xhci_dev(peer)) {
+			/*
+			 * The TU102 xHCI function can remain MMIO-dead after a
+			 * repeated secondary-bus reset even though config space is
+			 * present and PMCSR reports D0.  A forced PM cycle after
+			 * the bus reset brings the function back before assignment.
+			 */
+			if (!ppt_pm_reset(peer->pptd_dip, B_TRUE)) {
+				cmn_err(CE_WARN, "ppt: TU102 xHCI post-bus PM "
+				    "recovery failed for bdf=0x%x",
+				    pci_get_bdf(peer->pptd_dip));
+				err = EIO;
+			} else if (pci_restore_config_regs(peer->pptd_dip) !=
+			    DDI_SUCCESS) {
+				cmn_err(CE_WARN, "ppt: TU102 xHCI post-bus "
+				    "restore failed for bdf=0x%x",
+				    pci_get_bdf(peer->pptd_dip));
+				err = EIO;
+				continue;
+			}
 		}
 		/*
 		 * pci_restore_config_regs() consumes the saved config property.
