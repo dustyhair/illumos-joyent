@@ -35,19 +35,6 @@
 #include <sys/sunndi.h>
 #include <sys/ndi_impldefs.h>	/* include prototypes */
 #include <sys/atomic.h>
-#include <sys/promif.h>
-
-static boolean_t
-ddi_intr_trace_ppt(ddi_intr_handle_impl_t *hdlp)
-{
-	const char *drv;
-
-	if (hdlp == NULL || hdlp->ih_dip == NULL)
-		return (B_FALSE);
-
-	drv = ddi_driver_name(hdlp->ih_dip);
-	return (drv != NULL && strcmp(drv, "ppt") == 0);
-}
 
 /*
  * New DDI interrupt framework
@@ -778,22 +765,10 @@ ddi_intr_enable(ddi_intr_handle_t h)
 		return (DDI_EINVAL);
 	}
 
-	if (ddi_intr_trace_ppt(hdlp)) {
-		prom_printf("DDI-MSI-PPT: ddi_intr_enable enter dip=%p inum=%u "
-		    "type=0x%x state=0x%x cap=0x%x\n", (void *)hdlp->ih_dip,
-		    hdlp->ih_inum, hdlp->ih_type, hdlp->ih_state, hdlp->ih_cap);
-	}
-
 	I_DDI_VERIFY_MSIX_HANDLE(hdlp);
 
 	ret = i_ddi_intr_ops(hdlp->ih_dip, hdlp->ih_dip,
 	    DDI_INTROP_ENABLE, hdlp, NULL);
-
-	if (ddi_intr_trace_ppt(hdlp)) {
-		prom_printf("DDI-MSI-PPT: ddi_intr_enable done dip=%p inum=%u "
-		    "ret=%d vector=0x%x\n", (void *)hdlp->ih_dip, hdlp->ih_inum,
-		    ret, hdlp->ih_vector);
-	}
 
 	if (ret == DDI_SUCCESS) {
 		hdlp->ih_state = DDI_IHDL_STATE_ENABLE;

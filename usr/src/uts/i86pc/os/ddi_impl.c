@@ -847,15 +847,7 @@ i_ddi_intr_ops(dev_info_t *dip, dev_info_t *rdip, ddi_intr_op_t op,
     ddi_intr_handle_impl_t *hdlp, void * result)
 {
 	dev_info_t	*pdip = (dev_info_t *)DEVI(dip)->devi_parent;
-	const char	*drv = ddi_driver_name(rdip);
 	int		ret = DDI_FAILURE;
-
-	if (drv != NULL && strcmp(drv, "ppt") == 0 &&
-	    (op == DDI_INTROP_ENABLE || op == DDI_INTROP_BLOCKENABLE)) {
-		prom_printf("DDI-MSI-PPT: i_ddi_intr_ops enter dip=%p pdip=%p "
-		    "rdip=%p op=0x%x inum=%u\n", (void *)dip, (void *)pdip,
-		    (void *)rdip, op, hdlp != NULL ? hdlp->ih_inum : 0);
-	}
 
 	/* request parent to process this interrupt op */
 	if (NEXUS_HAS_INTR_OP(pdip))
@@ -867,12 +859,6 @@ i_ddi_intr_ops(dev_info_t *dip, dev_info_t *rdip, ddi_intr_op_t op,
 		    ddi_get_name(rdip), ddi_get_instance(rdip),
 		    ddi_get_name(pdip), ddi_get_instance(pdip));
 
-	if (drv != NULL && strcmp(drv, "ppt") == 0 &&
-	    (op == DDI_INTROP_ENABLE || op == DDI_INTROP_BLOCKENABLE)) {
-		prom_printf("DDI-MSI-PPT: i_ddi_intr_ops done rdip=%p op=0x%x "
-		    "ret=%d vector=0x%x\n", (void *)rdip, op, ret,
-		    hdlp != NULL ? hdlp->ih_vector : 0);
-	}
 	return (ret);
 }
 

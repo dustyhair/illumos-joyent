@@ -32,7 +32,6 @@
 #include <sys/sysmacros.h>
 #include <sys/sunddi.h>
 #include <sys/sunndi.h>
-#include <sys/promif.h>
 #include <sys/pcie.h>
 #include <sys/pci_cap.h>
 #include <sys/pcie_impl.h>
@@ -106,23 +105,7 @@ int
 pcieb_plat_intr_ops(dev_info_t *dip, dev_info_t *rdip, ddi_intr_op_t intr_op,
     ddi_intr_handle_impl_t *hdlp, void *result)
 {
-	int ret;
-
-	if (intr_op == DDI_INTROP_ENABLE || intr_op == DDI_INTROP_BLOCKENABLE) {
-		prom_printf("PCIEB-MSI-TU102: forward enter dip=%p rdip=%p "
-		    "op=0x%x inum=%u\n", (void *)dip, (void *)rdip, intr_op,
-		    hdlp != NULL ? hdlp->ih_inum : 0);
-	}
-
-	ret = i_ddi_intr_ops(dip, rdip, intr_op, hdlp, result);
-
-	if (intr_op == DDI_INTROP_ENABLE || intr_op == DDI_INTROP_BLOCKENABLE) {
-		prom_printf("PCIEB-MSI-TU102: forward done rdip=%p op=0x%x "
-		    "ret=%d vector=0x%x\n", (void *)rdip, intr_op, ret,
-		    hdlp != NULL ? hdlp->ih_vector : 0);
-	}
-
-	return (ret);
+	return (i_ddi_intr_ops(dip, rdip, intr_op, hdlp, result));
 }
 
 /* shpc is not supported on x86 */
