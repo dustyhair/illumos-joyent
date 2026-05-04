@@ -49,7 +49,6 @@
 
 #include <sys/atomic.h>
 #include <sys/param.h>
-#include <sys/promif.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/kmem.h>
@@ -208,11 +207,6 @@ static enum vmx_caps vmx_capabilities;
 
 /* APICv posted interrupt vector */
 static int pirvec = -1;
-static uint32_t vmx_tu102_enter_count;
-static uint32_t vmx_tu102_block_count;
-static uint32_t vmx_tu102_vcpu1_runenter_count;
-static uint32_t vmx_tu102_vcpu1_postrun_count;
-static uint32_t vmx_tu102_vcpu1_runreturn_count;
 
 static uint_t vpid_alloc_failed;
 
@@ -1348,17 +1342,6 @@ vmx_inject_vlapic(struct vmx *vmx, int vcpu, struct vlapic *vlapic)
 	if (!vlapic_pending_intr(vlapic, &vector)) {
 		return (EIS_CAN_INJECT);
 	}
-	if (vector == 0x23) {
-		uint32_t enter_count = atomic_inc_32_nv(&vmx_tu102_enter_count);
-
-		if (enter_count <= 16 || powerof2(enter_count)) {
-			prom_printf("VMX-INJ-TU102: enter vm=%p vcpu=%d "
-			    "vec=0x%x apicv=%d count=%u\n",
-			    (void *)vmx->vm, vcpu, vector,
-			    vmx_cap_en(vmx, VMX_CAP_APICV) ? 1 : 0,
-			    enter_count);
-		}
-	}
 
 	/*
 	 * From the Intel SDM, Volume 3, Section "Maskable
@@ -1372,12 +1355,6 @@ vmx_inject_vlapic(struct vmx *vmx, int vcpu, struct vlapic *vlapic)
 	if (vmx_cap_en(vmx, VMX_CAP_APICV)) {
 		uint16_t status_old = vmcs_read(VMCS_GUEST_INTR_STATUS);
 		uint16_t status_new = (status_old & 0xff00) | vector;
-		if (vector == 0x23) {
-			prom_printf("VMX-INJ-TU102: apicv pre vm=%p vcpu=%d "
-			    "vec=0x%x status_old=0x%x status_new=0x%x\n",
-			    (void *)vmx->vm, vcpu, vector, status_old,
-			    status_new);
-		}
 
 		/*
 		 * The APICv state will have been synced into the vLAPIC
@@ -1386,10 +1363,6 @@ vmx_inject_vlapic(struct vmx *vmx, int vcpu, struct vlapic *vlapic)
 		 */
 		if (status_new > status_old) {
 			vmcs_write(VMCS_GUEST_INTR_STATUS, status_new);
-			if (vector == 0x23) {
-				prom_printf("VMX-INJ-TU102: apicv wrote "
-				    "guest_intr_status=0x%x\n", status_new);
-			}
 		}
 
 		/*
@@ -1397,12 +1370,6 @@ vmx_inject_vlapic(struct vmx *vmx, int vcpu, struct vlapic *vlapic)
 		 * with the TMRs in the vlapic.
 		 */
 		vmx_apicv_sync_tmr(vlapic);
-		if (vector == 0x23) {
-			prom_printf("VMX-INJ-TU102: apicv done vm=%p vcpu=%d "
-			    "vec=0x%x status_cur=0x%x\n", (void *)vmx->vm,
-			    vcpu, vector,
-			    (uint16_t)vmcs_read(VMCS_GUEST_INTR_STATUS));
-		}
 
 		/*
 		 * The rest of the injection process for injecting the
@@ -1417,40 +1384,15 @@ vmx_inject_vlapic(struct vmx *vmx, int vcpu, struct vlapic *vlapic)
 	/* Does guest interruptability block injection? */
 	if ((vmcs_read(VMCS_GUEST_INTERRUPTIBILITY) & HWINTR_BLOCKING) != 0 ||
 	    (vmcs_read(VMCS_GUEST_RFLAGS) & PSL_I) == 0) {
-		if (vector == 0x23) {
-			uint32_t blocked_count =
-			    atomic_inc_32_nv(&vmx_tu102_block_count);
-
-			if (blocked_count <= 16 || powerof2(blocked_count)) {
-				prom_printf("VMX-INJ-TU102: blocked vm=%p "
-				    "vcpu=%d vec=0x%x gi=0x%x rflags=0x%llx "
-				    "rip=0x%llx count=%u\n",
-				    (void *)vmx->vm, vcpu, vector,
-				    (uint32_t)vmcs_read(
-				    VMCS_GUEST_INTERRUPTIBILITY),
-				    (u_longlong_t)vmcs_read(VMCS_GUEST_RFLAGS),
-				    (u_longlong_t)vmcs_read(VMCS_GUEST_RIP),
-				    blocked_count);
-			}
-		}
 		return (EIS_GI_BLOCK);
 	}
 
 	/* Inject the interrupt */
 	vmcs_write(VMCS_ENTRY_INTR_INFO,
 	    VMCS_INTR_T_HWINTR | VMCS_INTR_VALID | vector);
-	if (vector == 0x23) {
-		prom_printf("VMX-INJ-TU102: entry-info vm=%p vcpu=%d vec=0x%x "
-		    "entry=0x%llx\n", (void *)vmx->vm, vcpu, vector,
-		    (u_longlong_t)vmcs_read(VMCS_ENTRY_INTR_INFO));
-	}
 
 	/* Update the Local APIC ISR */
 	vlapic_intr_accepted(vlapic, vector);
-	if (vector == 0x23) {
-		prom_printf("VMX-INJ-TU102: accepted vm=%p vcpu=%d vec=0x%x\n",
-		    (void *)vmx->vm, vcpu, vector);
-	}
 
 	return (EIS_EV_INJECTED);
 }
@@ -2974,19 +2916,6 @@ vmx_run(void *arg, int vcpu, uint64_t rip)
 
 		vcpu_ustate_change(vm, vcpu, VU_RUN);
 
-		if (vcpu == 1) {
-			uint32_t runenter_count =
-			    atomic_inc_32_nv(&vmx_tu102_vcpu1_runenter_count);
-
-			if (runenter_count <= 16 || powerof2(runenter_count)) {
-				prom_printf("VMX-RUN-TU102: preenter vm=%p "
-				    "vcpu=%d rip=0x%llx launched=%d count=%u\n",
-				    (void *)vmx->vm, vcpu,
-				    (u_longlong_t)vmcs_read(VMCS_GUEST_RIP),
-				    launched, runenter_count);
-			}
-		}
-
 		vmx_dr_enter_guest(vmxctx);
 
 		/* Perform VMX entry */
@@ -3011,36 +2940,6 @@ vmx_run(void *arg, int vcpu, uint64_t rip)
 		    vmcs_read(VMCS_EXIT_QUALIFICATION);
 		/* Update 'nextrip' */
 		vmx->state[vcpu].nextrip = rip;
-
-		if (vcpu == 1) {
-			uint32_t runreturn_count =
-			    atomic_inc_32_nv(&vmx_tu102_vcpu1_runreturn_count);
-
-			if (runreturn_count <= 16 || powerof2(runreturn_count)) {
-				prom_printf("VMX-RUN-TU102: return vm=%p "
-				    "vcpu=%d rc=%d rip=0x%llx reason=0x%x "
-				    "qual=0x%llx instlen=%u count=%u\n",
-				    (void *)vmx->vm, vcpu, rc,
-				    (u_longlong_t)rip, exit_reason,
-				    (u_longlong_t)vmexit->u.vmx.exit_qualification,
-				    vmexit->inst_length, runreturn_count);
-			}
-		}
-
-		if (rc == VMX_GUEST_VMEXIT && vcpu == 1) {
-			uint32_t postrun_count =
-			    atomic_inc_32_nv(&vmx_tu102_vcpu1_postrun_count);
-
-			if (postrun_count <= 16 || powerof2(postrun_count)) {
-				prom_printf("VMX-RUN-TU102: postrun vm=%p "
-				    "vcpu=%d rip=0x%llx reason=0x%x qual=0x%llx "
-				    "instlen=%u count=%u\n",
-				    (void *)vmx->vm, vcpu,
-				    (u_longlong_t)rip, exit_reason,
-				    (u_longlong_t)vmexit->u.vmx.exit_qualification,
-				    vmexit->inst_length, postrun_count);
-			}
-		}
 
 		if (rc == VMX_GUEST_VMEXIT) {
 			vmx_exit_handle_possible_nmi(vmexit);
