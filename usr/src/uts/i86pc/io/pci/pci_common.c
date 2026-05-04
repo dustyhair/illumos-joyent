@@ -51,7 +51,6 @@
 #include <sys/pci_cfgspace.h>
 #include <sys/pci_impl.h>
 #include <sys/pci_cap.h>
-#include <sys/promif.h>
 
 /*
  * Function prototypes
@@ -65,36 +64,11 @@ static int	pci_alloc_intr_fixed(dev_info_t *, dev_info_t *,
 		    ddi_intr_handle_impl_t *, void *);
 static int	pci_free_intr_fixed(dev_info_t *, dev_info_t *,
 		    ddi_intr_handle_impl_t *);
-static boolean_t pci_common_is_tu102(dev_info_t *);
-static boolean_t pci_common_trace_ppt(dev_info_t *);
 
 /* Extern declarations for PSM module */
 extern int	(*psm_intr_ops)(dev_info_t *, ddi_intr_handle_impl_t *,
 		    psm_intr_op_t, int *);
 extern ddi_irm_pool_t *apix_irm_pool_p;
-
-static boolean_t
-pci_common_is_tu102(dev_info_t *dip)
-{
-	ddi_acc_handle_t handle;
-	int cap_ptr;
-
-	cap_ptr = i_ddi_get_msi_msix_cap_ptr(dip);
-	handle = i_ddi_get_pci_config_handle(dip);
-	if (handle == NULL || cap_ptr == 0)
-		return (B_FALSE);
-
-	return (pci_config_get16(handle, PCI_CONF_VENID) == 0x10de &&
-	    pci_config_get16(handle, PCI_CONF_DEVID) == 0x1e07);
-}
-
-static boolean_t
-pci_common_trace_ppt(dev_info_t *dip)
-{
-	const char *drv = ddi_driver_name(dip);
-
-	return (drv != NULL && strcmp(drv, "ppt") == 0);
-}
 
 /*
  * pci_name_child:
@@ -608,21 +582,9 @@ SUPPORTED_TYPES_OUT:
 		if (psm_intr_ops == NULL)
 			return (DDI_FAILURE);
 
-		if (pci_common_trace_ppt(rdip)) {
-			prom_printf("PCI-MSI-PPT: intr_ops ENABLE enter pdip=%p "
-			    "rdip=%p inum=%u type=0x%x\n", (void *)pdip,
-			    (void *)rdip, hdlp->ih_inum, hdlp->ih_type);
-		}
-
 		if (pci_enable_intr(pdip, rdip, hdlp, hdlp->ih_inum) !=
 		    DDI_SUCCESS)
 			return (DDI_FAILURE);
-
-		if (pci_common_trace_ppt(rdip)) {
-			prom_printf("PCI-MSI-PPT: intr_ops ENABLE done rdip=%p "
-			    "inum=%u vector=0x%x\n", (void *)rdip, hdlp->ih_inum,
-			    hdlp->ih_vector);
-		}
 
 		DDI_INTR_NEXDBG((CE_CONT, "pci_common_intr_ops: ENABLE "
 		    "vector=0x%x\n", hdlp->ih_vector));
@@ -965,11 +927,9 @@ pci_enable_intr(dev_info_t *pdip, dev_info_t *rdip,
 	struct intrspec	*ispec;
 	int		irq;
 	ihdl_plat_t	*ihdl_plat_datap = (ihdl_plat_t *)hdlp->ih_private;
-	boolean_t	is_tu102;
 
 	DDI_INTR_NEXDBG((CE_CONT, "pci_enable_intr: hdlp %p inum %x\n",
 	    (void *)hdlp, inum));
-	is_tu102 = pci_common_is_tu102(rdip);
 
 	/* Translate the interrupt if needed */
 	ispec = (struct intrspec *)pci_intx_get_ispec(pdip, rdip, (int)inum);
@@ -980,21 +940,11 @@ pci_enable_intr(dev_info_t *pdip, dev_info_t *rdip,
 		ispec->intrspec_pri = hdlp->ih_pri;
 	}
 	ihdl_plat_datap->ip_ispecp = ispec;
-	if (is_tu102) {
-		prom_printf("PCI-MSI-TU102: enable enter dip=%p inum=%u "
-		    "type=0x%x pri=0x%x vec=%u\n", (void *)rdip, inum,
-		    hdlp->ih_type, hdlp->ih_pri, ispec->intrspec_vec);
-	}
 
 	/* translate the interrupt if needed */
 	if ((*psm_intr_ops)(rdip, hdlp, PSM_INTR_OP_XLATE_VECTOR, &irq) ==
 	    PSM_FAILURE)
 		return (DDI_FAILURE);
-	if (is_tu102) {
-		prom_printf("PCI-MSI-TU102: xlate done dip=%p inum=%u "
-		    "irq=0x%x hdl-vector=0x%x\n", (void *)rdip, inum, irq,
-		    hdlp->ih_vector);
-	}
 	DDI_INTR_NEXDBG((CE_CONT, "pci_enable_intr: priority=%x irq=%x\n",
 	    hdlp->ih_pri, irq));
 
@@ -1003,11 +953,6 @@ pci_enable_intr(dev_info_t *pdip, dev_info_t *rdip,
 	    DEVI(rdip)->devi_name, irq, hdlp->ih_cb_arg1,
 	    hdlp->ih_cb_arg2, &ihdl_plat_datap->ip_ticks, rdip))
 		return (DDI_FAILURE);
-	if (is_tu102) {
-		prom_printf("PCI-MSI-TU102: add_avintr done dip=%p inum=%u "
-		    "irq=0x%x pri=0x%x\n", (void *)rdip, inum, irq,
-		    hdlp->ih_pri);
-	}
 
 	hdlp->ih_vector = irq;
 

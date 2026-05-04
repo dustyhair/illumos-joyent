@@ -45,7 +45,6 @@
 #include <sys/sunddi.h>
 #include <sys/ddi_impldefs.h>
 #include <sys/pci.h>
-#include <sys/promif.h>
 #include <sys/x86_archext.h>
 #include <sys/cpc_impl.h>
 #include <sys/uadmin.h>
@@ -78,18 +77,6 @@ static void apix_remove_av(apix_vector_t *, struct autovec *);
 static void apix_clear_dev_map(dev_info_t *, int, int);
 static boolean_t apix_is_cpu_enabled(processorid_t);
 static void apix_wait_till_seen(processorid_t, int);
-static boolean_t apix_is_tu102_handle(ddi_acc_handle_t);
-
-static boolean_t
-apix_is_tu102_handle(ddi_acc_handle_t handle)
-{
-	if (handle == NULL)
-		return (B_FALSE);
-
-	return (pci_config_get16(handle, PCI_CONF_VENID) == 0x10de &&
-	    pci_config_get16(handle, PCI_CONF_DEVID) == 0x1e07);
-}
-
 #define	GET_INTR_INUM(ihdlp)		\
 	(((ihdlp) != NULL) ? ((ddi_intr_handle_impl_t *)(ihdlp))->ih_inum : 0)
 
@@ -314,7 +301,6 @@ apix_pci_msi_enable_vector(apix_vector_t *vecp, dev_info_t *dip, int type,
     int inum, int count, uchar_t vector, int target_apic_id)
 {
 	uint64_t		msi_addr, msi_data;
-	uint64_t		orig_addr, orig_data;
 	ushort_t		msi_ctrl;
 	int			i, cap_ptr = i_ddi_get_msi_msix_cap_ptr(dip);
 	ddi_acc_handle_t	handle = i_ddi_get_pci_config_handle(dip);
@@ -329,8 +315,6 @@ apix_pci_msi_enable_vector(apix_vector_t *vecp, dev_info_t *dip, int type,
 
 	msi_regs.mr_data = vector;
 	msi_regs.mr_addr = target_apic_id;
-	orig_data = msi_regs.mr_data;
-	orig_addr = msi_regs.mr_addr;
 
 	for (i = 0; i < count; i++)
 		intrmap_tbl[i] = xv_intrmap_private(vecp->v_cpuid, vector + i);
@@ -343,14 +327,6 @@ apix_pci_msi_enable_vector(apix_vector_t *vecp, dev_info_t *dip, int type,
 	    (void *)&msi_regs, type, count);
 	apic_vt_ops->apic_intrmap_record_msi(vecp->v_intrmap_private,
 	    &msi_regs);
-	if (apix_is_tu102_handle(handle)) {
-		prom_printf("APIC-MSI-TU102: apix map dip=%p inum=%d count=%d "
-		    "vector=0x%x apicid=0x%x orig_addr=0x%" PRIx64
-		    " orig_data=0x%" PRIx64 " msi_addr=0x%" PRIx64
-		    " msi_data=0x%" PRIx64 "\n", (void *)dip, inum, count,
-		    vector, target_apic_id, orig_addr, orig_data,
-		    (uint64_t)msi_regs.mr_addr, (uint64_t)msi_regs.mr_data);
-	}
 
 	/* MSI Address */
 	msi_addr = msi_regs.mr_addr;

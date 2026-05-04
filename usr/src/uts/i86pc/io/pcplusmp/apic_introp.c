@@ -41,7 +41,6 @@
 #include <sys/pci.h>
 #include <sys/pci_intr_lib.h>
 #include <sys/apic_common.h>
-#include <sys/promif.h>
 
 extern struct av_head autovect[];
 
@@ -49,17 +48,6 @@ extern struct av_head autovect[];
  *	Local Function Prototypes
  */
 apic_irq_t	*apic_find_irq(dev_info_t *, struct intrspec *, int);
-static boolean_t apic_is_tu102_handle(ddi_acc_handle_t);
-
-static boolean_t
-apic_is_tu102_handle(ddi_acc_handle_t handle)
-{
-	if (handle == NULL)
-		return (B_FALSE);
-
-	return (pci_config_get16(handle, PCI_CONF_VENID) == 0x10de &&
-	    pci_config_get16(handle, PCI_CONF_DEVID) == 0x1e07);
-}
 
 /*
  * apic_pci_msi_enable_vector:
@@ -72,7 +60,6 @@ apic_pci_msi_enable_vector(apic_irq_t *irq_ptr, int type, int inum, int vector,
     int count, int target_apic_id)
 {
 	uint64_t		msi_addr, msi_data;
-	uint64_t		orig_addr, orig_data;
 	ushort_t		msi_ctrl;
 	dev_info_t		*dip = irq_ptr->airq_dip;
 	int			cap_ptr = i_ddi_get_msi_msix_cap_ptr(dip);
@@ -89,8 +76,6 @@ apic_pci_msi_enable_vector(apic_irq_t *irq_ptr, int type, int inum, int vector,
 
 	msi_regs.mr_data = vector;
 	msi_regs.mr_addr = target_apic_id;
-	orig_data = msi_regs.mr_data;
-	orig_addr = msi_regs.mr_addr;
 
 	for (i = 0; i < count; i++) {
 		irqno = apic_vector_to_irq[vector + i];
@@ -108,14 +93,6 @@ apic_pci_msi_enable_vector(apic_irq_t *irq_ptr, int type, int inum, int vector,
 	    (void *)&msi_regs, type, count);
 	apic_vt_ops->apic_intrmap_record_msi(irq_ptr->airq_intrmap_private,
 	    &msi_regs);
-	if (apic_is_tu102_handle(handle)) {
-		prom_printf("APIC-MSI-TU102: apic map dip=%p inum=%d count=%d "
-		    "vector=0x%x apicid=0x%x orig_addr=0x%" PRIx64
-		    " orig_data=0x%" PRIx64 " msi_addr=0x%" PRIx64
-		    " msi_data=0x%" PRIx64 "\n", (void *)dip, inum, count,
-		    vector, target_apic_id, orig_addr, orig_data,
-		    (uint64_t)msi_regs.mr_addr, (uint64_t)msi_regs.mr_data);
-	}
 
 	/* MSI Address */
 	msi_addr = msi_regs.mr_addr;
