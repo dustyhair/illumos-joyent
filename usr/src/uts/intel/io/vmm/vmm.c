@@ -56,7 +56,6 @@
 #include <sys/pcpu.h>
 #include <sys/mutex.h>
 #include <sys/proc.h>
-#include <sys/promif.h>
 #include <sys/rwlock.h>
 #include <sys/sched.h>
 #include <sys/systm.h>
@@ -94,10 +93,6 @@
 #include "io/iommu.h"
 
 struct vlapic;
-
-static uint32_t vmm_tu102_vcpu1_state_count;
-static uint32_t vmm_tu102_vcpu1_notify_count;
-static uint32_t vmm_tu102_vcpu1_runstate_count;
 
 /* Flags for vtc_status */
 #define	VTCS_FPU_RESTORED	1 /* guest FPU restored, host FPU saved */
@@ -1498,12 +1493,10 @@ vcpu_set_state_locked(struct vm *vm, int vcpuid, enum vcpu_state newstate,
     bool from_idle)
 {
 	struct vcpu *vcpu;
-	enum vcpu_state oldstate;
 	int error;
 
 	vcpu = &vm->vcpu[vcpuid];
 	vcpu_assert_locked(vcpu);
-	oldstate = vcpu->state;
 
 	/*
 	 * State transitions from the vmmdev_ioctl() must always begin from
@@ -1558,18 +1551,6 @@ vcpu_set_state_locked(struct vm *vm, int vcpuid, enum vcpu_state newstate,
 		vcpu->hostcpu = curcpu;
 	else
 		vcpu->hostcpu = NOCPU;
-
-	if (vcpuid == 1) {
-		uint32_t state_count =
-		    atomic_inc_32_nv(&vmm_tu102_vcpu1_state_count);
-
-		if (state_count <= 32 || powerof2(state_count)) {
-			prom_printf("VCPU1-STATE-TU102: old=%d new=%d "
-			    "hostcpu=%d from_idle=%d reqidle=%d count=%u\n",
-			    oldstate, newstate, vcpu->hostcpu, from_idle,
-			    vcpu->reqidle, state_count);
-		}
-	}
 
 	if (newstate == VCPU_IDLE) {
 		cv_broadcast(&vcpu->state_cv);
@@ -1975,18 +1956,6 @@ vm_handle_run_state(struct vm *vm, int vcpuid)
 		 * wait for anything prior to re-entry.
 		 */
 		if ((vcpu->run_state & VRS_RUN) != 0) {
-			if (vcpuid == 1) {
-				uint32_t runstate_count =
-				    atomic_inc_32_nv(&vmm_tu102_vcpu1_runstate_count);
-
-				if (runstate_count <= 32 || powerof2(runstate_count)) {
-					prom_printf("VCPU1-RUNSTATE-TU102: ready "
-					    "state=%d run_state=0x%x hostcpu=%d "
-					    "count=%u\n", vcpu->state,
-					    vcpu->run_state, vcpu->hostcpu,
-					    runstate_count);
-				}
-			}
 			handled = true;
 			break;
 		}
@@ -2000,33 +1969,11 @@ vm_handle_run_state(struct vm *vm, int vcpuid)
 			break;
 		}
 
-		if (vcpuid == 1) {
-			uint32_t runstate_count =
-			    atomic_inc_32_nv(&vmm_tu102_vcpu1_runstate_count);
-
-			if (runstate_count <= 32 || powerof2(runstate_count)) {
-				prom_printf("VCPU1-RUNSTATE-TU102: sleep "
-				    "state=%d run_state=0x%x hostcpu=%d count=%u\n",
-				    vcpu->state, vcpu->run_state, vcpu->hostcpu,
-				    runstate_count);
-			}
-		}
 		vcpu_ustate_change(vm, vcpuid, VU_IDLE);
 		vcpu_require_state_locked(vm, vcpuid, VCPU_SLEEPING);
 		(void) cv_wait_sig(&vcpu->vcpu_cv, &vcpu->lock);
 		vcpu_require_state_locked(vm, vcpuid, VCPU_FROZEN);
 		vcpu_ustate_change(vm, vcpuid, VU_EMU_KERN);
-		if (vcpuid == 1) {
-			uint32_t runstate_count =
-			    atomic_inc_32_nv(&vmm_tu102_vcpu1_runstate_count);
-
-			if (runstate_count <= 32 || powerof2(runstate_count)) {
-				prom_printf("VCPU1-RUNSTATE-TU102: wake "
-				    "state=%d run_state=0x%x hostcpu=%d count=%u\n",
-				    vcpu->state, vcpu->run_state, vcpu->hostcpu,
-				    runstate_count);
-			}
-		}
 	}
 	vcpu_unlock(vcpu);
 
@@ -3717,17 +3664,6 @@ vcpu_notify_event_type(struct vm *vm, int vcpuid, vcpu_notify_t ntype)
 	}
 
 	vcpu_lock(vcpu);
-	if (vcpuid == 1) {
-		uint32_t notify_count =
-		    atomic_inc_32_nv(&vmm_tu102_vcpu1_notify_count);
-
-		if (notify_count <= 32 || powerof2(notify_count)) {
-			prom_printf("VCPU1-NOTIFY-TU102: type=%d state=%d "
-			    "hostcpu=%d run_state=0x%x reqidle=%d count=%u\n",
-			    ntype, vcpu->state, vcpu->hostcpu, vcpu->run_state,
-			    vcpu->reqidle, notify_count);
-		}
-	}
 	vcpu_notify_event_locked(vcpu, ntype);
 	vcpu_unlock(vcpu);
 }
