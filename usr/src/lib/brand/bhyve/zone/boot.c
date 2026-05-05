@@ -351,11 +351,15 @@ add_ppt(int *argc, char **argv, char *ppt, char *path, char *slotconf,
 		return (-1);
 	}
 
-	if (bus > 0) {
-		if (!acpi && add_arg(argc, argv, "-A") != 0)
-			return (-1);
-		acpi = B_TRUE;
-	}
+	/*
+	 * Passthrough devices rely on the ACPI PCI resource description for
+	 * large 64-bit BAR windows.  Limiting ACPI to non-zero guest buses makes
+	 * bus-0 passthrough guests reassign prefetchable BARs below 4G, which can
+	 * leave bhyve unable to map them.
+	 */
+	if (!acpi && add_arg(argc, argv, "-A") != 0)
+		return (-1);
+	acpi = B_TRUE;
 
 	if (!wired && add_arg(argc, argv, "-S") != 0)
 		return (-1);
