@@ -689,6 +689,23 @@ xhci_hcdi_pipe_reset(usba_pipe_handle_data_t *ph, usb_flags_t usb_flags)
 	 */
 	xhci_endpoint_serialize(xhcip, xep);
 
+	/*
+	 * Pipe reset is about to quiesce the endpoint and flush its
+	 * outstanding transfers.  Cancel the endpoint timeout first so
+	 * the timeout callback cannot race the reset path and complete a
+	 * request wrapper that reset/error handling has already freed.
+	 * Do not use xhci_endpoint_timeout_cancel() here because that is
+	 * the teardown variant and marks the endpoint closed.
+	 */
+	if (xep->xep_timeout != 0) {
+		timeout_id_t tid = xep->xep_timeout;
+
+		xep->xep_timeout = 0;
+		mutex_exit(&xhcip->xhci_lock);
+		(void) untimeout(tid);
+		mutex_enter(&xhcip->xhci_lock);
+	}
+
 	xep->xep_state |= XHCI_ENDPOINT_QUIESCE;
 	ret = xhci_endpoint_quiesce(xhcip, xd, xep);
 	if (ret != USB_SUCCESS) {
