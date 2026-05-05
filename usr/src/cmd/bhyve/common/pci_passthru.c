@@ -88,6 +88,7 @@ struct passthru_softc {
 	uint32_t psc_trace_cfgread_count;
 	uint32_t psc_trace_cfgwrite_count;
 	uint32_t psc_trace_map_count;
+	uint32_t psc_msix_error_count;
 
 	cfgread_handler psc_pcir_rhandler[PCI_REGMAX + 1];
 	cfgwrite_handler psc_pcir_whandler[PCI_REGMAX + 1];
@@ -116,6 +117,13 @@ msi_caplen(int msgctrl)
 #endif
 
 	return (len);
+}
+
+static bool
+passthru_cap_ptr_valid(int ptr)
+{
+	return (ptr >= PCIR_MAXLAT + 1 && ptr <= PCI_REGMAX - 1 &&
+	    (ptr & 0x3) == 0);
 }
 
 static uint32_t
@@ -271,6 +279,10 @@ cfginitmsi(struct passthru_softc *sc)
 	struct pci_devinst *pi = sc->psc_pi;
 	struct msixcap msixcap;
 	char *msixcap_ptr;
+	bool visited[PCI_REGMAX + 1];
+
+	bzero(&msixcap, sizeof (msixcap));
+	bzero(visited, sizeof (visited));
 
 	/*
 	 * Parse the capabilities and cache the location of the MSI
@@ -279,7 +291,9 @@ cfginitmsi(struct passthru_softc *sc)
 	sts = passthru_read_config(sc, PCIR_STATUS, 2);
 	if (sts & PCIM_STATUS_CAPPRESENT) {
 		ptr = passthru_read_config(sc, PCIR_CAP_PTR, 1);
-		while (ptr != 0 && ptr != 0xff) {
+		while (ptr != 0 && ptr != 0xff && passthru_cap_ptr_valid(ptr) &&
+		    !visited[ptr]) {
+			visited[ptr] = true;
 			cap = passthru_read_config(sc, ptr + PCICAP_ID, 1);
 			if (cap == PCIY_MSI) {
 				/*
@@ -318,6 +332,10 @@ cfginitmsi(struct passthru_softc *sc)
 				}
 			}
 			ptr = passthru_read_config(sc, ptr + PCICAP_NEXTPTR, 1);
+		}
+		if (ptr != 0 && ptr != 0xff) {
+			warnx("passthru device %d stopped invalid PCI capability "
+			    "walk at 0x%x", sc->pptfd, ptr);
 		}
 	}
 
@@ -504,9 +522,16 @@ msix_table_write(struct vmctx *ctx, struct passthru_softc *sc,
 		/* If the entry is masked, don't set it up */
 		if ((entry->vector_control & PCIM_MSIX_VCTRL_MASK) == 0 ||
 		    (vector_control & PCIM_MSIX_VCTRL_MASK) == 0) {
-			(void) vm_setup_pptdev_msix(ctx, sc->pptfd,
+			const int error = vm_setup_pptdev_msix(ctx, sc->pptfd,
 			    index, entry->addr, entry->msg_data,
 			    entry->vector_control);
+			if (error != 0 && sc->psc_msix_error_count++ < 8) {
+				warnx("passthru device %d MSI-X table setup "
+				    "failed idx=%d addr=0x%llx msg=0x%x "
+				    "ctrl=0x%x err=%d", sc->pptfd, index,
+				    (u_longlong_t)entry->addr, entry->msg_data,
+				    entry->vector_control, error);
+			}
 		}
 	}
 }
@@ -570,6 +595,55 @@ init_msix_table(struct vmctx *ctx __unused, struct passthru_softc *sc)
 		    pi->pi_msix.mapped_size - (table_offset + table_size),
 		    PROT_NONE) != 0)
 			warn("Failed to unmap MSI-X table BAR region");
+
+	return (0);
+}
+
+static int
+passthru_validate_msix(struct passthru_softc *sc)
+{
+	struct pci_devinst *pi = sc->psc_pi;
+	uint64_t table_end, pba_end;
+	int bar;
+
+	bar = pci_msix_table_bar(pi);
+	if (bar < 0)
+		return (0);
+
+	if (bar > PCI_BARMAX || sc->psc_bar[bar].size == 0) {
+		warnx("passthru device %d invalid MSI-X table BAR %d",
+		    sc->pptfd, bar);
+		return (-1);
+	}
+
+	table_end = (uint64_t)pi->pi_msix.table_offset +
+	    (uint64_t)pi->pi_msix.table_count * MSIX_TABLE_ENTRY_SIZE;
+	if (table_end > sc->psc_bar[bar].size) {
+		warnx("passthru device %d invalid MSI-X table range "
+		    "bar=%d off=0x%x count=%d barsz=0x%llx", sc->pptfd, bar,
+		    pi->pi_msix.table_offset, pi->pi_msix.table_count,
+		    (u_longlong_t)sc->psc_bar[bar].size);
+		return (-1);
+	}
+
+	bar = pci_msix_pba_bar(pi);
+	if (bar < 0)
+		return (0);
+
+	if (bar > PCI_BARMAX || sc->psc_bar[bar].size == 0) {
+		warnx("passthru device %d invalid MSI-X PBA BAR %d",
+		    sc->pptfd, bar);
+		return (-1);
+	}
+
+	pba_end = (uint64_t)pi->pi_msix.pba_offset + pi->pi_msix.pba_size;
+	if (pba_end > sc->psc_bar[bar].size) {
+		warnx("passthru device %d invalid MSI-X PBA range "
+		    "bar=%d off=0x%x size=0x%x barsz=0x%llx", sc->pptfd,
+		    bar, pi->pi_msix.pba_offset, pi->pi_msix.pba_size,
+		    (u_longlong_t)sc->psc_bar[bar].size);
+		return (-1);
+	}
 
 	return (0);
 }
@@ -673,6 +747,13 @@ cfginit(struct vmctx *ctx, struct passthru_softc *sc)
 	}
 
 	if (pci_msix_table_bar(pi) >= 0) {
+		error = passthru_validate_msix(sc);
+		if (error != 0) {
+			warnx("failed to validate MSI-X table for PCI %d",
+			    sc->pptfd);
+			goto done;
+		}
+
 		error = init_msix_table(ctx, sc);
 		if (error != 0) {
 			warnx("failed to initialize MSI-X table for PCI %d",
