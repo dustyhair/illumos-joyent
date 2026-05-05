@@ -41,8 +41,10 @@
 #include <sys/endian.h>
 #include <sys/errno.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 
 #include <err.h>
+#include <fcntl.h>
 #include <paths.h>
 #include <stdarg.h>
 #include <stddef.h>
@@ -98,6 +100,44 @@ struct basl_fio {
 
 #define EFFLUSH(x) \
 	if (fflush(x) != 0) goto err_exit
+
+static int
+basl_run_iasl(const char *out, const char *in, int verbose)
+{
+	pid_t pid;
+	int status;
+
+	pid = fork();
+	if (pid < 0)
+		return (errno);
+
+	if (pid == 0) {
+		if (!verbose) {
+			int fd = open(_PATH_DEVNULL, O_WRONLY);
+
+			if (fd >= 0) {
+				(void) dup2(fd, STDOUT_FILENO);
+				(void) close(fd);
+			}
+		}
+
+		(void) execl(BHYVE_ASL_COMPILER, BHYVE_ASL_COMPILER, "-p",
+		    out, in, (char *)NULL);
+		_exit(127);
+	}
+
+	for (;;) {
+		if (waitpid(pid, &status, 0) == pid)
+			break;
+		if (errno != EINTR)
+			return (errno);
+	}
+
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+		return (EINVAL);
+
+	return (0);
+}
 
 /*
  * A list for additional ACPI devices like a TPM.
@@ -346,8 +386,6 @@ static int
 basl_compile(struct vmctx *ctx, int (*fwrite_section)(FILE *))
 {
 	struct basl_fio io[2];
-	static char iaslbuf[3*MAXPATHLEN + 10];
-	const char *fmt;
 	int err;
 
 	err = basl_start(&io[0], &io[1]);
@@ -356,30 +394,19 @@ basl_compile(struct vmctx *ctx, int (*fwrite_section)(FILE *))
 
 		if (!err) {
 			/*
-			 * iasl sends the results of the compilation to
-			 * stdout. Shut this down by using the shell to
-			 * redirect stdout to /dev/null, unless the user
-			 * has requested verbose output for debugging
-			 * purposes
+			 * The bhyve brand zone does not mount /bin, so avoid
+			 * system(3C) and exec iasl directly.
 			 */
-			fmt = basl_verbose_iasl ?
-			    "%s -p %s %s" :
-			    "/bin/sh -c \"%s -p %s %s\" 1> /dev/null";
-
-			(void) snprintf(iaslbuf, sizeof (iaslbuf), fmt,
-			    BHYVE_ASL_COMPILER, io[1].f_name, io[0].f_name);
-			err = system(iaslbuf);
+			err = basl_run_iasl(io[1].f_name, io[0].f_name,
+			    basl_verbose_iasl);
 			if (err != 0 && !basl_verbose_iasl) {
 				basl_keep_temps = 1;
-				warnx("iasl failed status=%d input=%s output=%s; "
+				warnx("iasl failed error=%d input=%s output=%s; "
 				    "preserving temporary ACPI files and rerunning "
 				    "compiler with visible output", err,
 				    io[0].f_name, io[1].f_name);
-
-				(void) snprintf(iaslbuf, sizeof (iaslbuf),
-				    "%s -p %s %s", BHYVE_ASL_COMPILER,
-				    io[1].f_name, io[0].f_name);
-				(void) system(iaslbuf);
+				(void) basl_run_iasl(io[1].f_name,
+				    io[0].f_name, 1);
 			}
 
 			if (!err) {
