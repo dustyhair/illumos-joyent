@@ -1381,14 +1381,9 @@ passthru_addr_rom(struct pci_devinst *const pi, const int idx,
 		}
 
 	} else {
-		/*
-		 * Some guests probe/copy option ROM contents with vector stores.
-		 * Keep the ROM mapping writable so those stores complete in guest
-		 * context instead of falling into bhyve's limited MMIO emulator.
-		 */
 		if (vm_mmap_memseg(pi->pi_vmctx, addr, VM_PCIROM,
 			pi->pi_romoffset, size,
-			PROT_READ | PROT_WRITE | PROT_EXEC) != 0) {
+			PROT_READ | PROT_EXEC) != 0) {
 			errx(4, "%s: mmap_memseg @ [%016lx - %016lx]  failed",
 			    __func__, addr, addr + size);
 		}
