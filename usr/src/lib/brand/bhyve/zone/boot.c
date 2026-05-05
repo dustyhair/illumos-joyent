@@ -333,6 +333,9 @@ add_ppt(int *argc, char **argv, char *ppt, char *path, char *slotconf,
 	static boolean_t acpi = B_FALSE;
 	uint_t bus = 0, dev = 0, func = 0;
 	char *pcislot;
+	char *rom;
+	char *rom_exec;
+	custr_t *sconfstr = NULL;
 
 	pcislot = get_zcfg_var("device", ppt, "pci_slot");
 
@@ -356,12 +359,44 @@ add_ppt(int *argc, char **argv, char *ppt, char *path, char *slotconf,
 
 	wired = B_TRUE;
 
-	if (snprintf(slotconf, slotconf_len, "%d:%d:%d,passthru,%s",
-	    bus, dev, func, path) >= slotconf_len) {
-		(void) printf("Error: device path '%s' too long\n", path);
+	if (custr_alloc_buf(&sconfstr, slotconf, slotconf_len) == -1) {
 		return (-1);
 	}
 
+	if (custr_append_printf(sconfstr, "%d:%d:%d,passthru,%s",
+	    bus, dev, func, path) == -1) {
+		(void) printf("Error: device path '%s' too long\n", path);
+		custr_free(sconfstr);
+		return (-1);
+	}
+
+	rom = get_zcfg_var("device", ppt, "rom");
+	rom_exec = get_zcfg_var("device", ppt, "rom_exec");
+
+	if (rom != NULL) {
+		if (custr_append_printf(sconfstr, ",rom=%s", rom) == -1) {
+			(void) printf("Error: device ROM path '%s' too long\n",
+			    rom);
+			custr_free(sconfstr);
+			return (-1);
+		}
+
+		if (rom_exec != NULL && strcmp(rom_exec, "true") != 0) {
+			if (custr_append(sconfstr, ",rom-exec=off") == -1) {
+				(void) printf("Error: device ROM options too "
+				    "long\n");
+				custr_free(sconfstr);
+				return (-1);
+			}
+		}
+	} else if (rom_exec != NULL) {
+		(void) printf("Error: device %s has rom-exec without rom\n",
+		    ppt);
+		custr_free(sconfstr);
+		return (-1);
+	}
+
+	custr_free(sconfstr);
 	return (0);
 }
 
@@ -371,7 +406,7 @@ add_devices(int *argc, char **argv)
 	char *devices;
 	char *dev;
 	char *lasts;
-	char slotconf[MAXNAMELEN];
+	char slotconf[MAXPATHLEN];
 
 	if ((devices = get_zcfg_var("device", "resources", NULL)) == NULL) {
 		return (0);
