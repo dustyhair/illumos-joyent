@@ -55,6 +55,10 @@ $(LOGINDEVPERM): $(LOGINDEVPERMSRC)
 	$(RM) $(LOGINDEVPERM)
 	/bin/sh $(LOGINDEVPERMSRC) > $(LOGINDEVPERM)
 
+$(ROOTLOGINDEVPERM): $(LOGINDEVPERM) FRC
+	$(RM) $@
+	$(INS) -s -m $(FILEMODE) -f $(@D) $(LOGINDEVPERM)
+
 $(PROG): $(OBJS)
 	$(LINK.c) $(OBJS) -o $@ $(LDLIBS)
 	$(POST_PROCESS)
@@ -65,5 +69,7 @@ clean:
 	$(RM) $(OBJS)
 
 lint:	lint_SRCS
+
+FRC:
 
 include ../Makefile.targ
