@@ -87,6 +87,7 @@ struct passthru_softc {
 	int msix_limit;
 	bool psc_disable_msi;
 	bool psc_defer_bme;
+	bool psc_block_bme;
 	uint32_t psc_trace_cfgread_count;
 	uint32_t psc_trace_cfgwrite_count;
 	uint32_t psc_trace_map_count;
@@ -1028,9 +1029,15 @@ passthru_init(struct pci_devinst *pi, nvlist_t *nvl)
 	    &sc->msix_limit)) != 0)
 		goto done;
 	sc->psc_disable_msi = !get_config_bool_node_default(nvl, "msi", true);
-	sc->psc_defer_bme =
+	/*
+	 * Diagnostic TU102 xHCI mode: let the guest see COMMAND.BME changes,
+	 * but keep physical DMA disabled so we can split guest config/driver
+	 * failure from device DMA/IOMMU/reset failure.
+	 */
+	sc->psc_block_bme =
 	    passthru_read_config(sc, PCIR_VENDOR, 2) == 0x10de &&
 	    passthru_read_config(sc, PCIR_DEVICE, 2) == 0x1ad6;
+	sc->psc_defer_bme = sc->psc_block_bme;
 	if (sc->psc_defer_bme) {
 		passthru_set_phys_bme(sc, false);
 	}
@@ -1303,6 +1310,7 @@ passthru_cfgwrite_default(struct passthru_softc *sc, struct pci_devinst *pi,
 		pci_emul_cmd_changed(pi, cmd_old);
 		if (sc->psc_defer_bme) {
 			passthru_set_phys_bme(sc,
+			    !sc->psc_block_bme &&
 			    (newval & PCIM_CMD_BUSMASTEREN) != 0);
 		}
 		passthru_trace(sc, "command", "old=0x%x new=0x%x mem=%d io=%d "
