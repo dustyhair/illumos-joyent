@@ -87,9 +87,12 @@
  * and the other segment below the MSI-X table - with a hole in place of
  * the MSI-X table so accesses to it can be trapped and emulated.
  *
- * So, allocate a MMIO segment for each BAR register + 1 additional segment.
+ * Guests can transiently keep using old BAR GPAs across firmware/driver BAR
+ * and command-register churn.  Leave room for stale aliases in addition to
+ * the current BAR layout so those accesses keep taking the direct-mapped
+ * passthrough path instead of falling into generic instruction emulation.
  */
-#define	MAX_MMIOSEGS	((PCIR_MAX_BAR_0 + 1) + 1)
+#define	MAX_MMIOSEGS	16
 
 struct pptintr_arg {
 	struct pptdev	*pptdev;
@@ -104,6 +107,7 @@ struct pptintx_arg {
 
 struct pptseg {
 	vm_paddr_t	gpa;
+	vm_paddr_t	hpa;
 	size_t		len;
 	int		wired;
 };
@@ -1975,6 +1979,7 @@ ppt_map_mmio(struct vm *vm, int pptfd, vm_paddr_t gpa, size_t len,
 {
 	struct pptdev *ppt;
 	int err = 0;
+	uint16_t bdf;
 
 	if ((len & PAGEOFFSET) != 0 || len == 0 || (gpa & PAGEOFFSET) != 0 ||
 	    (hpa & PAGEOFFSET) != 0 || gpa + len < gpa || hpa + len < hpa) {
@@ -1991,6 +1996,7 @@ ppt_map_mmio(struct vm *vm, int pptfd, vm_paddr_t gpa, size_t len,
 		mutex_exit(&pptdev_mtx);
 		return (err);
 	}
+	bdf = pci_get_bdf(ppt->pptd_dip);
 
 	/*
 	 * Ensure that the host-physical range of the requested mapping fits
@@ -1999,14 +2005,27 @@ ppt_map_mmio(struct vm *vm, int pptfd, vm_paddr_t gpa, size_t len,
 	if (!ppt_bar_verify_mmio(ppt, hpa, len)) {
 		cmn_err(CE_NOTE, "ppt: map_mmio verify_fail bdf=0x%x vm=%p "
 		    "pptfd=%d gpa=0x%llx len=0x%llx hpa=0x%llx",
-		    pci_get_bdf(ppt->pptd_dip), (void *)vm, pptfd,
-		    (u_longlong_t)gpa, (u_longlong_t)len, (u_longlong_t)hpa);
+		    bdf, (void *)vm, pptfd, (u_longlong_t)gpa,
+		    (u_longlong_t)len, (u_longlong_t)hpa);
 		err = EINVAL;
 		goto done;
 	}
 
 	for (uint_t i = 0; i < MAX_MMIOSEGS; i++) {
 		struct pptseg *seg = &ppt->mmio[i];
+
+		if (seg->len != 0 && seg->gpa == gpa && seg->len == len &&
+		    seg->hpa == hpa) {
+			if (ppt_diag_enable != 0) {
+				cmn_err(CE_NOTE, "ppt: map_mmio duplicate "
+				    "bdf=0x%x vm=%p pptfd=%d gpa=0x%llx "
+				    "len=0x%llx hpa=0x%llx seg=%u",
+				    bdf, (void *)vm, pptfd,
+				    (u_longlong_t)gpa, (u_longlong_t)len,
+				    (u_longlong_t)hpa, i);
+			}
+			goto done;
+		}
 
 		if (seg->len == 0) {
 			if (ppt_diag_enable != 0) {
@@ -2020,6 +2039,7 @@ ppt_map_mmio(struct vm *vm, int pptfd, vm_paddr_t gpa, size_t len,
 			err = vm_map_mmio(vm, gpa, len, hpa);
 			if (err == 0) {
 				seg->gpa = gpa;
+				seg->hpa = hpa;
 				seg->len = len;
 			}
 			if (ppt_diag_enable != 0 || err != 0) {
@@ -2065,6 +2085,7 @@ ppt_unmap_mmio(struct vm *vm, int pptfd, vm_paddr_t gpa, size_t len)
 			err = vm_unmap_mmio(vm, seg->gpa, seg->len);
 			if (err == 0) {
 				seg->gpa = 0;
+				seg->hpa = 0;
 				seg->len = 0;
 			}
 			goto out;

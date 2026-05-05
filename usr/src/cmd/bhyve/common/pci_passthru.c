@@ -1349,13 +1349,16 @@ passthru_mmio_addr(struct vmctx *ctx, struct pci_devinst *pi, int baridx,
 
 	sc = pi->pi_arg;
 	if (!enabled) {
-		int error = vm_unmap_pptdev_mmio(ctx, sc->pptfd, address,
-		    sc->psc_bar[baridx].size);
+		/*
+		 * Keep passthrough MMIO aliases live across guest BAR/command
+		 * churn.  Some GPU firmware/driver paths can briefly touch a
+		 * previously-programmed BAR GPA after decode has been toggled;
+		 * unmapping it forces that access through generic instruction
+		 * emulation, which cannot handle vector stores such as MOVUPS.
+		 */
 		passthru_trace_map(sc, baridx, enabled, address,
-		    sc->psc_bar[baridx].size, sc->psc_bar[baridx].addr, error,
-		    "mmio");
-		if (error != 0)
-			warnx("pci_passthru: unmap_pptdev_mmio failed");
+		    sc->psc_bar[baridx].size, sc->psc_bar[baridx].addr, 0,
+		    "mmio-keep");
 	} else {
 		int error = vm_map_pptdev_mmio(ctx, sc->pptfd, address,
 		    sc->psc_bar[baridx].size, sc->psc_bar[baridx].addr);
