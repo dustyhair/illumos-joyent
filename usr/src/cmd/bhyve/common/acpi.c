@@ -370,7 +370,19 @@ basl_compile(struct vmctx *ctx, int (*fwrite_section)(FILE *))
 				 fmt,
 				 BHYVE_ASL_COMPILER,
 				 io[1].f_name, io[0].f_name);
-			err = system(iaslbuf);
+				err = system(iaslbuf);
+				if (err != 0 && !basl_verbose_iasl) {
+					basl_keep_temps = 1;
+					warnx("iasl failed status=%d input=%s output=%s; "
+					    "preserving temporary ACPI files and rerunning "
+					    "compiler with visible output", err,
+					    io[0].f_name, io[1].f_name);
+
+					(void) snprintf(iaslbuf, sizeof (iaslbuf),
+					    "%s -p %s %s", BHYVE_ASL_COMPILER,
+					    io[1].f_name, io[0].f_name);
+					(void) system(iaslbuf);
+				}
 
 			if (!err) {
 				/*
@@ -398,9 +410,9 @@ basl_make_templates(void)
 	/*
 	 *
 	 */
-	if ((tmpdir = getenv("BHYVE_TMPDIR")) == NULL || *tmpdir == '\0' ||
-	    (tmpdir = getenv("TMPDIR")) == NULL || *tmpdir == '\0') {
-		tmpdir = _PATH_TMP;
+	if ((tmpdir = getenv("BHYVE_TMPDIR")) == NULL || *tmpdir == '\0') {
+		if ((tmpdir = getenv("TMPDIR")) == NULL || *tmpdir == '\0')
+			tmpdir = _PATH_TMP;
 	}
 
 	len = strlen(tmpdir);
