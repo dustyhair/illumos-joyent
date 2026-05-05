@@ -91,6 +91,7 @@ struct passthru_softc {
 	uint32_t psc_trace_cfgwrite_count;
 	uint32_t psc_trace_map_count;
 	uint32_t psc_msix_error_count;
+	uint32_t psc_bad_bar_emul_count;
 
 	cfgread_handler psc_pcir_rhandler[PCI_REGMAX + 1];
 	cfgwrite_handler psc_pcir_whandler[PCI_REGMAX + 1];
@@ -1379,7 +1380,17 @@ passthru_write(struct pci_devinst *pi, int baridx, uint64_t offset, int size,
 	} else {
 		struct ppt_bar_io pbi;
 
-		assert(pi->pi_bar[baridx].type == PCIBAR_IO);
+		if (pi->pi_bar[baridx].type != PCIBAR_IO) {
+			if (sc->psc_bad_bar_emul_count++ < 8) {
+				warnx("passthru: dropping unexpected emulated "
+				    "BAR write pptfd=%d bar=%d type=%d "
+				    "off=0x%llx size=%d value=0x%llx",
+				    sc->pptfd, baridx, pi->pi_bar[baridx].type,
+				    (u_longlong_t)offset, size,
+				    (u_longlong_t)value);
+			}
+			return;
+		}
 
 		pbi.pbi_bar = baridx;
 		pbi.pbi_width = size;
@@ -1400,7 +1411,16 @@ passthru_read(struct pci_devinst *pi, int baridx, uint64_t offset, int size)
 	} else {
 		struct ppt_bar_io pbi;
 
-		assert(pi->pi_bar[baridx].type == PCIBAR_IO);
+		if (pi->pi_bar[baridx].type != PCIBAR_IO) {
+			if (sc->psc_bad_bar_emul_count++ < 8) {
+				warnx("passthru: returning all-ones for "
+				    "unexpected emulated BAR read pptfd=%d "
+				    "bar=%d type=%d off=0x%llx size=%d",
+				    sc->pptfd, baridx, pi->pi_bar[baridx].type,
+				    (u_longlong_t)offset, size);
+			}
+			return (UINT64_MAX);
+		}
 
 		pbi.pbi_bar = baridx;
 		pbi.pbi_width = size;
@@ -1507,7 +1527,12 @@ passthru_mmio_addr(struct vmctx *ctx, struct pci_devinst *pi, int baridx,
 		    sc->psc_bar[baridx].size, sc->psc_bar[baridx].addr, error,
 		    "mmio");
 		if (error != 0)
-			warnx("pci_passthru: map_pptdev_mmio failed");
+			warnx("pci_passthru: map_pptdev_mmio failed "
+			    "pptfd=%d bar=%d gpa=0x%llx hpa=0x%llx "
+			    "size=0x%llx err=%d", sc->pptfd, baridx,
+			    (u_longlong_t)address,
+			    (u_longlong_t)sc->psc_bar[baridx].addr,
+			    (u_longlong_t)sc->psc_bar[baridx].size, error);
 	}
 }
 
