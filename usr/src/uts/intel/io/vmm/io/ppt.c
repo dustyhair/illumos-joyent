@@ -182,6 +182,11 @@ int			ppt_diag_enable = 0;
 #define	DEVICE_PRESENT_TIMEOUT_US	5000000
 #define	TU102_XHCI_BAR0_POLL_US	10000
 #define	TU102_XHCI_BAR0_TIMEOUT_US	100000
+#define	TU102_XHCI_RESET_POLL_US	10000
+#define	TU102_XHCI_RESET_TIMEOUT_US	1000000
+#define	XHCI_USBCMD_RS			0x00000001
+#define	XHCI_USBCMD_HCRST		0x00000002
+#define	XHCI_USBSTS_HCH			0x00000001
 
 struct ppt_reset_state {
 	uint16_t	prs_bdf;
@@ -670,7 +675,7 @@ ppt_bar_verify_mmio(struct pptdev *ppt, uint64_t base, uint64_t size)
 }
 
 static boolean_t
-ppt_toggle_bar(struct pptdev *ppt, boolean_t enable)
+ppt_toggle_bar_ex(struct pptdev *ppt, boolean_t enable, boolean_t busmaster)
 {
 	/*
 	 * Enable/disable bus mastering and BAR decoding based on the BAR
@@ -685,8 +690,11 @@ ppt_toggle_bar(struct pptdev *ppt, boolean_t enable)
 	cmd = pci_config_get16(hdl, PCI_CONF_COMM);
 
 	if (enable) {
-		cmd |= PCI_COMM_ME;
-
+		if (busmaster) {
+			cmd |= PCI_COMM_ME;
+		} else {
+			cmd &= ~PCI_COMM_ME;
+		}
 		for (uint_t i = 0; i < PCI_BASE_NUM; i++) {
 			const struct pptbar *bar = &ppt->pptd_bars[i];
 
@@ -708,6 +716,12 @@ ppt_toggle_bar(struct pptdev *ppt, boolean_t enable)
 	pci_config_teardown(&hdl);
 
 	return (B_TRUE);
+}
+
+static boolean_t
+ppt_toggle_bar(struct pptdev *ppt, boolean_t enable)
+{
+	return (ppt_toggle_bar_ex(ppt, enable, B_TRUE));
 }
 
 static int
@@ -1343,8 +1357,51 @@ ppt_tu102_xhci_after_decode(struct pptdev *ppt, const char *phase)
 	usbcmd = PCI_EINVAL32;
 	usbsts = PCI_EINVAL32;
 	if (caplen >= 0x20 && caplen + 0x8 <= bar->size) {
-		usbcmd = ddi_get32(hdl, (void *)(ptr + caplen));
-		usbsts = ddi_get32(hdl, (void *)(ptr + caplen + 0x4));
+		caddr_t opregs = ptr + caplen;
+
+		usbcmd = ddi_get32(hdl, (void *)opregs);
+		usbsts = ddi_get32(hdl, (void *)(opregs + 0x4));
+
+		if (strcmp(phase, "assign-after-toggle") == 0 &&
+		    cap0 != PCI_EINVAL32) {
+			hrtime_t reset_start;
+
+			/*
+			 * PM reset can leave stale operational state alive.
+			 * Stop/reset xHCI before VM start so it cannot DMA
+			 * from old rings before the guest driver owns it.
+			 */
+			if ((usbcmd & XHCI_USBCMD_RS) != 0) {
+				ddi_put32(hdl, (void *)opregs,
+				    usbcmd & ~XHCI_USBCMD_RS);
+				reset_start = gethrtime();
+				do {
+					usbsts = ddi_get32(hdl,
+					    (void *)(opregs + 0x4));
+					if ((usbsts & XHCI_USBSTS_HCH) != 0)
+						break;
+					delay(drv_usectohz(
+					    TU102_XHCI_RESET_POLL_US));
+				} while ((gethrtime() - reset_start) <
+				    (hrtime_t)USEC2NSEC(
+				    TU102_XHCI_RESET_TIMEOUT_US));
+			}
+
+			usbcmd = ddi_get32(hdl, (void *)opregs);
+			ddi_put32(hdl, (void *)opregs,
+			    usbcmd | XHCI_USBCMD_HCRST);
+			reset_start = gethrtime();
+			do {
+				usbcmd = ddi_get32(hdl, (void *)opregs);
+				if ((usbcmd & XHCI_USBCMD_HCRST) == 0)
+					break;
+				delay(drv_usectohz(TU102_XHCI_RESET_POLL_US));
+			} while ((gethrtime() - reset_start) <
+			    (hrtime_t)USEC2NSEC(TU102_XHCI_RESET_TIMEOUT_US));
+
+			usbcmd = ddi_get32(hdl, (void *)opregs);
+			usbsts = ddi_get32(hdl, (void *)(opregs + 0x4));
+		}
 	}
 
 	if (cap0 == PCI_EINVAL32) {
@@ -1857,7 +1914,7 @@ ppt_assign_device(struct vm *vm, int pptfd)
 		goto done;
 	}
 
-	ppt_toggle_bar(ppt, B_TRUE);
+	ppt_toggle_bar_ex(ppt, B_TRUE, !ppt_tu102_xhci_dev(ppt));
 	ppt_tu102_xhci_after_decode(ppt, "assign-after-toggle");
 
 	ppt->vm = vm;

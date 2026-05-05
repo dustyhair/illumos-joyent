@@ -86,6 +86,7 @@ struct passthru_softc {
 	int msi_limit;
 	int msix_limit;
 	bool psc_disable_msi;
+	bool psc_defer_bme;
 	uint32_t psc_trace_cfgread_count;
 	uint32_t psc_trace_cfgwrite_count;
 	uint32_t psc_trace_map_count;
@@ -152,6 +153,20 @@ passthru_write_config(const struct passthru_softc *sc, long reg, int width,
 	pi.pci_data = data;
 
 	(void) ioctl(sc->pptfd, PPT_CFG_WRITE, &pi);
+}
+
+static void
+passthru_set_phys_bme(const struct passthru_softc *sc, bool enabled)
+{
+	uint16_t cmd;
+
+	cmd = passthru_read_config(sc, PCIR_COMMAND, 2);
+	if (enabled) {
+		cmd |= PCIM_CMD_BUSMASTEREN;
+	} else {
+		cmd &= ~PCIM_CMD_BUSMASTEREN;
+	}
+	passthru_write_config(sc, PCIR_COMMAND, 2, cmd);
 }
 
 static int
@@ -1013,6 +1028,12 @@ passthru_init(struct pci_devinst *pi, nvlist_t *nvl)
 	    &sc->msix_limit)) != 0)
 		goto done;
 	sc->psc_disable_msi = !get_config_bool_node_default(nvl, "msi", true);
+	sc->psc_defer_bme =
+	    passthru_read_config(sc, PCIR_VENDOR, 2) == 0x10de &&
+	    passthru_read_config(sc, PCIR_DEVICE, 2) == 0x1ad6;
+	if (sc->psc_defer_bme) {
+		passthru_set_phys_bme(sc, false);
+	}
 
 #ifndef	__FreeBSD__
 	/*
@@ -1280,6 +1301,10 @@ passthru_cfgwrite_default(struct passthru_softc *sc, struct pci_devinst *pi,
 		cmd_old = pci_get_cfgdata16(pi, PCIR_COMMAND);
 		pci_set_cfgdata16(pi, PCIR_COMMAND, newval);
 		pci_emul_cmd_changed(pi, cmd_old);
+		if (sc->psc_defer_bme) {
+			passthru_set_phys_bme(sc,
+			    (newval & PCIM_CMD_BUSMASTEREN) != 0);
+		}
 		passthru_trace(sc, "command", "old=0x%x new=0x%x mem=%d io=%d "
 		    "busmaster=%d msi=%d msix=%d", cmd_old, newval,
 		    (newval & PCIM_CMD_MEMEN) != 0,
