@@ -470,6 +470,7 @@ add_nets(int *argc, char **argv)
 	for (net = strtok_r(nets, " ", &lasts); net != NULL;
 	    net = strtok_r(NULL, " ", &lasts)) {
 		int pcifn;
+		char *model;
 
 		/* zoneadmd is not careful about a trailing delimiter. */
 		if (net[0] == '\0') {
@@ -491,6 +492,16 @@ add_nets(int *argc, char **argv)
 			nextpcifn++;
 		}
 
+		model = get_zcfg_var("net", net, "model");
+		if (model == NULL || strcmp(model, "virtio") == 0 ||
+		    strcmp(model, "virtio-net-viona") == 0) {
+			model = "virtio-net-viona";
+		} else if (strcmp(model, "e1000") != 0) {
+			(void) printf("Error: net %s bad model %s\n", net,
+			    model);
+			return (-1);
+		}
+
 		/*
 		 * if you look in bhyve(8) you will see that
 		 * one can append "[,network-backend-options]"
@@ -500,7 +511,7 @@ add_nets(int *argc, char **argv)
 		 * All other network backend options are by default true.
 		 */
 		if (snprintf(slotconf, sizeof (slotconf),
-		    "%d:%d,virtio-net-viona,%s%s", PCI_SLOT_NICS, pcifn, net,
+		    "%d:%d,%s,%s%s", PCI_SLOT_NICS, pcifn, model, net,
 		    is_env_true("net", net, "allow_mac_spoofing") ?
 		    ",promiscphys=true" : "") >= sizeof (slotconf)) {
 			(void) printf("Error: net '%s' too long\n", net);
