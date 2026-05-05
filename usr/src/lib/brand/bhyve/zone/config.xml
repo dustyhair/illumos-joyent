@@ -62,5 +62,6 @@
 	<privilege set="prohibited" name="sys_ppp_config" ip-type="shared" />
 
 	<privilege set="required" name="proc_exec" />
+	<privilege set="required" name="proc_fork" />
 	<privilege set="required" name="sys_mount" />
 </brand>
