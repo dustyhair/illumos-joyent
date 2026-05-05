@@ -88,6 +88,7 @@ struct passthru_softc {
 	bool psc_disable_msi;
 	bool psc_defer_bme;
 	bool psc_block_bme;
+	bool psc_hide_caps;
 	uint32_t psc_trace_cfgread_count;
 	uint32_t psc_trace_cfgwrite_count;
 	uint32_t psc_trace_map_count;
@@ -168,6 +169,28 @@ passthru_set_phys_bme(const struct passthru_softc *sc, bool enabled)
 		cmd &= ~PCIM_CMD_BUSMASTEREN;
 	}
 	passthru_write_config(sc, PCIR_COMMAND, 2, cmd);
+}
+
+static void
+passthru_mask_xhci_caps(const struct passthru_softc *sc, int coff, int bytes,
+    uint32_t *rv)
+{
+	if (!sc->psc_hide_caps)
+		return;
+
+	for (int i = 0; i < bytes; i++) {
+		const int off = coff + i;
+		uint8_t val = (*rv >> (i * NBBY)) & 0xff;
+
+		if (off == PCIR_CAP_PTR || off >= 0x100) {
+			val = 0;
+		} else if (off == PCIR_STATUS) {
+			val &= ~PCIM_STATUS_CAPPRESENT;
+		}
+
+		*rv &= ~(0xffu << (i * NBBY));
+		*rv |= (uint32_t)val << (i * NBBY);
+	}
 }
 
 static int
@@ -1038,6 +1061,7 @@ passthru_init(struct pci_devinst *pi, nvlist_t *nvl)
 	    passthru_read_config(sc, PCIR_VENDOR, 2) == 0x10de &&
 	    passthru_read_config(sc, PCIR_DEVICE, 2) == 0x1ad6;
 	sc->psc_defer_bme = sc->psc_block_bme;
+	sc->psc_hide_caps = sc->psc_block_bme;
 	if (sc->psc_defer_bme) {
 		passthru_set_phys_bme(sc, false);
 	}
@@ -1200,12 +1224,14 @@ passthru_cfgread_default(struct passthru_softc *sc,
 			return (PE_CFGRW_DEFAULT);
 		*rv = passthru_read_config(sc, PCIR_STATUS, 2) << 16 |
 		    pci_get_cfgdata16(pi, PCIR_COMMAND);
+		passthru_mask_xhci_caps(sc, coff, bytes, rv);
 		passthru_trace_cfgread(sc, coff, bytes, *rv, "command-emul");
 		return (PE_CFGRW_DROP);
 	}
 
 	/* Everything else just read from the device's config space */
 	*rv = passthru_read_config(sc, coff, bytes);
+	passthru_mask_xhci_caps(sc, coff, bytes, rv);
 	passthru_trace_cfgread(sc, coff, bytes, *rv, "device");
 
 	return (PE_CFGRW_DROP);
