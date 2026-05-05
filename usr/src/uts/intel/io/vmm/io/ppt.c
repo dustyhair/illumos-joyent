@@ -1980,6 +1980,7 @@ ppt_map_mmio(struct vm *vm, int pptfd, vm_paddr_t gpa, size_t len,
 	struct pptdev *ppt;
 	int err = 0;
 	uint16_t bdf;
+	vm_paddr_t end = gpa + len;
 
 	if ((len & PAGEOFFSET) != 0 || len == 0 || (gpa & PAGEOFFSET) != 0 ||
 	    (hpa & PAGEOFFSET) != 0 || gpa + len < gpa || hpa + len < hpa) {
@@ -2026,15 +2027,57 @@ ppt_map_mmio(struct vm *vm, int pptfd, vm_paddr_t gpa, size_t len,
 			}
 			goto done;
 		}
+	}
+
+	for (uint_t i = 0; i < MAX_MMIOSEGS; i++) {
+		struct pptseg *seg = &ppt->mmio[i];
+		vm_paddr_t seg_end;
+
+		if (seg->len == 0)
+			continue;
+
+		seg_end = seg->gpa + seg->len;
+		if (seg->gpa >= end || gpa >= seg_end)
+			continue;
+
+		if (ppt_diag_enable != 0) {
+			cmn_err(CE_NOTE, "ppt: map_mmio replace_overlap "
+			    "bdf=0x%x vm=%p pptfd=%d old_gpa=0x%llx "
+			    "old_len=0x%llx old_hpa=0x%llx new_gpa=0x%llx "
+			    "new_len=0x%llx new_hpa=0x%llx seg=%u",
+			    bdf, (void *)vm, pptfd, (u_longlong_t)seg->gpa,
+			    (u_longlong_t)seg->len, (u_longlong_t)seg->hpa,
+			    (u_longlong_t)gpa, (u_longlong_t)len,
+			    (u_longlong_t)hpa, i);
+		}
+
+		err = vm_unmap_mmio(vm, seg->gpa, seg->len);
+		if (err != 0) {
+			cmn_err(CE_WARN, "ppt: map_mmio replace_unmap_fail "
+			    "bdf=0x%x vm=%p pptfd=%d old_gpa=0x%llx "
+			    "old_len=0x%llx old_hpa=0x%llx err=%d",
+			    bdf, (void *)vm, pptfd, (u_longlong_t)seg->gpa,
+			    (u_longlong_t)seg->len, (u_longlong_t)seg->hpa,
+			    err);
+			goto done;
+		}
+
+		seg->gpa = 0;
+		seg->hpa = 0;
+		seg->len = 0;
+	}
+
+	for (uint_t i = 0; i < MAX_MMIOSEGS; i++) {
+		struct pptseg *seg = &ppt->mmio[i];
 
 		if (seg->len == 0) {
 			if (ppt_diag_enable != 0) {
 				cmn_err(CE_NOTE, "ppt: map_mmio enter "
 				    "bdf=0x%x vm=%p pptfd=%d gpa=0x%llx "
 				    "len=0x%llx hpa=0x%llx seg=%u",
-				    pci_get_bdf(ppt->pptd_dip), (void *)vm,
-				    pptfd, (u_longlong_t)gpa,
-				    (u_longlong_t)len, (u_longlong_t)hpa, i);
+				    bdf, (void *)vm, pptfd,
+				    (u_longlong_t)gpa, (u_longlong_t)len,
+				    (u_longlong_t)hpa, i);
 			}
 			err = vm_map_mmio(vm, gpa, len, hpa);
 			if (err == 0) {
@@ -2046,17 +2089,15 @@ ppt_map_mmio(struct vm *vm, int pptfd, vm_paddr_t gpa, size_t len,
 				cmn_err(err == 0 ? CE_NOTE : CE_WARN,
 				    "ppt: map_mmio done bdf=0x%x vm=%p "
 				    "pptfd=%d seg=%u err=%d",
-				    pci_get_bdf(ppt->pptd_dip), (void *)vm,
-				    pptfd, i, err);
+				    bdf, (void *)vm, pptfd, i, err);
 			}
 			goto done;
 		}
 	}
 	err = ENOSPC;
 	cmn_err(CE_NOTE, "ppt: map_mmio nospc bdf=0x%x vm=%p pptfd=%d "
-	    "gpa=0x%llx len=0x%llx hpa=0x%llx", pci_get_bdf(ppt->pptd_dip),
-	    (void *)vm, pptfd, (u_longlong_t)gpa, (u_longlong_t)len,
-	    (u_longlong_t)hpa);
+	    "gpa=0x%llx len=0x%llx hpa=0x%llx", bdf, (void *)vm, pptfd,
+	    (u_longlong_t)gpa, (u_longlong_t)len, (u_longlong_t)hpa);
 
 done:
 	releasef(pptfd);
