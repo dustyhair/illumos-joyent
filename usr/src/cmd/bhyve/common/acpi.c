@@ -113,7 +113,7 @@ basl_run_iasl(const char *out, const char *in, int verbose)
 
 	if (pid == 0) {
 		if (!verbose) {
-			int fd = open(_PATH_DEVNULL, O_WRONLY);
+			int fd = open("/dev/null", O_WRONLY);
 
 			if (fd >= 0) {
 				(void) dup2(fd, STDOUT_FILENO);
