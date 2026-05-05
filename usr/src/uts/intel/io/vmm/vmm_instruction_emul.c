@@ -2711,6 +2711,16 @@ vie_exitinfo(const struct vie *vie, struct vm_exit *vme)
 void
 vie_fallback_exitinfo(const struct vie *vie, struct vm_exit *vme)
 {
+	if (vme->exitcode == VM_EXITCODE_MMIO_EMUL &&
+	    (vie->status & VIES_INST_FETCH) != 0) {
+		cmn_err(CE_NOTE, "!VMM-INST-EMUL-FAIL: rip=%lx gpa=%lx "
+		    "gla=%lx valid=%u inst=%02x,%02x,%02x,%02x,%02x,%02x",
+		    (ulong_t)vme->rip, (ulong_t)vme->u.mmio_emul.gpa,
+		    (ulong_t)vme->u.mmio_emul.gla, vie->num_valid,
+		    vie->inst[0], vie->inst[1], vie->inst[2], vie->inst[3],
+		    vie->inst[4], vie->inst[5]);
+	}
+
 	if ((vie->status & VIES_INST_FETCH) == 0) {
 		bzero(&vme->u.inst_emul, sizeof (vme->u.inst_emul));
 	} else {
