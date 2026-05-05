@@ -85,6 +85,7 @@ struct passthru_softc {
 	int pptfd;
 	int msi_limit;
 	int msix_limit;
+	bool psc_disable_msi;
 	uint32_t psc_trace_cfgread_count;
 	uint32_t psc_trace_cfgwrite_count;
 	uint32_t psc_trace_map_count;
@@ -274,7 +275,7 @@ passthru_intr_limit(struct passthru_softc *sc, struct msixcap *msixcap)
 static int
 cfginitmsi(struct passthru_softc *sc)
 {
-	int i, ptr, capptr, cap, sts, caplen, table_size;
+	int i, ptr, prevptr, capptr, cap, sts, caplen, table_size;
 	uint32_t u32;
 	struct pci_devinst *pi = sc->psc_pi;
 	struct msixcap msixcap;
@@ -291,11 +292,29 @@ cfginitmsi(struct passthru_softc *sc)
 	sts = passthru_read_config(sc, PCIR_STATUS, 2);
 	if (sts & PCIM_STATUS_CAPPRESENT) {
 		ptr = passthru_read_config(sc, PCIR_CAP_PTR, 1);
+		prevptr = 0;
 		while (ptr != 0 && ptr != 0xff && passthru_cap_ptr_valid(ptr) &&
 		    !visited[ptr]) {
+			int nextptr;
+			bool hide_cap;
+
 			visited[ptr] = true;
 			cap = passthru_read_config(sc, ptr + PCICAP_ID, 1);
-			if (cap == PCIY_MSI) {
+			nextptr = passthru_read_config(sc, ptr + PCICAP_NEXTPTR, 1);
+			hide_cap = sc->psc_disable_msi &&
+			    (cap == PCIY_MSI || cap == PCIY_MSIX);
+			if (hide_cap) {
+				if (prevptr == 0) {
+					pci_set_cfgdata8(pi, PCIR_CAP_PTR, nextptr);
+				} else {
+					pci_set_cfgdata8(pi, prevptr +
+					    PCICAP_NEXTPTR, nextptr);
+					(void) set_pcir_handler(sc, prevptr +
+					    PCICAP_NEXTPTR, 1,
+					    passthru_cfgread_emulate,
+					    passthru_cfgwrite_emulate);
+				}
+			} else if (cap == PCIY_MSI) {
 				/*
 				 * Copy the MSI capability into the config
 				 * space of the emulated pci device
@@ -331,7 +350,9 @@ cfginitmsi(struct passthru_softc *sc)
 					msixcap_ptr += 4;
 				}
 			}
-			ptr = passthru_read_config(sc, ptr + PCICAP_NEXTPTR, 1);
+			if (!hide_cap)
+				prevptr = ptr;
+			ptr = nextptr;
 		}
 		if (ptr != 0 && ptr != 0xff) {
 			warnx("passthru device %d stopped invalid PCI capability "
@@ -370,7 +391,8 @@ cfginitmsi(struct passthru_softc *sc)
 	 * MSI capability for it. We link the new MSI capability at the
 	 * head of the list of capabilities.
 	 */
-	if ((sts & PCIM_STATUS_CAPPRESENT) != 0 && sc->psc_msi.capoff == 0) {
+	if ((sts & PCIM_STATUS_CAPPRESENT) != 0 &&
+	    !sc->psc_disable_msi && sc->psc_msi.capoff == 0) {
 		int origptr, msiptr;
 		origptr = passthru_read_config(sc, PCIR_CAP_PTR, 1);
 		msiptr = passthru_add_msicap(pi, 1, origptr);
@@ -382,7 +404,8 @@ cfginitmsi(struct passthru_softc *sc)
 #endif
 
 	/* Make sure one of the capabilities is present */
-	if (sc->psc_msi.capoff == 0 && sc->psc_msix.capoff == 0)
+	if (!sc->psc_disable_msi &&
+	    sc->psc_msi.capoff == 0 && sc->psc_msix.capoff == 0)
 		return (-1);
 	else
 		return (0);
@@ -989,6 +1012,7 @@ passthru_init(struct pci_devinst *pi, nvlist_t *nvl)
 	if ((error = vm_get_pptdev_limits(ctx, pptfd, &sc->msi_limit,
 	    &sc->msix_limit)) != 0)
 		goto done;
+	sc->psc_disable_msi = !get_config_bool_node_default(nvl, "msi", true);
 
 #ifndef	__FreeBSD__
 	/*

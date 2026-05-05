@@ -337,6 +337,7 @@ add_ppt(int *argc, char **argv, char *ppt, char *path, char *slotconf,
 	char *pptdev;
 	char *rom;
 	char *rom_exec;
+	char *msi;
 	custr_t *sconfstr = NULL;
 
 	pcislot = get_zcfg_var("device", ppt, "pci_slot");
@@ -377,6 +378,7 @@ add_ppt(int *argc, char **argv, char *ppt, char *path, char *slotconf,
 
 	rom = get_zcfg_var("device", ppt, "rom");
 	rom_exec = get_zcfg_var("device", ppt, "rom_exec");
+	msi = get_zcfg_var("device", ppt, "msi");
 
 	if (rom != NULL) {
 		if (custr_append_printf(sconfstr, ",rom=%s", rom) == -1) {
@@ -399,6 +401,14 @@ add_ppt(int *argc, char **argv, char *ppt, char *path, char *slotconf,
 		    ppt);
 		custr_free(sconfstr);
 		return (-1);
+	}
+
+	if (msi != NULL && strcmp(msi, "true") != 0) {
+		if (custr_append(sconfstr, ",msi=off") == -1) {
+			(void) printf("Error: device MSI options too long\n");
+			custr_free(sconfstr);
+			return (-1);
+		}
 	}
 
 	custr_free(sconfstr);
