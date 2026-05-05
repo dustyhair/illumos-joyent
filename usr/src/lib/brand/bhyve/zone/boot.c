@@ -333,6 +333,8 @@ add_ppt(int *argc, char **argv, char *ppt, char *path, char *slotconf,
 	static boolean_t acpi = B_FALSE;
 	uint_t bus = 0, dev = 0, func = 0;
 	char *pcislot;
+	char *openpath;
+	char *pptdev;
 	char *rom;
 	char *rom_exec;
 	custr_t *sconfstr = NULL;
@@ -363,9 +365,12 @@ add_ppt(int *argc, char **argv, char *ppt, char *path, char *slotconf,
 		return (-1);
 	}
 
+	pptdev = get_zcfg_var("device", ppt, "pptdev");
+	openpath = pptdev != NULL ? pptdev : path;
+
 	if (custr_append_printf(sconfstr, "%d:%d:%d,passthru,%s",
-	    bus, dev, func, path) == -1) {
-		(void) printf("Error: device path '%s' too long\n", path);
+	    bus, dev, func, openpath) == -1) {
+		(void) printf("Error: device path '%s' too long\n", openpath);
 		custr_free(sconfstr);
 		return (-1);
 	}
