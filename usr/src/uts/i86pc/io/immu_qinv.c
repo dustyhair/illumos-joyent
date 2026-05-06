@@ -114,6 +114,7 @@ int immu_qinv_strict_intr_delay_us = 0;
 int immu_qinv_haswell_quirk = 1;
 int immu_qinv_haswell_force_global_iec = 0;
 int immu_qinv_haswell_extra_delay_us = 4;
+int immu_qinv_wait_timeout_report_enable = 0;
 int immu_qinv_wait_timeout_loops = 50000000;
 int immu_qinv_wait_timeout_maxdump = 16;
 static uint32_t immu_qinv_wait_timeout_dumped;
@@ -464,11 +465,14 @@ qinv_wait_timeout_report(immu_t *immu, immu_inv_wait_t *iwp,
 {
 	uint32_t dumped;
 
+	if (immu_qinv_wait_timeout_report_enable == 0)
+		return;
+
 	dumped = atomic_inc_32_nv(&immu_qinv_wait_timeout_dumped);
 	if (dumped > (uint32_t)immu_qinv_wait_timeout_maxdump)
 		return;
 
-	prom_printf("QINV-WAIT-TU102: timeout immu=%p iwp=%p name=%s "
+	prom_printf("QINV-WAIT: timeout immu=%p iwp=%p name=%s "
 	    "statusp=%p paddr=0x%llx status=0x%x loops=%llu "
 	    "qh=0x%llx qt=0x%llx qar=0x%llx ics=0x%x fsts=0x%x\n",
 	    (void *)immu, (void *)iwp,

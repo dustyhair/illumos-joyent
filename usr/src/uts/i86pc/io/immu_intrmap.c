@@ -275,14 +275,14 @@ immu_intrmap_sync_cache(immu_t *immu, uint_t idx, uint_t count,
 {
 	if (use_irta_sync) {
 		if (immu_intrmap_diag_enable != 0) {
-			prom_printf("IRMAP-TU102: sync-irta start idx=%u "
+			prom_printf("IRMAP: sync-irta start idx=%u "
 			    "count=%u reason=%s immu=%s\n", idx, count,
 			    reason != NULL ? reason : "?",
 			    immu->immu_name ? immu->immu_name : "<noname>");
 		}
 		immu_regs_intrmap_sync(immu);
 		if (immu_intrmap_diag_enable != 0) {
-			prom_printf("IRMAP-TU102: sync-irta done idx=%u "
+			prom_printf("IRMAP: sync-irta done idx=%u "
 			    "count=%u reason=%s\n", idx, count,
 			    reason != NULL ? reason : "?");
 		}
@@ -1196,7 +1196,7 @@ immu_intrmap_alloc(void **intrmap_private_tbl, dev_info_t *dip,
 	    immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
 		char pathbuf[256];
 
-		prom_printf("IRMAP-TU102: alloc dip=%s type=0x%x "
+		prom_printf("IRMAP: alloc dip=%s type=0x%x "
 		    "count=%d idx=%u sid=0x%x immu=%s\n",
 		    immu_intrmap_dip_path(dip, pathbuf, sizeof (pathbuf)), type,
 		    count, idx, sid_svt_sq,
@@ -1374,7 +1374,7 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data,
 	    immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
 		char pathbuf[256];
 
-		prom_printf("IRMAP-TU102: map dip=%s type=0x%x count=%d "
+		prom_printf("IRMAP: map dip=%s type=0x%x count=%d "
 		    "idx=%u sid=0x%x vector=0x%x dst=0x%x raw_data=0x%x\n",
 		    immu_intrmap_dip_path(INTRMAP_PRIVATE(intrmap_private)->ir_dip,
 		    pathbuf, sizeof (pathbuf)), type, count, idx, sid,
@@ -1439,7 +1439,7 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data,
 		/* set interrupt remapping table entry */
 		if (immu_intrmap_diag_enable != 0 &&
 		    immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
-			prom_printf("IRMAP-TU102: pre-bcopy idx=%u sid=0x%x "
+			prom_printf("IRMAP: pre-bcopy idx=%u sid=0x%x "
 			    "vector=0x%x dst=0x%x\n",
 			    idx, sid, (uint_t)vector, dst);
 		}
@@ -1447,7 +1447,7 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data,
 		    INTRMAP_RTE_SIZE);
 		if (immu_intrmap_diag_enable != 0 &&
 		    immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
-			prom_printf("IRMAP-TU102: post-bcopy idx=%u sid=0x%x "
+			prom_printf("IRMAP: post-bcopy idx=%u sid=0x%x "
 			    "vector=0x%x dst=0x%x\n",
 			    idx, sid, (uint_t)vector, dst);
 		}
@@ -1455,7 +1455,7 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data,
 		membar_producer();
 		if (immu_intrmap_diag_enable != 0 &&
 		    immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
-			prom_printf("IRMAP-TU102: pre-qinv idx=%u sid=0x%x "
+			prom_printf("IRMAP: pre-qinv idx=%u sid=0x%x "
 			    "vector=0x%x dst=0x%x\n",
 			    idx, sid, (uint_t)vector, dst);
 		}
@@ -1463,7 +1463,7 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data,
 		    immu_intrmap_trace_tu102_sid(sid_svt_sq), "map-one");
 		if (immu_intrmap_diag_enable != 0 &&
 		    immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
-			prom_printf("IRMAP-TU102: map-post idx=%u sid=0x%x "
+			prom_printf("IRMAP: map-post idx=%u sid=0x%x "
 			    "vector=0x%x dst=0x%x count=%d stage=sync-one\n",
 			    idx, sid, (uint_t)vector, dst, count);
 		}
@@ -1513,7 +1513,7 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data,
 		    immu_intrmap_trace_tu102_sid(sid_svt_sq), "map-many");
 		if (immu_intrmap_diag_enable != 0 &&
 		    immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
-			prom_printf("IRMAP-TU102: map-post idx=%u sid=0x%x "
+			prom_printf("IRMAP: map-post idx=%u sid=0x%x "
 			    "vector=0x%x dst=0x%x count=%d stage=sync-many\n",
 			    idx, sid, (uint_t)vector, dst, count);
 		}
@@ -1521,7 +1521,7 @@ immu_intrmap_map(void *intrmap_private, void *intrmap_data,
 out:
 	if (immu_intrmap_diag_enable != 0 &&
 	    immu_intrmap_trace_tu102_sid(sid_svt_sq)) {
-		prom_printf("IRMAP-TU102: map-return idx=%u sid=0x%x "
+		prom_printf("IRMAP: map-return idx=%u sid=0x%x "
 		    "count=%d unit=%d entered=%d\n",
 		    idx, sid, count, unit, unit_entered ? 1 : 0);
 	}
@@ -1630,7 +1630,7 @@ immu_intrmap_free(void **intrmap_privatep)
 	    INTRMAP_PRIVATE(*intrmap_privatep)->ir_sid_svt_sq)) {
 		char pathbuf[256];
 
-		prom_printf("IRMAP-TU102: free dip=%s idx=%u sid=0x%x "
+		prom_printf("IRMAP: free dip=%s idx=%u sid=0x%x "
 		    "immu=%s\n",
 		    immu_intrmap_dip_path(INTRMAP_PRIVATE(*intrmap_privatep)->ir_dip,
 		    pathbuf, sizeof (pathbuf)), idx,
