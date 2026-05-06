@@ -1990,8 +1990,12 @@ retry:
 			 * list.
 			 */
 			pdp = pcache_lookup_fd(pcp, fd);
-			ASSERT(pdp != NULL);
-			ASSERT(pdp->pd_ref != NULL);
+			if (pdp == NULL || pdp->pd_ref == NULL) {
+				ASSERT(pdp != NULL);
+				ASSERT(pdp == NULL || pdp->pd_ref != NULL);
+				BT_CLEAR(pcp->pc_bitmap, fd);
+				continue;
+			}
 			refp = &pdp->pd_ref[which];
 			if (refp->xf_refcnt == 0)
 				continue;
