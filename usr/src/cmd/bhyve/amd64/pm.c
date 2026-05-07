@@ -40,11 +40,13 @@
 #include <pthread.h>
 #ifndef	__FreeBSD__
 #include <stdlib.h>
+#include <unistd.h>
 #endif
 #include <signal.h>
 #include <vmmapi.h>
 
 #include "acpi.h"
+#include "debug.h"
 #include "inout.h"
 #ifdef	__FreeBSD__
 #include "mevent.h"
@@ -235,6 +237,13 @@ power_button_handler(int signal __unused, enum ev_type type __unused, void *arg)
 
 #else
 /*
+ * This handler runs in signal context on illumos.  Keep its breadcrumbs to
+ * async-signal-safe writes so shutdown diagnostics do not perturb the path
+ * they are intended to observe.
+ */
+#define	PWRBTN_LOG(msg)	(void) write(STDERR_FILENO, msg, sizeof (msg) - 1)
+
+/*
  * Initiate graceful power off.
  */
 /*ARGSUSED*/
@@ -256,10 +265,16 @@ power_button_handler(int signal, siginfo_t *type, void *cp)
 	pthread_mutex_lock(&pm_lock);
 	if (!(pm1_status & PM1_PWRBTN_STS)) {
 		pm1_status |= PM1_PWRBTN_STS;
+		PWRBTN_LOG("ACPI-PWRBTN: SIGTERM injected power button "
+		    "event\n");
 		sci_update(pwr_ctx);
+	} else {
+		PWRBTN_LOG("ACPI-PWRBTN: SIGTERM ignored, event already "
+		    "pending\n");
 	}
 	pthread_mutex_unlock(&pm_lock);
 }
+#undef	PWRBTN_LOG
 #endif
 
 /*
@@ -300,6 +315,10 @@ pm1_control_handler(struct vmctx *ctx, int in,
 		 */
 		if (*eax & PM1_SLP_EN) {
 			if ((pm1_control & PM1_SLP_TYP) >> 10 == 5) {
+				EPRINTLN("ACPI-PWRBTN: guest requested "
+				    "S5 poweroff ctl=0x%x status=0x%x "
+				    "enable=0x%x", *eax, pm1_status,
+				    pm1_enable);
 				error = vm_suspend(ctx, VM_SUSPEND_POWEROFF);
 				assert(error == 0 || errno == EALREADY);
 			}
