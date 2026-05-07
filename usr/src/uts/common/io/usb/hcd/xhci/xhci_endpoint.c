@@ -83,13 +83,27 @@ xhci_endpoint_pipe_to_epid(usba_pipe_handle_data_t *ph)
 void
 xhci_endpoint_timeout_cancel(xhci_t *xhcip, xhci_endpoint_t *xep)
 {
+	timeout_id_t tid;
+
+	VERIFY(MUTEX_HELD(&xhcip->xhci_lock));
+
 	xep->xep_state |= XHCI_ENDPOINT_TEARDOWN;
-	if (xep->xep_timeout != 0) {
-		mutex_exit(&xhcip->xhci_lock);
-		(void) untimeout(xep->xep_timeout);
-		mutex_enter(&xhcip->xhci_lock);
+	tid = xep->xep_timeout;
+	if (tid != 0) {
 		xep->xep_timeout = 0;
+		mutex_exit(&xhcip->xhci_lock);
+		(void) untimeout(tid);
+		mutex_enter(&xhcip->xhci_lock);
 	}
+
+	/*
+	 * A timeout callback may have already passed the timeout(9F) boundary
+	 * and be running with xep_timeout cleared.  In that case untimeout()
+	 * cannot be relied on as the sole lifetime barrier.  Wait for the
+	 * endpoint timeout/reset serialization state to drop before allowing
+	 * close/reset teardown to destroy the pipe handle or its USBA queues.
+	 */
+	xhci_endpoint_serialize(xhcip, xep);
 }
 
 /*
@@ -111,13 +125,13 @@ xhci_endpoint_close(xhci_t *xhcip, xhci_endpoint_t *xep)
 	VERIFY3U(xep->xep_num, !=, XHCI_DEFAULT_ENDPOINT);
 	VERIFY(list_is_empty(&xep->xep_transfers));
 
+	xhci_endpoint_timeout_cancel(xhcip, xep);
+
 	VERIFY(xep->xep_pipe != NULL);
 	xep->xep_pipe = NULL;
 
 	VERIFY(xep->xep_state & XHCI_ENDPOINT_OPEN);
 	xep->xep_state &= ~XHCI_ENDPOINT_OPEN;
-
-	xhci_endpoint_timeout_cancel(xhcip, xep);
 }
 
 /*
@@ -1049,21 +1063,13 @@ xhci_endpoint_tick(void *arg)
 	 * done to set things up, it'd be odd if this did fail.
 	 */
 	ret = xhci_command_set_tr_dequeue(xhcip, xd, xep);
-	mutex_enter(&xhcip->xhci_lock);
-	xep->xep_state &= ~XHCI_ENDPOINT_QUIESCE;
-	if (ret == USB_SUCCESS) {
-		xep->xep_state &= ~XHCI_ENDPOINT_TIMED_OUT;
-	} else {
+	if (ret != USB_SUCCESS) {
 		xhci_error(xhcip, "failed to successfully set transfer ring "
 		    "dequeue pointer of timed out endpoint %u of "
 		    "device on slot %d and port %d: device remains timed out, "
 		    "please use cfgadm to recover", xep->xep_num, xd->xd_slot,
 		    xd->xd_port);
 	}
-	xep->xep_timeout = timeout(xhci_endpoint_tick, xep,
-	    drv_usectohz(XHCI_TICK_TIMEOUT_US));
-	mutex_exit(&xhcip->xhci_lock);
-	cv_broadcast(&xep->xep_state_cv);
 
 	/*
 	 * Because we never time out periodic related activity, we will always
@@ -1072,6 +1078,22 @@ xhci_endpoint_tick(void *arg)
 	ASSERT(xt->xt_usba_req != NULL);
 	usba_hcdi_cb(xep->xep_pipe, xt->xt_usba_req, USB_CR_TIMEOUT);
 	xhci_transfer_free(xhcip, xt);
+
+	mutex_enter(&xhcip->xhci_lock);
+	xep->xep_state &= ~XHCI_ENDPOINT_QUIESCE;
+	if (ret == USB_SUCCESS)
+		xep->xep_state &= ~XHCI_ENDPOINT_TIMED_OUT;
+
+	if ((xep->xep_state & (XHCI_ENDPOINT_TEARDOWN |
+	    XHCI_ENDPOINT_PERIODIC)) == 0 &&
+	    !list_is_empty(&xep->xep_transfers)) {
+		xep->xep_timeout = timeout(xhci_endpoint_tick, xep,
+		    drv_usectohz(XHCI_TICK_TIMEOUT_US));
+	} else {
+		xep->xep_timeout = 0;
+	}
+	mutex_exit(&xhcip->xhci_lock);
+	cv_broadcast(&xep->xep_state_cv);
 }
 
 /*
