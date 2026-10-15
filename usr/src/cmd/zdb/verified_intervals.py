@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Validate measured original-BP read results bound to one paired capture."""
 import argparse,collections,hashlib,json,pathlib
-from observed_intervals import parse,record_schema,require,uint,FLAGS
+from observed_intervals import parse,record_schema,require,uint,FLAGS,words,DMU_OT_NUMTYPES,DMU_BSWAP_NUMFUNCS
 from paired_intervals import analyze as paired,canonical,digest,same_cut
 
 def analyze(data,exit_status,expected_sha):
@@ -29,6 +29,15 @@ def analyze(data,exit_status,expected_sha):
         require(i>0 and rows[i-1] is bp,'verification must immediately follow its BP')
         for key in ('bp_words','objset','object','level','blkid'):require(r[key]==bp[key],'verification context mismatch: '+key)
         require(r['error']==0,'failed verification result')
+        # Native zv_record applies these gates BEFORE hole/embedded disposition.
+        # raw_classification intentionally classifies nonallocated layouts before
+        # dedup, so paired validation alone cannot enforce verifier eligibility.
+        prop=words(bp['bp_words'])[6];typ=(prop>>48)&255
+        valid=(typ&31)<DMU_BSWAP_NUMFUNCS if typ&128 else typ<DMU_OT_NUMTYPES
+        require(valid and not (prop & ((1<<61)|(1<<62))) and typ not in (42,43,49),
+                'native verification eligibility: type/crypt/dedup/DDT')
+        require(bp['unsupported'] is False and bp['children_skipped'] is False,
+                'native verification eligibility: rejected geometry/layout')
         if bp['classification'] in ('hole','embedded'):
             require(r['status']=='not_applicable' and r['measured'] is False and uint(r['requested_p'])==uint(r['completed_p'])==0,'nonallocated verification')
             na+=1
