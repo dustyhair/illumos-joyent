@@ -75,7 +75,10 @@ za_apply(range_tree_t *rt, uint64_t start, uint64_t size, maptype_t type)
  uint64_t os, ol;
  if (!size || start > UINT64_MAX - size) return (ERANGE);
  if (type == SM_ALLOC) {
-  if (range_tree_find_in(rt, start, size, &os, &ol)) return (EEXIST);
+  /* The pinned find_in returns true with ol == 0 for right adjacency.
+   * Only a positive intersection overlaps our half-open interval. */
+  if (range_tree_find_in(rt, start, size, &os, &ol) && ol != 0)
+   return (EEXIST);
   range_tree_add(rt, start, size);
  } else if (type == SM_FREE) {
   if (!range_tree_contains(rt, start, size)) return (ENOENT);

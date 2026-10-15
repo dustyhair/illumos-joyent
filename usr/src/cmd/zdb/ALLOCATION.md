@@ -177,3 +177,51 @@ allocation data or comparison against a different cut was produced.
 Review HOLD remains. No pools, pushes, baseline changes or production access.
 
 Pinned writer helper SHA256: 94a1420fd8ff4a277a7805813eebebe08f35d68a7b63c4de1b8d2659f7910010
+
+## v4 lab failure investigation and narrow boundary fix
+
+The real paired TXG-677 stream remains FAILED and unchanged (SHA256
+fed1036d66f13e3c7aab6720caff94c30423cc6ea8416ceb529580da87c953ec).
+Stock -mmm output reports map 21 length 240 and allocated bytes 0x2c000,
+but does not print individual entries: dump_spacemap requires -mmmm or -dddddd.
+The stream preserves six successful ALLOC entries before EEXIST, not the
+rejected seventh operation. No original missing operation has been invented.
+
+Confirmed defect: pinned range_tree_find_in returns B_TRUE with *osize == 0
+when the successor begins exactly at start+size (its comparison uses > rather
+than >=). za_apply incorrectly treated this zero-length boundary intersection
+as an overlap. The native reproducer uses the exact six recorded operations,
+then a clearly labeled SYNTHETIC left-adjacent probe. Before the fix, it fails
+with EEXIST; with the fix, the probe is accepted and correctly coalesced.
+Actual overlapping ranges (including a one-byte intersection), duplicates and
+frees over holes continue to fail. The production change only requires a
+positive intersection length when rejecting an allocation. Shared range-tree
+or space-map writer/loader behavior is unchanged.
+
+Pinned writer/loader interpretation: map entries describe half-open allocations
+and frees; range_tree_add permits adjacency and coalesces neighboring segments.
+The sorted-tree comparator treats touching endpoints as nonoverlapping. The
+existing find_in API's zero-size successor result therefore is not evidence of
+a duplicate allocation. No genuine overlap check was removed or weakened.
+
+This verified defect is CONSISTENT with the lab failure, not definitive proof
+of its specific seventh entry: the saved evidence lacks that entry. Exact
+confirmation requires the coordinator to capture decoded entries at verbosity
+4. On an authorized, exported, externally quiesced disposable lab cut:
+
+    /usr/sbin/zdb -e -p /explicit/lab/data-only-directory -u labtank
+    /usr/sbin/zdb -e -p /explicit/lab/data-only-directory -mmmm labtank 0 7
+
+The trailing arguments select top-vdev 0, metaslab 7; record full stdout/stderr
+and exit status. Existing -mmm output is insufficient. The pool has since been
+reimported/scrubbed, so a new dump must be labeled with its NEW selected cut.
+Do not rewind, pretend it proves TXG 677, or compare old BPs with new allocation
+maps. An already-preserved immutable TXG-677 image would be needed to establish
+that historic entry exactly. No new pool reads were performed during this fix.
+
+The fixture JSON/inc contain only the six original emitted operations with
+source hash/TXG and explicit missing-entry caveat. Native and Python tests test
+that exact prefix and independent boundary probes. Failed-stream analyzer
+rejection and unavailable differences remain unchanged. Independent review is
+required before another coordinated paired capture; the historic root-cause
+attribution remains limited until additional entry evidence is available.

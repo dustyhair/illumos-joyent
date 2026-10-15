@@ -1,5 +1,5 @@
 """Pool-free synthetic serializer fixtures, never passed to certificate model."""
-import copy,hashlib,json,random,unittest
+import copy,hashlib,json,random,unittest,pathlib,re
 import paired_intervals as p
 F=p.FLAGS
 
@@ -146,6 +146,20 @@ class Tests(unittest.TestCase):
         for field in ('guid','txg'):
             bad=copy.deepcopy(c);bad[field]='not-an-integer'
             with self.assertRaises(ValueError):same_cut(bad,bad)
+    def test_recorded_map21_prefix_and_adjacent_probe(self):
+        root=pathlib.Path(__file__).parent
+        f=json.loads((root/'test_lab_map21_prefix.json').read_text())
+        self.assertEqual(f['source_sha256'],'fed1036d66f13e3c7aab6720caff94c30423cc6ea8416ceb529580da87c953ec')
+        ops=f['operations'];self.assertEqual(len(ops),6)
+        encoded=[tuple(map(int,m)) for m in re.findall(r'\{ (\d+)ULL, (\d+)ULL \}',(root/'test_lab_map21_prefix.inc').read_text())]
+        self.assertEqual(encoded,[(int(r['start']),int(r['length'])) for r in ops])
+        tree=[]
+        for r in ops:tree=p.apply(tree,int(r['start']),int(r['start'])+int(r['length']),r['op'])
+        self.assertEqual(sum(e-s for s,e in tree),73728)
+        left=int(ops[0]['start'])-8192
+        tree=p.apply(tree,left,left+8192,'alloc')
+        self.assertEqual(sum(e-s for s,e in tree),81920)
+        with self.assertRaises(ValueError):p.apply(tree,left+4096,left+12288,'alloc')
     def test_pointset_oracle(self):
         rng=random.Random(67)
         for _ in range(1000):

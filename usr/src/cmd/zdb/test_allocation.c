@@ -7,6 +7,7 @@ static int alloc_test_flush(FILE *);
 #undef fflush
 /* Verbatim production segment writer from the pinned space_map.c. */
 #include "test_pinned_writer.inc"
+#include "test_lab_map21_prefix.inc"
 static int alloc_test_flush(FILE *f) {
  if (output_error) return (EOF);
  return (fflush(f));
@@ -100,6 +101,31 @@ int main(int argc, char **argv) {
  CHECK(za_apply(tree, UINT64_MAX, 2, SM_ALLOC) == ERANGE);
  CHECK(za_apply(tree, 0, 0, SM_ALLOC) == ERANGE);
  CHECK(za_apply(tree, 0, 4096, (maptype_t)8) == EINVAL);
+ range_tree_vacate(tree, NULL, NULL);
+ /* Exact recorded TXG-677 prefix; subsequent probes are synthetic. */
+ for (unsigned i = 0; i < 6; i++)
+  CHECK(za_apply(tree, lab_prefix[i][0], lab_prefix[i][1], SM_ALLOC) == 0);
+ CHECK(range_tree_space(tree) == 73728);
+ uint64_t intersection_start = 0, intersection_size = UINT64_MAX;
+ uint64_t left = lab_prefix[0][0] - 8192;
+ CHECK(range_tree_find_in(tree, left, 8192, &intersection_start,
+     &intersection_size) && intersection_size == 0);
+ CHECK(za_apply(tree, left, 8192, SM_ALLOC) == 0);
+ CHECK(range_tree_space(tree) == 81920);
+ CHECK(za_apply(tree, left + 4096, 8192, SM_ALLOC) == EEXIST);
+ CHECK(za_apply(tree, lab_prefix[0][0], 8192, SM_ALLOC) == EEXIST);
+ CHECK(za_apply(tree, left, 8192, SM_FREE) == 0);
+ CHECK(range_tree_space(tree) == 73728);
+ range_tree_vacate(tree, NULL, NULL);
+ /* Adjacent spans on either side and a bridge coalesce; real overlap fails. */
+ CHECK(za_apply(tree, 8192, 4096, SM_ALLOC) == 0);
+ CHECK(za_apply(tree, 0, 4096, SM_ALLOC) == 0);
+ CHECK(za_apply(tree, 4096, 4096, SM_ALLOC) == 0);
+ CHECK(range_tree_numsegs(tree) == 1 && range_tree_space(tree) == 12288);
+ CHECK(za_apply(tree, 12288, 4096, SM_ALLOC) == 0);
+ CHECK(za_apply(tree, 12287, 1, SM_ALLOC) == EEXIST);
+ CHECK(za_apply(tree, 4096, 4096, SM_FREE) == 0);
+ CHECK(za_apply(tree, 0, 12288, SM_FREE) == ENOENT);
  range_tree_vacate(tree, NULL, NULL);
  zdb_inventory_pair_mode(); CHECK(zdb_inventory_begin(argv[1]) == 0);
  vdev_t vd = { 0 }; metaslab_t ms = { 0 };
