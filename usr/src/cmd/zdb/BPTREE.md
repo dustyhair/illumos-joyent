@@ -104,3 +104,45 @@ wrong-type and wrong-level roots, missing root owners even with adjusted termina
 counts, and invalid root-owner ordering/disposition. The Makefile now lists
 zdb_bptree.c as a zdb_inventory.o prerequisite; an isolated make timestamp test
 checks that changing this include invalidates the object.
+
+## V11 disposable runtime results — independent review passed
+
+The coordinator reports successful first-cut and resumed-cut runtime captures
+using v11 commit 3265b086cef53efcdc1984c0d50fdc4b472cec6d. Saved validation
+records were inspected while preparing this update. The coordinator subsequently
+confirmed that final independent evidence verification passed without numerical
+corrections.
+
+| Capture | TXG | Async owners | DVA references | Original resume (object, level, blkid) |
+| --- | --- | --- | --- | --- |
+| First, minimally progressed | 331 | 532 | 538 | (1, 0, 0) |
+| Resumed | 400 | 496 | 501 | (2, 0, 35) |
+
+Both captures use queue object 175, active range [0, 1), birth cutoff 1,
+and the same root BP. The first cut already has a nonzero resume bookmark;
+it is not evidence for a pristine, never-progressed destroy queue. Stock traversal
+independently corroborates order, count and displayed BP fields. The full-word
+checks use producer-selected raw metadata reads and parent-byte membership:
+these corroborate the BP words but are not a wholly independent
+bookmark-to-byte-offset walker. The saved validation records also report
+matching queue headers, zero residual owner intervals, and zero outside/overlap
+intervals for each fixture. These findings remain specific to the selected cuts
+and supported layouts.
+
+The coordinator confirmed that all five associated VMs exited with status 0.
+QMP observations covered 24 nodes for the first cut and 48 for the resumed cut;
+all were read-only with zero write, unmap and flush counters. These are bounded
+observations of the inspected nodes and runs, not a universal no-write proof.
+
+Capture SHA-256 values:
+
+- TXG 331: 4663f41b93b4f2f4150be344c1f0fdcf9676caf1b2d2f05153790043792e1e6d
+- TXG 400: 94141d63922b03c71f720c7a35b05f33691cacd2e0d9f6efd03c4528949b2830
+
+All global coverage_complete, payload_validation_performed and
+evacuation_authorized flags remain false. Async owners remain non-movable.
+DDT and ZIL ownership remain unenumerated. No full inventory, evacuation,
+crash-recovery or removal-safety claim follows from these runtime comparisons.
+The earlier runtime hold statements above describe the implementation/review
+stage; this section records subsequent runtime evidence, completed review and the
+limits of that corroboration.
