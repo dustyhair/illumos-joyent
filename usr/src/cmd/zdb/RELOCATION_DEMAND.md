@@ -31,7 +31,7 @@ inventory grouping rule, not ZFS deduplication.
 Sizing uses the compressed physical payload P and actual destination ashift,
 child count and parity, following pinned `vdev_raidz_asize()`: sector-round P,
 add parity sectors per data row, then round to parity+1 sectors. A compiled
-pool-free harness calls the actual libzpool vdev operation across 3,360 vectors.
+pool-free harness calls the actual libzpool vdev operation across all supported child counts through 255.
 Supported bounds are ashift 9..16, parity 1..3, children 2..255 and P <=16 MiB.
 All aggregate byte totals must fit uint64. Tests include a destination geometry
 that changes required bytes; source allocation size is never reused blindly.
@@ -86,3 +86,13 @@ regressions separately exercise retained reference multiplicity. No
 multi-destination fallback is implemented. Run the bundled `run_capture.py`
 with the accepted-capture directory and a new output directory to reproduce
 all 12 full reanalyses; `summary.json` records the exact IDs, GUIDs and cut hash.
+
+
+## V1 P2 correction
+
+Distinct source extents in different DVA slots of the same original BP cannot
+be assigned to one destination group, even when that group holds no existing
+replica. `planned_replica_colocation` refuses this case while retaining each
+physical extent and its demand. Repeated observations of the same exact extent
+are not additional replicas and remain grouped once. The native geometry sweep
+now includes every supported child count through 255 (sizes capped at 16 MiB).

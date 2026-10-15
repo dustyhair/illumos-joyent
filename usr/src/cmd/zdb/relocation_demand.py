@@ -63,11 +63,13 @@ def analyze(data, exit_status, expected_sha, expected_cut_sha, source_id,
     conflicts = []
     source_bytes = destination_bytes = reference_bytes = 0
     previous_end = 0
+    replica_extents = collections.defaultdict(set)
     for (start, end), refs in sorted(grouped.items()):
         require(start >= previous_end and end > start, 'overlapping source extents')
         previous_end = end
         signatures = {(tuple(r['bp_words']), r['P'], r['Q'], r['physical_birth'], r['metadata']) for r in refs}
         require(len(signatures) == 1, 'incompatible physical extent descriptors')
+        replica_extents[tuple(refs[0]['bp_words'])].add((start, end))
         first = refs[0]
         payload = uint(first['P'])
         demand = raidz_asize(payload, uint(destination['ashift']), uint(destination['children']), uint(destination['parity']))
@@ -93,6 +95,9 @@ def analyze(data, exit_status, expected_sha, expected_cut_sha, source_id,
     free = checked(gross - allocated)
     reasons = []
     if not extents: reasons.append('source_has_no_allocated_extents')
+    coupled = [dict(bp_words=list(bp), source_extents=[dict(start=str(a), length=str(b-a)) for a,b in sorted(spans)])
+               for bp,spans in sorted(replica_extents.items()) if len(spans)>1]
+    if coupled: reasons.append('planned_replica_colocation')
     if conflicts: reasons.append('destination_replica_conflict')
     if destination_bytes > free: reasons.append('base_demand_exceeds_captured_gross_free_bytes')
     if any(uint(e['destination_asize']) > uint(destination['asize']) for e in extents):
@@ -100,7 +105,7 @@ def analyze(data, exit_status, expected_sha, expected_cut_sha, source_id,
     return dict(schema='offline-relocation-demand-v1', input_sha256=expected_sha,
                 cut=result['cut'], cut_sha256=expected_cut_sha, source=source, destination=destination,
                 demand_calculation_complete=True, single_destination_contract_satisfied=not reasons,
-                refusal_reasons=reasons, replica_conflicts=conflicts, extents=extents,
+                refusal_reasons=reasons, replica_conflicts=conflicts, coupled_source_replicas=coupled, extents=extents,
                 physical_extent_count=str(len(extents)), observed_reference_count=str(sum(len(x) for x in grouped.values())),
                 source_unique_bytes=str(source_bytes), source_reference_bytes=str(reference_bytes),
                 destination_base_demand_bytes=str(destination_bytes), destination_captured_gross_free_bytes=str(free),

@@ -76,10 +76,16 @@ class Tests(unittest.TestCase):
         self.assertTrue(all(r[k] is False for k in d.SAFETY));self.assertEqual(r['destination_captured_gross_free_bytes'],'1048576')
     def test_repeated_references(self):
         r=invoke(fixture(repeat=True));self.assertEqual(r['physical_extent_count'],'1');self.assertEqual(r['observed_reference_count'],'2')
+        self.assertTrue(r['single_destination_contract_satisfied']);self.assertEqual(r['coupled_source_replicas'],[])
         self.assertEqual(r['source_reference_bytes'],'16384');self.assertEqual(r['destination_base_demand_bytes'],'8192')
         self.assertEqual([x['original_bp_record']['objset'] for x in r['extents'][0]['references']],['0','99'])
     def test_distinct_DVAs(self):
         r=invoke(fixture(second_source=True));self.assertEqual(r['physical_extent_count'],'2');self.assertEqual(r['destination_base_demand_bytes'],'16384')
+        self.assertFalse(r['single_destination_contract_satisfied']);self.assertEqual(r['refusal_reasons'],['planned_replica_colocation'])
+        self.assertEqual(len(r['coupled_source_replicas']),1)
+        r=invoke(fixture(second_source=True,repeat=True));self.assertEqual(r['observed_reference_count'],'4')
+        self.assertEqual(r['physical_extent_count'],'2');self.assertEqual(r['destination_base_demand_bytes'],'16384')
+        self.assertEqual(r['refusal_reasons'],['planned_replica_colocation'])
     def test_replica_conflict(self):
         r=invoke(fixture(replica=True));self.assertFalse(r['single_destination_contract_satisfied']);self.assertEqual(r['refusal_reasons'],['destination_replica_conflict'])
         self.assertEqual(r['replica_conflicts'][0]['sequence'],'1')
@@ -125,6 +131,8 @@ class Tests(unittest.TestCase):
         path=os.environ.get('RELOCATION_NATIVE_GEOMETRY')
         if not path:self.skipTest('native libzpool geometry harness not supplied')
         lines=subprocess.check_output([path],text=True).splitlines();self.assertGreater(len(lines),1000)
+        self.assertEqual({int(line.split()[2]) for line in lines},set(range(2,256)))
+        self.assertEqual({int(line.split()[1]) for line in lines},set(range(9,17)))
         for line in lines:
             p,a,n,k,want=map(int,line.split());self.assertEqual(d.raidz_asize(p,a,n,k),want,line)
     def test_regular_files_and_cli(self):
