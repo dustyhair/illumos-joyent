@@ -35,8 +35,11 @@ def metadata(rows,result):
         require(uint(d['dataset_flags']) & ~((1<<1)|(1<<2)|(1<<16))==0,'unsupported dataset flags')
         snap=uint(d['children'])!=0;require(d['snapshot'] is snap,'snapshot evidence mismatch')
         if snap:
+            require(uint(d['next_snap_object']) not in (0,obj),'snapshot next link')
+            require(uint(d['snapnames_object'])==0,'snapshot name map')
             require(d['zil_state']=='snapshot_not_applicable' and d['zil_header_words'] is None,'snapshot ZIL disposition');snapshots.append(d)
         else:
+            require(uint(d['next_snap_object'])==0,'head next link')
             require(d['zil_state']=='canonical_zero_header' and d['zil_header_words']==['0000000000000000']*24,'nonempty/ambiguous ZIL header')
             w=words(d['root_bp']);require((w[6]>>48)&255==11 and (w[6]>>56)&31==0,'head root type/level')
             require(tuple(d['root_bp']) in verified_words,'head root lacks original-BP verification')

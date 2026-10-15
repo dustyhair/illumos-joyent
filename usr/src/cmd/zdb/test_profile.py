@@ -35,9 +35,10 @@ class Tests(unittest.TestCase):
     self.assertEqual(result['profile_heads'],2 if mode=='clone-head' else 1)
     self.assertIn('metadata_reads=2' if mode=='clone-head' else 'metadata_reads=1',r.stdout)
  def test_native_rejections(self):
-  for mode in ('ddt-stats','ddt-in-core','ddt-slot','ddt-cache-missing','ddt-cache-identity','ddt-directory','directory-error','directory-name','directory-limit','object-limit','orphan-ddt','unknown-type','wrong-dataset-type','ambiguous-dataset','next-error','next-repeat','info-error','bonus-error','bonus-short','inconsistent','unknown-flags','future-dataset','snapshot-state','head-state','root-type','root-hole','zil-log','zil-claim','zil-padding','arc-error','arc-size','no-heads','writable'):
+  for mode in ('ddt-stats','ddt-in-core','ddt-slot','ddt-cache-missing','ddt-cache-identity','ddt-directory','directory-error','directory-name','directory-limit','object-limit','orphan-ddt','unknown-type','wrong-dataset-type','ambiguous-dataset','next-error','next-repeat','info-error','bonus-error','bonus-short','inconsistent','unknown-flags','future-dataset','snapshot-state','snapshot-missing-next-zil','snapshot-self-next-zil','head-state','root-type','root-hole','zil-log','zil-claim','zil-padding','arc-error','arc-size','no-heads','writable'):
    with self.subTest(mode=mode):
     r,rows=self.invoke(mode);self.assertEqual(r.returncode,1,r.stderr);self.assertFalse(rows[-1]['profile_metadata_complete'])
+    if mode in ('snapshot-missing-next-zil','snapshot-self-next-zil'):self.assertIn('metadata_reads=0 holds=1',r.stdout)
     with self.assertRaises(ValueError):run(combined(rows))
  def test_pre_io_and_exact_budgets(self):
   for mode in ('reads','bytes','datasets'):
@@ -85,4 +86,16 @@ class Tests(unittest.TestCase):
   self.assertEqual(subprocess.run(['/opt/local/bin/gmake','-q','zdb_inventory.o'],cwd=work).returncode,0)
   os.utime(work/'zdb_profile.c',(300,300))
   self.assertEqual(subprocess.run(['/opt/local/bin/gmake','-q','zdb_inventory.o'],cwd=work).returncode,1)
+ def test_snapshot_link_evidence(self):
+  _,original=self.invoke('normal')
+  snapshot=next(r for r in original if r['record']=='profile_dataset' and r['snapshot'])
+  self.assertEqual(snapshot['next_snap_object'],'2');self.assertEqual(snapshot['snapnames_object'],'0')
+  for key,value,why in [('next_snap_object','0','snapshot next link'),('next_snap_object','3','snapshot next link'),('snapnames_object','7','snapshot name map')]:
+   rows=copy.deepcopy(original);next(r for r in rows if r['record']=='profile_dataset' and r['snapshot'])[key]=value
+   with self.subTest(key=key,value=value),self.assertRaisesRegex(ValueError,why):run(combined(rows))
+  rows=copy.deepcopy(original);next(r for r in rows if r['record']=='profile_dataset' and not r['snapshot'])['next_snap_object']='3'
+  with self.assertRaisesRegex(ValueError,'head next link'):run(combined(rows))
+  for key in ('next_snap_object','snapnames_object'):
+   rows=copy.deepcopy(original);del next(r for r in rows if r['record']=='profile_dataset')[key]
+   with self.subTest(missing=key),self.assertRaises(ValueError):run(combined(rows))
 if __name__=='__main__':unittest.main(verbosity=2)

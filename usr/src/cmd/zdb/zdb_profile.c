@@ -70,7 +70,9 @@ zg_dataset(zg_ctx_t *c,uint64_t object,const dmu_object_info_t *info)
      ds.ds_creation_txg>c->spa->spa_ubsync.ub_txg || ds.ds_prev_snap_txg>c->spa->spa_ubsync.ub_txg)
   return(ENOTSUP);
  boolean_t snapshot=ds.ds_num_children!=0;
- if((snapshot && ds.ds_snapnames_zapobj) || (!snapshot && ds.ds_next_snap_obj))return(EINVAL);
+ /* Snapshot exemption requires a consistent forward snapshot-chain link. */
+ if((snapshot && (!ds.ds_next_snap_obj || ds.ds_next_snap_obj==object ||
+     ds.ds_snapnames_zapobj)) || (!snapshot && ds.ds_next_snap_obj))return(EINVAL);
  zil_header_t zh={0};const char *state="snapshot_not_applicable";
  if(!snapshot) {
   const blkptr_t *bp=&ds.ds_bp;const char *status="ordinary";
@@ -96,8 +98,10 @@ zg_dataset(zg_ctx_t *c,uint64_t object,const dmu_object_info_t *info)
  c->datasets++;if(snapshot)c->snapshots++;else c->heads++;
  (void)fprintf(zi_out,"{\"record\":\"profile_dataset\",\"object\":\"%llu\","
      "\"snapshot\":%s,\"children\":\"%llu\",\"dataset_flags\":\"%llu\","
+     "\"next_snap_object\":\"%llu\",\"snapnames_object\":\"%llu\","
      "\"zil_state\":\"%s\",\"root_bp\":",(u_longlong_t)object,snapshot?"true":"false",
-     (u_longlong_t)ds.ds_num_children,(u_longlong_t)ds.ds_flags,state);
+     (u_longlong_t)ds.ds_num_children,(u_longlong_t)ds.ds_flags,
+     (u_longlong_t)ds.ds_next_snap_obj,(u_longlong_t)ds.ds_snapnames_zapobj,state);
  zi_words(zi_out,&ds.ds_bp);
  (void)fprintf(zi_out,",\"zil_header_words\":");
  if(snapshot)(void)fprintf(zi_out,"null");

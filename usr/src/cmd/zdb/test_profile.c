@@ -76,10 +76,10 @@ int main(int argc,char **argv){
  spa.spa_root_vdev=&root;spa.spa_mode=FREAD;spa.spa_trust_config=B_TRUE;spa.spa_ubsync.ub_txg=30;spa.spa_meta_objset=(objset_t *)(uintptr_t)1;spa.spa_dsl_pool=&dp;
  for(unsigned i=0;i<ZIO_CHECKSUM_FUNCTIONS;i++){ddt[i].ddt_spa=&spa;ddt[i].ddt_os=spa.spa_meta_objset;ddt[i].ddt_checksum=i;spa.spa_ddt[i]=&ddt[i];}
  datasets[2].ds_dir_obj=10;datasets[2].ds_bp=bp(DMU_OT_OBJSET,0,4096,4096);datasets[2].ds_creation_txg=10;
- datasets[3]=datasets[2];datasets[3].ds_num_children=1;
+ datasets[3]=datasets[2];datasets[3].ds_num_children=1;datasets[3].ds_next_snap_obj=2;
  if(!strcmp(mode,"extended-dataset"))extended_dataset=1;
  if(!strcmp(mode,"wrong-dataset-type"))wrong_dataset_type=1;
- if(!strcmp(mode,"clone-head")){datasets[3].ds_num_children=0;datasets[3].ds_prev_snap_obj=99;}
+ if(!strcmp(mode,"clone-head")){datasets[3].ds_num_children=0;datasets[3].ds_next_snap_obj=0;datasets[3].ds_prev_snap_obj=99;}
  if(!strcmp(mode,"birth-pruned-head"))datasets[2].ds_prev_snap_txg=25;
  if(!strcmp(mode,"ddt-stats"))spa.spa_ddt_stat_object=7;
  if(!strcmp(mode,"ddt-in-core"))ddt[0].ddt_tree.avl_numnodes=1;
@@ -105,6 +105,8 @@ int main(int argc,char **argv){
  if(!strcmp(mode,"unknown-flags"))datasets[2].ds_flags=1ULL<<63;
  if(!strcmp(mode,"future-dataset"))datasets[2].ds_creation_txg=31;
  if(!strcmp(mode,"snapshot-state"))datasets[3].ds_snapnames_zapobj=9;
+ if(!strcmp(mode,"snapshot-missing-next-zil")){datasets[2].ds_num_children=1;datasets[2].ds_next_snap_obj=0;os.os_zil_header.zh_log=datasets[2].ds_bp;}
+ if(!strcmp(mode,"snapshot-self-next-zil")){datasets[2].ds_num_children=1;datasets[2].ds_next_snap_obj=2;os.os_zil_header.zh_log=datasets[2].ds_bp;}
  if(!strcmp(mode,"head-state"))datasets[2].ds_next_snap_obj=9;
  if(!strcmp(mode,"root-type"))BP_SET_TYPE(&datasets[2].ds_bp,DMU_OT_PLAIN_FILE_CONTENTS);
  if(!strcmp(mode,"root-hole"))memset(datasets[2].ds_bp.blk_dva,0,sizeof(datasets[2].ds_bp.blk_dva));
@@ -113,7 +115,7 @@ int main(int argc,char **argv){
  if(!strcmp(mode,"zil-padding"))os.os_zil_header.zh_pad[0]=1;
  if(!strcmp(mode,"arc-error"))fail_arc=1;
  if(!strcmp(mode,"arc-size"))size_bad=1;
- if(!strcmp(mode,"no-heads"))datasets[2].ds_num_children=1;
+ if(!strcmp(mode,"no-heads")){datasets[2].ds_num_children=1;datasets[2].ds_next_snap_obj=3;}
  if(!strcmp(mode,"writable"))spa.spa_mode=FREAD|FWRITE;
  dsl_dataset_phys_t before[4];memcpy(before,datasets,sizeof(before));zil_header_t saved=os.os_zil_header;
  boolean_t mode_header=!strcmp(mode,"mode-profile");

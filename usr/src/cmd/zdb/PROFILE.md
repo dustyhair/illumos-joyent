@@ -94,3 +94,18 @@ Stop for independent source/bundle review, then separately authorized disposable
 runtime validation. No dry-run planner, pool operation or push is part of this
 milestone. The qualified v11 bptree runtime results are documented separately
 in BPTREE.md and do not validate this new gate.
+
+## V13 snapshot-exemption correction
+
+Snapshot classification cannot rely on ds_num_children alone. Before exempting
+a dataset from ZIL inspection, the native collector requires a nonzero, nonself
+ds_next_snap_obj and zero ds_snapnames_zapobj; heads require a zero next link.
+The checked next-link and snapshot-name-map object IDs are emitted and required
+by the analyzer. No exception for missing snapshot links is supported. This
+validates local classification consistency, not the entire snapshot-chain graph.
+Corrected positive fixtures point the snapshot to its head. Negative native
+fixtures present contradictory snapshot fields together with a nonzero ZIL and
+verify refusal before any root ARC read; analyzer mutations independently reject
+missing/self links, unexpected name maps, head links and omitted evidence fields.
+V12 captures lack the required new fields and are not accepted by this corrected
+pre-runtime profile schema. Runtime remains on hold for corrected review.
