@@ -27,26 +27,39 @@ def analyze(rows,result):
             require(pos<len(rows)-1 and rows[pos]['record']=='async_entry','missing async entry');r=rows[pos];pos+=1
             require(uint(r['object'])==obj and uint(r['entry_index'])==index,'async entry provenance/order')
             cutoff=uint(r['birth_cutoff']);done=cutoff==2**64-1
-            require(r['completed_sentinel'] is done,'sentinel mismatch');words(r['root_bp']);entries.append(r)
+            require(r['completed_sentinel'] is done,'sentinel mismatch');root=words(r['root_bp']);entries.append(r)
             if done:continue
             require(cutoff<=txg,'future cutoff')
+            # Match zb_queue before birth pruning: every non-sentinel root is
+            # DMU_OT_OBJSET (11 at the pinned base), at BP level zero.
+            prop=root[6]
+            require(((prop>>48)&255)==11 and ((prop>>56)&31)==0,'async root type/level')
+            embedded=bool(prop&(1<<39));hole=not embedded and root[0]==root[1]==0
+            pruned=bool(root[10] and root[10]<=cutoff)
+            traverse=not pruned and not hole
+            if traverse:require(root[10]>0 and not embedded,'unsupported async metadata root')
+            else:require(r['resume']==['0']*4,'unresolved resume on skipped root')
             if r['resume']!=['0']*4:
                 o,l,b=bookmark(r['resume']);require(l==0 and b!=2**64-1,'unsupported resume')
-            seen=set()
+            seen=set();root_seen=False;entry_owners=0
             while pos<len(rows)-1 and rows[pos]['record']=='async_owner':
                 o=rows[pos];pos+=1
+                require(traverse and not root_seen,'unexpected owner after skipped/completed root')
+                entry_owners+=1
                 require(uint(o['object'])==obj and uint(o['entry_index'])==index and o['queue']=='async_destroy','async owner provenance')
                 key=tuple(o['bookmark']);bo,bl,bi=bookmark(o['bookmark'])
                 require(key not in seen and uint(o['depth'])<64,'duplicate bookmark/depth');seen.add(key)
                 w=words(o['bp_words']);require(w[10]>cutoff,'async owner birth cutoff')
                 if bl==-1:
                     require(bo==bi==0 and uint(o['depth'])==0 and o['bp_words']==r['root_bp'],'async root identity')
+                    root_seen=True
                 else:
                     require(0<=bl<=16 and uint(o['depth'])>0 and bl==((w[6]>>56)&31),'async bookmark level')
                 projected=dict(o,root_object=str(obj))
                 rr=owner_refs(projected,vdevs,txg)
                 for ref in rr:ref.update(bookmark=o['bookmark'],depth=o['depth'],birth_cutoff=r['birth_cutoff'],resume=r['resume'])
                 refs.extend(rr);owners.append(o)
+            require(root_seen is traverse and (traverse or entry_owners==0),'missing async root owner/disposition')
         require(uint(end['entry_index'])==stop,'async final index')
         require(nbytes>=40+168*len(entries) and reads>=2+2*len(entries),'async read accounting lower bound')
     else:

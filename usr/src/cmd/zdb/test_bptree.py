@@ -48,4 +48,46 @@ class Tests(unittest.TestCase):
   for i in range(len(rows)):
    own=copy.deepcopy(rows);own.pop(i)
    with self.subTest(missing=i),self.assertRaises((ValueError,KeyError)):run(combined(own))
+ def test_malformed_root_before_birth_pruning(self):
+  for mode in ('normal','root-cutoff-equal'):
+   _,original=self.invoke(mode)
+   for bad in ('zero','type','level'):
+    rows=copy.deepcopy(original);entry=next(r for r in rows if r['record']=='async_entry')
+    w=entry['root_bp']
+    if bad=='zero':w[:]=['0000000000000000']*16
+    elif bad=='type':w[6]=f'{(int(w[6],16)&~(255<<48))|(19<<48):016x}'
+    else:w[6]=f'{int(w[6],16)|(1<<56):016x}'
+    # Corrupt the matching owner too, so root identity alone cannot catch it.
+    for owner in rows:
+     if owner['record']=='async_owner' and owner['bookmark'][2]=='-1':owner['bp_words']=w.copy()
+    with self.subTest(mode=mode,bad=bad),self.assertRaises(ValueError):run(combined(rows))
+ def test_missing_root_owner_even_with_adjusted_counts(self):
+  for mode in ('normal','resumed','resume-later','resume-parent','cutoff-equal'):
+   _,original=self.invoke(mode)
+   for drop_all in (False,True):
+    rows=copy.deepcopy(original)
+    removed=[r for r in rows if r['record']=='async_owner' and (drop_all or r['bookmark'][2]=='-1')]
+    rows=[r for r in rows if r not in removed]
+    rows[-1]['owners']=str(int(rows[-1]['owners'])-len(removed))
+    with self.subTest(mode=mode,drop_all=drop_all),self.assertRaises(ValueError):run(combined(rows))
+ def test_root_disposition_and_postorder(self):
+  _,rows=self.invoke('root-cutoff-equal');run(combined(rows))
+  entry=next(r for r in rows if r['record']=='async_entry');entry['root_bp'][10]='0000000000000014'
+  with self.assertRaises(ValueError):run(combined(rows))
+  _,rows=self.invoke('normal');root=next(r for r in rows if r['record']=='async_owner' and r['bookmark'][2]=='-1')
+  rows.remove(root);rows.insert(3,root)
+  with self.assertRaises(ValueError):run(combined(rows))
+  _,rows=self.invoke('sentinel');next(r for r in rows if r['record']=='async_entry')['root_bp']=['0000000000000000']*16
+  run(combined(rows)) # Native completed sentinels deliberately skip root checks.
+ def test_incremental_bptree_dependency(self):
+  source=pathlib.Path(__file__).parent/'Makefile'
+  rule=next(s for s in source.read_text().splitlines() if s.startswith('zdb_inventory.o:'))
+  deps=rule.split(':',1)[1].split();self.assertIn('zdb_bptree.c',deps)
+  work=self.tmp/'make-dependency';work.mkdir()
+  (work/'Makefile').write_text(rule+'\n\t@echo rebuild-required\n')
+  for name in deps:(work/name).write_text('fixture\n');os.utime(work/name,(100,100))
+  (work/'zdb_inventory.o').write_text('fixture object\n');os.utime(work/'zdb_inventory.o',(200,200))
+  r=subprocess.run(['/opt/local/bin/gmake','-q','zdb_inventory.o'],cwd=work);self.assertEqual(r.returncode,0)
+  os.utime(work/'zdb_bptree.c',(300,300))
+  r=subprocess.run(['/opt/local/bin/gmake','-q','zdb_inventory.o'],cwd=work);self.assertEqual(r.returncode,1)
 if __name__=='__main__':unittest.main(verbosity=2)

@@ -92,3 +92,15 @@ same-cut runtime fixtures with nonempty and partially resumed async-destroy
 queues. Compare roots, cutoffs, original resume bookmarks, remaining owner BPs
 and extents with a bounded stock/reference traversal. No runtime success or
 relocation safety is claimed here.
+
+## V11 review corrections
+
+Every non-sentinel entry must have an OBJSET root at BP level zero, including
+birth-pruned roots. A traversed root must appear exactly once as the last owner
+for that entry, with identical BP words and the root bookmark; pruned or hole
+roots must have no owners and no unresolved resume. Completed sentinels retain
+the native exemption from root validation. Regression fixtures reject zero-word,
+wrong-type and wrong-level roots, missing root owners even with adjusted terminal
+counts, and invalid root-owner ordering/disposition. The Makefile now lists
+zdb_bptree.c as a zdb_inventory.o prerequisite; an isolated make timestamp test
+checks that changing this include invalidates the object.
