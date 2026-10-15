@@ -1,5 +1,10 @@
 # Offline observed reference graph and ancestor closure
 
+The additive [semantic-reference analyzer](SEMANTIC_REFERENCES.md) can authenticate
+bounded deadlist payload evidence and report references into this structural
+closure. It preserves the graph's unresolved obligations and readiness flags;
+its matches do not change this graph into a write schedule.
+
 `reference_graph.py` consumes the original `-W` stream, SHA-256, external exit
 status and expected cut digest. It reruns `parent_edges.analyze()` and the
 underlying supported-profile validation. Saved analysis summaries are not an
