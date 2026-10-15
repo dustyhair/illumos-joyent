@@ -103,3 +103,17 @@ pending queue and compare exact root/child objects, entries and extents against
 stock no-free enumeration. An empty-queue run alone is not substantive validation.
 No runtime success, complete ownership inventory, relocation, crash recovery or
 removal safety is claimed by this milestone.
+
+## P3 review follow-up (v9)
+
+-J now explicitly excludes deferred-free ownership and payload validation; paired
+-K/-Y exclude only deferred-free payload validation because they enumerate owners.
+Native fixtures now successfully traverse two BP data blocks and two subobject-list
+blocks, and inject failures specifically on each second block while checking
+partial counts and error context. Cumulative tests exercise the production
+100000-entry limit across both queue roots and the production 4096-ID limit
+including both roots, both list objects and children, at the exact limit and one
+beyond it. Large fixture JSON is checked incrementally to bound test memory.
+The direct zio_read interception now increments a payload_reads counter and aborts
+on any call; the printed zero is the observed counter, not a literal claim. This
+is native fixture instrumentation, not a claim about physical metadata I/O.

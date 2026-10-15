@@ -20,6 +20,10 @@ class InventoryTests(unittest.TestCase):
   q=subprocess.run([str(BUILD/'test_inventory'),mode,str(p)],env=ENV,capture_output=True,text=True)
   self.assertEqual(q.returncode,0,q.stderr)
   return [json.loads(x) for x in p.read_text().splitlines()]
+ def test_bp_only_excludes_pending_ownership(self):
+  begin=self.rows[0]
+  self.assertIn('deferred-free ownership and payload validation',begin['excluded'])
+  self.assertNotIn('deferred-free payload validation',begin['excluded'])
  def test_invalid_type_matrix(self):
   rows=[x for x in self.fixture('invalid-types') if x['record']=='bp']
   self.assertEqual(len(rows),24)

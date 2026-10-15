@@ -12,26 +12,28 @@ static int pending_close(FILE *f) { int e = fclose(f); return (bad_close ? EOF :
 typedef struct fake_obj {
  dmu_object_info_t info;
  bpobj_phys_t hdr;
- blkptr_t bps[2];
- uint64_t children[2];
+ blkptr_t bps[8];
+ uint64_t children[128];
  dmu_buf_t bonus;
  int exists;
 } fake_obj_t;
-static fake_obj_t objects[256];
+static fake_obj_t objects[5000];
 static uint64_t version = SPA_VERSION_DEADLISTS;
 static int read_error, bonus_error, info_error, sparse, tiny_bonus;
-static unsigned reads, holds, releases, writes;
+static unsigned reads, holds, releases, writes, payload_reads;
+static int generated_entries, generated_ids;
+static uint64_t error_object;
 uint64_t spa_version(spa_t *s) { (void) s; return (version); }
 int dmu_object_info(objset_t *os, uint64_t obj, dmu_object_info_t *info) {
  (void) os;
  if (info_error) return (EIO);
- if (obj >= 256 || !objects[obj].exists) return (ENOENT);
+ if (obj >= 5000 || !objects[obj].exists) return (ENOENT);
  *info = objects[obj].info; return (0);
 }
 int dmu_bonus_hold(objset_t *os, uint64_t obj, void *tag, dmu_buf_t **db) {
  (void) os; (void) tag;
  if (bonus_error) return (EIO);
- if (obj >= 256 || !objects[obj].exists) return (ENOENT);
+ if (obj >= 5000 || !objects[obj].exists) return (ENOENT);
  fake_obj_t *o = &objects[obj];
  o->bonus.db_data = &o->hdr; o->bonus.db_size = tiny_bonus ? 8 : sizeof (o->hdr);
  *db = &o->bonus; holds++; return (0);
@@ -44,9 +46,20 @@ int dmu_offset_next(objset_t *os, uint64_t obj, boolean_t hole, uint64_t *off) {
 }
 int dmu_read(objset_t *os, uint64_t obj, uint64_t off, uint64_t n, void *buf, uint32_t flags) {
  (void) os; (void) flags; reads++;
- if (read_error) return (EIO);
- if (obj >= 256 || !objects[obj].exists) return (ENOENT);
+ if (read_error || (error_object == obj && off >= 512)) return (EIO);
+ if (obj >= 5000 || !objects[obj].exists) return (ENOENT);
  fake_obj_t *o = &objects[obj];
+ if (off > o->info.doi_max_offset || n > o->info.doi_max_offset - off) return (EIO);
+ if (generated_entries && o->info.doi_type == DMU_OT_BPOBJ) {
+  for (uint64_t i = 0; i < n / sizeof (blkptr_t); i++)
+   ((blkptr_t *)buf)[i] = o->bps[(off / sizeof (blkptr_t) + i) % 8];
+  return (0);
+ }
+ if (generated_ids && o->info.doi_type == DMU_OT_BPOBJ_SUBOBJ) {
+  for (uint64_t i = 0; i < n / sizeof (uint64_t); i++)
+   ((uint64_t *)buf)[i] = (obj == 3 ? 5 : 2051) + off / 8 + i;
+  return (0);
+ }
  void *data = o->info.doi_type == DMU_OT_BPOBJ ? (void *)o->bps : (void *)o->children;
  uint64_t size = o->info.doi_type == DMU_OT_BPOBJ ? sizeof (o->bps) : sizeof (o->children);
  if (off > size || n > size - off) return (EIO);
@@ -62,15 +75,17 @@ zio_t *zio_read(zio_t *parent, spa_t *spa, const blkptr_t *bp, abd_t *abd,
  (void) parent; (void) spa; (void) bp; (void) abd; (void) n; (void) done;
  (void) private; (void) pri; (void) flags; (void) zb;
  /* Pending entries must never enter the original-payload verifier. */
+ payload_reads++;
+ (void)fprintf(stderr,"forbidden payload read attempt %u\n",payload_reads);
  abort(); return (NULL);
 }
 static void init_obj(unsigned id, unsigned entries) {
  fake_obj_t *o = &objects[id]; memset(o, 0, sizeof (*o));o->exists = 1;
  o->info.doi_type = DMU_OT_BPOBJ; o->info.doi_bonus_type = DMU_OT_BPOBJ_HDR;
  o->info.doi_bonus_size = sizeof (bpobj_phys_t);o->info.doi_data_block_size = 512;
- o->info.doi_max_offset = entries ? 512 : 0;o->hdr.bpo_num_blkptrs = entries;
+ o->info.doi_max_offset = ((uint64_t)entries * sizeof (blkptr_t) + 511) & ~511ULL;o->hdr.bpo_num_blkptrs = entries;
  o->hdr.bpo_bytes = entries * 8192;
- for (unsigned i = 0; i < entries && i < 2; i++) {
+ for (unsigned i = 0; i < entries && i < 8; i++) {
   blkptr_t *b = &o->bps[i]; BP_SET_TYPE(b, DMU_OT_PLAIN_FILE_CONTENTS);
   BP_SET_LSIZE(b, 4096); BP_SET_PSIZE(b, 4096); BP_SET_CHECKSUM(b, ZIO_CHECKSUM_FLETCHER_4);
   BP_SET_COMPRESS(b, ZIO_COMPRESS_OFF);BP_SET_BIRTH(b, 20, 19);
@@ -93,6 +108,26 @@ int main(int argc,char **argv) {
  spa.spa_mode=FREAD;spa.spa_trust_config=B_TRUE;spa.spa_ubsync.ub_txg=30;
  spa.spa_meta_objset=(objset_t *)(uintptr_t)1;spa.spa_dsl_pool=&dp;
  spa.spa_deferred_bpobj.bpo_object=1;dp.dp_free_bpobj.bpo_object=2;
+ if (!strcmp(mode,"multi-bp") || !strcmp(mode,"second-bp-error")) {
+  init_obj(1,8);if(!strcmp(mode,"second-bp-error"))error_object=1;
+ }
+ if (!strcmp(mode,"multi-list") || !strcmp(mode,"second-list-error")) {
+  init_obj(1,0);link_obj(1,3,4);objects[1].hdr.bpo_num_subobjs=65;
+  objects[3].info.doi_max_offset=1024;
+  for(unsigned i=0;i<65;i++){objects[3].children[i]=4+i;init_obj(4+i,0);}
+  if(!strcmp(mode,"second-list-error"))error_object=3;
+ }
+ if (!strcmp(mode,"cumulative-entries-boundary") || !strcmp(mode,"cumulative-entries-excess")) {
+  generated_entries=1;init_obj(1,50000);
+  init_obj(2,!strcmp(mode,"cumulative-entries-boundary")?50000:50001);
+ }
+ if (!strcmp(mode,"cumulative-ids-boundary") || !strcmp(mode,"cumulative-ids-excess")) {
+  generated_ids=1;init_obj(1,0);init_obj(2,0);link_obj(1,3,5);link_obj(2,4,2051);
+  objects[1].hdr.bpo_num_subobjs=2046;
+  objects[2].hdr.bpo_num_subobjs=!strcmp(mode,"cumulative-ids-boundary")?2046:2047;
+  objects[3].info.doi_max_offset=objects[4].info.doi_max_offset=16384;
+  for(unsigned i=5;i<=4097;i++)init_obj(i,0);
+ }
  if (!strcmp(mode,"empty")) init_obj(1,0);
  if (!strcmp(mode,"both")) init_obj(2,1);
  if (!strcmp(mode,"legacy")) { version=25;objects[1].info.doi_bonus_size=BPOBJ_SIZE_V1; }
@@ -143,7 +178,7 @@ int main(int argc,char **argv) {
  e=zp_run(&spa);
  if (!strcmp(mode,"close-error")) bad_close=1;
  e=zdb_inventory_end(e);
- if(holds!=releases || writes)return (95);
- (void)printf("reads=%u holds=%u releases=%u writes=%u payload_reads=0\n",reads,holds,releases,writes);
+ if(holds!=releases || writes || payload_reads)return (95);
+ (void)printf("reads=%u holds=%u releases=%u writes=%u payload_reads=%u\n",reads,holds,releases,writes,payload_reads);
  return (e?1:0);
 }

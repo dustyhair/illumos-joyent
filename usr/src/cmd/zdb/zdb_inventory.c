@@ -188,11 +188,13 @@ zdb_inventory_begin(const char *path)
      "\"source_base\":\"da512a7e2e6716980271582e436faef06a575f71\","
      "\"quiescence\":\"externally required; not proven by this diagnostic\","
      "\"attempted\":[\"birth-pruned MOS/dataset tree references\"],"
-     "\"excluded\":[\"ZIL\",\"DDT ownership\",\"deferred-free payload validation\","
+     "\"excluded\":[\"ZIL\",\"DDT ownership\",\"%s\","
      "\"async destroy\",\"checkpoint-only ownership\",\"removal accounting\","
      "\"allocation maps in -J only; paired -K captures independently\"],%s}\n",
      zi_verify ? "zdb-observed-verified-v2" :
-     zi_paired ? "zdb-observed-allocation-v2" : "zdb-observed-bp-v1", zi_flags);
+     zi_paired ? "zdb-observed-allocation-v2" : "zdb-observed-bp-v1",
+     zi_paired ? "deferred-free payload validation" : "deferred-free ownership and payload validation",
+     zi_flags);
  return (fflush(zi_out) == 0 ? 0 : EIO);
 }
 
