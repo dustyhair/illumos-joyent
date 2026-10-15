@@ -17,7 +17,8 @@
 #define ZI_LIMIT 1000000ULL
 static FILE *zi_out;
 static uint64_t zi_count, zi_unsupported;
-static boolean_t zi_paired, zi_verify;
+static boolean_t zi_paired, zi_verify, zi_profile;
+void zdb_inventory_profile_mode(void) { zi_profile = zi_verify = zi_paired = B_TRUE; }
 void zdb_inventory_verify_mode(void) { zi_verify = zi_paired = B_TRUE; }
 void zdb_inventory_pair_mode(void) { zi_paired = B_TRUE; }
 static const char *zi_flags = "\"coverage_complete\":false,"
@@ -52,6 +53,7 @@ zi_words(FILE *f, const blkptr_t *bp)
 #include "zdb_verify.c"
 #include "zdb_pending.c"
 #include "zdb_bptree.c"
+#include "zdb_profile.c"
 
 /* Raw bias is retained even if the enum gains unsupported values. */
 static void
@@ -192,6 +194,7 @@ zdb_inventory_begin(const char *path)
      "\"excluded\":[\"ZIL\",\"DDT ownership\",\"%s\","
      "\"async-destroy payload validation in -K/-Y; ownership absent in -J\",\"checkpoint-only ownership\",\"removal accounting\","
      "\"allocation maps in -J only; paired -K captures independently\"],%s}\n",
+     zi_profile ? "zdb-observed-profile-v1" :
      zi_verify ? "zdb-observed-verified-v3" :
      zi_paired ? "zdb-observed-allocation-v3" : "zdb-observed-bp-v1",
      zi_paired ? "deferred-free payload validation" : "deferred-free ownership and payload validation",
@@ -231,6 +234,7 @@ zdb_inventory_run(spa_t *spa)
  if (!err && zi_paired) err = za_run(spa);
  if (!err && zi_paired) err = zp_run(spa);
  if (!err && zi_paired) err = zb_run(spa);
+ if (!err && zi_profile) err = zg_run(spa);
  if (!err && zi_paired && (cut != spa->spa_ubsync.ub_txg ||
      memcmp(&root, spa_get_rootblkptr(spa), sizeof (root)))) err = ESTALE;
  if (zi_paired) {
