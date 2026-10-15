@@ -262,7 +262,7 @@ za_run(spa_t *spa)
  (void) fprintf(zi_out, "{\"record\":\"allocation_scope\","
      "\"checkpoint_unsupported\":%s,\"removal_unsupported\":%s,"
      "\"owner_obligations\":[\"DDT:not_enumerated\",\"deferred_free:pending_enumeration\","
-     "\"async_destroy:not_enumerated\",\"ZIL:not_enumerated\"],"
+     "\"async_destroy:pending_enumeration\",\"ZIL:not_enumerated\"],"
      "\"allocation_adjustments\":\"none\",%s}\n",
      checkpoint ? "true" : "false", removal ? "true" : "false", zi_flags);
  if ((err = za_finish_record()) != 0) return (err);

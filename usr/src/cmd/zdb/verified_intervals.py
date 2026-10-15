@@ -11,12 +11,12 @@ def analyze(data,exit_status,expected_sha):
     rows=[parse(s) for s in data.splitlines()]
     require(len(rows)>=4,'missing verified envelope')
     for r in rows:record_schema(r)
-    require(rows[0].get('schema') in ('zdb-observed-verified-v1','zdb-observed-verified-v2'),'verified schema required')
+    require(rows[0].get('schema') in ('zdb-observed-verified-v1','zdb-observed-verified-v2','zdb-observed-verified-v3'),'verified schema required')
     require(all(all(r.get(k) is False for k in FLAGS) for r in rows),'global certification flag')
     ends=[r for r in rows if r['record']=='verification_end']
     require(len(ends)==1 and rows[-3] is ends[0],'verification terminal order/count')
     stripped=[dict(r) for r in rows if r['record'] not in ('verification','verification_end')]
-    stripped[0]['schema']='zdb-observed-allocation-v2' if rows[0]['schema'].endswith('-v2') else 'zdb-observed-allocation-v1'
+    stripped[0]['schema']=rows[0]['schema'].replace('verified','allocation')
     projected=b''.join(canonical(r)+b'\n' for r in stripped)
     result=paired(projected,exit_status,hashlib.sha256(projected).hexdigest())
     result['input_sha256']=expected_sha;result['observation']['input_sha256']=expected_sha
@@ -55,7 +55,7 @@ def analyze(data,exit_status,expected_sha):
     require(uint(end['submitted'])==uint(end['completed'])==uint(end['passed'])==passed,'verification completion counts')
     require(uint(end['failed'])==uint(end['unsupported'])==uint(end['outstanding'])==0,'failed or outstanding verification')
     require(uint(end['requested_p'])==uint(end['verified_p'])==verified_p<=1<<30,'verification byte counts')
-    result['schema']='real-verified-interval-analysis-v2' if rows[0]['schema'].endswith('-v2') else 'real-verified-interval-analysis-v1'
+    result['schema']='real-verified-interval-analysis-'+rows[0]['schema'].rsplit('-',1)[1]
     result['verification_results']=checks
     result['verification_results_sha256']=digest(checks)
     result['measured_read_summary']={'verified_bp_references':passed,'not_applicable_bp_references':na,'verified_raw_P_bytes':verified_p,'submitted':passed,'completed':passed,'outstanding':0,'scope':'original-BP checksum-valid logical payload recovery; not per-replica or per-member health'}

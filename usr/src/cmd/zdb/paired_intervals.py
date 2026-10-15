@@ -54,6 +54,25 @@ def analyze(data,exit_status,expected_sha):
     rows=[parse(x) for x in data.splitlines()]
     for r in rows:record_schema(r)
     require(len(rows)>=4,'short paired stream')
+    if rows[0].get('schema')=='zdb-observed-allocation-v3':
+        from bptree_intervals import KINDS,analyze as async_analyze
+        indices=[i for i,r in enumerate(rows) if r['record'] in KINDS]
+        require(indices and indices==list(range(indices[0],len(rows)-3)),'async section missing/order')
+        own=rows[indices[0]:-3]
+        require(all(all(r.get(k) is False for k in FLAGS) for r in own),'async certification flag')
+        projected=[dict(r) for r in rows if r['record'] not in KINDS]
+        projected[0]['schema']='zdb-observed-allocation-v2'
+        scopes=[r for r in projected if r['record']=='allocation_scope']
+        require(len(scopes)==1 and scopes[0]['owner_obligations'][2]=='async_destroy:pending_enumeration','async obligations')
+        scopes[0]['owner_obligations']=list(scopes[0]['owner_obligations'])
+        scopes[0]['owner_obligations'][2]='async_destroy:not_enumerated'
+        pdata=b''.join(canonical(r)+b'\n' for r in projected)
+        result=analyze(pdata,exit_status,hashlib.sha256(pdata).hexdigest())
+        result.update(async_analyze(own,result))
+        result.update(schema='real-paired-interval-analysis-v3',input_sha256=expected_sha,record_counts=dict(collections.Counter(r['record'] for r in rows)))
+        result['observation']['input_sha256']=expected_sha
+        result['owner_obligations'][2]='async_destroy:enumerated'
+        return result
     if rows[0].get('schema')=='zdb-observed-allocation-v2':
         from pending_intervals import KINDS,analyze as pending_analyze
         indices=[i for i,r in enumerate(rows) if r['record'] in KINDS]

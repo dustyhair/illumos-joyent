@@ -31,10 +31,10 @@ def words(x):
 
 # All integer/provenance fields, including those on records not used in arithmetic,
 # pass here before cut identity, classification or interval construction.
-UINT_FIELDS=set('guid txg id ashift children parity asize metaslab_count sequence objset object blkid logical_birth physical_birth lsize psize embedded_payload_bytes record_limit observed unsupported_count vdev_id vdev_guid offset qsize expected_asize metaslab start length unflushed_txg map_object log_txg ordinal records intervals bytes map_words map_bytes root_object parent_object parent_index entry_index child_object depth entries objects links subobject_list subobjects bonus_bytes accounted_bytes accounted_comp accounted_uncomp read_bytes active_object active_index spa_version spa_deferred_root dsl_free_root requested_p completed_p verified_p seen submitted completed passed failed not_applicable outstanding'.split())
+UINT_FIELDS=set('begin end birth_cutoff owners visits reads guid txg id ashift children parity asize metaslab_count sequence objset object blkid logical_birth physical_birth lsize psize embedded_payload_bytes record_limit observed unsupported_count vdev_id vdev_guid offset qsize expected_asize metaslab start length unflushed_txg map_object log_txg ordinal records intervals bytes map_words map_bytes root_object parent_object parent_index entry_index child_object depth entries objects links subobject_list subobjects bonus_bytes accounted_bytes accounted_comp accounted_uncomp read_bytes active_object active_index spa_version spa_deferred_root dsl_free_root requested_p completed_p verified_p seen submitted completed passed failed not_applicable outstanding'.split())
 INT_FIELDS={'level'}
 NUMBER_LIMITS={'bp_type':255,'bp_level':31,'checksum_id':255,'compression_id':127,'dnode_type':255,'dnode_indblkshift':255,'dnode_datablkszsec':65535,'slot':2,'alloc_bias':(1<<32)-1,'shift':63,'error':(1<<31)-1,'time_limit_seconds':(1<<31)-1}
-BOOL_FIELDS=set('coverage_complete payload_validation_performed evacuation_authorized dnode_present children_skipped geometry_valid gang is_log export_complete checkpoint_unsupported removal_unsupported applied measured verification_complete pending_complete dsl_free_applicable payload_verifiable movable_candidate'.split())
+BOOL_FIELDS=set('active completed_sentinel async_complete coverage_complete payload_validation_performed evacuation_authorized dnode_present children_skipped geometry_valid gang is_log export_complete checkpoint_unsupported removal_unsupported applied measured verification_complete pending_complete dsl_free_applicable payload_verifiable movable_candidate'.split())
 REQUIRED={
  'begin':{'schema','bp_encoding','source_base','record_limit'},
  'pool':{'guid','txg','root_bp'},
@@ -51,6 +51,11 @@ REQUIRED={
  'allocation_end':{'records','intervals','bytes','map_words','map_bytes'},
  'verification':{'sequence','status','measured','error','requested_p','completed_p','objset','object','level','blkid','bp_words'},
  'verification_end':{'verification_complete','seen','submitted','completed','passed','failed','unsupported','not_applicable','outstanding','requested_p','verified_p'},
+ 'async_scope':{'object','active'},
+ 'async_queue':{'object','begin','end','accounted_bytes','accounted_comp','accounted_uncomp'},
+ 'async_entry':{'object','entry_index','birth_cutoff','completed_sentinel','resume','root_bp'},
+ 'async_owner':{'object','entry_index','queue','depth','status','error','payload_verifiable','movable_candidate','bookmark','bp_words'},
+ 'async_end':{'object','entry_index','entries','owners','visits','reads','read_bytes','async_complete','error'},
  'pending_scope':{'spa_version','spa_deferred_root','dsl_free_root','dsl_free_applicable'},
  'pending_object':{'queue','root_object','object','parent_object','parent_index','depth','entries','subobject_list','subobjects','bonus_bytes','accounted_bytes','accounted_comp','accounted_uncomp'},
  'pending_owner':{'queue','root_object','object','entry_index','status','error','payload_verifiable','movable_candidate','bp_words'},
@@ -70,6 +75,9 @@ def record_schema(r,kind=None):
         elif key=='unsupported':
             if kind in ('end','verification_end'):uint(value)
             else:require(type(value) is bool,'invalid unsupported flag')
+        elif key in ('bookmark','resume'):
+            require(type(value) is list and len(value)==4,'bookmark encoding')
+            uint(value[0]);uint(value[1]);sint(value[2]);uint(value[3])
         elif key in UINT_FIELDS:uint(value)
         elif key in INT_FIELDS:sint(value)
         elif key in NUMBER_LIMITS:require(type(value) is int and 0<=value<=NUMBER_LIMITS[key],'invalid '+key)
