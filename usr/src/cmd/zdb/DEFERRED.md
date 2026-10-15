@@ -1,4 +1,28 @@
-# Bounded pending-free ownership (v8 review hold)
+# Bounded pending-free ownership
+
+## Verified disposable runtime result (v9)
+
+The fresh disposable v9 fixture at TXG 1658
+enumerated 525 stored entries and 530 DVA references. All 16 stored BP words
+were compared exactly with stock raw-read data decoded using bounded host LZ4.
+For this fixture, pending residual A-minus-observed, pending outside A,
+pending-versus-observed overlaps and pending-owner overlaps were all zero.
+The coordinator confirmed completion of independent final evidence review.
+
+The comparison used stock raw reads plus explicit host decoding: stock's
+heuristic decompression remains a limitation, and this is not a claim that its
+automatic decompression independently validated every entry. Comparing stored
+BP words does not restore checksums stripped by bpobj_enqueue or validate the
+freed payload. The result is specific to this fixture and selected cut.
+coverage_complete, payload_validation_performed and evacuation_authorized
+remain false globally; pending owners remain non-movable. Async-destroy bptrees,
+DDT and ZIL remain separate ownership gaps.
+
+The implementation notes below retain the original validation plan as historical
+context. The published checkpoint remains 665f1d2d05c9; the v9 follow-up
+6cf0e21e8780 has not been pushed. No new push accompanies this documentation update.
+
+## Original implementation scope
 
 This extends paired `-K` and verified `-Y` capture to schema v2. BP-only `-J`
 and schema-v1 analyzers remain supported. No new pool read, VM operation, pool
