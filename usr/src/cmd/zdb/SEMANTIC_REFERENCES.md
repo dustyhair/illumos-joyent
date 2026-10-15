@@ -1,5 +1,10 @@
 # Offline semantic references, initial bounded profile
 
+The additive [head-only symbolic COW ledger](COW_LEDGER.md) derives one selected
+reference-copy route and freezes captured semantic before-images in a
+hypothetical no-free model. Actual stock COW may expand deadlist/BPOBJ/MOS
+branches and change header totals; those effects and all readiness remain unresolved.
+
 `semantic_references.py` extends the observed graph with dataset deadlist
 references and contextual unflushed-TXG array layouts. It revalidates the raw
 `-W` capture through `reference_graph.analyze()` on every public invocation.
