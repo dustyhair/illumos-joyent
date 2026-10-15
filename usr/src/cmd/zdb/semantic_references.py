@@ -177,7 +177,7 @@ def leaf_payloads(document, graph, budget):
 
 def mos_objects(records, budget):
     edges = {r['node']: r for r in records if r['record'] == 'parent_edge'}
-    objects = {}; seen = set()
+    objects = {}; seen = {}
     for r in records:
         budget.take(work=1)
         if r['record'] != 'parent_container':
@@ -186,16 +186,20 @@ def mos_objects(records, budget):
         if z[:3] != ['0', '0', '0'] or (w[6] >> 48) & 255 != 10:
             continue
         key = block_id(edge['child_bp'])
-        if key in seen:
+        # Dnode object numbers depend on the logical block index. A shared
+        # physical buffer at another index describes another set of owners.
+        logical = uint(z[3]); observation = (key, r['decoded_hex'])
+        if logical in seen:
+            require(seen[logical] == observation, 'conflicting logical MOS dnode-block observation')
             continue
-        seen.add(key); data = bytes.fromhex(r['decoded_hex'])
+        seen[logical] = observation; data = bytes.fromhex(r['decoded_hex'])
         for offset in range(0, len(data), 512):
             budget.take(work=1)
             d = data[offset:offset+512]
             if d[0] == 0:
                 continue
             budget.take(objects=1)
-            obj = uint(z[3])*(len(data)//512)+offset//512
+            obj = logical*(len(data)//512)+offset//512
             require(obj not in objects, 'conflicting MOS object observation')
             start = 64+d[3]*128; n = int.from_bytes(d[10:12], 'little')
             objects[obj] = dict(object=obj, type=d[0], bonus_type=d[4], bonus=d[start:start+n],

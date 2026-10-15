@@ -58,7 +58,11 @@ ZAPs remain outside the decoded scope.
 
 Owners are derived from MOS dnode bytes: dataset bonus `ds_deadlist_obj`,
 deadlist micro-ZAP birth bucket, BPOBJ dnode and BPOBJ bonus. No object number
-is hardcoded. Valid empty deadlist maps and canonical empty BPOBJs are accepted.
+is hardcoded. MOS observations are deduplicated only at the same logical
+dnode-block index with identical BP and decoded bytes. Reusing one physical
+buffer at a different index describes different object numbers and owners;
+those observations must be expanded. Conflicting observations at one index
+refuse. Valid empty deadlist maps and canonical empty BPOBJs are accepted.
 Nonempty BPOBJs require the exact 48-byte BPOBJ_HDR, zero subobject fields,
 one logical leaf, checked `entries * 128`, data-block/count bounds and supplied
 authenticated raw leaf bytes. Missing bytes refuse. Older headers, subobject
@@ -152,8 +156,15 @@ bounded enumeration; this is not an exhaustive absence/identity proof.
 Objects 86, 90, 93 and 98 receive contextual TXG-array layout classifications.
 Their raw array values and vdev registration are not independently validated
 by this input. The structural closure stays at 20 blocks; all readiness flags
-stay false. Sixteen new test methods pass normally and under optimized Python,
-alongside 152 existing regression methods. No new native build is required.
+stay false. Nineteen semantic test methods pass normally and under optimized
+Python, alongside 152 existing regression methods. Three alias regressions
+cover additional dataset owner chains, duplicate contextual owners and a
+complete synthetic stream accepted by the public parent/graph validators
+with dataset roots 2, 3, 6 and 7. They fail against the initial BP-only
+deduplication implementation, which independent review correctly rejected.
+The logical-index fix leaves the sealed TXG 330 semantic output byte-identical
+(SHA256 `06c8a02797b4c1dc015b7d5a996699b60083f9f7a114374d664968ae676ef2a3`).
+No new native build is required.
 
 For a current-root COW experiment retaining all old allocations and source
 storage, older uberblocks can remain unchanged. Snapshots/clones and these

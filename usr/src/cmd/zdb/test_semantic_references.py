@@ -128,6 +128,82 @@ def change(records, obj, offset, value):
     records[1]['decoded_hex'] = data.hex()
 
 
+def repeat_mos(records, blkid):
+    edge = copy.deepcopy(records[0]); edge['node'] = '2'; edge['bookmark'][3] = str(blkid)
+    container = copy.deepcopy(records[1]); container['node'] = '2'
+    records.extend([edge, container])
+
+
+def public_mos_alias_fixture():
+    """Complete synthetic stream accepted by the public parent/graph validators.
+
+    One MOS buffer appears at logical indexes 0 and 1. Its dataset dnodes
+    therefore represent objects 2/3 and 6/7 despite identical physical bytes.
+    This tests capture-validation contracts, not actual disk authentication.
+    """
+    from parent_edges import SAFETY as parent_flags
+    from test_edges import full_fixture
+
+    def pointer(typ, offset, size):
+        w=bp(typ,offset,size);w[0]='0000000000000010';w[10]='0000000000000014'
+        return w
+
+    root=pointer(11,65536,4096);mosbp=pointer(10,81920,2048);dsroot=pointer(11,131072,4096)
+    rootdata=bytearray(4096);dn=dnode(10,mosbp,blocksize=2048,count=2)
+    dn[192:320]=raw(mosbp);rootdata[:512]=dn
+    emptyzap=embed(zap([]),50);emptyzap[10]='0000000000000014'
+    mosdata=bytearray(2048);mosdata[512:1024]=dnode(50,emptyzap,51,bytes(320),count=1)
+    for obj in (2,3):
+        bonus=bytearray(320)
+        for index,value in [(0,10),(2,25),(3,2 if obj==3 else 0),(5,1 if obj==3 else 0),(8,1)]:
+            struct.pack_into('<Q',bonus,index*8,value)
+        bonus[128:256]=raw(dsroot)
+        mosdata[obj*512:(obj+1)*512]=dnode(16,['0'*16]*16,16,bonus,count=1)
+    rows=[dict(record='parent_scope',encoding='decoded-amd64-little-endian',snapshot_birth_pruning=False,
+        scope='current_MOS_and_dataset_tree_pointer_slots',semantic_BP_payloads_enumerated=False,
+        historical_roots_enumerated=False,anchor='selected_import_uberblock_not_independent_label_proof',**parent_flags)]
+    edges={}
+
+    def edge(parent,kind,bm,bp,offset=0,base=0,slot=0,data=None):
+        node=str(len(edges)+1);w=[int(v,16) for v in bp]
+        disposition='container' if data is not None else 'embedded' if w[6]&(1<<39) else 'hole'
+        r=dict(record='parent_edge',node=node,parent_node=parent,kind=kind,bookmark=bm,
+            decoded_offset=str(offset),dnode_offset=str(base),slot=str(slot),child_bp=bp,
+            parent_bp=edges[parent]['child_bp'] if parent!='0' else None,
+            parent_bookmark=edges[parent]['bookmark'] if parent!='0' else None,
+            disposition=disposition,**parent_flags)
+        edges[node]=r;rows.append(r)
+        if data is not None:
+            rows.append(dict(record='parent_container',node=node,decoded_size=str(len(data)),
+                authentication='original_bp_arc_checksum',decoded_hex=bytes(data).hex(),**parent_flags))
+        return node
+
+    edge('0','selected_uberblock',['0','0','-1','0'],root,data=rootdata)
+    for blkid in (0,1):
+        parent=edge('1','dnode',['0','0','0',str(blkid)],mosbp,64+128*blkid,slot=blkid,data=mosdata)
+        first=4*blkid
+        edge(parent,'dnode',['0',str(first+1),'0','0'],emptyzap,576,512)
+        for obj in (first+2,first+3):
+            base=(obj-first)*512
+            edge(parent,'dnode',['0',str(obj),'0','0'],['0'*16]*16,base+64,base)
+        for obj in (first+2,first+3):
+            base=(obj-first)*512
+            edge(parent,'dataset_bonus',[str(obj),'0','-1','0'],dsroot,base+320,data=bytes(4096))
+    containers=[r for r in rows if r['record']=='parent_container'];decoded=sum(int(r['decoded_size']) for r in containers)
+    rows.append(dict(record='parent_end',parent_capture_complete=True,error=0,nodes=str(len(edges)),
+        containers=str(len(containers)),decoded_bytes=str(decoded),dataset_roots='4',
+        output_charge=str(4096*len(edges)+2048*len(containers)+2*decoded),**parent_flags))
+    full=full_fixture(rows);end=next(r for r in full if r['record']=='profile_end')
+    additions=[]
+    for old,new in [('2','6'),('3','7')]:
+        for kind in ('profile_object','profile_dataset'):
+            r=copy.deepcopy(next(r for r in full if r['record']==kind and r['object']==old))
+            r['object']=new;additions.append(r)
+    full[full.index(end):full.index(end)]=additions
+    end.update(objects='4',datasets='4',heads='2',snapshots='2',active_object='7',reads='17',read_bytes='8704')
+    return full
+
+
 class Tests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -260,6 +336,48 @@ class Tests(unittest.TestCase):
         self.assertEqual(result['counts']['unmatched'],1)
         self.assertIsNone(result['semantic_references'][0]['relationship'])
         self.assertTrue(any(v['kind']=='unmatched_stored_BP' for v in result['unresolved_obligations']))
+
+    def test_logical_mos_alias_preserves_dataset_owner_chains(self):
+        g,r,e=copy.deepcopy(self.base)
+        # Isolate dataset ownership: the contextual ZAP alias is tested below.
+        change(r,4,0,bytes(512));repeat_mos(r,1)
+        result=build(g,r,e)
+        self.assertEqual(result['counts']['semantic_references'],7)
+        self.assertTrue(all({c['dataset_object'] for c in ref['owner_chains']}=={'1','33'}
+                            for ref in result['semantic_references']))
+        # Identical observations at the same logical index may be deduplicated.
+        g,r,e=copy.deepcopy(self.base);repeat_mos(r,0)
+        actual=build(g,r,e);original=build(*copy.deepcopy(self.base))
+        self.assertEqual(actual['semantic_references'],original['semantic_references'])
+        self.assertEqual(actual['counts'],original['counts'])
+        self.assertEqual(actual['budget']['used']['objects'],original['budget']['used']['objects'])
+        # Conflicting observations at that logical index must refuse.
+        r[-1]['decoded_hex']='ff'+r[-1]['decoded_hex'][2:]
+        with self.assertRaisesRegex(ValueError,'conflicting logical MOS'):build(g,r,e)
+
+    def test_logical_mos_alias_exposes_duplicate_contextual_owner(self):
+        g,r,e=copy.deepcopy(self.base);repeat_mos(r,1)
+        self.assertEqual({v['object'] for v in s.mos_objects(r,s.Budget()).values() if v['type']==196 and not v['bonus']},
+                         {4,36})
+        with self.assertRaisesRegex(ValueError,'ambiguous unflushed-TXG owners'):build(g,r,e)
+
+    def test_public_validated_capture_preserves_all_logical_dataset_dnodes(self):
+        from parent_edges import analyze as parent_analyze
+        from reference_graph import analyze as graph_analyze
+        from paired_intervals import digest
+        rows=public_mos_alias_fixture();data=b''.join(canonical(r)+b'\n' for r in rows)
+        sha=hashlib.sha256(data).hexdigest();parent=parent_analyze(data,'0',sha)
+        roots={r['bookmark'][0] for r in parent['parent_edges'] if r['record']=='parent_edge' and r['kind']=='dataset_bonus'}
+        self.assertEqual(roots,{'2','3','6','7'})
+        objects=s.mos_objects(parent['parent_edges'],s.Budget())
+        self.assertEqual({str(k) for k,v in objects.items() if v['bonus_type']==16},roots)
+        target=dict(vdev_id='0',vdev_guid='7',offset='131072',asize='8192',dva_slot='0')
+        cutsha=digest(parent['cut']);graph=graph_analyze(data,'0',sha,cutsha,target)
+        self.assertEqual({r['dataset_object'] for r in graph['dataset_anchors']},roots)
+        leaf=canonical(dict(schema='semantic-leaf-evidence-v1',capture_sha256=sha,cut_sha256=cutsha,leaves=[]))
+        result=s.analyze(data,'0',sha,cutsha,target,leaf,hashlib.sha256(leaf).hexdigest())
+        self.assertEqual(result['counts']['semantic_references'],0)
+        self.assertTrue(all(result[k] is False for k in SAFETY))
 
     def test_birth_bucket_and_future_birth(self):
         for name in ('132','14a'):
