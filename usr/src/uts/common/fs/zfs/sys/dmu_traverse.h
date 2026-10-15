@@ -58,6 +58,9 @@ typedef int (blkptr_cb_t)(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
  */
 #define	TRAVERSE_NO_DECRYPT		(1<<5)
 
+/* Diagnostic-only exclusion; callers must declare ZIL coverage absent. */
+#define TRAVERSE_NO_ZIL (1<<6)
+
 /* Special traverse error return value to indicate skipping of children */
 #define	TRAVERSE_VISIT_NO_CHILDREN	-1
 
@@ -68,6 +71,8 @@ int traverse_dataset_resume(struct dsl_dataset *ds, uint64_t txg_start,
 int traverse_dataset_destroyed(spa_t *spa, blkptr_t *blkptr,
     uint64_t txg_start, zbookmark_phys_t *resume, int flags,
     blkptr_cb_t func, void *arg);
+boolean_t traverse_no_zil_supported(void);
+
 int traverse_pool(spa_t *spa,
     uint64_t txg_start, int flags, blkptr_cb_t func, void *arg);
 

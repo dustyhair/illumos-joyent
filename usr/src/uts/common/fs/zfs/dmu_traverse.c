@@ -616,7 +616,8 @@ traverse_impl(spa_t *spa, dsl_dataset_t *ds, uint64_t objset, blkptr_t *rootbp,
 	    ZB_ROOT_OBJECT, ZB_ROOT_LEVEL, ZB_ROOT_BLKID);
 
 	/* See comment on ZIL traversal in dsl_scan_visitds. */
-	if (ds != NULL && !ds->ds_is_snapshot && !BP_IS_HOLE(rootbp)) {
+	if (!(flags & TRAVERSE_NO_ZIL) && ds != NULL &&
+	    !ds->ds_is_snapshot && !BP_IS_HOLE(rootbp)) {
 		enum zio_flag zio_flags = ZIO_FLAG_CANFAIL;
 		arc_flags_t flags = ARC_FLAG_WAIT;
 		objset_phys_t *osp;
@@ -738,4 +739,11 @@ traverse_pool(spa_t *spa, uint64_t txg_start, int flags,
 	if (err == ESRCH)
 		err = 0;
 	return (err);
+}
+
+/* Userland diagnostics use this symbol to refuse an older libzpool. */
+boolean_t
+traverse_no_zil_supported(void)
+{
+	return (B_TRUE);
 }
