@@ -261,7 +261,7 @@ za_run(spa_t *spa)
      spa->spa_vdev_removal != NULL;
  (void) fprintf(zi_out, "{\"record\":\"allocation_scope\","
      "\"checkpoint_unsupported\":%s,\"removal_unsupported\":%s,"
-     "\"owner_obligations\":[\"DDT:not_enumerated\",\"deferred_free:not_enumerated\","
+     "\"owner_obligations\":[\"DDT:not_enumerated\",\"deferred_free:pending_enumeration\","
      "\"async_destroy:not_enumerated\",\"ZIL:not_enumerated\"],"
      "\"allocation_adjustments\":\"none\",%s}\n",
      checkpoint ? "true" : "false", removal ? "true" : "false", zi_flags);

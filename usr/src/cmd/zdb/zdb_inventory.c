@@ -50,6 +50,7 @@ zi_words(FILE *f, const blkptr_t *bp)
 
 #include "zdb_allocation.c"
 #include "zdb_verify.c"
+#include "zdb_pending.c"
 
 /* Raw bias is retained even if the enum gains unsupported values. */
 static void
@@ -187,11 +188,11 @@ zdb_inventory_begin(const char *path)
      "\"source_base\":\"da512a7e2e6716980271582e436faef06a575f71\","
      "\"quiescence\":\"externally required; not proven by this diagnostic\","
      "\"attempted\":[\"birth-pruned MOS/dataset tree references\"],"
-     "\"excluded\":[\"ZIL\",\"DDT ownership\",\"deferred frees\","
+     "\"excluded\":[\"ZIL\",\"DDT ownership\",\"deferred-free payload validation\","
      "\"async destroy\",\"checkpoint-only ownership\",\"removal accounting\","
      "\"allocation maps in -J only; paired -K captures independently\"],%s}\n",
-     zi_verify ? "zdb-observed-verified-v1" :
-     zi_paired ? "zdb-observed-allocation-v1" : "zdb-observed-bp-v1", zi_flags);
+     zi_verify ? "zdb-observed-verified-v2" :
+     zi_paired ? "zdb-observed-allocation-v2" : "zdb-observed-bp-v1", zi_flags);
  return (fflush(zi_out) == 0 ? 0 : EIO);
 }
 
@@ -225,6 +226,7 @@ zdb_inventory_run(spa_t *spa)
  int err = traverse_pool(spa, 0, TRAVERSE_PRE | TRAVERSE_NO_DECRYPT |
      TRAVERSE_NO_ZIL, zi_record, NULL);
  if (!err && zi_paired) err = za_run(spa);
+ if (!err && zi_paired) err = zp_run(spa);
  if (!err && zi_paired && (cut != spa->spa_ubsync.ub_txg ||
      memcmp(&root, spa_get_rootblkptr(spa), sizeof (root)))) err = ESTALE;
  if (zi_paired) {

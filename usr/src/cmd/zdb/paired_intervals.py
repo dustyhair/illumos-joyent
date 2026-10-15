@@ -53,6 +53,25 @@ def analyze(data,exit_status,expected_sha):
     require(data.endswith(b'\n'),'truncated stream')
     rows=[parse(x) for x in data.splitlines()]
     for r in rows:record_schema(r)
+    require(len(rows)>=4,'short paired stream')
+    if rows[0].get('schema')=='zdb-observed-allocation-v2':
+        from pending_intervals import KINDS,analyze as pending_analyze
+        indices=[i for i,r in enumerate(rows) if r['record'] in KINDS]
+        require(indices and indices==list(range(indices[0],len(rows)-3)),'pending section missing/order')
+        pending_rows=rows[indices[0]:-3]
+        require(all(all(r.get(k) is False for k in FLAGS) for r in pending_rows),'pending certification flag')
+        projected=[dict(r) for r in rows if r['record'] not in KINDS]
+        projected[0]['schema']='zdb-observed-allocation-v1'
+        scopes=[r for r in projected if r['record']=='allocation_scope']
+        require(len(scopes)==1 and scopes[0]['owner_obligations']==['DDT:not_enumerated','deferred_free:pending_enumeration','async_destroy:not_enumerated','ZIL:not_enumerated'],'pending owner obligations')
+        scopes[0]['owner_obligations']=['DDT:not_enumerated','deferred_free:not_enumerated','async_destroy:not_enumerated','ZIL:not_enumerated']
+        pdata=b''.join(canonical(r)+b'\n' for r in projected)
+        result=analyze(pdata,exit_status,hashlib.sha256(pdata).hexdigest())
+        result.update(pending_analyze(pending_rows,result))
+        result.update(schema='real-paired-interval-analysis-v2',input_sha256=expected_sha,record_counts=dict(collections.Counter(r['record'] for r in rows)))
+        result['observation']['input_sha256']=expected_sha
+        result['owner_obligations']=['DDT:not_enumerated','deferred_free:enumerated','async_destroy:not_enumerated','ZIL:not_enumerated']
+        return result
     counts=collections.Counter(r['record'] for r in rows)
     for kind in ['begin','pool','end','allocation_scope','cut_end','allocation_end']:
         require(counts[kind]==1,'missing/duplicate '+kind)
