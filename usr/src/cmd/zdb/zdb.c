@@ -158,6 +158,9 @@ usage(void)
 	(void) fprintf(stderr, "\t%s -Q <new.jsonl> -e -p /lab/path <pool>\n"
 	    "\tVerified capture plus strict DDT/ZIL absence evidence; analyze with profile_intervals.py.\n", cmdname);
 
+	(void) fprintf(stderr, "\t%s -W <new.jsonl> -e -p /lab/path <pool>\n"
+	    "\tRead-only unpruned parent-edge evidence; analyze with parent_edges.py.\n", cmdname);
+
 	(void) fprintf(stderr, "    Dataset name must include at least one "
 	    "separator character '/' or '@'\n");
 	(void) fprintf(stderr, "    If dataset name is specified, only that "
@@ -6275,7 +6278,7 @@ main(int argc, char **argv)
 	char *target, *target_pool;
 	char *inventory_path = NULL;
 	int inventory_seen = 0, inventory_bad = 0;
-	int inventory_e = 0, inventory_p = 0, inventory_pair = 0, inventory_verify = 0, inventory_profile = 0;
+	int inventory_e = 0, inventory_p = 0, inventory_pair = 0, inventory_verify = 0, inventory_profile = 0, inventory_edges = 0;
 	int saved_opterr = opterr;
 	nvlist_t *policy = NULL;
 	uint64_t max_txg = UINT64_MAX;
@@ -6288,10 +6291,10 @@ main(int argc, char **argv)
 	/* Prevalidate before tunable setters, discovery or any pool access. */
 	opterr = 0;
 	while ((c = getopt(argc, argv,
-	    "AbcCdDeEFGhiI:J:K:klLmMo:Op:PqQ:RsSt:uU:vVx:XY:")) != -1) {
-		if (c == 'J' || c == 'K' || c == 'Y' || c == 'Q') { inventory_path = optarg;
-			inventory_seen++; inventory_pair = c == 'K' || c == 'Y' || c == 'Q';
-			inventory_verify = c == 'Y' || c == 'Q'; inventory_profile = c == 'Q'; }
+	    "AbcCdDeEFGhiI:J:K:klLmMo:Op:PqQ:RsSt:uU:vVW:x:XY:")) != -1) {
+		if (c == 'J' || c == 'K' || c == 'Y' || (c == 'Q' || c == 'W')) { inventory_path = optarg;
+			inventory_seen++; inventory_pair = c == 'K' || c == 'Y' || (c == 'Q' || c == 'W');
+			inventory_verify = c == 'Y' || (c == 'Q' || c == 'W'); inventory_profile = (c == 'Q' || c == 'W'); inventory_edges = c == 'W'; }
 		else if (c == 'e') inventory_e++;
 		else if (c == 'p') {
 			inventory_p++;
@@ -6301,7 +6304,9 @@ main(int argc, char **argv)
 	if (inventory_seen && (inventory_seen != 1 || inventory_bad ||
 	    inventory_e != 1 || inventory_p < 1 || argc - optind != 1 ||
 	    strpbrk(argv[optind], "/@") != NULL)) {
-		(void) fprintf(stderr, "-J/-K/-Y/-Q requires only -e -p /explicit/path pool\n");
+		(void) fprintf(stderr, inventory_edges ?
+		    "-W requires only -e -p /explicit/path pool\n" :
+		    "-J/-K/-Y/-Q requires only -e -p /explicit/path pool\n");
 		return (2);
 	}
 	optind = 1;
@@ -6329,7 +6334,7 @@ main(int argc, char **argv)
 	zfs_btree_verify_intensity = 3;
 
 	while ((c = getopt(argc, argv,
-	    "AbcCdDeEFGhiI:J:K:klLmMo:Op:PqQ:RsSt:uU:vVx:XY:")) != -1) {
+	    "AbcCdDeEFGhiI:J:K:klLmMo:Op:PqQ:RsSt:uU:vVW:x:XY:")) != -1) {
 		switch (c) {
 		case 'b':
 		case 'c':
@@ -6375,6 +6380,7 @@ main(int argc, char **argv)
 		case 'K':
 		case 'Y':
 		case 'Q':
+		case 'W':
 			dump_all = 0;
 			break;
 		case 'o':
@@ -6462,6 +6468,7 @@ main(int argc, char **argv)
 		if (inventory_pair) zdb_inventory_pair_mode();
 		if (inventory_verify) zdb_inventory_verify_mode();
 		if (inventory_profile) zdb_inventory_profile_mode();
+		if (inventory_edges) zdb_inventory_edges_mode();
 		error = zdb_inventory_begin(inventory_path);
 		if (error) {
 			(void) fprintf(stderr, "inventory output: %s\n", strerror(error));

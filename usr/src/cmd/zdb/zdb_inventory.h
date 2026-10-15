@@ -3,6 +3,7 @@
 int zdb_inventory_discover(const char *, char **, int, nvlist_t **);
 int zdb_inventory_import(const char *, nvlist_t *);
 void zdb_inventory_verify_mode(void);
+void zdb_inventory_edges_mode(void);
 void zdb_inventory_profile_mode(void);
 void zdb_inventory_pair_mode(void);
 int zdb_inventory_begin(const char *);

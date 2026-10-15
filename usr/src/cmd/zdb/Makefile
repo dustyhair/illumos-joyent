@@ -70,4 +70,4 @@ clean:
 include ../Makefile.targ
 
 # Allocation helpers are included by the inventory translation unit.
-zdb_inventory.o: zdb_allocation.c zdb_verify.c zdb_pending.c zdb_bptree.c zdb_profile.c
+zdb_inventory.o: zdb_allocation.c zdb_verify.c zdb_pending.c zdb_bptree.c zdb_profile.c zdb_edges.c
