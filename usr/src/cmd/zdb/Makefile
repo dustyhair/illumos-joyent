@@ -28,7 +28,7 @@
 #
 
 PROG=	zdb
-OBJS=	zdb.o zdb_il.o
+OBJS=	zdb.o zdb_il.o zdb_inventory.o
 
 include ../Makefile.cmd
 include ../Makefile.cmd.64

@@ -78,6 +78,7 @@
 #include <libzutil.h>
 
 #include "zdb.h"
+#include "zdb_inventory.h"
 
 #define	ZDB_COMPRESS_NAME(idx) ((idx) < ZIO_COMPRESS_FUNCTIONS ?	\
 	zio_compress_table[(idx)].ci_name : "UNKNOWN")
@@ -151,6 +152,9 @@ usage(void)
 	    "<poolname>\n\n",
 	    cmdname, cmdname, cmdname, cmdname, cmdname, cmdname, cmdname,
 	    cmdname, cmdname);
+
+	(void) fprintf(stderr, "\t%s -J <new.jsonl> -e -p /lab/path <pool>\n"
+	    "\tRead-only observed BPs; no completeness or evacuation claim.\n", cmdname);
 
 	(void) fprintf(stderr, "    Dataset name must include at least one "
 	    "separator character '/' or '@'\n");
@@ -6267,6 +6271,10 @@ main(int argc, char **argv)
 	char **searchdirs = NULL;
 	int nsearch = 0;
 	char *target, *target_pool;
+	char *inventory_path = NULL;
+	int inventory_seen = 0, inventory_bad = 0;
+	int inventory_e = 0, inventory_p = 0;
+	int saved_opterr = opterr;
 	nvlist_t *policy = NULL;
 	uint64_t max_txg = UINT64_MAX;
 	int flags = ZFS_IMPORT_MISSING_LOG;
@@ -6274,6 +6282,26 @@ main(int argc, char **argv)
 	char *spa_config_path_env;
 	boolean_t target_is_spa = B_TRUE;
 	nvlist_t *cfg = NULL;
+
+	/* Prevalidate before tunable setters, discovery or any pool access. */
+	opterr = 0;
+	while ((c = getopt(argc, argv,
+	    "AbcCdDeEFGhiI:J:klLmMo:Op:PqRsSt:uU:vVx:X")) != -1) {
+		if (c == 'J') { inventory_path = optarg; inventory_seen++; }
+		else if (c == 'e') inventory_e++;
+		else if (c == 'p') {
+			inventory_p++;
+			if (optarg[0] != '/') inventory_bad = 1;
+		} else inventory_bad = 1;
+	}
+	if (inventory_seen && (inventory_seen != 1 || inventory_bad ||
+	    inventory_e != 1 || inventory_p < 1 || argc - optind != 1 ||
+	    strpbrk(argv[optind], "/@") != NULL)) {
+		(void) fprintf(stderr, "-J requires only -e -p /explicit/path pool\n");
+		return (2);
+	}
+	optind = 1;
+	opterr = saved_opterr;
 
 	(void) setrlimit(RLIMIT_NOFILE, &rl);
 	(void) enable_extended_FILE_stdio(-1, -1);
@@ -6297,7 +6325,7 @@ main(int argc, char **argv)
 	zfs_btree_verify_intensity = 3;
 
 	while ((c = getopt(argc, argv,
-	    "AbcCdDeEFGhiI:klLmMo:Op:PqRsSt:uU:vVx:X")) != -1) {
+	    "AbcCdDeEFGhiI:J:klLmMo:Op:PqRsSt:uU:vVx:X")) != -1) {
 		switch (c) {
 		case 'b':
 		case 'c':
@@ -6338,6 +6366,9 @@ main(int argc, char **argv)
 				    "than 0\n");
 				usage();
 			}
+			break;
+		case 'J':
+			dump_all = 0;
 			break;
 		case 'o':
 			error = set_global_var(optarg);
@@ -6418,7 +6449,17 @@ main(int argc, char **argv)
 	 * Do not fail spa_load when spa_load_verify fails. This is needed
 	 * to load non-idle pools.
 	 */
-	spa_load_verify_dryrun = B_TRUE;
+	spa_load_verify_dryrun = inventory_path ? B_FALSE : B_TRUE;
+
+	if (inventory_path) {
+		error = zdb_inventory_begin(inventory_path);
+		if (error) {
+			(void) fprintf(stderr, "inventory output: %s\n", strerror(error));
+			return (error);
+		}
+		flags = 0; /* No missing-log or rewind relaxation. */
+		(void) alarm(300);
+	}
 
 	kernel_init(FREAD);
 
@@ -6497,10 +6538,17 @@ main(int argc, char **argv)
 
 		args.paths = nsearch;
 		args.path = searchdirs;
-		args.can_be_active = B_TRUE;
+		args.can_be_active = inventory_path ? B_FALSE : B_TRUE;
 
 		error = zpool_find_config(NULL, target_pool, &cfg, &args,
 		    &libzpool_config_ops);
+
+		if (error == 0 && inventory_path) {
+			uint64_t state;
+			if (nvlist_lookup_uint64(cfg, ZPOOL_CONFIG_POOL_STATE, &state) != 0 ||
+			    state != POOL_STATE_EXPORTED)
+				error = EBUSY;
+		}
 
 		if (error == 0) {
 
@@ -6516,11 +6564,11 @@ main(int argc, char **argv)
 			}
 
 			/*
-			 * Disable the activity check to allow examination of
-			 * active pools.
+			 * Legacy modes permit active-pool examination; inventory
+			 * mode retains the activity check.
 			 */
 			error = spa_import(target_pool, cfg, NULL,
-			    flags | ZFS_IMPORT_SKIP_MMP);
+			    flags | (inventory_path ? 0 : ZFS_IMPORT_SKIP_MMP));
 		}
 	}
 
@@ -6547,6 +6595,8 @@ main(int argc, char **argv)
 				    checkpoint_pool, error);
 			}
 
+		} else if (inventory_path) {
+			error = spa_open(target, &spa, FTAG);
 		} else if (target_is_spa || dump_opt['R']) {
 			zdb_set_skip_mmp(target);
 			error = spa_open_rewind(target, &spa, FTAG, policy,
@@ -6577,12 +6627,17 @@ main(int argc, char **argv)
 	}
 	nvlist_free(policy);
 
+	if (error && inventory_path)
+		(void) zdb_inventory_end(error);
 	if (error)
 		fatal("can't open '%s': %s", target, strerror(error));
 
 	argv++;
 	argc--;
-	if (!dump_opt['R']) {
+	if (inventory_path) {
+		error = zdb_inventory_end(zdb_inventory_run(spa));
+		(void) alarm(0);
+	} else if (!dump_opt['R']) {
 		if (argc > 0) {
 			zopt_objects = argc;
 			zopt_object = calloc(zopt_objects, sizeof (uint64_t));
