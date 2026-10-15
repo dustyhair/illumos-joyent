@@ -68,6 +68,23 @@ def invoke(rows,**kwargs):
     return d.analyze(data,**args)
 
 
+def add_group(rows, vid='2', guid='10', parity='1', children='3'):
+    v=copy.deepcopy(next(r for r in rows if r['record']=='vdev'));v.update(id=vid,guid=guid,parity=parity,children=children)
+    rows.insert(next(i for i,r in enumerate(rows) if r['record']=='bp'),v)
+    ms=dict(record='metaslab',vdev_id=vid,id='0',start='0',length='1048576',unflushed_txg='20',map_object='52',**F)
+    mp=dict(record='allocation_map',source='base',map_object='52',log_txg='0',length='0',shift=12,**F)
+    i=next(i for i,r in enumerate(rows) if r['record']=='allocation');rows[i:i]=[ms,mp]
+    end=next(r for r in rows if r['record']=='allocation_end');end['records']=str(int(end['records'])+2)
+    return rows
+
+
+def groups(rows, **kw):
+    data=b''.join(canonical(r)+b'\n' for r in rows)
+    identity=cut(next(r for r in rows if r['record']=='pool'),[r for r in rows if r['record']=='vdev'])
+    args=dict(exit_status='0',expected_sha=hashlib.sha256(data).hexdigest(),expected_cut_sha=digest(identity),source_id='0',source_guid='7');args.update(kw)
+    return d.analyze_groups(data,**args)
+
+
 class Tests(unittest.TestCase):
     def test_success(self):
         r=invoke(fixture());self.assertTrue(r['single_destination_contract_satisfied'])
@@ -127,6 +144,34 @@ class Tests(unittest.TestCase):
         with self.assertRaises(ValueError):invoke(rows)
         rows=fixture();rows=[r for r in rows if r['record']!='verification']
         with self.assertRaises(ValueError):invoke(rows)
+    def test_group_eligibility_and_geometry(self):
+        r=groups(add_group(fixture(replica=True),parity='2',children='6'))
+        self.assertTrue(r['group_assignment_complete']);self.assertEqual(r['assignments'][0]['destination_id'],'2')
+        self.assertEqual(r['assignments'][0]['destination_asize'],'12288')
+        self.assertEqual(r['extents'][0]['excluded_groups'][0]['reason'],'existing_BP_replica')
+        self.assertTrue(all(r[k] is False for k in d.SAFETY))
+        self.assertEqual(r,groups(add_group(fixture(replica=True),parity='2',children='6')))
+    def test_group_sharing_coupling_and_blocked(self):
+        r=groups(add_group(fixture(repeat=True)));self.assertTrue(r['group_assignment_complete'])
+        self.assertEqual(len(r['assignments']),1);self.assertEqual(r['observed_reference_count'],'2')
+        r=groups(add_group(fixture(second_source=True,repeat=True)))
+        self.assertEqual(r['physical_extent_count'],'2');self.assertEqual(r['assignments'],[])
+        self.assertEqual(r['refusal_or_unresolved_reasons'],['coupled_source_replicas_unsupported'])
+        r=groups(fixture(replica=True));self.assertEqual(r['refusal_or_unresolved_reasons'],['no_eligible_destination_group'])
+        self.assertFalse(r['all_extents_have_eligible_group'])
+    def test_group_bounds_and_greedy_not_infeasibility(self):
+        rows=fixture();next(r for r in rows if r['record']=='metaslab' and r['vdev_id']=='1')['length']='4096'
+        r=groups(rows);self.assertTrue(r['all_extents_have_eligible_group']);self.assertFalse(r['group_assignment_complete'])
+        self.assertEqual(r['refusal_or_unresolved_reasons'],['greedy_capacity_assignment_unresolved'])
+        items=[dict(source_start=str(i),source_length=str(n),eligible_groups=[dict(id=k,guid=str(7+int(k)),destination_asize=str(n)) for k in ('0','1')]) for i,n in enumerate((6,5,5))]
+        assigned,used,unresolved=d.assign_groups(items,{'0':10,'1':6})
+        self.assertEqual(len(unresolved),1);self.assertTrue(all(used[k]<=v for k,v in {'0':10,'1':6}.items()))
+        # A feasible alternative is 6 to group 1 and 5+5 to group 0.
+        self.assertLessEqual(6,6);self.assertLessEqual(5+5,10)
+        self.assertEqual((assigned,used,unresolved),d.assign_groups(list(reversed(items)),{'1':6,'0':10}))
+    def test_group_identity_refusals(self):
+        for kw in (dict(expected_sha='0'*64),dict(expected_cut_sha='0'*64),dict(source_guid='8'),dict(exit_status='1')):
+            with self.subTest(kw=kw),self.assertRaises(ValueError):groups(fixture(),**kw)
     def test_native_geometry(self):
         path=os.environ.get('RELOCATION_NATIVE_GEOMETRY')
         if not path:self.skipTest('native libzpool geometry harness not supplied')
@@ -142,6 +187,9 @@ class Tests(unittest.TestCase):
             result=invoke(rows)
             cmd=[sys.executable,str(pathlib.Path(d.__file__)),str(cap),'--sha256',result['input_sha256'],'--cut-sha256',result['cut_sha256'],'--source-id','0','--source-guid','7','--destination-id','1','--destination-guid','8','--exit-status',str(status),'--output',str(out)]
             r=subprocess.run(cmd,capture_output=True);self.assertEqual(r.returncode,3,r.stderr)
+            groupcmd=cmd.copy();i=groupcmd.index('--destination-id');del groupcmd[i:i+4];groupcmd.insert(i,'--all-destinations');groupcmd[-1]=str(td/'groups')
+            self.assertEqual(subprocess.run(groupcmd,capture_output=True).returncode,3)
+            self.assertFalse(json.loads((td/'groups').read_text())['group_assignment_complete'])
             saved=out.read_bytes();self.assertFalse(json.loads(saved)['placement_performed'])
             self.assertEqual(subprocess.run(cmd,capture_output=True).returncode,2);self.assertEqual(out.read_bytes(),saved)
             link=td/'link';link.symlink_to(cap)

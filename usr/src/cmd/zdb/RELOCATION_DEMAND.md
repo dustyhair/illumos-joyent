@@ -96,3 +96,43 @@ replica. `planned_replica_colocation` refuses this case while retaining each
 physical extent and its demand. Repeated observations of the same exact extent
 are not additional replicas and remain grouped once. The native geometry sweep
 now includes every supported child count through 255 (sizes capped at 16 MiB).
+
+## Group-only extension
+
+`--all-destinations` replaces `--destination-id` and `--destination-guid`.
+The same raw profile is revalidated once, then all other captured normal RAID-Z
+groups are evaluated using the same single-destination sizing and grouping.
+Every source extent lists eligible groups with their geometry-specific demand
+and excluded groups with explicit reasons. Unsupported topology classes and
+the source group are also recorded separately. No eligible groups is a refusal;
+multiple distinct source replicas of one BP are conservatively refused before
+assignment, while their separate physical demand and observed references remain.
+
+The deterministic accounting heuristic orders extents by fewest eligible
+groups, then largest possible destination demand, then numeric source address.
+It chooses a group that stays within captured gross free bytes, minimizing
+resulting assigned bytes and breaking ties by numeric group ID. Every assignment
+contains only destination group ID/GUID and byte demand, never a destination
+byte offset. Each group's used and remaining gross-byte bound is emitted.
+
+`group_assignment_complete` means this accounting heuristic assigned every
+extent within those gross bounds. It is not physical placement, an allocator
+reservation, capacity proof, or rewrite readiness. `eligibility_complete` means
+all captured source extents were evaluated, not that reverse references are
+complete. Empty sources and missing eligible groups refuse. Greedy exhaustion
+is `greedy_capacity_assignment_unresolved`, not a proof of infeasibility;
+partial accounting assignments remain explicitly incomplete. Tests include a
+known feasible alternative that the greedy heuristic misses.
+
+Group mode returns exit 0 for complete group accounting, exit 3 for an explicit
+refusal or unresolved assignment, and exit 2 for invalid inputs. All safety
+flags remain false. The v1 single-destination mode remains available with its
+P2 replica co-location correction. Neither mode broadens provenance: authentic
+parent locations, shared ancestor relationships, exhaustive reverse references,
+reservations and crash-recovery design remain missing.
+
+The accepted TXG330 group replay evaluates four independent removal choices,
+not simultaneous removal of four groups. Every source extent has an eligible
+group and each independent group-only assignment fits the captured gross bound.
+The bundle contains per-source eligibility, exclusions, full references and
+assignment records. The original 12 single-destination refusals remain valid.

@@ -37,6 +37,13 @@ def analyze(data, exit_status, expected_sha, expected_cut_sha, source_id,
     require(len(data) <= LIMIT, 'capture byte budget')
     result = profile(data, exit_status, expected_sha)
     require(digest(result['cut']) == expected_cut_sha, 'expected cut mismatch')
+    rows = [parse(line) for line in data.splitlines()]
+    return _single(result, rows, expected_sha, expected_cut_sha, source_id,
+                   source_guid, destination_id, destination_guid)
+
+
+def _single(result, rows, expected_sha, expected_cut_sha, source_id,
+            source_guid, destination_id, destination_guid):
     for x in (source_id, source_guid, destination_id, destination_guid):
         uint(x)
     require(source_id != destination_id and source_guid != destination_guid, 'distinct destination required')
@@ -51,7 +58,6 @@ def analyze(data, exit_status, expected_sha, expected_cut_sha, source_id,
         return v
     source = select(source_id, source_guid)
     destination = select(destination_id, destination_guid)
-    rows = [parse(line) for line in data.splitlines()]
     bps = {r['sequence']: r for r in rows if r['record'] == 'bp'}
     checks = {r['sequence']: r for r in result['verification_results']}
     grouped = collections.defaultdict(list)
@@ -118,6 +124,89 @@ def analyze(data, exit_status, expected_sha, expected_cut_sha, source_id,
                         'Input hashes bind recorded evidence, not independent execution attestation.'], **SAFETY)
 
 
+def assign_groups(items, capacities):
+    """Deterministic greedy accounting only; failure is not infeasibility proof."""
+    used = {key: 0 for key in capacities}
+    assignments = []
+    unresolved = []
+    ordered = sorted(items, key=lambda x: (len(x['eligible_groups']),
+                     -max((uint(g['destination_asize']) for g in x['eligible_groups']), default=0),
+                     uint(x['source_start'])))
+    for item in ordered:
+        fit = [g for g in item['eligible_groups']
+               if checked(used[g['id']] + uint(g['destination_asize'])) <= capacities[g['id']]]
+        if not fit:
+            unresolved.append(dict(source_start=item['source_start'], source_length=item['source_length'],
+                                   reason='greedy_remaining_gross_bound_exhausted'))
+            continue
+        group = min(fit, key=lambda g: (used[g['id']] + uint(g['destination_asize']), uint(g['id'])))
+        used[group['id']] = checked(used[group['id']] + uint(group['destination_asize']))
+        assignments.append(dict(source_start=item['source_start'], source_length=item['source_length'],
+                                destination_id=group['id'], destination_guid=group['guid'],
+                                destination_asize=group['destination_asize'], **SAFETY))
+    return assignments, used, unresolved
+
+
+def analyze_groups(data, exit_status, expected_sha, expected_cut_sha, source_id, source_guid):
+    require(len(data) <= LIMIT, 'capture byte budget')
+    result = profile(data, exit_status, expected_sha)
+    require(digest(result['cut']) == expected_cut_sha, 'expected cut mismatch')
+    uint(source_id);uint(source_guid)
+    topology = result['cut']['topology']
+    rows = [parse(line) for line in data.splitlines()]
+    candidates = [v for v in topology if v['id'] != source_id and v['type']=='raidz'
+                  and v['allocation_class']=='normal' and v['alloc_bias']==0 and not v['is_log']]
+    require(candidates, 'no other normal RAID-Z destination groups')
+    candidates.sort(key=lambda v: uint(v['id']))
+    reports = [_single(result, rows, expected_sha, expected_cut_sha, source_id, source_guid,
+                       v['id'], v['guid']) for v in candidates]
+    first = reports[0]
+    capacities = {r['destination']['id']: uint(r['destination_captured_gross_free_bytes']) for r in reports}
+    by_group = {r['destination']['id']: {(e['source_start'],e['source_length']): e for e in r['extents']} for r in reports}
+    items = []
+    for extent in first['extents']:
+        forbidden = set()
+        for ref in extent['references']:
+            slot = ref['interval_reference']['slot']
+            forbidden.update(d['vdev_id'] for d in ref['original_bp_record']['dvas'] if d['slot'] != slot)
+        eligible = [];excluded = []
+        for v in candidates:
+            demand = by_group[v['id']][(extent['source_start'],extent['source_length'])]['destination_asize']
+            entry = dict(id=v['id'],guid=v['guid'],destination_asize=demand)
+            if v['id'] in forbidden:
+                excluded.append(dict(entry,reason='existing_BP_replica'))
+            elif uint(demand)>uint(v['asize']):
+                excluded.append(dict(entry,reason='extent_exceeds_group_asize'))
+            else:eligible.append(entry)
+        # Preserve the physical extent and every observed reference, not a representative only.
+        item = {k:v for k,v in extent.items() if k!='destination_asize'}
+        item.update(eligible_groups=eligible,excluded_groups=excluded);items.append(item)
+    reasons = []
+    if not items:reasons.append('source_has_no_allocated_extents')
+    if first['coupled_source_replicas']:reasons.append('coupled_source_replicas_unsupported')
+    if any(not e['eligible_groups'] for e in items):reasons.append('no_eligible_destination_group')
+    assignments=[];used={key:0 for key in capacities};unresolved=[]
+    if not reasons:assignments,used,unresolved=assign_groups(items,capacities)
+    if unresolved:reasons.append('greedy_capacity_assignment_unresolved')
+    return dict(schema='offline-relocation-group-demand-v1',input_sha256=expected_sha,
+                cut=result['cut'],cut_sha256=expected_cut_sha,source=first['source'],
+                candidate_groups=candidates,
+                excluded_topology_groups=[dict(id=v['id'],guid=v['guid'],reason='source_group' if v['id']==source_id else 'unsupported_group_class') for v in topology if v not in candidates],
+                extents=items,physical_extent_count=first['physical_extent_count'],
+                observed_reference_count=first['observed_reference_count'],source_unique_bytes=first['source_unique_bytes'],
+                source_reference_bytes=first['source_reference_bytes'],coupled_source_replicas=first['coupled_source_replicas'],
+                eligibility_complete=True,all_extents_have_eligible_group=bool(items) and all(e['eligible_groups'] for e in items),
+                group_assignment_complete=bool(items) and not reasons,refusal_or_unresolved_reasons=reasons,
+                assignments=assignments,unresolved_extents=unresolved,
+                per_destination=[dict(id=v['id'],guid=v['guid'],assigned_base_bytes=str(used[v['id']]),
+                                      captured_gross_free_bytes=str(capacities[v['id']]),
+                                      remaining_gross_bytes=str(capacities[v['id']]-used[v['id']])) for v in candidates],
+                exclusions=first['exclusions'],limits=first['limits']+[
+                    'Group assignment is only deterministic gross-byte accounting, not physical placement.',
+                    'Greedy failure is unresolved, not proof that no alternative assignment exists.',
+                    'Coupled distinct source replicas are conservatively unsupported.'],**SAFETY)
+
+
 def read_regular(path, limit):
     # Reject special files and symlinks before opening; recheck the opened handle.
     require(stat.S_ISREG(path.lstat().st_mode), 'regular input file required')
@@ -132,21 +221,27 @@ def read_regular(path, limit):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('capture', type=pathlib.Path)
-    for name in ('sha256', 'cut-sha256', 'source-id', 'source-guid', 'destination-id', 'destination-guid'):
+    for name in ('sha256', 'cut-sha256', 'source-id', 'source-guid'):
         p.add_argument('--'+name, required=True)
+    mode=p.add_mutually_exclusive_group(required=True)
+    mode.add_argument('--destination-id')
+    mode.add_argument('--all-destinations', action='store_true')
+    p.add_argument('--destination-guid')
     p.add_argument('--exit-status', type=pathlib.Path, required=True)
     p.add_argument('--output', type=pathlib.Path, required=True)
     a = p.parse_args()
     try:
-        result = analyze(read_regular(a.capture, LIMIT), read_regular(a.exit_status, 64).decode('ascii'),
-                         a.sha256, a.cut_sha256, a.source_id, a.source_guid, a.destination_id, a.destination_guid)
+        require((a.destination_guid is None) if a.all_destinations else (a.destination_guid is not None), 'destination GUID required only in single mode')
+        args=(read_regular(a.capture, LIMIT), read_regular(a.exit_status, 64).decode('ascii'),
+              a.sha256, a.cut_sha256, a.source_id, a.source_guid)
+        result = analyze_groups(*args) if a.all_destinations else analyze(*args,a.destination_id,a.destination_guid)
         with a.output.open('x') as f:
             json.dump(result, f, sort_keys=True, indent=2)
             f.write('\n')
     except (ValueError, OSError) as e:
         print('refused: '+str(e), file=sys.stderr)
         return 2
-    return 0 if result['single_destination_contract_satisfied'] else 3
+    return 0 if result['group_assignment_complete' if a.all_destinations else 'single_destination_contract_satisfied'] else 3
 
 
 if __name__ == '__main__':
