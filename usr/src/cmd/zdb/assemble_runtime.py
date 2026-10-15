@@ -10,7 +10,7 @@ import subprocess
 import sys
 
 base = Path('/build/workspaces/raidz')
-build = base / 'inventory-build'
+build = Path(os.environ.get('ZDB_INVENTORY_BUILD', str(base / 'inventory-build')))
 source = base / 'inventory-prototype/usr/src/cmd/zdb'
 dest = Path(sys.argv[1]).absolute()
 dest.mkdir()

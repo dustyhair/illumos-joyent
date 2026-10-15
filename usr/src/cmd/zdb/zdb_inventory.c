@@ -17,6 +17,8 @@
 #define ZI_LIMIT 1000000ULL
 static FILE *zi_out;
 static uint64_t zi_count, zi_unsupported;
+static boolean_t zi_paired;
+void zdb_inventory_pair_mode(void) { zi_paired = B_TRUE; }
 static const char *zi_flags = "\"coverage_complete\":false,"
     "\"payload_validation_performed\":false,\"evacuation_authorized\":false";
 
@@ -44,6 +46,8 @@ zi_words(FILE *f, const blkptr_t *bp)
       (u_longlong_t)words[i]);
  (void) fputc(']', f);
 }
+
+#include "zdb_allocation.c"
 
 /* Raw bias is retained even if the enum gains unsupported values. */
 static void
@@ -173,7 +177,7 @@ zdb_inventory_begin(const char *path)
  if (fd < 0) return (errno);
  zi_out = fdopen(fd, "w");
  if (!zi_out) { int e = errno; (void) close(fd); return (e); }
- (void) fprintf(zi_out, "{\"record\":\"begin\",\"schema\":\"zdb-observed-bp-v1\","
+ (void) fprintf(zi_out, "{\"record\":\"begin\",\"schema\":\"%s\","
      "\"bp_encoding\":\"host-normalized-u64-hex\",\"integer_encoding\":"
      "\"64-bit values are decimal strings; BP words are hex\","
      "\"record_limit\":\"1000000\",\"time_limit_seconds\":300,"
@@ -182,14 +186,17 @@ zdb_inventory_begin(const char *path)
      "\"attempted\":[\"birth-pruned MOS/dataset tree references\"],"
      "\"excluded\":[\"ZIL\",\"DDT ownership\",\"deferred frees\","
      "\"async destroy\",\"checkpoint-only ownership\",\"removal accounting\","
-     "\"allocation maps and unflushed space-map logs\"],%s}\n", zi_flags);
+     "\"allocation maps in -J only; paired -K captures independently\"],%s}\n",
+     zi_paired ? "zdb-observed-allocation-v1" : "zdb-observed-bp-v1", zi_flags);
  return (fflush(zi_out) == 0 ? 0 : EIO);
 }
 
 int
 zdb_inventory_run(spa_t *spa)
 {
- if (spa_writeable(spa)) return (EROFS);
+ if (spa_writeable(spa) || (spa_mode(spa) & FWRITE)) return (EROFS);
+ uint64_t cut = spa->spa_ubsync.ub_txg;
+ blkptr_t root = *spa_get_rootblkptr(spa);
  (void) fprintf(zi_out, "{\"record\":\"pool\",\"name\":");
  zi_string(zi_out, spa_name(spa));
  (void) fprintf(zi_out, ",\"guid\":\"%llu\",\"txg\":\"%llu\",\"root_bp\":",
@@ -206,17 +213,36 @@ zdb_inventory_run(spa_t *spa)
       (u_longlong_t)v->vdev_children, (u_longlong_t)v->vdev_nparity);
   zi_string(zi_out, v->vdev_ops->vdev_op_type);
   zi_class(zi_out, v);
+  if (zi_paired) (void) fprintf(zi_out, ",\"asize\":\"%llu\",\"metaslab_count\":\"%llu\"",
+      (u_longlong_t)v->vdev_asize, (u_longlong_t)v->vdev_ms_count);
   (void) fprintf(zi_out, ",%s}\n", zi_flags);
  }
  if (fflush(zi_out) != 0) return (EIO);
- return (traverse_pool(spa, 0, TRAVERSE_PRE | TRAVERSE_NO_DECRYPT |
-     TRAVERSE_NO_ZIL, zi_record, NULL));
+ int err = traverse_pool(spa, 0, TRAVERSE_PRE | TRAVERSE_NO_DECRYPT |
+     TRAVERSE_NO_ZIL, zi_record, NULL);
+ if (!err && zi_paired) err = za_run(spa);
+ if (!err && zi_paired && (cut != spa->spa_ubsync.ub_txg ||
+     memcmp(&root, spa_get_rootblkptr(spa), sizeof (root)))) err = ESTALE;
+ if (zi_paired) {
+  (void) fprintf(zi_out, "{\"record\":\"cut_end\",\"txg\":\"%llu\",\"root_bp\":",
+      (u_longlong_t)spa->spa_ubsync.ub_txg);
+  zi_words(zi_out, spa_get_rootblkptr(spa));
+  (void) fprintf(zi_out, ",%s}\n", zi_flags);
+  if (fflush(zi_out)) err = EIO;
+ }
+ return (err);
 }
 
 int
 zdb_inventory_end(int err)
 {
  if (!zi_out) return (err ? err : EIO);
+ if (zi_paired) {
+  (void) fprintf(zi_out, "{\"record\":\"allocation_end\",\"records\":\"%llu\",\"intervals\":\"%llu\",\"bytes\":\"%llu\",\"map_words\":\"%llu\",\"map_bytes\":\"%llu\",%s}\n",
+      (u_longlong_t)za_records, (u_longlong_t)za_intervals,
+      (u_longlong_t)za_total, (u_longlong_t)za_words,
+      (u_longlong_t)za_read_bytes, zi_flags);
+ }
  (void) fprintf(zi_out, "{\"record\":\"end\",\"export_complete\":%s,"
      "\"error\":%d,\"observed\":\"%llu\",\"unsupported\":\"%llu\",%s}\n",
      err ? "false" : "true", err, (u_longlong_t)zi_count,

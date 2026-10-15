@@ -68,3 +68,6 @@ clean:
 	$(RM) $(OBJS)
 
 include ../Makefile.targ
+
+# Allocation helpers are included by the inventory translation unit.
+zdb_inventory.o: zdb_allocation.c

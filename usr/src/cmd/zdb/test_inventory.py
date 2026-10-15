@@ -2,7 +2,7 @@
 """Pool-free tests. All executed zdb commands fail before discovery."""
 import json, os, pathlib, subprocess, tempfile, unittest, shutil
 BASE = pathlib.Path('/build/workspaces/raidz')
-BUILD = BASE / 'inventory-build'
+BUILD = pathlib.Path(os.environ.get('ZDB_INVENTORY_BUILD', str(BASE / 'inventory-build')))
 SRC = BASE / 'inventory-prototype/usr/src'
 ENV = dict(os.environ, LD_LIBRARY_PATH_64=':'.join(map(str, [BUILD/'lib', BASE/'smartos-live/proto/usr/lib/amd64', BASE/'smartos-live/proto/lib/amd64'])))
 
@@ -48,6 +48,15 @@ class InventoryTests(unittest.TestCase):
    self.assertEqual(d['geometry_valid'],i==0);self.assertEqual(bp['unsupported'],i!=0)
  def test_discovery_exported_active_import_stubs(self):
   self.assertTrue(self.fixture('import-policy')[-1]['export_complete'])
+ def test_paired_cli_refusals_before_discovery(self):
+  for opts in [[], ['-b'], ['-J', '/unused'], ['-p','relative','-e','fixture']]:
+   target=self.tmp/'paired-invalid-output'
+   q=subprocess.run([str(BUILD/'zdb-inventory'),'-K',str(target)]+opts,env=ENV,capture_output=True,text=True)
+   self.assertNotEqual(q.returncode,0);self.assertIn('requires only',q.stderr);self.assertFalse(target.exists())
+ def test_paired_exclusive_output_before_discovery(self):
+  p=self.tmp/'paired-existing';p.write_text('preserve')
+  q=subprocess.run([str(BUILD/'zdb-inventory'),'-K',str(p),'-e','-p','/fixture-only','fixture'],env=ENV,capture_output=True,text=True)
+  self.assertNotEqual(q.returncode,0);self.assertIn('inventory output',q.stderr);self.assertEqual(p.read_text(),'preserve')
  def test_final_flush_failure_returned(self):
   p=self.tmp/'final-flush.jsonl'
   q=subprocess.run([str(BUILD/'test_inventory'),'flush-failure',str(p)],env=ENV)
@@ -73,7 +82,7 @@ class InventoryTests(unittest.TestCase):
  def test_native_launcher_invalid_options_only(self):
   root=BUILD/'runtime-review-v2';p=self.tmp/'native-no-output'
   q=subprocess.run(['/bin/bash',str(root/'launch.sh'),'-J',str(p),'-b'],capture_output=True,text=True)
-  self.assertNotEqual(q.returncode,0);self.assertIn('-J requires only',q.stderr);self.assertFalse(p.exists())
+  self.assertNotEqual(q.returncode,0);self.assertIn('-J/-K requires only',q.stderr);self.assertFalse(p.exists())
  def test_verified_runtime_closure(self):
   q=self.launch(BUILD/'runtime-review-v2','--verify-only')
   self.assertEqual(q.returncode,0,q.stderr)
@@ -82,11 +91,11 @@ class InventoryTests(unittest.TestCase):
   q=self.launch(BUILD/'runtime-review-v2','-J',str(p),'-b',
                 env=dict(os.environ,SPA_CONFIG_PATH='/never-use-this',LD_LIBRARY_PATH_64='/nonexistent'))
   self.assertNotEqual(q.returncode,0)
-  self.assertIn('-J requires only',q.stderr);self.assertFalse(p.exists())
+  self.assertIn('-J/-K requires only',q.stderr);self.assertFalse(p.exists())
  def test_marker_compatible_wrong_library_refused(self):
   root=self.tmp/'wrong-marker-runtime'
   shutil.copytree(BUILD/'runtime-review-v2',root)
-  old=BUILD/'review-9b2e3f1de8/lib/libzpool.so.1'
+  old=BASE/'inventory-build/review-9b2e3f1de8/lib/libzpool.so.1'
   alternate=root/'lib/libzpool.so.1'
   shutil.copy2(old,alternate)
   # Valid ELF with unchanged exports/capability but a different file identity.
