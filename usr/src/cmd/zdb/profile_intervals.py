@@ -13,7 +13,7 @@ def metadata(rows,result):
     require(end['profile_metadata_complete'] is True and end['ddt_absence_checked'] is True and end['error']==0,'incomplete profile metadata')
     require(uint(end['cached_ddt_slots'])==42,'pinned cached DDT dimensions')
     require(uint(end['reads'])<=250000 and uint(end['read_bytes'])<=32<<20,'profile budget')
-    pos=1;names=set();objects=[];datasets=[];heads=[];snapshots=[]
+    pos=1;names=set();objects=[];datasets=[];heads=[];snapshots=[];empty=[]
     while pos<len(rows)-1 and rows[pos]['record']=='profile_directory':
         r=rows[pos];pos+=1;n=r['name']
         require(n and '\0' not in n and not n.startswith('DDT') and n not in names and len(names)<4096,'DDT/invalid directory key')
@@ -40,19 +40,35 @@ def metadata(rows,result):
             require(d['zil_state']=='snapshot_not_applicable' and d['zil_header_words'] is None,'snapshot ZIL disposition');snapshots.append(d)
         else:
             require(uint(d['next_snap_object'])==0,'head next link')
+            if d['zil_state']=='unallocated_pool_origin_head':
+                require(d['zil_header_words'] is None,'unallocated origin has header')
+                empty.append(d);datasets.append(d);continue
             require(d['zil_state']=='canonical_zero_header' and d['zil_header_words']==['0000000000000000']*24,'nonempty/ambiguous ZIL header')
             w=words(d['root_bp']);require((w[6]>>48)&255==11 and (w[6]>>56)&31==0,'head root type/level')
             require(tuple(d['root_bp']) in verified_words,'head root lacks original-BP verification')
             heads.append(d)
         datasets.append(d)
-    require(heads,'no relevant heads')
+    require(heads or empty,'no relevant heads')
+    require(len(empty)<=1,'multiple origin heads')
+    if empty:
+        h=empty[0];o=uint(scope['origin_snapshot']);hd=uint(scope['origin_head']);dd=uint(scope['origin_dir'])
+        require(o and hd and dd and o!=hd and uint(h['object'])==hd,'origin anchor identity')
+        matches=[d for d in snapshots if uint(d['object'])==o]
+        require(len(matches)==1,'origin snapshot missing');s=matches[0]
+        for d in (h,s):
+            require(uint(d['dir_object'])==dd and uint(d['creation_txg'])==1 and uint(d['dataset_flags'])==4,'origin type/state')
+            require(uint(d['userrefs_object'])==uint(d['props_object'])==0,'origin ancillary state')
+            require(words(d['root_bp'])==[0]*16 and d['space_bytes']==['0']*4,'noncanonical empty origin')
+        require(uint(h['next_clones_object'])==0,'origin head clones')
+        require(uint(h['prev_snap_object'])==o and uint(h['prev_snap_txg'])==1 and uint(h['snapnames_object'])!=0,'origin head links')
+        require(uint(s['next_snap_object'])==hd and uint(s['prev_snap_object'])==uint(s['prev_snap_txg'])==0,'origin snapshot links')
     requested_min=sum(((words(h['root_bp'])[6]&65535)+1)*512 for h in heads)+128*len(datasets)
     require(uint(end['read_bytes'])>=requested_min,'profile requested-byte lower bound')
-    for k,n in [('directory_entries',len(names)),('objects',len(objects)),('datasets',len(datasets)),('heads',len(heads)),('snapshots',len(snapshots)),('active_object',previous)]:require(uint(end[k])==n,'profile counter '+k)
+    for k,n in [('directory_entries',len(names)),('objects',len(objects)),('datasets',len(datasets)),('heads',len(heads)+len(empty)),('snapshots',len(snapshots)),('active_object',previous)]:require(uint(end[k])==n,'profile counter '+k)
     # Count lower bound for directory init/retrieve/advance, MOS next/info/end,
     # dataset bonus and head ARC reads. Internal I/O amplification is excluded.
     require(uint(end['reads'])==2+2*len(names)+2*len(objects)+1+len(datasets)+len(heads),'profile read-operation accounting')
-    return dict(profile_metadata_records=rows,ddt_absence_verified=True,zil_empty_heads_verified=True,profile_heads=len(heads),profile_snapshots_not_applicable=len(snapshots))
+    return dict(profile_metadata_records=rows,ddt_absence_verified=True,zil_empty_heads_verified=True,profile_heads=len(heads)+len(empty),profile_unallocated_origin_heads=len(empty),profile_snapshots_not_applicable=len(snapshots))
 
 def analyze(data,exit_status,expected_sha):
     require(exit_status.strip()=='0','profile process failed')

@@ -3,6 +3,7 @@
  */
 #include <sys/ddt.h>
 #include <sys/dsl_dataset.h>
+#include <sys/dsl_dir.h>
 #include <sys/zap.h>
 #define ZG_OBJECT_LIMIT 100000ULL
 #define ZG_DIRECTORY_LIMIT 4096ULL
@@ -12,6 +13,7 @@
 typedef struct zg_ctx {
  spa_t *spa;
  uint64_t objects,directory,datasets,heads,snapshots,reads,bytes,active;
+ uint64_t origin,origin_head,origin_dir;
 } zg_ctx_t;
 static int
 zg_budget(zg_ctx_t *c,uint64_t n)
@@ -54,6 +56,40 @@ zg_ddt(zg_ctx_t *c)
  }
  zap_cursor_fini(&cursor);return(e);
 }
+/* The loaded pool origin identity is only an anchor. Raw scanned bonuses must
+ * also prove the reciprocal empty origin pair; names and numbers are not policy.
+ * dsl_pool_create_origin/create_sync_dd leave ds_bp canonical zero.
+ */
+static boolean_t
+zg_empty_origin(const dsl_dataset_phys_t *d)
+{
+ blkptr_t zero={0};
+ return(!memcmp(&d->ds_bp,&zero,sizeof(zero)) && d->ds_creation_txg==1 &&
+     !d->ds_referenced_bytes && !d->ds_compressed_bytes &&
+     !d->ds_uncompressed_bytes && !d->ds_unique_bytes &&
+     d->ds_flags==DS_FLAG_UNIQUE_ACCURATE && !d->ds_userrefs_obj && !d->ds_props_obj);
+}
+static boolean_t
+zg_origin_head(zg_ctx_t *c,uint64_t object,const dsl_dataset_phys_t *d)
+{
+ dsl_pool_t *dp=c->spa->spa_dsl_pool;
+ dsl_dataset_t *snap=dp?dp->dp_origin_snap:NULL;
+ if(!snap || !snap->ds_dbuf || !snap->ds_dir ||
+     !snap->ds_dir->dd_dbuf || snap->ds_dir->dd_pool!=dp ||
+     dp->dp_spa!=c->spa || dp->dp_meta_objset!=c->spa->spa_meta_objset ||
+     !snap->ds_is_snapshot)return(B_FALSE);
+ const dsl_dataset_phys_t *o=dsl_dataset_phys(snap);
+ const dsl_dir_phys_t *dd=dsl_dir_phys(snap->ds_dir);
+ if(!c->origin || c->origin==object || c->origin_head!=object ||
+     c->origin_dir!=d->ds_dir_obj || o->ds_dir_obj!=d->ds_dir_obj ||
+     !zg_empty_origin(d) || !zg_empty_origin(o) ||
+     d->ds_prev_snap_obj!=c->origin || d->ds_prev_snap_txg!=1 ||
+     !d->ds_snapnames_zapobj || d->ds_num_children || d->ds_next_snap_obj ||
+     d->ds_next_clones_obj || !o->ds_num_children || o->ds_next_snap_obj!=object ||
+     o->ds_prev_snap_obj || o->ds_prev_snap_txg || o->ds_snapnames_zapobj ||
+     dd->dd_origin_obj || snap->ds_dir->dd_crypto_obj)return(B_FALSE);
+ return(B_TRUE);
+}
 static int
 zg_dataset(zg_ctx_t *c,uint64_t object,const dmu_object_info_t *info)
 {
@@ -73,8 +109,17 @@ zg_dataset(zg_ctx_t *c,uint64_t object,const dmu_object_info_t *info)
  /* Snapshot exemption requires a consistent forward snapshot-chain link. */
  if((snapshot && (!ds.ds_next_snap_obj || ds.ds_next_snap_obj==object ||
      ds.ds_snapnames_zapobj)) || (!snapshot && ds.ds_next_snap_obj))return(EINVAL);
+ if(object==c->origin) {
+  dsl_dataset_t *o=c->spa->spa_dsl_pool->dp_origin_snap;
+  if(!o || !o->ds_dbuf || memcmp(&ds,dsl_dataset_phys(o),sizeof(ds)))return(EINVAL);
+ }
  zil_header_t zh={0};const char *state="snapshot_not_applicable";
- if(!snapshot) {
+ boolean_t empty_origin=B_FALSE;
+ if(!snapshot && BP_IS_HOLE(&ds.ds_bp)) {
+  if(!zg_origin_head(c,object,&ds))return(ENOTSUP);
+  empty_origin=B_TRUE;state="unallocated_pool_origin_head";
+ }
+ if(!snapshot && !empty_origin) {
   const blkptr_t *bp=&ds.ds_bp;const char *status="ordinary";
   if(BP_GET_TYPE(bp)!=DMU_OT_OBJSET || BP_GET_LEVEL(bp) || BP_IS_EMBEDDED(bp))return(ENOTSUP);
   e=zb_valid(c->spa,bp,&status);if(e)return(e);
@@ -103,8 +148,16 @@ zg_dataset(zg_ctx_t *c,uint64_t object,const dmu_object_info_t *info)
      (u_longlong_t)ds.ds_num_children,(u_longlong_t)ds.ds_flags,
      (u_longlong_t)ds.ds_next_snap_obj,(u_longlong_t)ds.ds_snapnames_zapobj,state);
  zi_words(zi_out,&ds.ds_bp);
- (void)fprintf(zi_out,",\"zil_header_words\":");
- if(snapshot)(void)fprintf(zi_out,"null");
+ (void)fprintf(zi_out,",\"dir_object\":\"%llu\",\"prev_snap_object\":\"%llu\","
+     "\"prev_snap_txg\":\"%llu\",\"creation_txg\":\"%llu\",\"space_bytes\":[\"%llu\",\"%llu\",\"%llu\",\"%llu\"]",
+     (u_longlong_t)ds.ds_dir_obj,(u_longlong_t)ds.ds_prev_snap_obj,
+     (u_longlong_t)ds.ds_prev_snap_txg,(u_longlong_t)ds.ds_creation_txg,
+     (u_longlong_t)ds.ds_referenced_bytes,(u_longlong_t)ds.ds_compressed_bytes,
+     (u_longlong_t)ds.ds_uncompressed_bytes,(u_longlong_t)ds.ds_unique_bytes);
+ (void)fprintf(zi_out,",\"next_clones_object\":\"%llu\",\"userrefs_object\":\"%llu\",\"props_object\":\"%llu\",\"zil_header_words\":",
+     (u_longlong_t)ds.ds_next_clones_obj,(u_longlong_t)ds.ds_userrefs_obj,
+     (u_longlong_t)ds.ds_props_obj);
+ if(snapshot || empty_origin)(void)fprintf(zi_out,"null");
  else {
   const uint64_t *words=(const uint64_t *)&zh;
   (void)fputc('[',zi_out);
@@ -146,9 +199,16 @@ static int
 zg_run(spa_t *spa)
 {
  zg_ctx_t c={0};c.spa=spa;
+ dsl_dataset_t *origin=spa->spa_dsl_pool?spa->spa_dsl_pool->dp_origin_snap:NULL;
+ if(origin && origin->ds_dir && origin->ds_dir->dd_dbuf) {
+  c.origin=origin->ds_object;c.origin_dir=origin->ds_dir->dd_object;
+  c.origin_head=dsl_dir_phys(origin->ds_dir)->dd_head_dataset_obj;
+ }
  int e=spa_writeable(spa)||spa_mode(spa)!=FREAD ? EROFS:0;
  (void)fprintf(zi_out,"{\"record\":\"profile_scope\",\"profile\":\"ddt-absent-zil-zero-v1\","
-     "\"ddt_enumerated\":false,\"zil_enumerated\":false,%s}\n",zi_flags);
+     "\"origin_snapshot\":\"%llu\",\"origin_head\":\"%llu\",\"origin_dir\":\"%llu\","
+     "\"ddt_enumerated\":false,\"zil_enumerated\":false,%s}\n",
+     (u_longlong_t)c.origin,(u_longlong_t)c.origin_head,(u_longlong_t)c.origin_dir,zi_flags);
  if(!e)e=zp_flush();
  if(!e)e=zg_ddt(&c);
  if(!e)e=zg_scan(&c);

@@ -1,4 +1,4 @@
-# DDT-absent / canonical-empty-ZIL supported profile (v12 review hold)
+# DDT-absent / canonical-empty-ZIL supported profile (v14 review hold)
 
 `-Q new.jsonl -e -p /explicit/path pool` is an explicit opt-in diagnostic mode.
 It includes the same paired allocation, pending-free, async-destroy and
@@ -29,7 +29,7 @@ pinned bonus layout checked and copied, allowing only the legacy DSL_DATASET
 or extensible ZAP-metadata object type. A dataset-shaped object with another bonus
 layout is refused. Snapshot status follows the pinned `ds_num_children != 0`
 rule and is emitted explicitly as `snapshot_not_applicable`; snapshots do not
-own active ZILs. Every head, including clones and heads whose tree references
+own active ZILs. Every materialized head, including clones and heads whose tree references
 would be birth-pruned by ordinary traversal, has its original objset root read
 without prefetch. The complete 192-byte ZIL header must be canonical zero.
 Nonempty log BPs, claim/replay fields, flags, padding, unreadable roots and
@@ -55,7 +55,7 @@ CPU work or import. This is not a hostile-image sandbox or proof of quiescence.
 
 The analyzer validates the profile record order, unique directory keys,
 monotonic complete-declared MOS scan, matching dataset dispositions, pinned DDT
-slot count, counters, budgets and successful terminal. Every head root must
+slot count, counters, budgets and successful terminal. Every materialized head root must
 also match a successfully verified original BP in the paired capture.
 Missing/incomplete profile evidence, hash mismatch, nonzero external exit,
 changed cut, unsupported descriptors or incomplete original-BP verification
@@ -109,3 +109,43 @@ verify refusal before any root ARC read; analyzer mutations independently reject
 missing/self links, unexpected name maps, head links and omitted evidence fields.
 V12 captures lack the required new fields and are not accepted by this corrected
 pre-runtime profile schema. Runtime remains on hold for corrected review.
+
+
+### V14: unallocated pool-origin head
+
+The TXG 330 runtime inspection stopped at the internal origin head because its
+root BP is canonical zero. This is legitimate in the pinned source:
+`dsl_pool_create_origin()` creates a head with no origin then snapshots it;
+`dsl_dataset_create_sync_dd()` zeroes the bonus and leaves the root unallocated
+when there is no origin. The special snapshot creation TXG is 1.
+`dmu_objset_open_impl()` handles a hole root by creating a zeroed in-memory
+objset, but the diagnostic never calls that path or materializes an objset.
+
+The narrow `unallocated_pool_origin_head` disposition requires the loaded
+`dp_origin_snap` identity, matching pool/MOS/directory identity, the directory's
+head link, reciprocal head/snapshot links in the same directory, creation TXG 1,
+exact UNIQUE_ACCURATE flags, canonical all-zero roots and all four zero space
+counters. It also rejects encryption, an origin directory clone origin, head
+clone links, user references and dataset property objects. The scanned origin
+snapshot bonus must exactly match the loaded bonus. Every relevant field is
+emitted for analyzer validation; pool/directory cache identity checks remain
+native producer checks, as do the cached DDT checks. This is not an independent
+reconstruction of the entire DSL graph. Names and specific object numbers do
+not grant an exemption. Ordinary missing roots and noncanonical hole BPs still
+fail closed.
+
+This disposition has no persisted objset/ZIL header: `zil_header_words` is null,
+not a fabricated zero header. It adds no ARC read; operation accounting counts
+only materialized head reads. Every materialized head still requires the whole
+canonical-zero ZIL header and original-BP verification. Snapshot records remain
+explicitly not applicable. The analyzer requires the scanned origin pair and
+allows at most one unallocated origin head. Older profile streams lacking the
+new structural evidence are rejected.
+
+Pool-free fixtures test the positive pair and identity, root, space, creation,
+link, encryption, ancillary-state and cache mismatch negatives. Runtime evidence
+establishes the cause of the previous refusal, not a successful run of V14.
+The separately collected DDT-negative runtime case stops at an earlier type-43
+rejection; it does not exercise the DDT-absence collector. No pool/VM operation
+or push was performed for this correction. All global safety flags remain false;
+this gate only qualifies inputs for future read-only planning.

@@ -77,6 +77,43 @@ int main(int argc,char **argv){
  for(unsigned i=0;i<ZIO_CHECKSUM_FUNCTIONS;i++){ddt[i].ddt_spa=&spa;ddt[i].ddt_os=spa.spa_meta_objset;ddt[i].ddt_checksum=i;spa.spa_ddt[i]=&ddt[i];}
  datasets[2].ds_dir_obj=10;datasets[2].ds_bp=bp(DMU_OT_OBJSET,0,4096,4096);datasets[2].ds_creation_txg=10;
  datasets[3]=datasets[2];datasets[3].ds_num_children=1;datasets[3].ds_next_snap_obj=2;
+ dsl_dataset_t origin={0};dsl_dir_t dir={0};dsl_dir_phys_t dirphys={0};
+ dmu_buf_t odb={0},ddb={0};dsl_dataset_phys_t origin_phys={0};
+ if(!strncmp(mode,"origin-",7)) {
+  memset(&datasets[2].ds_bp,0,sizeof(blkptr_t));datasets[2].ds_creation_txg=1;
+  datasets[2].ds_flags=DS_FLAG_UNIQUE_ACCURATE;datasets[2].ds_prev_snap_obj=3;
+  datasets[2].ds_prev_snap_txg=1;datasets[2].ds_snapnames_zapobj=11;
+  datasets[3]=datasets[2];datasets[3].ds_num_children=3;datasets[3].ds_next_snap_obj=2;
+  datasets[3].ds_prev_snap_obj=0;datasets[3].ds_prev_snap_txg=0;datasets[3].ds_snapnames_zapobj=0;
+  dp.dp_spa=&spa;dp.dp_meta_objset=spa.spa_meta_objset;dp.dp_origin_snap=&origin;
+  origin.ds_object=3;origin.ds_is_snapshot=B_TRUE;origin.ds_dir=&dir;origin.ds_dbuf=&odb;
+  dir.dd_object=10;dir.dd_pool=&dp;dir.dd_dbuf=&ddb;dirphys.dd_head_dataset_obj=2;
+  ddb.db_data=&dirphys;ddb.db_size=sizeof(dirphys);
+  if(!strcmp(mode,"origin-no-anchor"))dp.dp_origin_snap=NULL;
+  if(!strcmp(mode,"origin-wrong-head"))dirphys.dd_head_dataset_obj=99;
+  if(!strcmp(mode,"origin-wrong-dir"))dir.dd_object=99;
+  if(!strcmp(mode,"origin-wrong-pool"))dir.dd_pool=NULL;
+  if(!strcmp(mode,"origin-not-snapshot"))origin.ds_is_snapshot=B_FALSE;
+  if(!strcmp(mode,"origin-nonzero-root"))datasets[2].ds_bp.blk_birth=1;
+  if(!strcmp(mode,"origin-nonzero-space"))datasets[2].ds_referenced_bytes=512;
+  if(!strcmp(mode,"origin-compressed"))datasets[2].ds_compressed_bytes=1;
+  if(!strcmp(mode,"origin-uncompressed"))datasets[2].ds_uncompressed_bytes=1;
+  if(!strcmp(mode,"origin-unique"))datasets[2].ds_unique_bytes=1;
+  if(!strcmp(mode,"origin-userrefs"))datasets[2].ds_userrefs_obj=1;
+  if(!strcmp(mode,"origin-props"))datasets[2].ds_props_obj=1;
+  if(!strcmp(mode,"origin-head-clones"))datasets[2].ds_next_clones_obj=1;
+  if(!strcmp(mode,"origin-wrong-creation"))datasets[2].ds_creation_txg=2;
+  if(!strcmp(mode,"origin-wrong-prev"))datasets[2].ds_prev_snap_obj=99;
+  if(!strcmp(mode,"origin-wrong-prev-txg"))datasets[2].ds_prev_snap_txg=2;
+  if(!strcmp(mode,"origin-missing-map"))datasets[2].ds_snapnames_zapobj=0;
+  if(!strcmp(mode,"origin-encrypted"))dir.dd_crypto_obj=9;
+  if(!strcmp(mode,"origin-snap-space"))datasets[3].ds_unique_bytes=1;
+  if(!strcmp(mode,"origin-snap-root"))datasets[3].ds_bp.blk_birth=1;
+  if(!strcmp(mode,"origin-snap-prev"))datasets[3].ds_prev_snap_obj=99;
+  if(!strcmp(mode,"origin-snap-next"))datasets[3].ds_next_snap_obj=99;
+  origin_phys=datasets[3];odb.db_data=&origin_phys;odb.db_size=sizeof(origin_phys);
+  if(!strcmp(mode,"origin-cache-mismatch"))datasets[3].ds_guid=999;
+ }
  if(!strcmp(mode,"extended-dataset"))extended_dataset=1;
  if(!strcmp(mode,"wrong-dataset-type"))wrong_dataset_type=1;
  if(!strcmp(mode,"clone-head")){datasets[3].ds_num_children=0;datasets[3].ds_next_snap_obj=0;datasets[3].ds_prev_snap_obj=99;}

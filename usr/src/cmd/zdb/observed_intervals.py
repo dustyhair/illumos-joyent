@@ -31,7 +31,7 @@ def words(x):
 
 # All integer/provenance fields, including those on records not used in arithmetic,
 # pass here before cut identity, classification or interval construction.
-UINT_FIELDS=set('next_snap_object snapnames_object dataset_flags directory_entries datasets heads snapshots cached_ddt_slots begin end birth_cutoff owners visits reads guid txg id ashift children parity asize metaslab_count sequence objset object blkid logical_birth physical_birth lsize psize embedded_payload_bytes record_limit observed unsupported_count vdev_id vdev_guid offset qsize expected_asize metaslab start length unflushed_txg map_object log_txg ordinal records intervals bytes map_words map_bytes root_object parent_object parent_index entry_index child_object depth entries objects links subobject_list subobjects bonus_bytes accounted_bytes accounted_comp accounted_uncomp read_bytes active_object active_index spa_version spa_deferred_root dsl_free_root requested_p completed_p verified_p seen submitted completed passed failed not_applicable outstanding'.split())
+UINT_FIELDS=set('next_clones_object userrefs_object props_object origin_snapshot origin_head origin_dir dir_object prev_snap_object prev_snap_txg creation_txg next_snap_object snapnames_object dataset_flags directory_entries datasets heads snapshots cached_ddt_slots begin end birth_cutoff owners visits reads guid txg id ashift children parity asize metaslab_count sequence objset object blkid logical_birth physical_birth lsize psize embedded_payload_bytes record_limit observed unsupported_count vdev_id vdev_guid offset qsize expected_asize metaslab start length unflushed_txg map_object log_txg ordinal records intervals bytes map_words map_bytes root_object parent_object parent_index entry_index child_object depth entries objects links subobject_list subobjects bonus_bytes accounted_bytes accounted_comp accounted_uncomp read_bytes active_object active_index spa_version spa_deferred_root dsl_free_root requested_p completed_p verified_p seen submitted completed passed failed not_applicable outstanding'.split())
 INT_FIELDS={'level'}
 NUMBER_LIMITS={'object_type':255,'bonus_type':255,'bp_type':255,'bp_level':31,'checksum_id':255,'compression_id':127,'dnode_type':255,'dnode_indblkshift':255,'dnode_datablkszsec':65535,'slot':2,'alloc_bias':(1<<32)-1,'shift':63,'error':(1<<31)-1,'time_limit_seconds':(1<<31)-1}
 BOOL_FIELDS=set('snapshot ddt_enumerated zil_enumerated profile_metadata_complete ddt_absence_checked active completed_sentinel async_complete coverage_complete payload_validation_performed evacuation_authorized dnode_present children_skipped geometry_valid gang is_log export_complete checkpoint_unsupported removal_unsupported applied measured verification_complete pending_complete dsl_free_applicable payload_verifiable movable_candidate'.split())
@@ -51,10 +51,10 @@ REQUIRED={
  'allocation_end':{'records','intervals','bytes','map_words','map_bytes'},
  'verification':{'sequence','status','measured','error','requested_p','completed_p','objset','object','level','blkid','bp_words'},
  'verification_end':{'verification_complete','seen','submitted','completed','passed','failed','unsupported','not_applicable','outstanding','requested_p','verified_p'},
- 'profile_scope':{'profile','ddt_enumerated','zil_enumerated'},
+ 'profile_scope':{'origin_snapshot','origin_head','origin_dir','profile','ddt_enumerated','zil_enumerated'},
  'profile_directory':{'name'},
  'profile_object':{'object','object_type','bonus_type'},
- 'profile_dataset':{'object','snapshot','children','dataset_flags','next_snap_object','snapnames_object','zil_state','root_bp','zil_header_words'},
+ 'profile_dataset':{'next_clones_object','userrefs_object','props_object','dir_object','prev_snap_object','prev_snap_txg','creation_txg','space_bytes','object','snapshot','children','dataset_flags','next_snap_object','snapnames_object','zil_state','root_bp','zil_header_words'},
  'profile_end':{'profile_metadata_complete','error','objects','directory_entries','datasets','heads','snapshots','reads','read_bytes','active_object','cached_ddt_slots','ddt_absence_checked'},
  'async_scope':{'object','active'},
  'async_queue':{'object','begin','end','accounted_bytes','accounted_comp','accounted_uncomp'},
@@ -80,6 +80,9 @@ def record_schema(r,kind=None):
         elif key=='unsupported':
             if kind in ('end','verification_end'):uint(value)
             else:require(type(value) is bool,'invalid unsupported flag')
+        elif key=='space_bytes':
+            require(type(value) is list and len(value)==4,'space counters encoding')
+            for n in value:uint(n)
         elif key=='zil_header_words':
             require(value is None or (isinstance(value,list) and len(value)==24 and all(isinstance(w,str) and re.fullmatch('[0-9a-f]{16}',w) for w in value)),'ZIL header encoding')
         elif key in ('bookmark','resume'):

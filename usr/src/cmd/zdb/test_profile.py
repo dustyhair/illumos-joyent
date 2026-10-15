@@ -34,6 +34,22 @@ class Tests(unittest.TestCase):
     self.assertTrue(all(result[k] is False for k in F))
     self.assertEqual(result['profile_heads'],2 if mode=='clone-head' else 1)
     self.assertIn('metadata_reads=2' if mode=='clone-head' else 'metadata_reads=1',r.stdout)
+ def test_unallocated_origin(self):
+  r,original=self.invoke('origin-valid');self.assertEqual(r.returncode,0,r.stdout)
+  self.assertIn('metadata_reads=0',r.stdout)
+  result=run(combined(original));self.assertEqual(result['profile_unallocated_origin_heads'],1)
+  self.assertEqual(result['profile_heads'],1)
+  for mode in ('compressed','uncompressed','unique','userrefs','props','head-clones','no-anchor','wrong-head','wrong-dir','wrong-pool','not-snapshot','nonzero-root','nonzero-space','wrong-creation','wrong-prev','wrong-prev-txg','missing-map','encrypted','snap-space','snap-root','snap-prev','snap-next','cache-mismatch'):
+   r,rows=self.invoke('origin-'+mode)
+   with self.subTest(mode=mode):
+    self.assertEqual(r.returncode,1,r.stdout);self.assertIn('metadata_reads=0',r.stdout)
+    with self.assertRaises(ValueError):run(combined(rows))
+  for index,key,value in [(3,'userrefs_object','1'),(3,'props_object','1'),(3,'next_clones_object','1'),(5,'userrefs_object','1'),(5,'props_object','1'),(0,'origin_snapshot','99'),(0,'origin_head','99'),(0,'origin_dir','99'),(3,'root_bp',['0000000000000001']*16),(3,'space_bytes',['1','0','0','0']),(3,'creation_txg','2'),(3,'prev_snap_object','99'),(3,'prev_snap_txg','2'),(3,'snapnames_object','0'),(3,'zil_header_words',['0000000000000000']*24),(5,'dir_object','99'),(5,'prev_snap_object','99'),(5,'space_bytes',['0','0','0','1']),(5,'root_bp',['0000000000000001']*16)]:
+   # Locate by kind/object, avoiding fixture row-position assumptions.
+   rows=copy.deepcopy(original)
+   row=rows[0] if index==0 else next(d for d in rows if d['record']=='profile_dataset' and d['object']==('2' if index==3 else '3'))
+   row[key]=value
+   with self.subTest(key=key,index=index),self.assertRaises(ValueError):run(combined(rows))
  def test_native_rejections(self):
   for mode in ('ddt-stats','ddt-in-core','ddt-slot','ddt-cache-missing','ddt-cache-identity','ddt-directory','directory-error','directory-name','directory-limit','object-limit','orphan-ddt','unknown-type','wrong-dataset-type','ambiguous-dataset','next-error','next-repeat','info-error','bonus-error','bonus-short','inconsistent','unknown-flags','future-dataset','snapshot-state','snapshot-missing-next-zil','snapshot-self-next-zil','head-state','root-type','root-hole','zil-log','zil-claim','zil-padding','arc-error','arc-size','no-heads','writable'):
    with self.subTest(mode=mode):
