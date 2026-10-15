@@ -8,6 +8,7 @@
 #include <sys/zfeature.h>
 
 #define ZA_MS_LIMIT 4096
+#define ZA_MAP_LIMIT 8192
 #define ZA_BYTES_LIMIT (64ULL << 20)
 #define ZA_WORD_LIMIT 1000000ULL
 #define ZA_BLOCK_LIMIT (16ULL << 20)
@@ -100,8 +101,9 @@ za_entry(space_map_entry_t *e, void *arg)
     m = p; break;
    }
   }
- } else if (e->sme_vdev != SM_NO_VDEVID && m &&
-     e->sme_vdev != m->vd->vdev_id) return (EINVAL);
+ }
+ /* Base ownership is the enclosing metaslab. The writer truncates
+  * SM_NO_VDEVID to zero in two-word entries; it is not a vdev ID. */
  if (!m || e->sme_offset < m->ms->ms_start ||
      e->sme_run > m->ms->ms_size ||
      e->sme_offset - m->ms->ms_start > m->ms->ms_size - e->sme_run ||
@@ -192,6 +194,55 @@ za_emit(za_ms_t *m)
  return (0);
 }
 
+/* Preflight every nonzero MOS map object before any operation is replayed. */
+static int
+za_register_object(uint64_t *objects, size_t *count, uint64_t object)
+{
+ if (!object) return (0); /* Absent base maps have no object ownership. */
+ if (*count >= ZA_MAP_LIMIT) return (E2BIG);
+ for (size_t i = 0; i < *count; i++)
+  if (objects[i] == object) return (EEXIST);
+ objects[(*count)++] = object;
+ return (0);
+}
+
+static int
+za_check_objects(spa_t *spa)
+{
+ uint64_t *objects = calloc(ZA_MAP_LIMIT, sizeof (*objects));
+ size_t count = 0, metaslabs = 0;
+ int err = 0;
+ if (!objects) return (ENOMEM);
+ vdev_t *root = spa->spa_root_vdev;
+ for (uint64_t i = 0; i < root->vdev_children; i++) {
+  vdev_t *v = root->vdev_child[i];
+  if (!v || v->vdev_ms_count > ZA_MS_LIMIT - metaslabs ||
+      (v->vdev_ms_count && !v->vdev_ms)) { err = EINVAL; goto done; }
+  metaslabs += v->vdev_ms_count;
+  for (uint64_t j = 0; j < v->vdev_ms_count; j++) {
+   metaslab_t *ms = v->vdev_ms[j];
+   if (!ms) { err = EINVAL; goto done; }
+   if (ms->ms_sm) {
+    uint64_t object = space_map_object(ms->ms_sm);
+    if (!object) { err = EINVAL; goto done; }
+    err = za_register_object(objects, &count, object);
+    if (err) goto done;
+   }
+  }
+ }
+ if (spa_feature_is_active(spa, SPA_FEATURE_LOG_SPACEMAP)) {
+  for (spa_log_sm_t *s = avl_first(&spa->spa_sm_logs_by_txg); s;
+      s = AVL_NEXT(&spa->spa_sm_logs_by_txg, s)) {
+   if (!s->sls_sm_obj) { err = EINVAL; goto done; }
+   err = za_register_object(objects, &count, s->sls_sm_obj);
+   if (err) goto done;
+  }
+ }
+done:
+ free(objects);
+ return (err);
+}
+
 static int
 za_run(spa_t *spa)
 {
@@ -213,6 +264,7 @@ za_run(spa_t *spa)
      checkpoint ? "true" : "false", removal ? "true" : "false", zi_flags);
  if ((err = za_finish_record()) != 0) return (err);
  if (checkpoint || removal) return (ENOTSUP);
+ if ((err = za_check_objects(spa)) != 0) return (err);
  ctx.maps = calloc(ZA_MS_LIMIT, sizeof (*ctx.maps));
  if (!ctx.maps) return (ENOMEM);
  for (uint64_t i = 0; i < spa->spa_root_vdev->vdev_children; i++) {

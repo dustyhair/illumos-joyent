@@ -79,6 +79,73 @@ class Tests(unittest.TestCase):
         with self.assertRaises(ValueError):p.apply([[0,10]],5,15,'alloc')
         with self.assertRaises(ValueError):p.apply([[0,10]],5,15,'free')
         self.assertEqual(p.apply([[0,10]],3,7,'free'),[[0,3],[7,10]])
+    def test_allocated_raw_cannot_masquerade_as_hole_or_embedded(self):
+        for kind in ('hole','embedded'):
+            rows=fixture(omit=True);rows[3].update(classification=kind,dvas=[])
+            with self.assertRaisesRegex(ValueError,'classification contradicts'):run(rows)
+    def test_raw_classification_matrix(self):
+        for bit,kind in [(39,'embedded'),(61,'protected_unsupported'),(62,'dedup_unsupported')]:
+            rows=fixture();r=rows[3];r['bp_words'][6]=f'{int(r["bp_words"][6],16)|(1<<bit):016x}'
+            with self.assertRaisesRegex(ValueError,'classification contradicts'):run(rows)
+        rows=fixture();rows[3]['bp_words'][1]='8000000000000008'
+        with self.assertRaisesRegex(ValueError,'classification contradicts'):run(rows)
+        rows=fixture();r=rows[3];r['bp_words'][6]=f'{(int(r["bp_words"][6],16)&~(255<<48))|(127<<48):016x}'
+        with self.assertRaisesRegex(ValueError,'classification contradicts'):run(rows)
+        rows=fixture();rows[3]['bp_words'][0]=rows[3]['bp_words'][1]='0000000000000000'
+        with self.assertRaisesRegex(ValueError,'classification contradicts'):run(rows)
+    def test_valid_hole_and_embedded_raw(self):
+        for embedded in (False,True):
+            rows=fixture(omit=True);r=rows[3];r.update(dvas=[],classification='embedded' if embedded else 'hole')
+            r['bp_words'][0]=r['bp_words'][1]='0000000000000000'
+            if embedded:
+                prop=(19<<48)|(1<<39)|(2<<32)|(7<<25)|1023
+                r['bp_words'][6]=f'{prop:016x}';r.update(lsize='1024',psize='0',checksum_id=2,physical_birth='0',embedded_payload_bytes='8')
+            result=run(rows);self.assertTrue(result['address_sets_equal']);self.assertFalse(result['coverage_complete'])
+    def test_global_map_object_aliases(self):
+        rows=fixture(log=True)
+        for r in rows:
+            if r.get('source')=='log':r['map_object']='50'
+        with self.assertRaisesRegex(ValueError,'map object reused'):run(rows)
+        rows=fixture();rows.insert(-4,dict(record='allocation_map',source='log',map_object='50',log_txg='20',length='0',shift=9,**F))
+        with self.assertRaisesRegex(ValueError,'map object reused'):run(rows)
+        rows=fixture(log=True);idx=next(i for i,r in enumerate(rows) if r['record']=='allocation')
+        rows.insert(idx,dict(record='allocation_map',source='log',map_object='51',log_txg='21',length='0',shift=9,**F))
+        with self.assertRaisesRegex(ValueError,'map object reused'):run(rows)
+    def test_base_base_object_alias(self):
+        rows=fixture();ms=copy.deepcopy(rows[5]);ms.update(id='1',start='1048576')
+        rows[2].update(asize='2097152',metaslab_count='2')
+        idx=next(i for i,r in enumerate(rows) if r['record']=='allocation')
+        rows[idx:idx]=[ms,dict(record='allocation_map',source='base',map_object='50',log_txg='0',length='0',shift=12,**F)]
+        with self.assertRaisesRegex(ValueError,'map object reused'):run(rows)
+    def test_new_type_and_crypt_precedence(self):
+        for typ in (54,127,138,255):
+            rows=fixture();r=rows[3];prop=int(r['bp_words'][6],16);r['bp_words'][6]=f'{(prop&~(255<<48))|(typ<<48):016x}'
+            with self.assertRaisesRegex(ValueError,'classification contradicts'):run(rows)
+        rows=fixture(omit=True);r=rows[3];r.update(classification='hole',dvas=[]);r['bp_words'][0]=r['bp_words'][1]='0000000000000000';r['bp_words'][6]=f'{int(r["bp_words"][6],16)|(1<<61):016x}'
+        with self.assertRaisesRegex(ValueError,'classification contradicts'):run(rows)
+    def test_all_numeric_provenance_fields(self):
+        for bad in ['not-a-guid','-1','01',str(2**64),True,1]:
+            for field in ('guid','vdev_guid','objset','object','blkid','sequence','physical_birth','txg','map_object','log_txg','ordinal','id','metaslab'):
+                rows=fixture(log=True)
+                for r in rows:
+                    if field in r:r[field]=bad
+                    for d in r.get('dvas',[]):
+                        if field in d:d[field]=bad
+                with self.subTest(field=field,bad=bad):
+                    with self.assertRaises(ValueError):run(rows)
+        for bad in ['-0','00','-01',str(2**63),str(-2**63-1),True,0]:
+            rows=fixture();rows[3]['level']=bad
+            with self.assertRaises(ValueError):run(rows)
+    def test_small_integer_and_boolean_types(self):
+        for field in ('bp_type','bp_level','checksum_id','compression_id'):
+            rows=fixture();rows[3][field]=True
+            with self.assertRaises(ValueError):run(rows)
+    def test_invalid_cut_schema(self):
+        from paired_intervals import same_cut,cut
+        rows=fixture();c=cut(rows[1],[rows[2]])
+        for field in ('guid','txg'):
+            bad=copy.deepcopy(c);bad[field]='not-an-integer'
+            with self.assertRaises(ValueError):same_cut(bad,bad)
     def test_pointset_oracle(self):
         rng=random.Random(67)
         for _ in range(1000):

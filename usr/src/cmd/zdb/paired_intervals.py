@@ -1,14 +1,23 @@
 #!/usr/bin/env python3
 """Real paired evidence diagnostics. No device access, synthetic certificate or mover."""
 import argparse, collections, hashlib, json, pathlib
-from observed_intervals import parse, require, uint, analyze as observed, FLAGS
+from observed_intervals import parse, require, uint, analyze as observed, FLAGS, record_schema
 
 def canonical(x):return json.dumps(x,sort_keys=True,separators=(',',':')).encode()
 def digest(x):return hashlib.sha256(canonical(x)).hexdigest()
 def cut(pool,vdevs):
+    record_schema(pool,'pool')
+    for v in vdevs:record_schema(v,'vdev')
     return {'guid':pool['guid'],'txg':pool['txg'],'root_bp':pool['root_bp'],
             'topology':sorted(vdevs,key=lambda v:uint(v['id']))}
-def same_cut(left,right):require(left==right,'cut identity mismatch: GUID/TXG/root/topology')
+def validate_cut(c):
+    require(type(c) is dict and set(c)=={'guid','txg','root_bp','topology'},'invalid cut schema')
+    record_schema({k:c[k] for k in ('guid','txg','root_bp')},'pool')
+    require(type(c['topology']) is list,'invalid cut topology')
+    for v in c['topology']:record_schema(v,'vdev')
+def same_cut(left,right):
+    validate_cut(left);validate_cut(right)
+    require(left==right,'cut identity mismatch: GUID/TXG/root/topology')
 def union(spans):
     out=[]
     for s,e in sorted(spans):
@@ -42,7 +51,9 @@ def apply(tree,s,e,op):
 def analyze(data,exit_status,expected_sha):
     require(hashlib.sha256(data).hexdigest()==expected_sha,'stream hash mismatch')
     require(data.endswith(b'\n'),'truncated stream')
-    rows=[parse(x) for x in data.splitlines()];counts=collections.Counter(r['record'] for r in rows)
+    rows=[parse(x) for x in data.splitlines()]
+    for r in rows:record_schema(r)
+    counts=collections.Counter(r['record'] for r in rows)
     for kind in ['begin','pool','end','allocation_scope','cut_end','allocation_end']:
         require(counts[kind]==1,'missing/duplicate '+kind)
     require(rows[0]['schema']=='zdb-observed-allocation-v1','paired schema required')
@@ -65,7 +76,7 @@ def analyze(data,exit_status,expected_sha):
     first=rows.index(scope)
     require(all(r['record'] in {'begin','pool','vdev','bp','dnode'} for r in rows[:first]),'premature allocation records')
     phase='base';maps={};tree={};actual={};operations=[];current=None;last_ms=None;last_log=0;map_bytes=0
-    record_count=0;base_seen=set()
+    record_count=0;base_seen=set();map_objects=set()
     for r in rows[first:-3]:
         kind=r['record'];record_count+=1
         if kind=='allocation_scope':continue
@@ -79,6 +90,8 @@ def analyze(data,exit_status,expected_sha):
             maps[key]=r;tree[key]=[];actual[key]=[];last_ms=key;current=None
         elif kind=='allocation_map':
             source=r['source'];length=uint(r['length']);obj=uint(r['map_object']);txg=uint(r['log_txg'])
+            if obj:
+                require(obj not in map_objects,'map object reused across owners');map_objects.add(obj)
             require(length%8==0 and type(r['shift']) is int and 0<=r['shift']<=63,'map encoding')
             require(phase!='allocation','late map')
             if source=='base':

@@ -5,12 +5,14 @@ static int alloc_test_flush(FILE *);
 #define fflush alloc_test_flush
 #include "zdb_inventory.c"
 #undef fflush
+/* Verbatim production segment writer from the pinned space_map.c. */
+#include "test_pinned_writer.inc"
 static int alloc_test_flush(FILE *f) {
  if (output_error) return (EOF);
  return (fflush(f));
 }
 static uint64_t input_words[8];
-static int read_error, hole_error;
+static int read_error, hole_error, read_calls;
 int dmu_offset_next(objset_t *os, uint64_t object, boolean_t hole, uint64_t *off) {
  (void) os; (void) object; (void) hole;
  if (hole_error) *off += 16;
@@ -24,6 +26,7 @@ int dmu_object_info(objset_t *os, uint64_t object, dmu_object_info_t *info) {
 int dmu_read(objset_t *os, uint64_t object, uint64_t off, uint64_t size,
     void *buf, uint32_t flags) {
  (void) os; (void) object; (void) flags;
+ read_calls++;
  if (read_error) return (read_error);
  if (off > sizeof (input_words) || size > sizeof (input_words)-off)
   return (EIO);
@@ -62,6 +65,7 @@ static int reject_entry(space_map_entry_t *e, void *arg) {
 int main(int argc, char **argv) {
  if (argc != 2) return (99);
  unsigned passed = 0;
+ CHECK(DMU_OT_NUMTYPES == 54 && DMU_BSWAP_NUMFUNCS == 10);
  zfs_btree_init();
  uint64_t w[4] = { SM_OFFSET_ENCODE(2) | SM_RUN_ENCODE(3), 0, 0, 0 };
  CHECK(za_decode(w, 1, 4096, 32768, 9, collect, NULL) == 0);
@@ -143,6 +147,32 @@ int main(int argc, char **argv) {
  output_error = 1;
  CHECK(za_finish_record() == EIO);
  output_error = 0;
+ /* Production writer-generated long two-word base entries on nonzero owners. */
+ space_map_phys_t writer_phys = { 0 }; space_map_t writer_sm = { 0 };
+ uint64_t writer_words[32] = { 0 };
+ dmu_buf_t writer_db = { 0 }; dmu_buf_t *writer_dbp = &writer_db;
+ writer_sm.sm_phys = &writer_phys; writer_sm.sm_blksz = sizeof (writer_words);
+ writer_sm.sm_shift = 12; writer_sm.sm_size = 1ULL << 40;
+ writer_db.db_data = writer_words; writer_db.db_size = sizeof (writer_words);
+ uint64_t long_size = (SM_RUN_MAX + 8) << 12;
+ uint64_t owner_ids[] = { 1, 3, 19 };
+ ctx.base = &m; ctx.log = B_FALSE; ctx.txg = 0;
+ ms.ms_size = 1ULL << 40;
+ for (unsigned i = 0; i < 3; i++) {
+  vd.vdev_id = owner_ids[i]; range_tree_vacate(tree, NULL, NULL);
+  writer_phys.smp_length = 0;
+  space_map_write_seg(&writer_sm, 4096, 4096 + long_size, SM_ALLOC,
+      SM_NO_VDEVID, 2, &writer_dbp, NULL, NULL);
+  CHECK(writer_phys.smp_length == 16 && SM2_VDEV_DECODE(writer_words[0]) == 0);
+  CHECK(za_decode(writer_words, 2, 0, writer_sm.sm_size, 12, za_entry, &ctx) == 0);
+  CHECK(range_tree_space(tree) == long_size);
+  writer_phys.smp_length = 0;
+  space_map_write_seg(&writer_sm, 4096, 4096 + long_size, SM_FREE,
+      SM_NO_VDEVID, 2, &writer_dbp, NULL, NULL);
+  CHECK(za_decode(writer_words, 2, 0, writer_sm.sm_size, 12, za_entry, &ctx) == 0);
+  CHECK(range_tree_space(tree) == 0);
+ }
+ ms.ms_size = 32768;
  /* Execute the complete allocation driver with fake metadata and stub reads. */
  za_read_bytes = za_words = 0;
  spa_t spa = { 0 }; vdev_t root = { 0 };
@@ -174,6 +204,23 @@ int main(int argc, char **argv) {
  avl_remove(&spa.spa_sm_logs_by_txg, &log); log.sls_txg = 31;
  avl_add(&spa.spa_sm_logs_by_txg, &log);
  CHECK(za_run(&spa) == EINVAL);
+ /* Global object aliases fail before map reads, even with empty maps. */
+ avl_remove(&spa.spa_sm_logs_by_txg, &log); log.sls_txg = 20;
+ avl_add(&spa.spa_sm_logs_by_txg, &log);
+ mock_log.sm_object = 99; ms.ms_sm = &mock_log;
+ int before_reads = read_calls;
+ CHECK(za_run(&spa) == EEXIST && read_calls == before_reads);
+ ms.ms_sm = NULL;
+ spa_log_sm_t log2 = { 0 }; log2.sls_txg = 21; log2.sls_sm_obj = 99;
+ avl_add(&spa.spa_sm_logs_by_txg, &log2);
+ CHECK(za_run(&spa) == EEXIST && read_calls == before_reads);
+ avl_remove(&spa.spa_sm_logs_by_txg, &log2);
+ features = 0; ms.ms_sm = &mock_log;
+ metaslab_t ms2 = ms; ms2.ms_id = 1; ms2.ms_start = 32768;
+ metaslab_t *two_ms[] = { &ms, &ms2 }; vd.vdev_ms = two_ms;
+ vd.vdev_ms_count = 2; vd.vdev_asize = 65536;
+ CHECK(za_run(&spa) == EEXIST && read_calls == before_reads);
+ vd.vdev_ms = metaslabs; vd.vdev_ms_count = 1; ms.ms_sm = NULL;
  avl_remove(&spa.spa_sm_logs_by_txg, &log); avl_destroy(&spa.spa_sm_logs_by_txg);
  CHECK(zdb_inventory_end(0) == 0);
  range_tree_vacate(tree, NULL, NULL); range_tree_destroy(tree);

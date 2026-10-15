@@ -17,10 +17,102 @@ def uint(x):
     require(isinstance(x,str) and re.fullmatch(r'0|[1-9][0-9]*',x) is not None,'noncanonical uint')
     n=int(x);require(n<=U64,'uint overflow');return n
 
+# Constants are pinned to da512a7e's sys/dmu.h; native tests check these values.
+DMU_OT_NUMTYPES=54
+DMU_BSWAP_NUMFUNCS=10
+
+def sint(x):
+    require(isinstance(x,str) and re.fullmatch(r'0|-?[1-9][0-9]*',x) is not None,'noncanonical int64')
+    n=int(x);require(-(1<<63)<=n<(1<<63),'int64 overflow');return n
+
+def words(x):
+    require(isinstance(x,list) and len(x)==16 and all(isinstance(w,str) and re.fullmatch('[0-9a-f]{16}',w) for w in x),'raw BP encoding')
+    return [int(w,16) for w in x]
+
+# All integer/provenance fields, including those on records not used in arithmetic,
+# pass here before cut identity, classification or interval construction.
+UINT_FIELDS=set('guid txg id ashift children parity asize metaslab_count sequence objset object blkid logical_birth physical_birth lsize psize embedded_payload_bytes record_limit observed unsupported_count vdev_id vdev_guid offset qsize expected_asize metaslab start length unflushed_txg map_object log_txg ordinal records intervals bytes map_words map_bytes'.split())
+INT_FIELDS={'level'}
+NUMBER_LIMITS={'bp_type':255,'bp_level':31,'checksum_id':255,'compression_id':127,'dnode_type':255,'dnode_indblkshift':255,'dnode_datablkszsec':65535,'slot':2,'alloc_bias':(1<<32)-1,'shift':63,'error':(1<<31)-1,'time_limit_seconds':(1<<31)-1}
+BOOL_FIELDS=set('coverage_complete payload_validation_performed evacuation_authorized dnode_present children_skipped geometry_valid gang is_log export_complete checkpoint_unsupported removal_unsupported applied'.split())
+REQUIRED={
+ 'begin':{'schema','bp_encoding','source_base','record_limit'},
+ 'pool':{'guid','txg','root_bp'},
+ 'vdev':{'id','guid','ashift','children','parity','type','allocation_class','alloc_bias','is_log'},
+ 'bp':{'sequence','objset','object','level','blkid','bp_words','classification','bp_type','bp_level','logical_birth','physical_birth','lsize','psize','checksum_id','compression_id','metadata','dvas','unsupported','children_skipped'},
+ 'dnode':{'sequence','objset','object','dnode_type'},
+ 'end':{'export_complete','error','observed','unsupported'},
+ 'allocation_scope':{'checkpoint_unsupported','removal_unsupported','owner_obligations','allocation_adjustments'},
+ 'metaslab':{'vdev_id','id','start','length','unflushed_txg','map_object'},
+ 'allocation_map':{'source','map_object','log_txg','length','shift'},
+ 'allocation_op':{'source','map_object','log_txg','ordinal','vdev_id','metaslab','start','length','op','applied'},
+ 'allocation':{'vdev_id','vdev_guid','metaslab','start','length'},
+ 'cut_end':{'txg','root_bp'},
+ 'allocation_end':{'records','intervals','bytes','map_words','map_bytes'},
+ 'dva':{'slot','vdev_id','offset','asize','gang','geometry_valid'},
+}
+TEXT_FIELDS=set('schema bp_encoding source_base integer_encoding quiescence name type allocation_class classification source op allocation_adjustments'.split())
+LIST_FIELDS={'attempted','excluded','owner_obligations'}
+def record_schema(r,kind=None):
+    require(type(r) is dict,'record must be object')
+    kind=kind or r.get('record');require(kind in REQUIRED,'unknown record kind')
+    require(REQUIRED[kind]<=r.keys(),'missing '+str(kind)+' fields')
+    for key,value in r.items():
+        if key=='record':require(value==kind,'record kind mismatch')
+        elif key=='unsupported':
+            if kind=='end':uint(value)
+            else:require(type(value) is bool,'invalid unsupported flag')
+        elif key in UINT_FIELDS:uint(value)
+        elif key in INT_FIELDS:sint(value)
+        elif key in NUMBER_LIMITS:require(type(value) is int and 0<=value<=NUMBER_LIMITS[key],'invalid '+key)
+        elif key in BOOL_FIELDS:require(type(value) is bool,'invalid '+key)
+        elif key=='metadata':require(value is None or type(value) is bool,'invalid metadata')
+        elif key in ('root_bp','bp_words'):words(value)
+        elif key=='dvas':
+            require(type(value) is list and len(value)<=3,'invalid DVAs')
+            for d in value:record_schema(d,'dva')
+        elif key in TEXT_FIELDS:require(type(value) is str,'invalid text '+key)
+        elif key in LIST_FIELDS:require(type(value) is list and all(type(v) is str for v in value),'invalid list '+key)
+        else:raise ValueError('unknown field '+key)
+    if kind in ('pool','vdev'):require(uint(r['guid'])>0,'zero GUID')
+    if 'vdev_guid' in r:require(uint(r['vdev_guid'])>0,'zero vdev GUID')
+
+def raw_classification(r):
+    w=words(r['bp_words']);prop=w[6];typ=(prop>>48)&255
+    embedded=bool((prop>>39)&1);crypt=bool((prop>>61)&1)
+    valid=(typ&31)<DMU_BSWAP_NUMFUNCS if typ&128 else typ<DMU_OT_NUMTYPES
+    hole=not embedded and w[0]==w[1]==0
+    gang=not embedded and any(w[i]>>63 for i in (1,3,5))
+    kind=('type_unsupported' if not valid else 'protected_unsupported' if crypt else
+          'embedded' if embedded else 'hole' if hole else 'gang_unsupported' if gang else
+          'dedup_unsupported' if (prop>>62)&1 else 'ordinary')
+    require(r['classification']==kind,'classification contradicts raw BP')
+    require(r['bp_type']==typ and r['bp_level']==((prop>>56)&31),'raw type/level')
+    require(r['compression_id']==((prop>>32)&127),'raw compression')
+    require(r['checksum_id']==(2 if embedded else (prop>>40)&255),'raw checksum')
+    require(uint(r['logical_birth'])==w[10],'raw logical birth')
+    require(uint(r['physical_birth'])==(0 if embedded else (w[9] or w[10])),'raw physical birth')
+    require(uint(r['psize'])==(0 if embedded else (((prop>>16)&65535)+1)*512),'raw psize')
+    logical=((prop&((1<<25)-1))+1 if ((prop>>40)&255)==0 else 0) if embedded else ((prop&65535)+1)*512
+    require(uint(r['lsize'])==logical,'raw lsize')
+    if 'embedded_payload_bytes' in r:require(uint(r['embedded_payload_bytes'])==(((prop>>25)&127)+1 if embedded else 0),'raw embedded size')
+    if not valid:require(r['metadata'] is None,'invalid type metadata')
+    else:require(type(r['metadata']) is bool,'valid type missing metadata')
+    if kind in ('type_unsupported','protected_unsupported','gang_unsupported','dedup_unsupported'):
+        require(r['unsupported'] is True and r['children_skipped'] is True,'unsupported raw layout admitted')
+    if kind in ('hole','embedded'):
+        require(r['unsupported'] is False and r['children_skipped'] is False,'nonallocated classification flags')
+        require(r['dvas']==[],'nonallocated DVAs')
+    if hole and valid and not crypt:
+        require(all(x==0 for x in w[:6]),'hole contains secondary DVA words')
+    if not valid or crypt or embedded or hole:require(r['dvas']==[],'uninterpretable DVAs')
+    return kind
+
 def validate(data,exit_status):
     require(exit_status.strip()=='0','process failed')
     require(data.endswith(b'\n'),'unterminated final line')
     rows=[parse(s) for s in data.splitlines()]
+    for r in rows:record_schema(r)
     require(len(rows)>=4,'short stream')
     counts=collections.Counter(r['record'] for r in rows)
     require(set(counts)<= {'begin','pool','vdev','bp','dnode','end'},'unknown record')
@@ -35,7 +127,8 @@ def validate(data,exit_status):
     for r in rows[2:-1]:
         if r['record']=='vdev':
             require(not started,'late vdev');i=uint(r['id'])
-            require(i not in vdevs,'duplicate vdev');vdevs[i]=r
+            require(i not in vdevs,'duplicate vdev')
+            require(all(v['guid']!=r['guid'] for v in vdevs.values()),'duplicate vdev GUID');vdevs[i]=r
         else:
             require(r['record'] in ('bp','dnode'),'unexpected middle record');started=True;events.append(r)
             require(uint(r['sequence'])==len(events),'sequence gap')
@@ -43,8 +136,7 @@ def validate(data,exit_status):
     bps=[r for r in events if r['record']=='bp']
     require(all(type(r['unsupported']) is bool and type(r['children_skipped']) is bool for r in bps),'invalid bool')
     require(sum(r['unsupported'] for r in bps)==uint(end['unsupported']),'unsupported count')
-    for r in bps:
-        require(len(r['bp_words'])==16 and all(re.fullmatch('[0-9a-f]{16}',w) for w in r['bp_words']),'raw BP encoding')
+    for r in bps:raw_classification(r)
     require(pool['root_bp']==bps[0]['bp_words'] and bps[0]['objset']=='0' and bps[0]['level']=='-1','MOS root binding')
     return rows,counts,pool,vdevs,bps
 

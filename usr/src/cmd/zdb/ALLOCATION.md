@@ -141,3 +141,39 @@ After independent review, run a new paired disposable-lab capture and stock
 cross-check. A separate approved fixture must demonstrate nonempty unflushed
 log operations; a zero-log pass cannot validate real log replay. Real corrupted
 maps, import failure paths, and all excluded ownership classes remain untested.
+
+## v3 independent-review fixes
+
+- Validate raw BP classification BEFORE any nonallocated/unsupported filtering.
+  The pinned DMU type bounds, embedded/crypt bits, first-DVA hole identity,
+  gang bits and dedup bit determine the class. All reported type/level/size/
+  checksum/compression/birth fields must match raw words, including embedded
+  encodings. Hole records cannot conceal secondary DVA words. Layout/class
+  contradictions fail parsing, never produce a successful empty comparison.
+- A central schema pass validates canonical uint64 strings for every GUID,
+  bookmark, birth, topology, map/operation/counter field before cut construction;
+  bookmark level uses canonical int64. Small numeric enums reject booleans;
+  boolean fields require actual booleans. Missing required and unknown fields
+  fail; GUIDs must be nonzero and top-vdev GUIDs unique. Cut comparisons also
+  validate their identities before comparing them.
+- Base-map entry ownership is the enclosing metaslab, matching the pinned
+  loader. SM_NO_VDEVID is truncated to zero by the writer in the 24-bit
+  two-word vdev field. It is not an owner ID. Log entries continue to require
+  and validate their encoded vdev ID. test_pinned_writer.inc is the VERBATIM
+  space_map_write_seg helper from pinned space_map.c; tests call it against
+  in-memory dbufs to generate long two-word ALLOC/FREE entries for nonzero
+  enclosing vdevs 1, 3 and 19. No pool or actual DMU write is involved.
+- Preflight all base/log map objects before ANY replay: nonzero object IDs
+  must have exactly one owner, including across log TXGs. Absent base maps
+  retain object zero; log object zero is invalid. Registry cap: 8192 map
+  objects in addition to existing resource limits. Analyzer independently
+  enforces global object ownership, including zero-length aliased maps.
+
+Current verification: 70 native checks; 39 exporter/runtime regressions;
+24 analyzer tests with 1000 interval oracle cases and review reproducers.
+Actual prior TXG-600 data passes strict raw/schema validation unchanged:
+850 ordinary / 13719 hole / 58 embedded BPs, 987 interval references. No new
+allocation data or comparison against a different cut was produced.
+Review HOLD remains. No pools, pushes, baseline changes or production access.
+
+Pinned writer helper SHA256: 94a1420fd8ff4a277a7805813eebebe08f35d68a7b63c4de1b8d2659f7910010
