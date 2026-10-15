@@ -1,4 +1,4 @@
-# DDT-absent / canonical-empty-ZIL supported profile (v14 review hold)
+# DDT-absent / canonical-empty-ZIL supported profile (V14)
 
 `-Q new.jsonl -e -p /explicit/path pool` is an explicit opt-in diagnostic mode.
 It includes the same paired allocation, pending-free, async-destroy and
@@ -8,9 +8,11 @@ section. Existing `-J`, `-K` and `-Y` behavior and schemas are unchanged.
 A successful native exit means capture and metadata checks completed. It is
 **not** profile acceptance. Run `profile_intervals.py` with the stream hash,
 external exit-status file and exclusive output path to evaluate the complete
-supported-profile policy. No planner or mover is implemented. This milestone
-has targeted build and pool-free fixture validation only; real profile runtime
-validation remains on hold for independent review.
+supported-profile policy. V14 runtime validation at sealed TXG 330 and its
+independent evidence review passed. The separate offline planner now computes
+base demand and group accounting; no mover is implemented. See [RESULTS.md](RESULTS.md)
+for current reviewed status. The implementation and validation-plan sections
+below retain the earlier milestone scopes and review-stage holds.
 
 ## Bounded absence evidence
 

@@ -1,4 +1,4 @@
-# Bounded parent-edge capture (review hold)
+# Bounded parent-edge capture (source reviewed; runtime underway)
 
 `-W new.jsonl -e -p /explicit/path pool` is a new opt-in diagnostic mode.
 It runs the existing verified/profile capture, then a separate bounded walker
@@ -73,10 +73,11 @@ synthetic profile/edge fixture exercises projection and acceptance. Mutations
 cover missing slots/containers, altered bytes, changed cuts and mismatched
 profile bonuses. Synthetic checksum-success stubs are not disk checksum proof.
 
-After independent source/bundle review, separately authorized disposable
-read-only validation must recover raw parent bytes and independently reproduce
-the recorded decoded membership and aliases. No pool runtime success is claimed
-by this milestone. Actual movement still requires relevant reverse-reference
+Independent source/bundle review passed for commit
+1ef884f67adff5c27d7e737ddfeb0591a53dd5b7. Exact runtime validation against the
+sealed TXG 330 fixture is underway; no parent-edge runtime success is claimed.
+It must recover raw parent bytes and independently reproduce recorded decoded
+membership and aliases. See [RESULTS.md](RESULTS.md). Actual movement still requires relevant reverse-reference
 semantics, COW ancestors/shared roots, allocation reservations,
 snapshot/deadlist accounting, atomic publication, old-root retention and crash
 recovery. Unmodified stock-reader reopen/scrub and update compatibility remain
