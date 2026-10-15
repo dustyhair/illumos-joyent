@@ -17,7 +17,8 @@
 #define ZI_LIMIT 1000000ULL
 static FILE *zi_out;
 static uint64_t zi_count, zi_unsupported;
-static boolean_t zi_paired;
+static boolean_t zi_paired, zi_verify;
+void zdb_inventory_verify_mode(void) { zi_verify = zi_paired = B_TRUE; }
 void zdb_inventory_pair_mode(void) { zi_paired = B_TRUE; }
 static const char *zi_flags = "\"coverage_complete\":false,"
     "\"payload_validation_performed\":false,\"evacuation_authorized\":false";
@@ -48,6 +49,7 @@ zi_words(FILE *f, const blkptr_t *bp)
 }
 
 #include "zdb_allocation.c"
+#include "zdb_verify.c"
 
 /* Raw bias is retained even if the enum gains unsupported values. */
 static void
@@ -166,6 +168,7 @@ zi_record(spa_t *spa, zilog_t *zil, const blkptr_t *bp,
  (void) fprintf(f, "\"unsupported\":%s,\"children_skipped\":%s,%s}\n",
      reject ? "true" : "false", reject ? "true" : "false", zi_flags);
  if (fflush(f) != 0) return (EIO);
+ if (zi_verify) return (zv_record(spa, bp, zb, reject));
  return (reject ? TRAVERSE_VISIT_NO_CHILDREN : 0);
 }
 
@@ -187,6 +190,7 @@ zdb_inventory_begin(const char *path)
      "\"excluded\":[\"ZIL\",\"DDT ownership\",\"deferred frees\","
      "\"async destroy\",\"checkpoint-only ownership\",\"removal accounting\","
      "\"allocation maps in -J only; paired -K captures independently\"],%s}\n",
+     zi_verify ? "zdb-observed-verified-v1" :
      zi_paired ? "zdb-observed-allocation-v1" : "zdb-observed-bp-v1", zi_flags);
  return (fflush(zi_out) == 0 ? 0 : EIO);
 }
@@ -237,6 +241,7 @@ int
 zdb_inventory_end(int err)
 {
  if (!zi_out) return (err ? err : EIO);
+ if (zi_verify) err = zv_end(err);
  if (zi_paired) {
   (void) fprintf(zi_out, "{\"record\":\"allocation_end\",\"records\":\"%llu\",\"intervals\":\"%llu\",\"bytes\":\"%llu\",\"map_words\":\"%llu\",\"map_bytes\":\"%llu\",%s}\n",
       (u_longlong_t)za_records, (u_longlong_t)za_intervals,

@@ -31,10 +31,10 @@ def words(x):
 
 # All integer/provenance fields, including those on records not used in arithmetic,
 # pass here before cut identity, classification or interval construction.
-UINT_FIELDS=set('guid txg id ashift children parity asize metaslab_count sequence objset object blkid logical_birth physical_birth lsize psize embedded_payload_bytes record_limit observed unsupported_count vdev_id vdev_guid offset qsize expected_asize metaslab start length unflushed_txg map_object log_txg ordinal records intervals bytes map_words map_bytes'.split())
+UINT_FIELDS=set('guid txg id ashift children parity asize metaslab_count sequence objset object blkid logical_birth physical_birth lsize psize embedded_payload_bytes record_limit observed unsupported_count vdev_id vdev_guid offset qsize expected_asize metaslab start length unflushed_txg map_object log_txg ordinal records intervals bytes map_words map_bytes requested_p completed_p verified_p seen submitted completed passed failed not_applicable outstanding'.split())
 INT_FIELDS={'level'}
 NUMBER_LIMITS={'bp_type':255,'bp_level':31,'checksum_id':255,'compression_id':127,'dnode_type':255,'dnode_indblkshift':255,'dnode_datablkszsec':65535,'slot':2,'alloc_bias':(1<<32)-1,'shift':63,'error':(1<<31)-1,'time_limit_seconds':(1<<31)-1}
-BOOL_FIELDS=set('coverage_complete payload_validation_performed evacuation_authorized dnode_present children_skipped geometry_valid gang is_log export_complete checkpoint_unsupported removal_unsupported applied'.split())
+BOOL_FIELDS=set('coverage_complete payload_validation_performed evacuation_authorized dnode_present children_skipped geometry_valid gang is_log export_complete checkpoint_unsupported removal_unsupported applied measured verification_complete'.split())
 REQUIRED={
  'begin':{'schema','bp_encoding','source_base','record_limit'},
  'pool':{'guid','txg','root_bp'},
@@ -49,9 +49,11 @@ REQUIRED={
  'allocation':{'vdev_id','vdev_guid','metaslab','start','length'},
  'cut_end':{'txg','root_bp'},
  'allocation_end':{'records','intervals','bytes','map_words','map_bytes'},
+ 'verification':{'sequence','status','measured','error','requested_p','completed_p','objset','object','level','blkid','bp_words'},
+ 'verification_end':{'verification_complete','seen','submitted','completed','passed','failed','unsupported','not_applicable','outstanding','requested_p','verified_p'},
  'dva':{'slot','vdev_id','offset','asize','gang','geometry_valid'},
 }
-TEXT_FIELDS=set('schema bp_encoding source_base integer_encoding quiescence name type allocation_class classification source op allocation_adjustments'.split())
+TEXT_FIELDS=set('schema bp_encoding source_base integer_encoding quiescence name type allocation_class classification source op allocation_adjustments status'.split())
 LIST_FIELDS={'attempted','excluded','owner_obligations'}
 def record_schema(r,kind=None):
     require(type(r) is dict,'record must be object')
@@ -60,7 +62,7 @@ def record_schema(r,kind=None):
     for key,value in r.items():
         if key=='record':require(value==kind,'record kind mismatch')
         elif key=='unsupported':
-            if kind=='end':uint(value)
+            if kind in ('end','verification_end'):uint(value)
             else:require(type(value) is bool,'invalid unsupported flag')
         elif key in UINT_FIELDS:uint(value)
         elif key in INT_FIELDS:sint(value)

@@ -82,7 +82,7 @@ class InventoryTests(unittest.TestCase):
  def test_native_launcher_invalid_options_only(self):
   root=BUILD/'runtime-review-v2';p=self.tmp/'native-no-output'
   q=subprocess.run(['/bin/bash',str(root/'launch.sh'),'-J',str(p),'-b'],capture_output=True,text=True)
-  self.assertNotEqual(q.returncode,0);self.assertIn('-J/-K requires only',q.stderr);self.assertFalse(p.exists())
+  self.assertNotEqual(q.returncode,0);self.assertIn('-J/-K/-Y requires only',q.stderr);self.assertFalse(p.exists())
  def test_verified_runtime_closure(self):
   q=self.launch(BUILD/'runtime-review-v2','--verify-only')
   self.assertEqual(q.returncode,0,q.stderr)
@@ -91,7 +91,7 @@ class InventoryTests(unittest.TestCase):
   q=self.launch(BUILD/'runtime-review-v2','-J',str(p),'-b',
                 env=dict(os.environ,SPA_CONFIG_PATH='/never-use-this',LD_LIBRARY_PATH_64='/nonexistent'))
   self.assertNotEqual(q.returncode,0)
-  self.assertIn('-J/-K requires only',q.stderr);self.assertFalse(p.exists())
+  self.assertIn('-J/-K/-Y requires only',q.stderr);self.assertFalse(p.exists())
  def test_marker_compatible_wrong_library_refused(self):
   root=self.tmp/'wrong-marker-runtime'
   shutil.copytree(BUILD/'runtime-review-v2',root)

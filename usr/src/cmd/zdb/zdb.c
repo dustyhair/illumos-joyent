@@ -6273,7 +6273,7 @@ main(int argc, char **argv)
 	char *target, *target_pool;
 	char *inventory_path = NULL;
 	int inventory_seen = 0, inventory_bad = 0;
-	int inventory_e = 0, inventory_p = 0, inventory_pair = 0;
+	int inventory_e = 0, inventory_p = 0, inventory_pair = 0, inventory_verify = 0;
 	int saved_opterr = opterr;
 	nvlist_t *policy = NULL;
 	uint64_t max_txg = UINT64_MAX;
@@ -6286,9 +6286,10 @@ main(int argc, char **argv)
 	/* Prevalidate before tunable setters, discovery or any pool access. */
 	opterr = 0;
 	while ((c = getopt(argc, argv,
-	    "AbcCdDeEFGhiI:J:K:klLmMo:Op:PqRsSt:uU:vVx:X")) != -1) {
-		if (c == 'J' || c == 'K') { inventory_path = optarg;
-			inventory_seen++; inventory_pair = c == 'K'; }
+	    "AbcCdDeEFGhiI:J:K:klLmMo:Op:PqRsSt:uU:vVx:XY:")) != -1) {
+		if (c == 'J' || c == 'K' || c == 'Y') { inventory_path = optarg;
+			inventory_seen++; inventory_pair = c == 'K' || c == 'Y';
+			inventory_verify = c == 'Y'; }
 		else if (c == 'e') inventory_e++;
 		else if (c == 'p') {
 			inventory_p++;
@@ -6298,7 +6299,7 @@ main(int argc, char **argv)
 	if (inventory_seen && (inventory_seen != 1 || inventory_bad ||
 	    inventory_e != 1 || inventory_p < 1 || argc - optind != 1 ||
 	    strpbrk(argv[optind], "/@") != NULL)) {
-		(void) fprintf(stderr, "-J/-K requires only -e -p /explicit/path pool\n");
+		(void) fprintf(stderr, "-J/-K/-Y requires only -e -p /explicit/path pool\n");
 		return (2);
 	}
 	optind = 1;
@@ -6326,7 +6327,7 @@ main(int argc, char **argv)
 	zfs_btree_verify_intensity = 3;
 
 	while ((c = getopt(argc, argv,
-	    "AbcCdDeEFGhiI:J:K:klLmMo:Op:PqRsSt:uU:vVx:X")) != -1) {
+	    "AbcCdDeEFGhiI:J:K:klLmMo:Op:PqRsSt:uU:vVx:XY:")) != -1) {
 		switch (c) {
 		case 'b':
 		case 'c':
@@ -6370,6 +6371,7 @@ main(int argc, char **argv)
 			break;
 		case 'J':
 		case 'K':
+		case 'Y':
 			dump_all = 0;
 			break;
 		case 'o':
@@ -6455,6 +6457,7 @@ main(int argc, char **argv)
 
 	if (inventory_path) {
 		if (inventory_pair) zdb_inventory_pair_mode();
+		if (inventory_verify) zdb_inventory_verify_mode();
 		error = zdb_inventory_begin(inventory_path);
 		if (error) {
 			(void) fprintf(stderr, "inventory output: %s\n", strerror(error));
