@@ -11,6 +11,7 @@
 #include <sys/vdev_impl.h>
 #include <sys/dmu_traverse.h>
 #include <sys/dmu.h>
+#include <libzutil.h>
 #include "zdb_inventory.h"
 
 #define ZI_LIMIT 1000000ULL
@@ -44,6 +45,24 @@ zi_words(FILE *f, const blkptr_t *bp)
  (void) fputc(']', f);
 }
 
+/* Raw bias is retained even if the enum gains unsupported values. */
+static void
+zi_class(FILE *f, const vdev_t *v)
+{
+ const char *name = "unknown";
+ if (v->vdev_islog) name = "log";
+ else switch (v->vdev_alloc_bias) {
+ case VDEV_BIAS_NONE: name = "normal"; break;
+ case VDEV_BIAS_LOG: name = "log"; break;
+ case VDEV_BIAS_SPECIAL: name = "special"; break;
+ case VDEV_BIAS_DEDUP: name = "dedup"; break;
+ }
+ (void) fprintf(f, ",\"allocation_class\":");
+ zi_string(f, name);
+ (void) fprintf(f, ",\"alloc_bias\":%u,\"is_log\":%s",
+     (unsigned)v->vdev_alloc_bias, v->vdev_islog ? "true" : "false");
+}
+
 static int
 zi_record(spa_t *spa, zilog_t *zil, const blkptr_t *bp,
     const zbookmark_phys_t *zb, const dnode_phys_t *dn, void *arg)
@@ -61,14 +80,17 @@ zi_record(spa_t *spa, zilog_t *zil, const blkptr_t *bp,
       (u_longlong_t)zb->zb_object, dn ? dn->dn_type : 0, zi_flags);
   return (fflush(f) == 0 ? 0 : EIO);
  }
- if (BP_IS_EMBEDDED(bp)) kind = "embedded";
+ /* Validate the type before ANY macro which may index dmu_ot[]. */
+ boolean_t type_valid = DMU_OT_IS_VALID(BP_GET_TYPE(bp));
+ boolean_t crypt = BP_USES_CRYPT(bp);
+ if (!type_valid) { kind = "type_unsupported"; reject = B_TRUE; }
+ else if (crypt) { kind = "protected_unsupported"; reject = B_TRUE; }
+ else if (BP_IS_EMBEDDED(bp)) kind = "embedded";
  else if (BP_IS_HOLE(bp)) kind = "hole";
  else if (BP_COUNT_GANG(bp)) { kind = "gang_unsupported"; reject = B_TRUE; }
- else if (BP_IS_PROTECTED(bp)) { kind = "protected_unsupported"; reject = B_TRUE; }
  else if (BP_GET_DEDUP(bp)) { kind = "dedup_unsupported"; reject = B_TRUE; }
- else if (!DMU_OT_IS_VALID(BP_GET_TYPE(bp))) {
-  kind = "type_unsupported"; reject = B_TRUE;
- }
+ /* A failed slot must not suppress geometry on later independent slots. */
+ const boolean_t bp_reject = reject;
  (void) fprintf(f, "{\"record\":\"bp\",\"sequence\":\"%llu\",\"classification\":",
      (u_longlong_t)zi_count);
  zi_string(f, kind);
@@ -86,9 +108,9 @@ zi_record(spa_t *spa, zilog_t *zil, const blkptr_t *bp,
      (u_longlong_t)BP_PHYSICAL_BIRTH(bp),
      (u_longlong_t)BP_GET_LSIZE(bp), (u_longlong_t)BP_GET_PSIZE(bp),
      (unsigned)BP_GET_CHECKSUM(bp), (unsigned)BP_GET_COMPRESS(bp),
-     BP_IS_METADATA(bp) ? "true" : "false");
+     !type_valid ? "null" : (BP_IS_METADATA(bp) ? "true" : "false"));
  /* Protected DVA slots may contain non-DVA metadata. Raw words are retained. */
- if (!BP_IS_EMBEDDED(bp) && !BP_IS_HOLE(bp) && !BP_IS_PROTECTED(bp)) {
+ if (type_valid && !crypt && !BP_IS_EMBEDDED(bp) && !BP_IS_HOLE(bp)) {
   unsigned emitted = 0;
   for (unsigned i = 0; i < SPA_DVAS_PER_BP; i++) {
    const dva_t *d = &bp->blk_dva[i];
@@ -102,12 +124,14 @@ zi_record(spa_t *spa, zilog_t *zil, const blkptr_t *bp,
        "\"offset\":\"%llu\",\"asize\":\"%llu\",\"gang\":%s",
        emitted++ ? "," : "", i, (u_longlong_t)id,
        (u_longlong_t)off, (u_longlong_t)a, DVA_GET_GANG(d) ? "true" : "false");
-   boolean_t geometry = !reject && vd && vd->vdev_id == id &&
+   boolean_t geometry = !bp_reject && vd && vd->vdev_id == id &&
+       vd->vdev_alloc_bias == VDEV_BIAS_NONE && !vd->vdev_islog &&
        strcmp(vd->vdev_ops->vdev_op_type, "raidz") == 0 &&
        vd->vdev_ashift >= SPA_MINBLOCKSHIFT && vd->vdev_ashift <= 16 &&
        vd->vdev_nparity > 0 && vd->vdev_nparity < vd->vdev_children;
    if (vd) (void) fprintf(f, ",\"vdev_guid\":\"%llu\",\"ashift\":\"%llu\"",
        (u_longlong_t)vd->vdev_guid, (u_longlong_t)vd->vdev_ashift);
+   if (vd) zi_class(f, vd);
    if (geometry) {
     uint64_t sec = 1ULL << vd->vdev_ashift;
     uint64_t n = (p + sec - 1) / sec, q = n * sec;
@@ -181,6 +205,7 @@ zdb_inventory_run(spa_t *spa)
       (u_longlong_t)v->vdev_guid, (u_longlong_t)v->vdev_ashift,
       (u_longlong_t)v->vdev_children, (u_longlong_t)v->vdev_nparity);
   zi_string(zi_out, v->vdev_ops->vdev_op_type);
+  zi_class(zi_out, v);
   (void) fprintf(zi_out, ",%s}\n", zi_flags);
  }
  if (fflush(zi_out) != 0) return (EIO);
@@ -200,4 +225,24 @@ zdb_inventory_end(int err)
  if (fclose(zi_out) != 0) err = EIO;
  zi_out = NULL;
  return (err);
+}
+
+int
+zdb_inventory_discover(const char *target, char **paths, int n, nvlist_t **cfg)
+{
+ importargs_t args = { 0 };
+ args.paths = n;
+ args.path = paths;
+ args.can_be_active = B_FALSE;
+ return (zpool_find_config(NULL, target, cfg, &args, &libzpool_config_ops));
+}
+
+int
+zdb_inventory_import(const char *target, nvlist_t *cfg)
+{
+ uint64_t state;
+ if (nvlist_lookup_uint64(cfg, ZPOOL_CONFIG_POOL_STATE, &state) != 0)
+  return (EPROTO);
+ if (state != POOL_STATE_EXPORTED) return (EBUSY);
+ return (spa_import((char *)target, cfg, NULL, 0));
 }

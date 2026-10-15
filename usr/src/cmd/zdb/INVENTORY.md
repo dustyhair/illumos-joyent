@@ -16,7 +16,7 @@ Discovery must identify an EXPORTED pool; active-pool acceptance is disabled.
 The operator must independently ensure no other system can write these devices.
 Exported labels/read-only opening do not prove quiescence across hosts.
 
-Use the matching private libzpool.so.1, not the baseline/system library. The
+Use runtime/launch.sh (via /bin/bash) from the verified review bundle, not the bare binary. No Python installation is needed for this native launcher. The
 traverse_no_zil_supported symbol deliberately prevents an old library silently
 ignoring the new traversal flag. Other userland dependencies come from the
 verified baseline build. No pool was opened on builder during implementation.
@@ -98,3 +98,46 @@ Legacy regression proves the opt-in source gate leaves the old path unchanged;
 legacy real-pool behavior and actual ZIL parsing were NOT exercised.
 
 No source pool reads, no lab execution, no feature changes, no remote pushes.
+
+## Independent-review fixes (second review bundle)
+
+- Validate DMU object type before all type-dependent macros. Unknown type raw
+  words survive; metadata is null and no DVAs are interpreted. All crypt-bit
+  layouts, including indirect MAC layouts, are explicitly unsupported.
+- Per-DVA geometry uses immutable BP classification; invalid earlier slots no
+  longer suppress later valid slot observations. Whole-BP pruning aggregates
+  slot results only after each independent evaluation.
+- Report allocation_class, raw alloc_bias and is_log on vdev and DVA records.
+  Only VDEV_BIAS_NONE with is_log false qualifies for ordinary geometry.
+  Special, dedup, log and unknown classes are rejected, not silently ordinary.
+- Discovery and import are separate testable boundaries. Stubs verify explicit
+  paths, can_be_active=false, discovery error propagation, missing/active-state
+  refusal before import, exported-state admission with zero import relaxation
+  flags, and propagation of an import error.
+- Flush/close failure tests assert a nonzero completion status. A terminal
+  record can already contain export_complete=true when a later fclose fails;
+  consumers MUST require successful process exit as well as a complete stream.
+- The capability symbol is only an ABI safety guard, NOT library identity.
+
+The runtime directory contains the exact executable, private ld.so.1 and 40
+hashed library files. Both native launch.sh and optional Python launch.py pin
+their generated manifests, hash every file, clear inherited target settings,
+disable loader configuration, invoke the private loader directly and verify
+its 38-library resolved startup dependency closure before execution. This
+replaces reliance on a caller-supplied LD_LIBRARY_PATH or the capability marker.
+A valid ELF alternative that still exports the true capability is refused by
+hash. Changed executable, loader, dependency and manifest tests also fail closed.
+
+The host kernel and launcher interpreter/utilities remain trusted. Keep the
+reviewed bundle owner-protected and unchanged during verification/execution;
+this is reproducible runtime selection, not protection against a hostile
+same-user process racing file replacement. Startup dependency closure is
+verified; future optional dlopen/plugin paths are not a sandbox or separately
+attested by this prototype. Lab execution remains on HOLD for independent
+review. No pool was opened during these tests.
+
+Baseline tracked source and ISO hashes remain unchanged. Its filesystem is NOT
+pristine: these two untracked build/header-test setup files were observed and
+preserved without modification:
+- usr/src/test/header-tests/tests/c-symbols/setup
+- usr/src/test/header-tests/tests/cxx-symbols/setup

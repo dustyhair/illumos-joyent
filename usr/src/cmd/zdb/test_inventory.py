@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Pool-free tests. All executed zdb commands fail before discovery."""
-import json, os, pathlib, subprocess, tempfile, unittest
+import json, os, pathlib, subprocess, tempfile, unittest, shutil
 BASE = pathlib.Path('/build/workspaces/raidz')
 BUILD = BASE / 'inventory-build'
 SRC = BASE / 'inventory-prototype/usr/src'
@@ -15,6 +15,100 @@ class InventoryTests(unittest.TestCase):
   assert q.returncode == 0, (q.returncode,q.stderr)
   cls.rows = [json.loads(x) for x in cls.normal.read_text().splitlines()]
   cls.bps = [x for x in cls.rows if x['record']=='bp']
+ def fixture(self, mode):
+  p=self.tmp/(mode+'.jsonl')
+  q=subprocess.run([str(BUILD/'test_inventory'),mode,str(p)],env=ENV,capture_output=True,text=True)
+  self.assertEqual(q.returncode,0,q.stderr)
+  return [json.loads(x) for x in p.read_text().splitlines()]
+ def test_invalid_type_matrix(self):
+  rows=[x for x in self.fixture('invalid-types') if x['record']=='bp']
+  self.assertEqual(len(rows),24)
+  for r in rows:
+   self.assertEqual(r['classification'],'type_unsupported')
+   self.assertIsNone(r['metadata']);self.assertEqual(r['dvas'],[])
+   self.assertTrue(r['unsupported']);self.assertEqual(len(r['bp_words']),16)
+ def test_protected_layout_matrix(self):
+  rows=[x for x in self.fixture('protected-layouts') if x['record']=='bp']
+  self.assertEqual(len(rows),24)
+  for r in rows:
+   self.assertEqual(r['classification'],'protected_unsupported')
+   self.assertEqual(r['dvas'],[]);self.assertTrue(r['children_skipped'])
+ def test_mixed_dvas_order_independent(self):
+  rows=[x for x in self.fixture('mixed-slots') if x['record']=='bp']
+  self.assertEqual([[d['geometry_valid'] for d in r['dvas']] for r in rows],[[False,True],[True,False]])
+  for r in rows:
+   self.assertTrue(r['unsupported'])
+   for d in r['dvas']:self.assertIn('qsize',d)
+ def test_allocation_class_policy_and_provenance(self):
+  rows=self.fixture('allocation-classes');bps=[x for x in rows if x['record']=='bp'];vs=[x for x in rows if x['record']=='vdev']
+  self.assertEqual(len(bps),10);self.assertEqual(len(vs),10)
+  for i,(bp,vd) in enumerate(zip(bps,vs)):
+   d=bp['dvas'][0];self.assertEqual(d['allocation_class'],vd['allocation_class'])
+   self.assertEqual(d['alloc_bias'],vd['alloc_bias']);self.assertEqual(d['is_log'],vd['is_log'])
+   self.assertEqual(d['geometry_valid'],i==0);self.assertEqual(bp['unsupported'],i!=0)
+ def test_discovery_exported_active_import_stubs(self):
+  self.assertTrue(self.fixture('import-policy')[-1]['export_complete'])
+ def test_final_flush_failure_returned(self):
+  p=self.tmp/'final-flush.jsonl'
+  q=subprocess.run([str(BUILD/'test_inventory'),'flush-failure',str(p)],env=ENV)
+  self.assertNotEqual(q.returncode,0)
+ def test_final_close_failure_returned(self):
+  p=self.tmp/'final-close.jsonl'
+  q=subprocess.run([str(BUILD/'test_inventory'),'close-failure',str(p)],env=ENV)
+  self.assertNotEqual(q.returncode,0)
+  end=json.loads(p.read_text().splitlines()[-1])
+  self.assertTrue(end['export_complete']) # Must reject because exit is nonzero.
+ def launch(self, root, *args, env=None):
+  return subprocess.run(['/opt/local/bin/python3.12',str(root/'launch.py'),*args],
+                        env=env,capture_output=True,text=True)
+ def test_native_launcher_closure(self):
+  root=BUILD/'runtime-review-v2'
+  q=subprocess.run(['/bin/bash',str(root/'launch.sh'),'--verify-only'],capture_output=True,text=True)
+  self.assertEqual(q.returncode,0,q.stderr)
+ def test_native_launcher_rejects_tampering(self):
+  root=self.tmp/'native-tamper';shutil.copytree(BUILD/'runtime-review-v2',root)
+  p=root/'lib/libzpool.so.1';p.write_bytes(p.read_bytes()+b'changed')
+  q=subprocess.run(['/bin/bash',str(root/'launch.sh'),'--verify-only'],capture_output=True,text=True)
+  self.assertNotEqual(q.returncode,0);self.assertIn('identity mismatch',q.stderr)
+ def test_native_launcher_invalid_options_only(self):
+  root=BUILD/'runtime-review-v2';p=self.tmp/'native-no-output'
+  q=subprocess.run(['/bin/bash',str(root/'launch.sh'),'-J',str(p),'-b'],capture_output=True,text=True)
+  self.assertNotEqual(q.returncode,0);self.assertIn('-J requires only',q.stderr);self.assertFalse(p.exists())
+ def test_verified_runtime_closure(self):
+  q=self.launch(BUILD/'runtime-review-v2','--verify-only')
+  self.assertEqual(q.returncode,0,q.stderr)
+ def test_verified_runtime_exec_invalid_options_only(self):
+  p=self.tmp/'not-created'
+  q=self.launch(BUILD/'runtime-review-v2','-J',str(p),'-b',
+                env=dict(os.environ,SPA_CONFIG_PATH='/never-use-this',LD_LIBRARY_PATH_64='/nonexistent'))
+  self.assertNotEqual(q.returncode,0)
+  self.assertIn('-J requires only',q.stderr);self.assertFalse(p.exists())
+ def test_marker_compatible_wrong_library_refused(self):
+  root=self.tmp/'wrong-marker-runtime'
+  shutil.copytree(BUILD/'runtime-review-v2',root)
+  old=BUILD/'review-9b2e3f1de8/lib/libzpool.so.1'
+  alternate=root/'lib/libzpool.so.1'
+  shutil.copy2(old,alternate)
+  # Valid ELF with unchanged exports/capability but a different file identity.
+  with alternate.open('ab') as f:f.write(b'\nmarker-compatible alternate build fixture\n')
+  check=subprocess.run(['/opt/local/bin/python3.12','-c',
+       'import ctypes,sys; print(ctypes.CDLL(sys.argv[1]).traverse_no_zil_supported())',str(alternate)],
+       env=ENV,capture_output=True,text=True)
+  self.assertEqual(check.returncode,0,check.stderr);self.assertEqual(check.stdout.strip(),'1')
+  q=self.launch(root,'--verify-only')
+  self.assertNotEqual(q.returncode,0);self.assertIn('identity mismatch: lib/libzpool',q.stderr)
+ def test_changed_dependency_and_loader_refused(self):
+  root=self.tmp/'tampered-runtime';shutil.copytree(BUILD/'runtime-review-v2',root)
+  for name in ['lib/libnvpair.so.1','ld.so.1','zdb-inventory']:
+   p=root/name;original=p.read_bytes();p.write_bytes(original+b'changed')
+   q=self.launch(root,'--verify-only')
+   self.assertNotEqual(q.returncode,0);self.assertIn('identity mismatch: '+name,q.stderr)
+   p.write_bytes(original)
+ def test_manifest_replacement_refused(self):
+  root=self.tmp/'manifest-runtime';shutil.copytree(BUILD/'runtime-review-v2',root)
+  p=root/'runtime.json';p.write_text(p.read_text()+' ')
+  q=self.launch(root,'--verify-only')
+  self.assertNotEqual(q.returncode,0);self.assertIn('manifest identity mismatch',q.stderr)
  def test_geometry_256_pinned_oracle_cases(self):
   for r in self.bps[:256]:
    with self.subTest(p=r['psize']):

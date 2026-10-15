@@ -6540,15 +6540,11 @@ main(int argc, char **argv)
 		args.path = searchdirs;
 		args.can_be_active = inventory_path ? B_FALSE : B_TRUE;
 
-		error = zpool_find_config(NULL, target_pool, &cfg, &args,
+		error = inventory_path ?
+		    zdb_inventory_discover(target_pool, searchdirs, nsearch, &cfg) :
+		    zpool_find_config(NULL, target_pool, &cfg, &args,
 		    &libzpool_config_ops);
 
-		if (error == 0 && inventory_path) {
-			uint64_t state;
-			if (nvlist_lookup_uint64(cfg, ZPOOL_CONFIG_POOL_STATE, &state) != 0 ||
-			    state != POOL_STATE_EXPORTED)
-				error = EBUSY;
-		}
 
 		if (error == 0) {
 
@@ -6567,8 +6563,9 @@ main(int argc, char **argv)
 			 * Legacy modes permit active-pool examination; inventory
 			 * mode retains the activity check.
 			 */
-			error = spa_import(target_pool, cfg, NULL,
-			    flags | (inventory_path ? 0 : ZFS_IMPORT_SKIP_MMP));
+			error = inventory_path ? zdb_inventory_import(target_pool, cfg) :
+			    spa_import(target_pool, cfg, NULL,
+			    flags | ZFS_IMPORT_SKIP_MMP);
 		}
 	}
 
