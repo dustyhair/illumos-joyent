@@ -1896,11 +1896,64 @@ vdev_drain_mos_sync(void *arg, dmu_tx_t *tx)
 	}
 }
 
+/*
+ * dmu_objset_find() callback: relocate cold metadata off the no-alloc vdev for
+ * one dataset.  Datasets have a backing objset, so open-context dmu_tx works
+ * here (the MOS does not -- it is drained in syncing context above).  Re-dirty
+ * each safe object's L0 blocks so COW reallocates them onto the keepers.
+ */
+static int
+vdev_drain_ds(const char *dsname, void *arg)
+{
+	objset_t *os;
+	uint64_t obj = 0;
+	dmu_object_info_t doi;
+
+	(void) arg;
+	if (dmu_objset_hold(dsname, FTAG, &os) != 0)
+		return (0);
+
+	while (dmu_object_next(os, &obj, B_FALSE, 0) == 0) {
+		if (dmu_object_info(os, obj, &doi) != 0)
+			continue;
+		if (!vdev_drain_safe_type(doi.doi_type))
+			continue;
+		if (doi.doi_data_block_size == 0)
+			continue;
+
+		for (uint64_t off = 0; off < doi.doi_max_offset;
+		    off += doi.doi_data_block_size) {
+			dmu_buf_t *db;
+			dmu_tx_t *tx;
+
+			if (dmu_buf_hold(os, obj, off, FTAG, &db, 0) != 0)
+				continue;
+			tx = dmu_tx_create(os);
+			dmu_tx_hold_write(tx, obj, off,
+			    (int)doi.doi_data_block_size);
+			if (dmu_tx_assign(tx, TXG_WAIT) != 0) {
+				dmu_tx_abort(tx);
+				dmu_buf_rele(db, FTAG);
+				continue;
+			}
+			dmu_buf_will_dirty(db, tx);
+			dmu_tx_commit(tx);
+			dmu_buf_rele(db, FTAG);
+		}
+	}
+	dmu_objset_rele(os, FTAG);
+	return (0);
+}
+
 static void
 vdev_drain_mos(spa_t *spa)
 {
+	/* MOS (objset 0): syncing context -- it has no backing dataset. */
 	(void) dsl_sync_task(spa->spa_name, NULL, vdev_drain_mos_sync,
 	    spa, 0, ZFS_SPACE_CHECK_NONE);
+	/* Datasets: open context, per-object COW rewrite. */
+	(void) dmu_objset_find(spa_name(spa), vdev_drain_ds, NULL,
+	    DS_FIND_CHILDREN);
 	txg_wait_synced(spa_get_dsl(spa), 0);
 }
 
