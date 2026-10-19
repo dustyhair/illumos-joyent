@@ -1790,16 +1790,6 @@ vdev_drop_refscan_cb(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
 
 	for (int d = 0; d < BP_GET_NDVAS(bp); d++) {
 		if (DVA_GET_VDEV(&bp->blk_dva[d]) == s->vdrs_vdev) {
-			cmn_err(CE_WARN, "vdrefscan: vdev%llu live ref "
-			    "objset=%llu object=%llu level=%lld blkid=%llu "
-			    "dva=%llu:%llx:%llx",
-			    (u_longlong_t)s->vdrs_vdev,
-			    (u_longlong_t)zb->zb_objset,
-			    (u_longlong_t)zb->zb_object,
-			    (long long)zb->zb_level, (u_longlong_t)zb->zb_blkid,
-			    (u_longlong_t)DVA_GET_VDEV(&bp->blk_dva[d]),
-			    (u_longlong_t)DVA_GET_OFFSET(&bp->blk_dva[d]),
-			    (u_longlong_t)DVA_GET_ASIZE(&bp->blk_dva[d]));
 			s->vdrs_found = B_TRUE;
 			return (SET_ERROR(EINTR));	/* stop traversal */
 		}
