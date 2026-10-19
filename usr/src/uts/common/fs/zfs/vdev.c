@@ -746,6 +746,8 @@ vdev_alloc(spa_t *spa, vdev_t **vdp, nvlist_t *nv, vdev_t *parent, uint_t id,
 		    &vd->vdev_asize);
 		(void) nvlist_lookup_uint64(nv, ZPOOL_CONFIG_REMOVING,
 		    &vd->vdev_removing);
+		(void) nvlist_lookup_uint64(nv, ZPOOL_CONFIG_NOALLOC,
+		    &vd->vdev_noalloc);
 		(void) nvlist_lookup_uint64(nv, ZPOOL_CONFIG_VDEV_TOP_ZAP,
 		    &vd->vdev_top_zap);
 	} else {
@@ -1025,6 +1027,7 @@ vdev_top_transfer(vdev_t *svd, vdev_t *tvd)
 	ASSERT3P(tvd->vdev_obsolete_sm, ==, NULL);
 	ASSERT0(tvd->vdev_removing);
 	tvd->vdev_removing = svd->vdev_removing;
+	tvd->vdev_noalloc = svd->vdev_noalloc;
 	tvd->vdev_indirect_config = svd->vdev_indirect_config;
 	tvd->vdev_indirect_mapping = svd->vdev_indirect_mapping;
 	tvd->vdev_indirect_births = svd->vdev_indirect_births;
@@ -1038,6 +1041,7 @@ vdev_top_transfer(vdev_t *svd, vdev_t *tvd)
 	svd->vdev_indirect_births = NULL;
 	svd->vdev_obsolete_sm = NULL;
 	svd->vdev_removing = 0;
+	svd->vdev_noalloc = 0;
 
 	for (t = 0; t < TXG_SIZE; t++) {
 		while ((msp = txg_list_remove(&svd->vdev_ms_list, t)) != NULL)
@@ -2775,6 +2779,8 @@ vdev_construct_zaps(vdev_t *vd, dmu_tx_t *tx)
 	}
 }
 
+extern int zfs_unsafe_empty_vdev_drop;	/* TEST-ONLY: empty vdev drop */
+
 void
 vdev_dtl_sync(vdev_t *vd, uint64_t txg)
 {
@@ -2803,7 +2809,11 @@ vdev_dtl_sync(vdev_t *vd, uint64_t txg)
 		 * cleanup later, once cancellation is no longer possible.
 		 */
 		if (vd->vdev_leaf_zap != 0 && (vd->vdev_detached ||
-		    vd->vdev_top->vdev_islog)) {
+		    vd->vdev_top->vdev_islog ||
+		    (zfs_unsafe_empty_vdev_drop &&
+		    vd->vdev_top->vdev_removing &&
+		    vd->vdev_top->vdev_ops != &vdev_indirect_ops &&
+		    vd->vdev_spa->spa_removing_phys.sr_state != DSS_SCANNING))) {
 			vdev_destroy_unlink_zap(vd, vd->vdev_leaf_zap, tx);
 			vd->vdev_leaf_zap = 0;
 		}
@@ -3155,12 +3165,14 @@ vdev_destroy_spacemaps(vdev_t *vd, dmu_tx_t *tx)
 	vd->vdev_ms_array = 0;
 }
 
+extern int zfs_unsafe_empty_vdev_drop;	/* TEST-ONLY: empty vdev drop */
+
 static void
 vdev_remove_empty_log(vdev_t *vd, uint64_t txg)
 {
 	spa_t *spa = vd->vdev_spa;
 
-	ASSERT(vd->vdev_islog);
+	ASSERT(vd->vdev_islog || vd->vdev_stat.vs_alloc == 0);
 	ASSERT(vd == vd->vdev_top);
 	ASSERT3U(txg, ==, spa_syncing_txg(spa));
 
@@ -3242,7 +3254,11 @@ vdev_sync(vdev_t *vd, uint64_t txg)
 	 * If this is an empty log device being removed, destroy the
 	 * metadata associated with it.
 	 */
-	if (vd->vdev_islog && vd->vdev_stat.vs_alloc == 0 && vd->vdev_removing)
+	if (((vd->vdev_islog && vd->vdev_stat.vs_alloc == 0) ||
+	    (zfs_unsafe_empty_vdev_drop && !vd->vdev_islog &&
+	    vd->vdev_ops != &vdev_indirect_ops &&
+	    vd->vdev_spa->spa_removing_phys.sr_state != DSS_SCANNING)) &&
+	    vd->vdev_removing)
 		vdev_remove_empty_log(vd, txg);
 
 	(void) txg_list_add(&spa->spa_vdev_txg_list, vd, TXG_CLEAN(txg));

@@ -5128,6 +5128,11 @@ top:
 
 		ASSERT(mg->mg_activation_count == 1);
 		vd = mg->mg_vd;
+		if (vd->vdev_noalloc) {
+			metaslab_trace_add(zal, mg, NULL, psize, d,
+			    TRACE_NOT_ALLOCATABLE, allocator);
+			goto next;
+		}
 
 		/*
 		 * Don't allocate from faulted devices.

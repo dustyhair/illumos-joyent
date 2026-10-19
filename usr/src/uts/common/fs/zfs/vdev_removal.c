@@ -46,6 +46,7 @@
 #include <sys/abd.h>
 #include <sys/vdev_initialize.h>
 #include <sys/vdev_trim.h>
+#include <sys/dmu_traverse.h>
 
 /*
  * This file contains the necessary logic to remove vdevs from a
@@ -1751,6 +1752,89 @@ vdev_remove_make_hole_and_free(vdev_t *vd)
 /*
  * Remove a log device.  The config lock is held for the specified TXG.
  */
+
+/*
+ * TEST-ONLY (default off): permit a native drop of an EMPTY top-level vdev
+ * (e.g. a raidz vdev added by mistake) via the log-removal path, without an
+ * indirect vdev or feature activation. See writepath-impl.md.
+ */
+int zfs_unsafe_empty_vdev_drop = 0;
+
+/*
+ * TEST-ONLY (zfs_unsafe_empty_vdev_drop): return B_TRUE iff the only space
+ * still allocated on this top-level vdev is the vdev's OWN space-map metadata
+ * -- i.e. every metaslab's allocated space is fully accounted for by that
+ * metaslab's own space-map object, which vdev_destroy_spacemaps() frees during
+ * teardown.  Any byte of real data (a metaslab allocated beyond its space
+ * map's own on-disk footprint) makes this return B_FALSE, so a vdev that still
+ * holds user/pool data can never pass the established-vdev drop gate.
+ */
+typedef struct vdev_drop_refscan {
+	uint64_t	vdrs_vdev;
+	boolean_t	vdrs_found;
+} vdev_drop_refscan_t;
+
+/*
+ * traverse_pool() callback: flag if any live block pointer has a DVA on the
+ * vdev we want to drop.  Stop the traversal as soon as one is found.
+ */
+/* ARGSUSED */
+static int
+vdev_drop_refscan_cb(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
+    const zbookmark_phys_t *zb, const dnode_phys_t *dnp, void *arg)
+{
+	vdev_drop_refscan_t *s = arg;
+
+	if (bp == NULL || BP_IS_HOLE(bp) || BP_IS_EMBEDDED(bp))
+		return (0);
+
+	for (int d = 0; d < BP_GET_NDVAS(bp); d++) {
+		if (DVA_GET_VDEV(&bp->blk_dva[d]) == s->vdrs_vdev) {
+			cmn_err(CE_WARN, "vdrefscan: vdev%llu live ref "
+			    "objset=%llu object=%llu level=%lld blkid=%llu "
+			    "dva=%llu:%llx:%llx",
+			    (u_longlong_t)s->vdrs_vdev,
+			    (u_longlong_t)zb->zb_objset,
+			    (u_longlong_t)zb->zb_object,
+			    (long long)zb->zb_level, (u_longlong_t)zb->zb_blkid,
+			    (u_longlong_t)DVA_GET_VDEV(&bp->blk_dva[d]),
+			    (u_longlong_t)DVA_GET_OFFSET(&bp->blk_dva[d]),
+			    (u_longlong_t)DVA_GET_ASIZE(&bp->blk_dva[d]));
+			s->vdrs_found = B_TRUE;
+			return (SET_ERROR(EINTR));	/* stop traversal */
+		}
+	}
+	return (0);
+}
+
+/*
+ * TEST-ONLY drop gate.  Return B_TRUE iff NO live block pointer in the pool
+ * references this vdev -- i.e. dropping it orphans nothing.  Any space the
+ * vdev still reports allocated is then its own space-map/unflushed bookkeeping
+ * (whose backing objects may even live on other vdevs), which teardown frees.
+ * A full-pool traversal is the only way to decide this correctly: byte-
+ * accounting of the vdev's own metadata objects cannot, because those objects
+ * are not necessarily resident on this vdev.
+ */
+static boolean_t
+vdev_only_own_metadata(vdev_t *vd)
+{
+	vdev_drop_refscan_t s;
+
+	/* Fresh/empty vdev: nothing allocated at all. */
+	if (vd->vdev_stat.vs_alloc == 0)
+		return (B_TRUE);
+
+	s.vdrs_vdev = vd->vdev_id;
+	s.vdrs_found = B_FALSE;
+
+	(void) traverse_pool(vd->vdev_spa, 0,
+	    TRAVERSE_PRE | TRAVERSE_PREFETCH_METADATA | TRAVERSE_NO_DECRYPT,
+	    vdev_drop_refscan_cb, &s);
+
+	return (!s.vdrs_found);
+}
+
 static int
 spa_vdev_remove_log(vdev_t *vd, uint64_t *txg)
 {
@@ -1758,7 +1842,7 @@ spa_vdev_remove_log(vdev_t *vd, uint64_t *txg)
 	spa_t *spa = vd->vdev_spa;
 	int error = 0;
 
-	ASSERT(vd->vdev_islog);
+	ASSERT(vd->vdev_islog || vd->vdev_stat.vs_alloc == 0);
 	ASSERT(vd == vd->vdev_top);
 	ASSERT(MUTEX_HELD(&spa_namespace_lock));
 
@@ -1781,7 +1865,7 @@ spa_vdev_remove_log(vdev_t *vd, uint64_t *txg)
 	 * should no longer have any blocks allocated on it.
 	 */
 	ASSERT(MUTEX_HELD(&spa_namespace_lock));
-	if (vd->vdev_stat.vs_alloc != 0)
+	if (vd->vdev_islog && vd->vdev_stat.vs_alloc != 0)
 		error = spa_reset_logs(spa);
 
 	*txg = spa_vdev_config_enter(spa);
@@ -2135,6 +2219,36 @@ spa_vdev_remove(spa_t *spa, uint64_t guid, boolean_t unspare)
 	} else if (vd != NULL && vd->vdev_islog) {
 		ASSERT(!locked);
 		error = spa_vdev_remove_log(vd, &txg);
+	} else if (vd != NULL && zfs_unsafe_empty_vdev_drop &&
+	    vd == vd->vdev_top && !vd->vdev_islog &&
+	    vd->vdev_ops != &vdev_indirect_ops &&
+	    !spa_has_checkpoint(spa) &&
+	    spa->spa_removing_phys.sr_state != DSS_SCANNING &&
+	    vdev_dtl_empty(vd, DTL_MISSING) &&
+	    vdev_dtl_empty(vd, DTL_OUTAGE) &&
+	    vdev_readable(vd)) {
+		ASSERT(!locked);
+		if (vd->vdev_stat.vs_alloc == 0 ||
+		    vdev_only_own_metadata(vd)) {
+			/*
+			 * TEST-ONLY: native drop of a top-level vdev that is
+			 * empty, or whose only residual is its own space-map
+			 * metadata (data already evacuated).  Teardown frees
+			 * that metadata, so the drop ends stock-clean.
+			 */
+			error = spa_vdev_remove_log(vd, &txg);
+		} else {
+			/*
+			 * TEST-ONLY: not empty yet -- passivate its allocator so
+			 * it stops accumulating; operator evacuates the residual
+			 * and retries the remove once vs_alloc == 0.
+			 */
+			metaslab_group_passivate(vd->vdev_mg);
+			/* TEST: persist no-alloc so the drain target stays empty */
+			vd->vdev_noalloc = B_TRUE;
+			vdev_config_dirty(vd);
+			error = SET_ERROR(EBUSY);
+		}
 	} else if (vd != NULL) {
 		ASSERT(!locked);
 		error = spa_vdev_remove_top(vd, &txg);
