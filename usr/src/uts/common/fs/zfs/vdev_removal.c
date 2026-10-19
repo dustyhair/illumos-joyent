@@ -1835,6 +1835,75 @@ vdev_only_own_metadata(vdev_t *vd)
 	return (!s.vdrs_found);
 }
 
+int zfs_unsafe_drain_mos = 0;	/* TEST: relocate cold MOS blocks off vdev */
+
+/*
+ * Object types that are managed by the sync/space-map/bpobj machinery and
+ * must NOT be blindly rewritten underneath it.
+ */
+static boolean_t
+vdev_drain_safe_type(dmu_object_type_t t)
+{
+	switch (t) {
+	case DMU_OT_SPACE_MAP:
+	case DMU_OT_SPACE_MAP_HEADER:
+	case DMU_OT_BPOBJ:
+	case DMU_OT_BPOBJ_HDR:
+		return (B_FALSE);
+	default:
+		return (B_TRUE);
+	}
+}
+
+/*
+ * TEST-ONLY: relocate cold MOS metadata off a no-alloc (drain-target) vdev by
+ * re-dirtying every L0 block of each safe MOS object, forcing COW to realloc
+ * it onto the keepers (the target is vdev_noalloc).  dnode/indirect/objset
+ * blocks cascade.  Must run WITHOUT the spa config lock held (issues DMU
+ * writes); caller drops it first.
+ */
+/*
+ * Syncing-context worker: re-dirty every L0 block of each safe MOS object so
+ * COW reallocates it off the no-alloc vdev.  Runs under the syncing-txg tx
+ * supplied by dsl_sync_task(); the dirtied MOS objects are written out when
+ * the MOS syncs later in this same txg.
+ */
+static void
+vdev_drain_mos_sync(void *arg, dmu_tx_t *tx)
+{
+	spa_t *spa = arg;
+	objset_t *mos = spa_meta_objset(spa);
+	uint64_t obj = 0;
+	dmu_object_info_t doi;
+
+	while (dmu_object_next(mos, &obj, B_FALSE, 0) == 0) {
+		if (dmu_object_info(mos, obj, &doi) != 0)
+			continue;
+		if (!vdev_drain_safe_type(doi.doi_type))
+			continue;
+		if (doi.doi_data_block_size == 0)
+			continue;
+
+		for (uint64_t off = 0; off < doi.doi_max_offset;
+		    off += doi.doi_data_block_size) {
+			dmu_buf_t *db;
+
+			if (dmu_buf_hold(mos, obj, off, FTAG, &db, 0) != 0)
+				continue;
+			dmu_buf_will_dirty(db, tx);
+			dmu_buf_rele(db, FTAG);
+		}
+	}
+}
+
+static void
+vdev_drain_mos(spa_t *spa)
+{
+	(void) dsl_sync_task(spa->spa_name, NULL, vdev_drain_mos_sync,
+	    spa, 0, ZFS_SPACE_CHECK_NONE);
+	txg_wait_synced(spa_get_dsl(spa), 0);
+}
+
 static int
 spa_vdev_remove_log(vdev_t *vd, uint64_t *txg)
 {
@@ -2239,15 +2308,28 @@ spa_vdev_remove(spa_t *spa, uint64_t guid, boolean_t unspare)
 			error = spa_vdev_remove_log(vd, &txg);
 		} else {
 			/*
-			 * TEST-ONLY: not empty yet -- passivate its allocator so
-			 * it stops accumulating; operator evacuates the residual
-			 * and retries the remove once vs_alloc == 0.
+			 * TEST-ONLY: not clean yet -- passivate + persist no-alloc
+			 * so the target stops accumulating.  With zfs_unsafe_drain_
+			 * mos set, relocate cold MOS metadata off it (data is
+			 * evacuated by the operator), then re-check and drop
+			 * in-place if nothing references the vdev anymore.
 			 */
 			metaslab_group_passivate(vd->vdev_mg);
-			/* TEST: persist no-alloc so the drain target stays empty */
 			vd->vdev_noalloc = B_TRUE;
 			vdev_config_dirty(vd);
-			error = SET_ERROR(EBUSY);
+			if (zfs_unsafe_drain_mos) {
+				spa_vdev_config_exit(spa, NULL, txg +
+				    TXG_CONCURRENT_STATES + TXG_DEFER_SIZE,
+				    0, FTAG);
+				vdev_drain_mos(spa);
+				txg = spa_vdev_config_enter(spa);
+				if (vdev_only_own_metadata(vd))
+					error = spa_vdev_remove_log(vd, &txg);
+				else
+					error = SET_ERROR(EBUSY);
+			} else {
+				error = SET_ERROR(EBUSY);
+			}
 		}
 	} else if (vd != NULL) {
 		ASSERT(!locked);
