@@ -536,6 +536,13 @@ void dmu_write_policy_override_encrypt(struct zio_prop *zp,
 int dmu_bonus_hold_impl(objset_t *os, uint64_t object, void *tag,
     uint32_t flags, dmu_buf_t **dbp);
 int dmu_bonus_hold(objset_t *os, uint64_t object, void *tag, dmu_buf_t **);
+/*
+ * TEST-ONLY (experimental raidz-vdev drain, see vdev_removal.c): report
+ * whether a block currently resides on a given top-level vdev.
+ */
+boolean_t dmu_buf_on_vdev(dmu_buf_t *db, uint64_t vdev);
+boolean_t dmu_object_dnode_block_on_vdev(objset_t *os, uint64_t object,
+    uint64_t vdev);
 int dmu_bonus_hold_by_dnode(dnode_t *dn, void *tag, dmu_buf_t **dbp,
     uint32_t flags);
 int dmu_bonus_max(void);

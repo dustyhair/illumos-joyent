@@ -459,6 +459,51 @@ dmu_bonus_hold(objset_t *os, uint64_t obj, void *tag, dmu_buf_t **dbp)
 }
 
 /*
+ * TEST-ONLY helpers for the experimental raidz-vdev drain
+ * (vdev_removal.c): report whether a block currently resides on a given
+ * top-level vdev, without exposing DMU buffer/dnode internals to the vdev
+ * layer.
+ */
+static boolean_t
+dmu_blkptr_on_vdev(const blkptr_t *bp, uint64_t vdev)
+{
+	if (bp == NULL || BP_IS_HOLE(bp) || BP_IS_EMBEDDED(bp))
+		return (B_FALSE);
+	for (int d = 0; d < BP_GET_NDVAS(bp); d++) {
+		const dva_t *dva = &bp->blk_dva[d];
+		if (DVA_GET_ASIZE(dva) != 0 && DVA_GET_VDEV(dva) == vdev)
+			return (B_TRUE);
+	}
+	return (B_FALSE);
+}
+
+boolean_t
+dmu_buf_on_vdev(dmu_buf_t *db_fake, uint64_t vdev)
+{
+	dmu_buf_impl_t *db = (dmu_buf_impl_t *)db_fake;
+	boolean_t ret;
+
+	mutex_enter(&db->db_mtx);
+	ret = dmu_blkptr_on_vdev(db->db_blkptr, vdev);
+	mutex_exit(&db->db_mtx);
+	return (ret);
+}
+
+boolean_t
+dmu_object_dnode_block_on_vdev(objset_t *os, uint64_t object, uint64_t vdev)
+{
+	dnode_t *dn;
+	boolean_t ret = B_FALSE;
+
+	if (dnode_hold(os, object, FTAG, &dn) != 0)
+		return (B_FALSE);
+	if (dn->dn_dbuf != NULL)
+		ret = dmu_buf_on_vdev((dmu_buf_t *)dn->dn_dbuf, vdev);
+	dnode_rele(dn, FTAG);
+	return (ret);
+}
+
+/*
  * returns ENOENT, EIO, or 0.
  *
  * This interface will allocate a blank spill dbuf when a spill blk

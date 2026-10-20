@@ -47,8 +47,6 @@
 #include <sys/vdev_initialize.h>
 #include <sys/vdev_trim.h>
 #include <sys/dmu_traverse.h>
-#include <sys/dbuf.h>
-#include <sys/dnode.h>
 
 /*
  * This file contains the necessary logic to remove vdevs from a
@@ -1827,7 +1825,17 @@ vdev_only_own_metadata(vdev_t *vd)
 	return (!s.vdrs_found);
 }
 
-int zfs_unsafe_drain_mos = 0;	/* TEST: relocate cold MOS blocks off vdev */
+/*
+ * TEST-ONLY module parameters gating the experimental raidz-vdev
+ * drain+drop.  Both default off; set via `mdb -kw` or /etc/system.
+ * zfs_unsafe_empty_vdev_drop (above) enables the log-removal drop path and
+ * its traversal safety gate; zfs_unsafe_drain_mos additionally relocates
+ * cold metadata off the passivated vdev so an established vdev can reach
+ * the zero-live-refs state the gate requires.  Operator flow: destroy
+ * snapshots, evacuate bulk data in userland, then `zpool remove` (retry
+ * until it succeeds).
+ */
+int zfs_unsafe_drain_mos = 0;
 
 /*
  * Object types that are managed by the sync/space-map/bpobj machinery and
@@ -1853,39 +1861,6 @@ typedef struct vdev_drain_arg {
 } vdev_drain_arg_t;
 
 /*
- * TEST-ONLY: does this block pointer have a live DVA on the drain-target
- * vdev?  Holes, embedded blocks and empty DVAs are never "on" a vdev.
- */
-static boolean_t
-vdev_drain_bp_on_target(const blkptr_t *bp, uint64_t tgt)
-{
-	if (bp == NULL || BP_IS_HOLE(bp) || BP_IS_EMBEDDED(bp))
-		return (B_FALSE);
-	for (int d = 0; d < BP_GET_NDVAS(bp); d++) {
-		const dva_t *dva = &bp->blk_dva[d];
-		if (DVA_GET_ASIZE(dva) != 0 && DVA_GET_VDEV(dva) == tgt)
-			return (B_TRUE);
-	}
-	return (B_FALSE);
-}
-
-/*
- * TEST-ONLY: is the currently-held L0 dbuf resident on the target vdev?
- * Peeks db_blkptr under db_mtx (read-only).
- */
-static boolean_t
-vdev_drain_db_on_target(dmu_buf_t *db, uint64_t tgt)
-{
-	dmu_buf_impl_t *dbi = (dmu_buf_impl_t *)db;
-	boolean_t on_tgt;
-
-	mutex_enter(&dbi->db_mtx);
-	on_tgt = vdev_drain_bp_on_target(dbi->db_blkptr, tgt);
-	mutex_exit(&dbi->db_mtx);
-	return (on_tgt);
-}
-
-/*
  * TEST-ONLY: if this object's dnode block (an L0 of the meta-dnode) sits on
  * the target vdev, re-dirty the dnode (via its bonus buffer) so COW relocates
  * that dnode block onto the keepers.  A dnode block aggregates many objects'
@@ -1897,29 +1872,25 @@ static void
 vdev_drain_move_dnode(objset_t *os, uint64_t obj, uint64_t tgt,
     dmu_tx_t *mos_tx)
 {
-	dnode_t *dn;
 	dmu_buf_t *bdb;
 
-	if (dnode_hold(os, obj, FTAG, &dn) != 0)
+	if (!dmu_object_dnode_block_on_vdev(os, obj, tgt))
 		return;
-	if (dn->dn_dbuf != NULL &&
-	    vdev_drain_db_on_target((dmu_buf_t *)dn->dn_dbuf, tgt) &&
-	    dmu_bonus_hold(os, obj, FTAG, &bdb) == 0) {
-		if (mos_tx != NULL) {
-			dmu_buf_will_dirty(bdb, mos_tx);
+	if (dmu_bonus_hold(os, obj, FTAG, &bdb) != 0)
+		return;
+	if (mos_tx != NULL) {
+		dmu_buf_will_dirty(bdb, mos_tx);
+	} else {
+		dmu_tx_t *tx = dmu_tx_create(os);
+		dmu_tx_hold_bonus(tx, obj);
+		if (dmu_tx_assign(tx, TXG_WAIT) == 0) {
+			dmu_buf_will_dirty(bdb, tx);
+			dmu_tx_commit(tx);
 		} else {
-			dmu_tx_t *tx = dmu_tx_create(os);
-			dmu_tx_hold_bonus(tx, obj);
-			if (dmu_tx_assign(tx, TXG_WAIT) == 0) {
-				dmu_buf_will_dirty(bdb, tx);
-				dmu_tx_commit(tx);
-			} else {
-				dmu_tx_abort(tx);
-			}
+			dmu_tx_abort(tx);
 		}
-		dmu_buf_rele(bdb, FTAG);
 	}
-	dnode_rele(dn, FTAG);
+	dmu_buf_rele(bdb, FTAG);
 }
 
 /*
@@ -1958,7 +1929,7 @@ vdev_drain_mos_sync(void *arg, dmu_tx_t *tx)
 
 			if (dmu_buf_hold(mos, obj, off, FTAG, &db, 0) != 0)
 				continue;
-			if (!vdev_drain_db_on_target(db, vda->vda_tgt)) {
+			if (!dmu_buf_on_vdev(db, vda->vda_tgt)) {
 				dmu_buf_rele(db, FTAG);
 				continue;
 			}
@@ -2001,7 +1972,7 @@ vdev_drain_ds(const char *dsname, void *arg)
 
 			if (dmu_buf_hold(os, obj, off, FTAG, &db, 0) != 0)
 				continue;
-			if (!vdev_drain_db_on_target(db, vda->vda_tgt)) {
+			if (!dmu_buf_on_vdev(db, vda->vda_tgt)) {
 				dmu_buf_rele(db, FTAG);
 				continue;
 			}
