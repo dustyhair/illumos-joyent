@@ -47,6 +47,8 @@
 #include <sys/vdev_initialize.h>
 #include <sys/vdev_trim.h>
 #include <sys/dmu_traverse.h>
+#include <sys/dbuf.h>
+#include <sys/dnode.h>
 
 /*
  * This file contains the necessary logic to remove vdevs from a
@@ -1845,6 +1847,81 @@ vdev_drain_safe_type(dmu_object_type_t t)
 	}
 }
 
+typedef struct vdev_drain_arg {
+	spa_t		*vda_spa;
+	uint64_t	vda_tgt;	/* target (no-alloc) vdev id */
+} vdev_drain_arg_t;
+
+/*
+ * TEST-ONLY: does this block pointer have a live DVA on the drain-target
+ * vdev?  Holes, embedded blocks and empty DVAs are never "on" a vdev.
+ */
+static boolean_t
+vdev_drain_bp_on_target(const blkptr_t *bp, uint64_t tgt)
+{
+	if (bp == NULL || BP_IS_HOLE(bp) || BP_IS_EMBEDDED(bp))
+		return (B_FALSE);
+	for (int d = 0; d < BP_GET_NDVAS(bp); d++) {
+		const dva_t *dva = &bp->blk_dva[d];
+		if (DVA_GET_ASIZE(dva) != 0 && DVA_GET_VDEV(dva) == tgt)
+			return (B_TRUE);
+	}
+	return (B_FALSE);
+}
+
+/*
+ * TEST-ONLY: is the currently-held L0 dbuf resident on the target vdev?
+ * Peeks db_blkptr under db_mtx (read-only).
+ */
+static boolean_t
+vdev_drain_db_on_target(dmu_buf_t *db, uint64_t tgt)
+{
+	dmu_buf_impl_t *dbi = (dmu_buf_impl_t *)db;
+	boolean_t on_tgt;
+
+	mutex_enter(&dbi->db_mtx);
+	on_tgt = vdev_drain_bp_on_target(dbi->db_blkptr, tgt);
+	mutex_exit(&dbi->db_mtx);
+	return (on_tgt);
+}
+
+/*
+ * TEST-ONLY: if this object's dnode block (an L0 of the meta-dnode) sits on
+ * the target vdev, re-dirty the dnode (via its bonus buffer) so COW relocates
+ * that dnode block onto the keepers.  A dnode block aggregates many objects'
+ * dnodes and can reside on the target even when none of those objects' data
+ * does, so the per-object L0 scan alone would not move it.  mos_tx != NULL =>
+ * syncing context (MOS), dirty under it; NULL => open context, use a tx.
+ */
+static void
+vdev_drain_move_dnode(objset_t *os, uint64_t obj, uint64_t tgt,
+    dmu_tx_t *mos_tx)
+{
+	dnode_t *dn;
+	dmu_buf_t *bdb;
+
+	if (dnode_hold(os, obj, FTAG, &dn) != 0)
+		return;
+	if (dn->dn_dbuf != NULL &&
+	    vdev_drain_db_on_target((dmu_buf_t *)dn->dn_dbuf, tgt) &&
+	    dmu_bonus_hold(os, obj, FTAG, &bdb) == 0) {
+		if (mos_tx != NULL) {
+			dmu_buf_will_dirty(bdb, mos_tx);
+		} else {
+			dmu_tx_t *tx = dmu_tx_create(os);
+			dmu_tx_hold_bonus(tx, obj);
+			if (dmu_tx_assign(tx, TXG_WAIT) == 0) {
+				dmu_buf_will_dirty(bdb, tx);
+				dmu_tx_commit(tx);
+			} else {
+				dmu_tx_abort(tx);
+			}
+		}
+		dmu_buf_rele(bdb, FTAG);
+	}
+	dnode_rele(dn, FTAG);
+}
+
 /*
  * TEST-ONLY: relocate cold MOS metadata off a no-alloc (drain-target) vdev by
  * re-dirtying every L0 block of each safe MOS object, forcing COW to realloc
@@ -1861,7 +1938,8 @@ vdev_drain_safe_type(dmu_object_type_t t)
 static void
 vdev_drain_mos_sync(void *arg, dmu_tx_t *tx)
 {
-	spa_t *spa = arg;
+	vdev_drain_arg_t *vda = arg;
+	spa_t *spa = vda->vda_spa;
 	objset_t *mos = spa_meta_objset(spa);
 	uint64_t obj = 0;
 	dmu_object_info_t doi;
@@ -1880,9 +1958,14 @@ vdev_drain_mos_sync(void *arg, dmu_tx_t *tx)
 
 			if (dmu_buf_hold(mos, obj, off, FTAG, &db, 0) != 0)
 				continue;
+			if (!vdev_drain_db_on_target(db, vda->vda_tgt)) {
+				dmu_buf_rele(db, FTAG);
+				continue;
+			}
 			dmu_buf_will_dirty(db, tx);
 			dmu_buf_rele(db, FTAG);
 		}
+		vdev_drain_move_dnode(mos, obj, vda->vda_tgt, tx);
 	}
 }
 
@@ -1898,8 +1981,8 @@ vdev_drain_ds(const char *dsname, void *arg)
 	objset_t *os;
 	uint64_t obj = 0;
 	dmu_object_info_t doi;
+	vdev_drain_arg_t *vda = arg;
 
-	(void) arg;
 	if (dmu_objset_hold(dsname, FTAG, &os) != 0)
 		return (0);
 
@@ -1918,6 +2001,10 @@ vdev_drain_ds(const char *dsname, void *arg)
 
 			if (dmu_buf_hold(os, obj, off, FTAG, &db, 0) != 0)
 				continue;
+			if (!vdev_drain_db_on_target(db, vda->vda_tgt)) {
+				dmu_buf_rele(db, FTAG);
+				continue;
+			}
 			tx = dmu_tx_create(os);
 			dmu_tx_hold_write(tx, obj, off,
 			    (int)doi.doi_data_block_size);
@@ -1930,19 +2017,25 @@ vdev_drain_ds(const char *dsname, void *arg)
 			dmu_tx_commit(tx);
 			dmu_buf_rele(db, FTAG);
 		}
+		vdev_drain_move_dnode(os, obj, vda->vda_tgt, NULL);
 	}
 	dmu_objset_rele(os, FTAG);
 	return (0);
 }
 
 static void
-vdev_drain_mos(spa_t *spa)
+vdev_drain_mos(spa_t *spa, uint64_t tgt)
 {
+	vdev_drain_arg_t vda;
+
+	vda.vda_spa = spa;
+	vda.vda_tgt = tgt;
+
 	/* MOS (objset 0): syncing context -- it has no backing dataset. */
 	(void) dsl_sync_task(spa->spa_name, NULL, vdev_drain_mos_sync,
-	    spa, 0, ZFS_SPACE_CHECK_NONE);
+	    &vda, 0, ZFS_SPACE_CHECK_NONE);
 	/* Datasets: open context, per-object COW rewrite. */
-	(void) dmu_objset_find(spa_name(spa), vdev_drain_ds, NULL,
+	(void) dmu_objset_find(spa_name(spa), vdev_drain_ds, &vda,
 	    DS_FIND_CHILDREN);
 	txg_wait_synced(spa_get_dsl(spa), 0);
 }
@@ -2351,11 +2444,12 @@ spa_vdev_remove(spa_t *spa, uint64_t guid, boolean_t unspare)
 			error = spa_vdev_remove_log(vd, &txg);
 		} else {
 			/*
-			 * TEST-ONLY: not clean yet -- passivate + persist no-alloc
-			 * so the target stops accumulating.  With zfs_unsafe_drain_
-			 * mos set, relocate cold MOS metadata off it (data is
-			 * evacuated by the operator), then re-check and drop
-			 * in-place if nothing references the vdev anymore.
+			 * TEST-ONLY: not clean yet -- passivate + persist
+			 * no-alloc so the target stops accumulating.  With
+			 * zfs_unsafe_drain_mos set, relocate cold metadata
+			 * off it (bulk data is evacuated in userland first),
+			 * then re-check and drop in-place if nothing still
+			 * references the vdev.
 			 */
 			metaslab_group_passivate(vd->vdev_mg);
 			vd->vdev_noalloc = B_TRUE;
@@ -2364,7 +2458,7 @@ spa_vdev_remove(spa_t *spa, uint64_t guid, boolean_t unspare)
 				spa_vdev_config_exit(spa, NULL, txg +
 				    TXG_CONCURRENT_STATES + TXG_DEFER_SIZE,
 				    0, FTAG);
-				vdev_drain_mos(spa);
+				vdev_drain_mos(spa, vd->vdev_id);
 				txg = spa_vdev_config_enter(spa);
 				if (vdev_only_own_metadata(vd))
 					error = spa_vdev_remove_log(vd, &txg);
