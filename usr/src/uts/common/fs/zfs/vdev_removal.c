@@ -1870,11 +1870,11 @@ typedef struct vdev_drain_arg {
  */
 static void
 vdev_drain_move_dnode(objset_t *os, uint64_t obj, uint64_t tgt,
-    dmu_tx_t *mos_tx)
+    dmu_tx_t *mos_tx, boolean_t force)
 {
 	dmu_buf_t *bdb;
 
-	if (!dmu_object_dnode_block_on_vdev(os, obj, tgt))
+	if (!force && !dmu_object_dnode_block_on_vdev(os, obj, tgt))
 		return;
 	if (dmu_bonus_hold(os, obj, FTAG, &bdb) != 0)
 		return;
@@ -1936,7 +1936,7 @@ vdev_drain_mos_sync(void *arg, dmu_tx_t *tx)
 			dmu_buf_will_dirty(db, tx);
 			dmu_buf_rele(db, FTAG);
 		}
-		vdev_drain_move_dnode(mos, obj, vda->vda_tgt, tx);
+		vdev_drain_move_dnode(mos, obj, vda->vda_tgt, tx, B_TRUE);
 	}
 }
 
@@ -1988,7 +1988,7 @@ vdev_drain_ds(const char *dsname, void *arg)
 			dmu_tx_commit(tx);
 			dmu_buf_rele(db, FTAG);
 		}
-		vdev_drain_move_dnode(os, obj, vda->vda_tgt, NULL);
+		vdev_drain_move_dnode(os, obj, vda->vda_tgt, NULL, B_FALSE);
 		dmu_object_relocate_indirects_off_vdev(os, obj, vda->vda_tgt);
 	}
 	dmu_objset_rele(os, FTAG);

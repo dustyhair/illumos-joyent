@@ -552,7 +552,7 @@ dmu_object_relocate_indirects_off_vdev(objset_t *os, uint64_t object,
 {
 	dnode_t *dn;
 	uint64_t offset, l1span;
-	boolean_t root_on_tgt = B_FALSE;
+	boolean_t need = B_FALSE;
 
 	if (dnode_hold(os, object, FTAG, &dn) != 0)
 		return;
@@ -561,23 +561,60 @@ dmu_object_relocate_indirects_off_vdev(objset_t *os, uint64_t object,
 		return;
 	}
 
+	/*
+	 * Detect whether ANY indirect block of this object resides on the
+	 * target: its root (dnode) pointers, or any block at any indirect
+	 * level.  We must check every level -- in a deep (4-6 level) tree an
+	 * on-target L2/L3 can have an off-target root and off-target L1
+	 * children, so a root+L1 check alone would miss it.
+	 */
 	rw_enter(&dn->dn_struct_rwlock, RW_READER);
-	for (int i = 0; i < dn->dn_phys->dn_nblkptr; i++) {
-		if (dmu_blkptr_on_vdev(&dn->dn_phys->dn_blkptr[i], vdev)) {
-			root_on_tgt = B_TRUE;
-			break;
-		}
+	for (int i = 0; i < dn->dn_phys->dn_nblkptr && !need; i++) {
+		if (dmu_blkptr_on_vdev(&dn->dn_phys->dn_blkptr[i], vdev))
+			need = B_TRUE;
 	}
 	rw_exit(&dn->dn_struct_rwlock);
 
+	for (int lvl = 1; lvl < dn->dn_nlevels && !need; lvl++) {
+		uint64_t off = 0;
+		uint64_t span = 1ULL << (dn->dn_datablkshift +
+		    lvl * (dn->dn_indblkshift - SPA_BLKPTRSHIFT));
+
+		while (!need &&
+		    dnode_next_offset(dn, 0, &off, lvl + 1, 1, 0) == 0) {
+			uint64_t blkid = dbuf_whichblock(dn, lvl, off);
+			dmu_buf_impl_t *idb;
+
+			rw_enter(&dn->dn_struct_rwlock, RW_READER);
+			idb = dbuf_hold_level(dn, lvl, blkid, FTAG);
+			rw_exit(&dn->dn_struct_rwlock);
+			if (idb != NULL) {
+				if (idb->db_blkptr != NULL &&
+				    dmu_blkptr_on_vdev(idb->db_blkptr, vdev))
+					need = B_TRUE;
+				dbuf_rele(idb, FTAG);
+			}
+			off += span;
+		}
+	}
+
+	if (!need) {
+		dnode_rele(dn, FTAG);
+		return;
+	}
+
+	/*
+	 * Dirty EVERY non-hole L1 indirect.  Each dbuf_dirty() COW-rewrites
+	 * that L1 and cascades up to the root, so rewriting all L1s rewrites
+	 * the complete indirect tree at every level; the new blocks avoid the
+	 * target because it is vdev_noalloc.
+	 */
 	offset = 0;
 	l1span = 1ULL << (dn->dn_indblkshift - SPA_BLKPTRSHIFT +
 	    dn->dn_datablkshift);
-
 	while (dnode_next_offset(dn, 0, &offset, 2, 1, 0) == 0) {
 		uint64_t l1blkid = dbuf_whichblock(dn, 1, offset);
 		dmu_buf_impl_t *dbuf;
-		boolean_t hit;
 
 		rw_enter(&dn->dn_struct_rwlock, RW_READER);
 		dbuf = dbuf_hold_level(dn, 1, l1blkid, FTAG);
@@ -586,12 +623,7 @@ dmu_object_relocate_indirects_off_vdev(objset_t *os, uint64_t object,
 			offset += l1span;
 			continue;
 		}
-
-		hit = root_on_tgt;
-		if (!hit && dbuf->db_blkptr != NULL)
-			hit = dmu_blkptr_on_vdev(dbuf->db_blkptr, vdev);
-
-		if (hit && dbuf_read(dbuf, NULL, DB_RF_MUST_SUCCEED) == 0) {
+		if (dbuf_read(dbuf, NULL, DB_RF_MUST_SUCCEED) == 0) {
 			dmu_tx_t *tx = dmu_tx_create(os);
 			dmu_tx_hold_remap_l1indirect(tx, object);
 			if (dmu_tx_assign(tx, TXG_WAIT) == 0) {
