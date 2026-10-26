@@ -134,6 +134,7 @@ void metaslab_enable(metaslab_t *, boolean_t, boolean_t);
 void metaslab_set_selected_txg(metaslab_t *, uint64_t);
 
 extern int metaslab_debug_load;
+extern void metaslab_drain_off_vdev(spa_t *spa, uint64_t tgt);
 
 #ifdef	__cplusplus
 }

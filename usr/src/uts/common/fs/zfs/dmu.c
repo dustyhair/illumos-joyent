@@ -504,6 +504,110 @@ dmu_object_dnode_block_on_vdev(objset_t *os, uint64_t object, uint64_t vdev)
 }
 
 /*
+ * TEST-ONLY (experimental raidz-vdev drain): report whether ANY block of
+ * the given object -- its dnode block or any of its L0 data blocks --
+ * currently resides on the given top-level vdev.  Used to detect a foreign
+ * space-map object with a (ditto) copy stranded on the drain target.
+ */
+boolean_t
+dmu_object_on_vdev(objset_t *os, uint64_t object, uint64_t vdev)
+{
+	dmu_object_info_t doi;
+	boolean_t ret = B_FALSE;
+
+	if (dmu_object_dnode_block_on_vdev(os, object, vdev))
+		return (B_TRUE);
+	if (dmu_object_info(os, object, &doi) != 0)
+		return (B_FALSE);
+	if (doi.doi_data_block_size == 0)
+		return (B_FALSE);
+	for (uint64_t off = 0; off < doi.doi_max_offset;
+	    off += doi.doi_data_block_size) {
+		dmu_buf_t *db;
+
+		if (dmu_buf_hold(os, object, off, FTAG, &db, 0) != 0)
+			continue;
+		ret = dmu_buf_on_vdev(db, vdev);
+		dmu_buf_rele(db, FTAG);
+		if (ret)
+			break;
+	}
+	return (ret);
+}
+
+/*
+ * TEST-ONLY (experimental raidz-vdev drain): relocate an object's INDIRECT
+ * blocks (and the blocks on the path to its root) that reside on the
+ * no-alloc drain target.  The selective L0 drain moves on-target data and
+ * dnode blocks, but a cold indirect block whose children are all already
+ * off-target is never re-dirtied and stays stranded.  Here we dirty each
+ * affected L1 indirect directly -- the same dbuf_dirty() path `zfs remap`
+ * uses (see dmu_object_remap_one_indirect) -- which COW-rewrites it and
+ * cascades up to the root; the new blocks avoid the target because it is
+ * vdev_noalloc.  Open context only (creates per-dirty txs); datasets only.
+ */
+void
+dmu_object_relocate_indirects_off_vdev(objset_t *os, uint64_t object,
+    uint64_t vdev)
+{
+	dnode_t *dn;
+	uint64_t offset, l1span;
+	boolean_t root_on_tgt = B_FALSE;
+
+	if (dnode_hold(os, object, FTAG, &dn) != 0)
+		return;
+	if (dn->dn_nlevels <= 1) {
+		dnode_rele(dn, FTAG);
+		return;
+	}
+
+	rw_enter(&dn->dn_struct_rwlock, RW_READER);
+	for (int i = 0; i < dn->dn_phys->dn_nblkptr; i++) {
+		if (dmu_blkptr_on_vdev(&dn->dn_phys->dn_blkptr[i], vdev)) {
+			root_on_tgt = B_TRUE;
+			break;
+		}
+	}
+	rw_exit(&dn->dn_struct_rwlock);
+
+	offset = 0;
+	l1span = 1ULL << (dn->dn_indblkshift - SPA_BLKPTRSHIFT +
+	    dn->dn_datablkshift);
+
+	while (dnode_next_offset(dn, 0, &offset, 2, 1, 0) == 0) {
+		uint64_t l1blkid = dbuf_whichblock(dn, 1, offset);
+		dmu_buf_impl_t *dbuf;
+		boolean_t hit;
+
+		rw_enter(&dn->dn_struct_rwlock, RW_READER);
+		dbuf = dbuf_hold_level(dn, 1, l1blkid, FTAG);
+		rw_exit(&dn->dn_struct_rwlock);
+		if (dbuf == NULL) {
+			offset += l1span;
+			continue;
+		}
+
+		hit = root_on_tgt;
+		if (!hit && dbuf->db_blkptr != NULL)
+			hit = dmu_blkptr_on_vdev(dbuf->db_blkptr, vdev);
+
+		if (hit && dbuf_read(dbuf, NULL, DB_RF_MUST_SUCCEED) == 0) {
+			dmu_tx_t *tx = dmu_tx_create(os);
+			dmu_tx_hold_remap_l1indirect(tx, object);
+			if (dmu_tx_assign(tx, TXG_WAIT) == 0) {
+				(void) dbuf_dirty(dbuf, tx);
+				dmu_tx_commit(tx);
+			} else {
+				dmu_tx_abort(tx);
+			}
+		}
+		dbuf_rele(dbuf, FTAG);
+		offset += l1span;
+	}
+	dnode_rele(dn, FTAG);
+}
+
+/*
  * returns ENOENT, EIO, or 0.
  *
  * This interface will allocate a blank spill dbuf when a spill blk

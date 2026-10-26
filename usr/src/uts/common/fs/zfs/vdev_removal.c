@@ -1989,6 +1989,7 @@ vdev_drain_ds(const char *dsname, void *arg)
 			dmu_buf_rele(db, FTAG);
 		}
 		vdev_drain_move_dnode(os, obj, vda->vda_tgt, NULL);
+		dmu_object_relocate_indirects_off_vdev(os, obj, vda->vda_tgt);
 	}
 	dmu_objset_rele(os, FTAG);
 	return (0);
@@ -2008,6 +2009,12 @@ vdev_drain_mos(spa_t *spa, uint64_t tgt)
 	/* Datasets: open context, per-object COW rewrite. */
 	(void) dmu_objset_find(spa_name(spa), vdev_drain_ds, &vda,
 	    DS_FIND_CHILDREN);
+	/*
+	 * Foreign cold space-map blocks stranded on the target (e.g. a slog
+	 * space-map ditto copy): force-condense the owning metaslabs so the
+	 * space-map objects are rewritten off the no-alloc target.
+	 */
+	metaslab_drain_off_vdev(spa, tgt);
 	txg_wait_synced(spa_get_dsl(spa), 0);
 }
 

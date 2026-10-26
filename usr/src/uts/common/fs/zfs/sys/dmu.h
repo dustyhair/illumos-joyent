@@ -543,6 +543,9 @@ int dmu_bonus_hold(objset_t *os, uint64_t object, void *tag, dmu_buf_t **);
 boolean_t dmu_buf_on_vdev(dmu_buf_t *db, uint64_t vdev);
 boolean_t dmu_object_dnode_block_on_vdev(objset_t *os, uint64_t object,
     uint64_t vdev);
+boolean_t dmu_object_on_vdev(objset_t *os, uint64_t object, uint64_t vdev);
+void dmu_object_relocate_indirects_off_vdev(objset_t *os, uint64_t object,
+    uint64_t vdev);
 int dmu_bonus_hold_by_dnode(dnode_t *dn, void *tag, dmu_buf_t **dbp,
     uint32_t flags);
 int dmu_bonus_max(void);

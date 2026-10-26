@@ -3860,6 +3860,62 @@ metaslab_flush(metaslab_t *msp, dmu_tx_t *tx)
 }
 
 /*
+ * TEST-ONLY (experimental raidz-vdev drain, see vdev_removal.c): relocate
+ * cold space-map blocks that reside on the no-alloc drain target (vdev
+ * "tgt") but belong to a SURVIVING vdev's metaslab -- e.g. a foreign
+ * space-map ditto copy stranded on the target at pool creation.  Such blocks
+ * are not freed by the target's teardown and are never re-dirtied by data
+ * evacuation, so without this they keep the traversal gate at EBUSY.  For
+ * each affected metaslab we load it and request a forced condense (the same
+ * ms_condense_wanted + vdev_dirty idiom metaslab_set_fragmentation uses),
+ * which rewrites the space-map object; the new blocks avoid the target
+ * because it is vdev_noalloc.  Runs in open context; the caller waits for
+ * the syncing txg afterward.
+ */
+void
+metaslab_drain_off_vdev(spa_t *spa, uint64_t tgt)
+{
+	vdev_t *rvd = spa->spa_root_vdev;
+	objset_t *mos = spa_meta_objset(spa);
+
+	for (uint64_t c = 0; c < rvd->vdev_children; c++) {
+		vdev_t *vd = rvd->vdev_child[c];
+
+		if (vd->vdev_id == tgt || vd->vdev_ms == NULL)
+			continue;
+
+		for (uint64_t m = 0; m < vd->vdev_ms_count; m++) {
+			metaslab_t *msp = vd->vdev_ms[m];
+			uint64_t smobj;
+
+			if (msp == NULL)
+				continue;
+
+			mutex_enter(&msp->ms_lock);
+			smobj = (msp->ms_sm != NULL) ?
+			    space_map_object(msp->ms_sm) : 0;
+			mutex_exit(&msp->ms_lock);
+
+			if (smobj == 0 ||
+			    !dmu_object_on_vdev(mos, smobj, tgt))
+				continue;
+
+			mutex_enter(&msp->ms_lock);
+			if (!msp->ms_loaded)
+				(void) metaslab_load(msp);
+			if (msp->ms_loaded && spa_writeable(spa) &&
+			    spa_syncing_txg(spa) + 1 <
+			    spa_final_dirty_txg(spa)) {
+				msp->ms_condense_wanted = B_TRUE;
+				vdev_dirty(vd, VDD_METASLAB, msp,
+				    spa_syncing_txg(spa) + 1);
+			}
+			mutex_exit(&msp->ms_lock);
+		}
+	}
+}
+
+/*
  * Write a metaslab to disk in the context of the specified transaction group.
  */
 void
