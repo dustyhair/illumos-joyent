@@ -8,6 +8,8 @@
 #include <sys/cred_impl.h>
 #include <sys/priv_impl.h>
 #include <sys/policy.h>
+#include <sys/taskq.h>
+#include <sys/disp.h>
 #include <sys/lx_userns.h>
 #include <sys/lx_mntns.h>
 
@@ -262,6 +264,109 @@ out:
 	if (view != NULL && lx_mntns_view_destroy(view, source) != 0)
 		passed = B_FALSE;
 	crfree(reduced);
+	if (passed)
+		KT_PASS(ctx);
+}
+
+typedef struct lx_ns_race {
+	kmutex_t nr_lock;
+	kcondvar_t nr_cv;
+	uint_t nr_ready;
+	lx_userns_t *nr_ns;
+	lx_userns_cred_t nr_actor;
+	int nr_results[2];
+} lx_ns_race_t;
+
+typedef struct lx_ns_writer {
+	lx_ns_race_t *nw_race;
+	uint_t nw_index;
+} lx_ns_writer_t;
+
+static void
+lx_ns_writer(void *arg)
+{
+	lx_ns_writer_t *writer = arg;
+	lx_ns_race_t *race = writer->nw_race;
+	uint_t index = writer->nw_index;
+
+	mutex_enter(&race->nr_lock);
+	if (++race->nr_ready == 2)
+		cv_broadcast(&race->nr_cv);
+	while (race->nr_ready < 2)
+		cv_wait(&race->nr_cv, &race->nr_lock);
+	mutex_exit(&race->nr_lock);
+	race->nr_results[index] = lx_userns_map_write(race->nr_ns, 0,
+	    &race->nr_actor, &race->nr_actor,
+	    index == 0 ? "0 1000 1" : "1 1000 1", 8, 0);
+}
+
+void
+lx_userns_test_lifetime(ktest_ctx_hdl_t *ctx)
+{
+	taskq_t *queue = taskq_create("lx_ns_writers", 2, minclsyspri,
+	    2, 2, TASKQ_PREPOPULATE);
+	lx_userns_t *root = lx_userns_root_create(), *chain = NULL;
+	lx_userns_t *next = NULL;
+	lx_userns_cred_t creator = { 0 };
+	lx_ns_race_t race = { 0 };
+	lx_ns_writer_t writers[2] = { { &race, 0 }, { &race, 1 } };
+	uint_t round, winner;
+	boolean_t passed = B_FALSE;
+
+	mutex_init(&race.nr_lock, NULL, MUTEX_DEFAULT, NULL);
+	cv_init(&race.nr_cv, NULL, CV_DEFAULT, NULL);
+	creator.luc_ns = root;
+	creator.luc_uid = creator.luc_gid = 1000;
+	NS_CHECK(queue != NULL, "cannot create concurrent map writers");
+	for (round = 0; round < 32; round++) {
+		race.nr_ready = 0;
+		NS_CHECK(lx_userns_child_create(&creator, &race.nr_ns) == 0,
+		    "cannot create concurrent map target");
+		race.nr_actor = creator;
+		race.nr_actor.luc_ns = race.nr_ns;
+		lx_caps_new_namespace(&race.nr_actor.luc_caps);
+		(void) taskq_dispatch(queue, lx_ns_writer, &writers[0],
+		    TQ_SLEEP);
+		(void) taskq_dispatch(queue, lx_ns_writer, &writers[1],
+		    TQ_SLEEP);
+		taskq_wait(queue);
+		winner = race.nr_results[0] == 0 ? 0 : 1;
+		NS_CHECK(race.nr_results[winner] == 0 &&
+		    race.nr_results[1 - winner] == EPERM &&
+		    lx_userns_id(race.nr_ns, 0, 1000, 0) == winner,
+		    "concurrent map writers did not publish exactly one map");
+		lx_userns_rele(race.nr_ns);
+		race.nr_ns = NULL;
+	}
+	chain = lx_userns_root_create();
+	creator.luc_ns = chain;
+	creator.luc_uid = creator.luc_gid = 0;
+	lx_caps_new_namespace(&creator.luc_caps);
+	for (round = 0; round < 33; round++) {
+		NS_CHECK(lx_userns_child_create(&creator, &next) == 0,
+		    "namespace depth rejected before limit");
+		NS_CHECK(lx_userns_map_write(next, 0, &creator, &creator,
+		    "0 0 1", 5, 0) == 0 &&
+		    lx_userns_map_write(next, 1, &creator, &creator,
+		    "0 0 1", 5, 0) == 0, "deep namespace identity map failed");
+		lx_userns_rele(chain);
+		chain = next;
+		next = NULL;
+		creator.luc_ns = chain;
+	}
+	NS_CHECK(lx_userns_child_create(&creator, &next) == ENOSPC &&
+	    next == NULL,
+	    "namespace depth limit not enforced");
+	passed = B_TRUE;
+out:
+	if (queue != NULL)
+		taskq_destroy(queue);
+	lx_userns_rele(race.nr_ns);
+	lx_userns_rele(next);
+	lx_userns_rele(chain);
+	lx_userns_rele(root);
+	cv_destroy(&race.nr_cv);
+	mutex_destroy(&race.nr_lock);
 	if (passed)
 		KT_PASS(ctx);
 }

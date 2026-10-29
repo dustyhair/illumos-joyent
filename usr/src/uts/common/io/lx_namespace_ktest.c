@@ -13,6 +13,7 @@
 extern void lx_userns_test_maps(ktest_ctx_hdl_t *);
 extern void lx_userns_test_caps(ktest_ctx_hdl_t *);
 extern void lx_userns_test_native(ktest_ctx_hdl_t *);
+extern void lx_userns_test_lifetime(ktest_ctx_hdl_t *);
 
 /* Only the disposable lab driver prepares this private source tree. */
 static void
@@ -312,6 +313,8 @@ _init(void)
 	    (error = ktest_add_test(ks, "capabilities", lx_userns_test_caps,
 	    0)) != 0 ||
 	    (error = ktest_add_test(ks, "native", lx_userns_test_native,
+	    0)) != 0 ||
+	    (error = ktest_add_test(ks, "lifetime", lx_userns_test_lifetime,
 	    0)) != 0 ||
 	    (error = ktest_register_module(km)) != 0) {
 		ktest_free_module(km);
