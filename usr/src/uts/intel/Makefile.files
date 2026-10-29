@@ -355,6 +355,8 @@ LX_BRAND_OBJS  =		\
 	lx_ksignal.o	\
 	lx_seccomp.o	\
 	lx_seccomp_bpf.o	\
+	lx_userns.o	\
+	lx_userns_model.o	\
 	lx_signal.o		\
 	lx_signum.o		\
 	lx_socket.o		\

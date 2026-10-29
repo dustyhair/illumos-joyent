@@ -5,7 +5,7 @@ OBJECTS = $(LX_NAMESPACE_KTEST_OBJS:%=$(OBJS_DIR)/%)
 ROOTMODULE = $(USR_KTEST_DIR)/$(MODULE)
 
 include $(UTSBASE)/intel/Makefile.intel
-INC_PATH += -I$(UTSBASE)/common/brand/lx
+INC_PATH += -I$(UTSBASE)/common/brand/lx -I$(SRC)/common/brand/lx
 ALL_TARGET = $(BINARY)
 INSTALL_TARGET = $(BINARY) $(ROOTMODULE)
 LDFLAGS += -N drv/ktest -N brand/lx_brand
