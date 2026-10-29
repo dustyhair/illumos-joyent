@@ -405,7 +405,8 @@ lx_sigdeliver_kernel(int sig, k_siginfo_t *sip, void (*handler)())
 			uint32_t uid = sip->si_uid;
 			uint64_t utime = (uint64_t)sip->si_utime * 100 / hz;
 			uint64_t stime = (uint64_t)sip->si_stime * 100 / hz;
-			if (sip->si_code != CLD_EXITED && status > 0 && status < NSIG)
+			if (sip->si_code != CLD_EXITED && status > 0 &&
+			    status < NSIG)
 				status = stol_signo[status];
 			bcopy(&pid, frame->info.data, sizeof (pid));
 			bcopy(&uid, frame->info.data + 4, sizeof (uid));
