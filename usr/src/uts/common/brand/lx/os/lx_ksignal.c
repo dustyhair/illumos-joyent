@@ -525,6 +525,9 @@ lx_sig_kernel_syscall(klwp_t *lwp, int nr, uintptr_t *args, long *result)
 		*result = lxk_sigprocmask(args[0], args[1], args[2], args[3]);
 		break;
 	case 15:
+		if (lwptolxlwp(lwp)->br_sigframes == NULL &&
+		    !lx_seccomp_active(curproc))
+			return (B_FALSE);
 		*result = lxk_sigreturn(lwp);
 		break;
 	case 131:

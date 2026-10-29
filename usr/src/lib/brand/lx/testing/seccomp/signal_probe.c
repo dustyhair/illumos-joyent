@@ -400,7 +400,9 @@ wait_sleeping(pid_t pid)
 			return (1);
 		while (fgets(line, sizeof (line), f) != NULL) {
 			if (strncmp(line, "State:", 6) == 0) {
-				int sleeping = strchr(line, 'S') != NULL;
+				char *value = strchr(line, ':');
+				int sleeping = value != NULL &&
+				    strchr(value, 'S') != NULL;
 				(void) fclose(f);
 				if (sleeping)
 					return (0);
