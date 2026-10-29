@@ -23,9 +23,10 @@ result=0
     cd genunix && dmake clean && dmake all &&
     cd ../../i86pc/unix && dmake clean && dmake all &&
     cd ../../intel/lx_brand && dmake clean && dmake all &&
-    cd ../lx_proc && dmake clean && dmake all
+    cd ../lx_proc && dmake clean && dmake all &&
+    cd ../elfexec && dmake clean && dmake all
 ' > "$workspace/log/$tag.kernel.log" 2>&1 || result=$?
-printf '| %s | lx kernel build END | %s | %s | launcher %s; path N/A | release/debug unix, genunix, lx_brand and lx_proc, isolated output; reused compiler/onbld and seeded proto headers | exit %s; no install or deploy |\n' \
+printf '| %s | lx kernel build END | %s | %s | launcher %s; path N/A | release/debug unix, genunix, lx_brand, lx_proc and elfexec, isolated output; reused compiler/onbld and seeded proto headers | exit %s; no install or deploy |\n' \
     "$(date -u +%Y%m%dT%H%M%SZ)" "$branch" "$commit" "$launcher" "$result" >> /build/RUNNING_TESTS.md
 echo "Build exit $result; log: $workspace/log/$tag.kernel.log"
 exit "$result"
