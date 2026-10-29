@@ -1,7 +1,7 @@
 #!/bin/bash
 # Run only in this thread's disposable offline SmartOS VM.
 set -euo pipefail
-export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH=/lab:/usr/sbin:/usr/bin:/sbin:/bin
 test -f /lab/offline-lx-guest
 bootparams | grep -q '^lx_lab=true$'
 test "$(zonename)" = global
