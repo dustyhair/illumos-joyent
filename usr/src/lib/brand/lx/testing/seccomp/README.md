@@ -122,8 +122,9 @@ runtime coverage. The probes do not establish seccomp or namespace support.
 
 `usr/src/common/brand/lx/lx_seccomp_bpf.c` implements the seccomp-specific
 classic BPF verifier and interpreter. It is linked into `lx_brand` but has
-no syscall enforcement caller. Both `prctl` and `seccomp` continue rejecting
-filter installation. This change does not enable Codex's sandbox.
+an experimental syscall enforcement caller. Both `prctl` and `seccomp`
+reject filter installation by default. The separate enforcement experiment
+below does not yet enable Codex's sandbox.
 
 The core accepts at most 4096 instructions, aligned word loads within the
 64-byte x86 Linux metadata ABI, initialized scratch memory, forward jumps,
@@ -188,15 +189,73 @@ Release and debug modules built cleanly; runtime coverage used release.
 Filtering remained unsupported, as required. This was a mixed platform
 image and does not establish a complete platform build or i386 entry support.
 
+## Experimental kernel enforcement
+
+`uts/common/brand/lx/os/lx_seccomp.c` adds an enforcement prototype, disabled
+by the `lx_seccomp_experimental` tunable's default value of zero. Ordinary
+zones still reject installation. Only the disposable VM driver enables it.
+This is a restricted experiment, not general Linux seccomp compatibility.
+
+With the switch enabled, an amd64 process with one LWP and `no_new_privs`
+may install filters through `prctl` or `seccomp`, with flags zero. Programs
+and headers are copied before publication; the programs remain immutable.
+Stacking preserves earlier restrictions, KILL takes precedence over ERRNO,
+and the newest ERRNO wins equal-action ties. Linux error numbers bypass
+illumos errno translation, including errno zero and the 4095 clamp.
+The prototype accepts constant ALLOW, ERRNO and KILL returns. It rejects
+computed returns, TRAP, TRACE, LOG, USER_NOTIF, TSYNC and other flags.
+Chains are limited to 64 filters and 32768 instructions including the
+four-instruction overhead between stacked filters.
+
+The guard is process-wide and installation requires one LWP. It remains
+visible to any later proc-agent LWP. Normal clone, fork and exec currently
+need native user-space emulation and terminate a guarded process with
+SIGSYS. Signal trampolines, native brand commands, compatibility entry
+instructions and vsyscalls also terminate the process. Both KILL actions
+terminate the process; separate per-thread kill semantics are not provided.
+Only `exit_group` has an additional in-kernel path for normal termination.
+These restrictions mean the experiment cannot run Codex's sandbox yet.
+
+The assembly interposer now receives a kernel-supplied entry ABI. Metadata
+contains the six raw amd64 registers and saved post-syscall PC before lx
+argument processing or table bounds checks. Native SYSENTER and legacy
+LCALL dispatch also consult the interposer in `syscall_entry`. lx rejects
+native dispatch while a guard exists. User-space emulation and brandsys
+have additional checks. The negative audit-table index check is required
+because a filter can now return a result for a negative syscall number.
+
+Filter nodes are reference counted. The proc's previous reference becomes
+an immutable chain link when a new head is published under `p_lock`.
+Process-data copying holds the copied head, and debranding releases it.
+This accounts for kernel process lifecycle paths even though normal Linux
+fork and exec are not supported for guarded tasks. Disabling the tunable
+only prevents new installations; it does not remove existing guards.
+
+Build the additional probe on Linux x86-64:
+
+```sh
+cc -std=c11 -Wall -Wextra -Werror -O2 -static -pthread \
+    enforcement_probe.c -o enforcement_probe
+```
+
+The Linux control runs 17 checks. The enabled lx experiment adds escape,
+thread-count and resource-limit checks. Every test runs in a separate child;
+expected SIGSYS termination is success only for the designated kill/escape
+cases. The parent remains unrestricted. The offline
+`lab/enforcement-test.sh` first runs the default-off privilege and seccomp
+regressions and the BPF corpus. It then changes the experiment switch through
+MDB inside the guarded private VM and runs both enforcement probes. The
+matching `unix`, `genunix`, `lx_brand` and `lx_proc` must all be rebuilt.
+
 ## Remaining implementation
 
 1. Extend no-new-privileges validation to i386 and the remaining native
    privilege paths, and validate a complete platform build before deployment.
-2. Add seccomp program copy-in, immutable filter lifetime, inheritance,
-   stacking, action precedence, signals, Linux errno mapping and thread
-   synchronization. The BPF core alone provides none of these.
-3. Close native execution and context-restoration escapes before accepting
-   any filter. `lx_syscall_enter` currently hands some calls to user-space
+2. Replace the experimental process-wide guard with full per-task filter
+   semantics, complete action handling and thread synchronization. Extend
+   the immutable filter lifetime and stacking implementation accordingly.
+3. Replace the experiment's native-transition termination with an enforceable
+   implementation that permits the Linux operations Codex needs. `lx_syscall_enter` currently hands some calls to user-space
    native emulation; filtering only that dispatcher is insufficient.
    Audit `B_EXEC_NATIVE`, brand-native syscalls, restored native stack modes,
    tracing and signal return. Metadata must capture all six raw arguments
