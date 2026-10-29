@@ -193,7 +193,8 @@ lxk_sigaction(uintptr_t sig, uintptr_t ap, uintptr_t op, uintptr_t size)
 		if (act.flags & LXK_SA_NOCLDWAIT) flags |= SA_NOCLDWAIT;
 		if (act.flags & LXK_SA_RESTART) flags |= SA_RESTART;
 		if (act.flags & LXK_SA_NODEFER) flags |= SA_NODEFER;
-		if (act.flags & LXK_SA_RESETHAND) flags |= SA_RESETHAND;
+		if ((act.flags & LXK_SA_RESETHAND) && sig != LX_SIGPWR)
+			flags |= SA_RESETHAND;
 	}
 	mutex_enter(&p->p_lock);
 	if (pd->l_sigvalid & bit) {
@@ -301,8 +302,15 @@ lx_sigdeliver_kernel(int sig, k_siginfo_t *sip, void (*handler)())
 		return (-1);
 	}
 	act = pd->l_sigacts[ls];
-	if (act.flags & LXK_SA_RESETHAND)
+	if (act.flags & LXK_SA_RESETHAND) {
 		pd->l_sigacts[ls].handler = 0;
+		if (ls == LX_SIGPWR) {
+			k_sigset_t empty;
+			sigemptyset(&empty);
+			setsigact(sig, (void (*)(int))(uintptr_t)2, &empty,
+			    SA_SIGINFO);
+		}
+	}
 	mutex_exit(&p->p_lock);
 	if (ls == LX_SIGPWR && act.handler == 0 && (uintptr_t)handler == 2) {
 		exit(CLD_KILLED, SIGPWR);

@@ -26,6 +26,8 @@
 static volatile sig_atomic_t hits, inner_hits, problem, kind;
 static pid_t self_pid, self_tid;
 static uid_t self_uid;
+static pid_t expected_sender;
+static int ack_fd;
 static uintptr_t saved_frame;
 static unsigned char altstack_mem[65536] __attribute__((aligned(16)));
 static int is_lx, skipped;
@@ -33,7 +35,7 @@ static int is_lx, skipped;
 enum {
 	BASIC, MASK, PERSIST_MASK, NESTED, NODEFER, ALTSTACK, CHANGE_RAX,
 	POISON_FLAGS, BAD_CS, BAD_SS, BAD_IOPL, BAD_IP, BAD_SP, BAD_FP,
-	BAD_MXCSR, NATIVE_ESCAPE, CLOBBER_SSE, CLOBBER_AVX
+	BAD_MXCSR, NATIVE_ESCAPE, CLOBBER_SSE, CLOBBER_AVX, WAIT_READ
 };
 
 static long
@@ -98,7 +100,7 @@ handler(int sig, siginfo_t *info, void *context)
 	if (kind == CLOBBER_AVX)
 		clobber_avx();
 	if (sig != SIGUSR1 || info == NULL || uc == NULL ||
-	    info->si_signo != sig || info->si_pid != self_pid ||
+	    info->si_signo != sig || info->si_pid != expected_sender ||
 	    info->si_uid != self_uid)
 		problem = 2;
 	if (raw3(SYS_getppid, 0, 0, 0) != -EACCES)
@@ -114,6 +116,12 @@ handler(int sig, siginfo_t *info, void *context)
 	case PERSIST_MASK:
 		(void) sigaddset(&uc->uc_sigmask, SIGUSR2);
 		break;
+	case WAIT_READ: {
+		char ack = 'A';
+		if (raw3(SYS_write, ack_fd, (uintptr_t)&ack, 1) != 1)
+			problem = 9;
+		break;
+	}
 	case NESTED:
 		if (send_self(SIGUSR2) != 0 || inner_hits != 1)
 			problem = 5;
@@ -185,6 +193,7 @@ setup(int mode, int flags)
 	self_pid = getpid();
 	self_tid = syscall(SYS_gettid);
 	self_uid = getuid();
+	expected_sender = self_pid;
 	kind = mode;
 	memset(&sa, 0, sizeof (sa));
 	sa.sa_sigaction = handler;
@@ -379,6 +388,112 @@ avx_preservation(void)
 }
 
 static int
+wait_sleeping(pid_t pid)
+{
+	char path[80], line[128];
+	unsigned int attempt;
+
+	(void) snprintf(path, sizeof (path), "/proc/%ld/status", (long)pid);
+	for (attempt = 0; attempt < 1000; attempt++) {
+		FILE *f = fopen(path, "r");
+		if (f == NULL)
+			return (1);
+		while (fgets(line, sizeof (line), f) != NULL) {
+			if (strncmp(line, "State:", 6) == 0) {
+				int sleeping = strchr(line, 'S') != NULL;
+				(void) fclose(f);
+				if (sleeping)
+					return (0);
+				f = NULL;
+				break;
+			}
+		}
+		if (f != NULL)
+			(void) fclose(f);
+		(void) usleep(1000);
+	}
+	return (1);
+}
+
+static int
+interrupted_read(int restart)
+{
+	int ready[2], ack[2], data[2], status;
+	pid_t sender, target;
+	char byte = 'D';
+	ssize_t n;
+	int error;
+
+	if (setup(WAIT_READ, restart ? SA_RESTART : 0) != 0 ||
+	    pipe(ready) != 0 || pipe(ack) != 0 || pipe(data) != 0)
+		return (1);
+	target = self_pid;
+	sender = fork();
+	if (sender == -1)
+		return (1);
+	if (sender == 0) {
+		(void) alarm(4);
+		(void) close(ready[1]);
+		(void) close(ack[1]);
+		(void) close(data[0]);
+		if (read(ready[0], &byte, 1) != 1 || wait_sleeping(target) != 0)
+			_exit(2);
+		if (syscall(SYS_tgkill, target, target, SIGUSR1) != 0 ||
+		    read(ack[0], &byte, 1) != 1 || write(data[1], &byte, 1) != 1)
+			_exit(3);
+		_exit(0);
+	}
+	expected_sender = sender;
+	ack_fd = ack[1];
+	(void) close(ready[0]);
+	(void) close(ack[0]);
+	(void) close(data[1]);
+	if (filter() != 0 || write(ready[1], &byte, 1) != 1)
+		return (4);
+	errno = 0;
+	n = read(data[0], &byte, 1);
+	error = errno;
+	if (restart) {
+		if (n != 1)
+			return (5);
+	} else {
+		if (n != -1 || error != EINTR || read(data[0], &byte, 1) != 1)
+			return (6);
+	}
+	if (waitpid(sender, &status, 0) != sender ||
+	    !WIFEXITED(status) || WEXITSTATUS(status) != 0)
+		return (7);
+	return (hits != 1 || problem || raw3(SYS_getppid, 0, 0, 0) != -EACCES);
+}
+
+static int read_eintr(void) { return (interrupted_read(0)); }
+static int read_restart(void) { return (interrupted_read(1)); }
+
+static void
+pwr_handler(int sig)
+{
+	if (sig == SIGPWR)
+		hits++;
+}
+
+static int
+pwr_reset(void)
+{
+	struct sigaction sa;
+
+	self_pid = getpid();
+	self_tid = syscall(SYS_gettid);
+	memset(&sa, 0, sizeof (sa));
+	sa.sa_handler = pwr_handler;
+	sa.sa_flags = SA_RESETHAND;
+	if (sigaction(SIGPWR, &sa, NULL) != 0 || filter() != 0 ||
+	    send_self(SIGPWR) != 0 || hits != 1)
+		return (1);
+	(void) send_self(SIGPWR);
+	return (2);
+}
+
+static int
 boundary_syscalls(void)
 {
 	if (!is_lx)
@@ -443,6 +558,7 @@ main(void)
 	RUN(handler_policy, 0);
 	RUN(sse_preservation, 0);
 	RUN(avx_preservation, 0);
+	RUN(read_eintr, 0); RUN(read_restart, 0); RUN(pwr_reset, SIGPWR);
 	if (is_lx) {
 		RUN(bad_cs, SIGSEGV); RUN(bad_ss, SIGSEGV);
 		RUN(bad_iopl, SIGSEGV); RUN(bad_ip, SIGSEGV);
