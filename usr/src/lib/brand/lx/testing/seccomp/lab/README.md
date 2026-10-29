@@ -248,3 +248,47 @@ compressed userland. This is a mixed-image development result. The zone
 was halted, the guest ZFS pool exported, and the local VM powered off.
 The builder's private lofi mapping was detached. Neither production host
 nor Debian zone was changed. Default filtering remains disabled.
+
+
+## Guarded fork, exec and pthread acceptance
+
+Runtime source includes fork831e3687d0, exec cleanup7c9c26580b,
+threads6c96514137 and native-stack context correction5a48428507.
+The final test source is b654270c07. Clean release/debug unix, genunix,
+lx_brand, lx_proc and elfexec passed at01e76e59e1. The context correction
+then clean-rebuilt release/debug lx_brand. The archive overrides elfexec
+at /kernel/exec/amd64/elfexec as well as the four earlier components.
+Always copy the matching unix to the external ISO tree after a common build.
+
+The final boot passed all 15 fork, 7 exec, 5 thread, 31 signal, 29 filter,
+17 privilege checks and the 67179 BPF records. Both installation APIs and
+the raw ELF32 boundary probe returned zero. Malformed BPF fixtures produced
+expected errors. The combined driver returned zero. Codex0.166.0's real
+musl binary printed its version after guarded exec and thread creation.
+Its normal sandbox still fails bubblewrap user-namespace creation.
+
+The Linux test root now contains exec_probe, exec_dynamic, fork_probe and
+thread_probe, plus the host Linux libc and dynamic loader for that fixture.
+The large Codex vendor package is in the read-only ISO's lab-codex directory;
+mount /dev/dsk/c2t0d0s0 as hsfs in this QEMU device layout and copy the needed
+files onto the disposable zone's ZFS root. It is not placed in the RAM root.
+The coding binaries and bundled bwrap were tested; voice resources were not.
+The newest npm tag was0.166.0 when recorded, with the package SHA512 verified.
+This is a raw-binary runtime test, not a fresh npm installer acceptance.
+
+Failures retained in the running log include the first native-exec rejection
+leaking zone references because it exited inside the ELF loader. Returning a
+negative errno from the brand classifier fixed cleanup. The first pthread
+signal case asserted because a context tried to restore an absent native
+stack. Guarding that save-context flag fixed the panic. The final run also
+checks signal return after static and dynamic exec, covering the same rule.
+DTrace with -x nolibs showed Codex's clone0x7d0f00 returning EINVAL before
+the thread implementation. The mixed image's default scsi.d translator did
+not compile, so the diagnostic trace disabled unrelated D libraries.
+
+The final zone halted, the guest pool exported with status0 and the VM
+powered off normally. Builder lofi mappings are empty. Production0.130.0,
+the physical hosts and the other project checkout remain unchanged.
+Namespace support, vfork/multithreaded subprocess creation, other native
+helper calls, full seccomp semantics, fresh installation and end-to-end
+Codex coding workflow acceptance remain required.

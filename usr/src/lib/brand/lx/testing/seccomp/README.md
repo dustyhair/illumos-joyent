@@ -207,15 +207,14 @@ computed returns, TRAP, TRACE, LOG, USER_NOTIF, TSYNC and other flags.
 Chains are limited to 64 filters and 32768 instructions including the
 four-instruction overhead between stacked filters.
 
-The guard is process-wide and installation requires one LWP. It remains
-visible to any later proc-agent LWP. Normal clone, fork and exec currently
-need native user-space emulation and terminate a guarded process with
-SIGSYS. Native brand commands, compatibility entry instructions and
-vsyscalls also terminate the process. Tracked amd64 signal handlers use
-the kernel delivery and return path described below. Both KILL actions
-terminate the process; separate per-thread kill semantics are not provided.
-Only `exit_group` has an additional in-kernel path for normal termination.
-These restrictions mean the experiment cannot run Codex's sandbox yet.
+The guard is process-wide and installation requires one LWP. New kernel
+paths allow restricted amd64 fork, clone and exec operations without
+entering the native user-space emulation library. Later Linux threads
+inherit the process guard and no-new-privileges state. Native brand
+commands, compatibility entries and vsyscalls still terminate the process.
+Both KILL actions terminate the process; separate per-task filter and kill
+semantics are not provided. See the guarded process section for limits.
+Codex's full sandbox still fails because user namespaces are missing.
 
 The assembly interposer now receives a kernel-supplied entry ABI. Metadata
 contains the six raw amd64 registers and saved post-syscall PC before lx
@@ -278,8 +277,7 @@ older user-space bridge cannot be imported. A signal interrupting native
 emulation cannot use this path. There is no i386 kernel signal backend.
 Nonlocal handler exits such as longjmp and user editing of Linux extended
 XSAVE records are not implemented. The LIFO kernel-record requirement is
-stricter than Linux signal-return semantics. Fork and exec under a filter
-remain unsupported. Existing unfiltered legacy signal returns still use
+stricter than Linux signal-return semantics. Fork and exec use the restricted kernel paths described below. Existing unfiltered legacy signal returns still use
 the older bridge when no kernel frame exists.
 
 The final isolated VM run passed all 31 signal checks with no skips, all
@@ -299,6 +297,58 @@ The raw ELF32 boundary32_probe.s checks reserved syscall 251 and out-of-range
 The signal pointer appends to lx_lwp_data. All 54 old field offsets remain
 unchanged; its size grows from 440 to 448 bytes. Rebuild lx_brand and lx_proc
 together. The shared sendsig hook also requires matching unix and genunix.
+
+## Guarded processes and threads
+
+The kernel handles amd64 fork and process-style clone for a single-LWP,
+untraced caller. Supported process clone flags cover a child stack,
+SIGCHLD or no termination signal, and parent/child TID stores. The child
+inherits immutable filters, no-new-privileges, TLS and copied signal records.
+Read-only or invalid TID targets do not gain write access. Child filter
+stacking does not change its parent's restrictions. Private address-space
+children do not clear a same-mm waiter on exit.
+
+The exec path uses the normal kernel ELF loader, translates its initial
+aux vector and enters the Linux executable or interpreter directly.
+The mapped native brand library is never entered. Filters and masks survive;
+caught dispositions and alternate stacks reset, ignored dispositions remain,
+and a new handler can return without a native stack. Solaris ELF execution
+returns ENOEXEC with the guard retained. The native-exec classifier's negative
+errno result lets the ELF loader release its resources normally. A 32-bit
+image is rejected. Raw exit and exit_group have kernel paths.
+
+Thread-style clone supports the full shared-process flags used by glibc
+and musl pthreads, optional TLS, TID stores, SYSVSEM, DETACHED and PARENT.
+Each new LWP starts in Linux mode with its own stack, TLS, Linux TID and
+inherited process guard. The kernel preserves POSIX floating-point control
+settings. Thread exit clears its TID and wakes joiners. The last exiting
+thread supplies the process status through lwp_exit_status; existing native
+callers of lwp_exit retain status zero. Signal contexts only request native
+stack restoration when such a stack exists.
+
+This is not complete Linux clone or exec compatibility. vfork and VM-sharing
+process clones are absent. Fork from a multithreaded process and ptraced
+creation are rejected. Filter installation still requires a single LWP;
+per-task filters, TSYNC and thread-only KILL remain unfinished. User-space
+emulated syscalls still cannot run under a guard. These limits matter for
+coding tools that create subprocesses and for general sandbox compatibility.
+
+The isolated release VM passed 15 fork, 7 exec and 5 thread checks, plus
+31 signal checks, 29 enforcement checks, 17 no-new-privileges checks and
+the 67179-record BPF corpus. No signal or privilege cases were skipped.
+Static and dynamic exec checks cover auxv, credentials, masks, dispositions,
+alternate stacks, caught-signal return and retained denial. Thread checks
+cover TLS, mutexes, join, floating-point controls, signals, final exit status
+and blocked native entry. The actual Codex 0.166.0 binary prints its version
+after exec under an Internet-socket-denying filter that permits local IPC.
+Its normal sandbox still exits 1 at bubblewrap user-namespace creation.
+This is a mixed-platform development result, not a full Codex acceptance.
+
+Build the Linux probes with -std=c11 -Wall -Wextra -Werror -O2 -static
+-pthread, adding -lm for thread_probe.c. Build exec_probe.c again without
+-static as exec_dynamic. The latter needs the matching Linux loader/libc
+inside the test root. Linux controls pass 13 fork, 5 static/dynamic exec and
+4 thread cases. The lx-only cases cover its explicit unsupported operations.
 
 ## Remaining implementation
 

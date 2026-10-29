@@ -4,7 +4,7 @@
  * A copy is available at http://www.illumos.org/license/CDDL.
  */
 /*
- * EXPERIMENTAL: a single-threaded, kernel-emulation-only enforcement path.
+ * EXPERIMENTAL: a process-wide, kernel-emulation-only enforcement path.
  * Native execution and alternate syscall entries terminate the process.
  * This is deliberately disabled until explicitly enabled by the lab host.
  */
@@ -136,8 +136,8 @@ lx_seccomp_install(uintptr_t address)
 
 	/*
 	 * The experimental guard is process-wide. Installation requires one
-	 * LWP; any later proc-agent LWP sees the same guard. Normal Linux
-	 * fork/clone/exec require usermode emulation and are not yet usable.
+	 * LWP; later LWPs see the same guard. Restricted kernel paths handle
+	 * fork, exec and pthread clones without native usermode emulation.
 	 */
 	mutex_enter(&p->p_lock);
 	old = pd->l_seccomp;
@@ -205,7 +205,7 @@ lx_seccomp_check(klwp_t *lwp, int nr)
 
 		if (action != SC_ALLOW && action != SC_ERRNO) {
 			lx_seccomp_rele(head);
-			/* Normal execution has only the installing LWP. */
+			/* Both experimental KILL actions terminate the process. */
 			exit(CLD_KILLED, SIGSYS);
 			return (B_FALSE);
 		}
