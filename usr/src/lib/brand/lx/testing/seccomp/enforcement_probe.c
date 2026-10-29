@@ -324,21 +324,31 @@ escape_int91(void)
 }
 
 static int
-escape_fork(void)
+guarded_fork(void)
 {
+	pid_t pid;
+	int status;
+
 	if (allow_all() != 0)
 		return (1);
-	(void) syscall(SYS_fork);
-	return (2);
+	pid = syscall(SYS_fork);
+	if (pid == 0)
+		_exit(0);
+	return (pid < 0 || waitpid(pid, &status, 0) != pid || status != 0);
 }
 
 static int
-escape_clone(void)
+guarded_clone(void)
 {
+	pid_t pid;
+	int status;
+
 	if (allow_all() != 0)
 		return (1);
-	(void) syscall(SYS_clone, 0, 0, 0, 0, 0);
-	return (2);
+	pid = syscall(SYS_clone, SIGCHLD, 0, 0, 0, 0);
+	if (pid == 0)
+		_exit(0);
+	return (pid < 0 || waitpid(pid, &status, 0) != pid || status != 0);
 }
 
 static int
@@ -514,7 +524,7 @@ main(void)
 	RUN(kill_over_errno, SIGSYS);
 	if (lx) {
 		RUN(escape_int80, SIGSYS); RUN(escape_int91, SIGSYS);
-		RUN(escape_fork, SIGSYS); RUN(escape_clone, SIGSYS);
+		RUN(guarded_fork, 0); RUN(guarded_clone, 0);
 		RUN(escape_exec, SIGSYS); RUN(invalid_sigreturn, SIGSEGV);
 		RUN(escape_vsyscall, SIGSYS); RUN(caught_signal, 0);
 		RUN(multiple_threads, 0); RUN(unsupported_actions, 0);

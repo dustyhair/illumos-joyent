@@ -19,6 +19,8 @@ zlogin -S lx-probe '/test/enforcement_probe'
 enforce_rc=$?
 zlogin -S lx-probe '/test/signal_probe'
 signal_rc=$?
+zlogin -S lx-probe '/test/fork_probe'
+fork_rc=$?
 boundary_rc=0
 if test -f /usr/lib/lx_brand.so.1; then
     zlogin -S lx-probe '/test/boundary32_probe'
@@ -30,10 +32,12 @@ set -e
 echo "LX_FILTER_PROBE_EXIT=$probe_rc"
 echo "LX_ENFORCEMENT_PROBE_EXIT=$enforce_rc"
 echo "LX_SIGNAL_PROBE_EXIT=$signal_rc"
+echo "LX_FORK_PROBE_EXIT=$fork_rc"
 echo "LX_BOUNDARY32_EXIT=$boundary_rc"
 zoneadm -z lx-probe halt
 test "$probe_rc" -eq 0
 test "$enforce_rc" -eq 0
 test "$signal_rc" -eq 0
+test "$fork_rc" -eq 0
 test "$boundary_rc" -eq 0
 echo LX_ENFORCEMENT_PASS

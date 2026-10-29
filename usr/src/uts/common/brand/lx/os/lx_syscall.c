@@ -412,7 +412,8 @@ lx_syscall_enter(int entry)
 	}
 
 	/* Single-LWP experimental processes can terminate in-kernel. */
-	if (lx_seccomp_active(curproc) && syscall_num == 231)
+	if (lx_seccomp_active(curproc) &&
+	    (syscall_num == 60 || syscall_num == 231))
 		exit(CLD_EXITED, args[0] & 0xff);
 
 	if (s->sy_callc != NULL) {
