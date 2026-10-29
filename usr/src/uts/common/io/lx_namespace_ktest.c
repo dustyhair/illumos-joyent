@@ -28,7 +28,10 @@ ns_views(ktest_ctx_hdl_t *ctx)
 		return;
 	}
 #define	NS_CHECK(expr, why) do { \
-	if (!(expr)) { KT_FAIL(ctx, "%s", why); goto out; } \
+	if (!(expr)) { \
+		KT_FAIL(ctx, "%s", why); \
+		goto out; \
+	} \
 } while (0)
 	error = lx_mntns_view_create((char *)input, cr, &a);
 	NS_CHECK(error == 0, "cannot create detached view A");
@@ -40,15 +43,18 @@ ns_views(ktest_ctx_hdl_t *ctx)
 	NS_CHECK(error == 0, "initial file missing from B");
 	NS_CHECK(vp->v_vfsp != other->v_vfsp,
 	    "views share the same mount-instance vnode");
-	VN_RELE(vp); vp = NULL;
-	VN_RELE(other); other = NULL;
+	VN_RELE(vp);
+	vp = NULL;
+	VN_RELE(other);
+	other = NULL;
 	error = lx_mntns_view_tmpfs(a, "/sub", cr);
 	NS_CHECK(error == 0, "cannot graft tmpfs onto A");
 	error = lx_mntns_view_lookup(a, "/sub/original", cr, &vp);
 	NS_CHECK(error == ENOENT, "A still sees the covered file");
 	error = lx_mntns_view_lookup(b, "/sub/original", cr, &vp);
 	NS_CHECK(error == 0, "private mount changed sibling B");
-	VN_RELE(vp); vp = NULL;
+	VN_RELE(vp);
+	vp = NULL;
 	error = lx_mntns_view_lookup(a, "/sub", cr, &held);
 	NS_CHECK(error == 0, "A tmpfs root missing");
 	bzero(&attr, sizeof (attr));
@@ -58,7 +64,8 @@ ns_views(ktest_ctx_hdl_t *ctx)
 	error = VOP_CREATE(held, "private", &attr, EXCL, VWRITE,
 	    &vp, cr, 0, NULL, NULL);
 	NS_CHECK(error == 0, "cannot create A-private file");
-	VN_RELE(vp); vp = NULL;
+	VN_RELE(vp);
+	vp = NULL;
 	error = lx_mntns_view_lookup(b, "/sub/private", cr, &vp);
 	NS_CHECK(error == ENOENT, "A-private file leaked into B");
 	error = lx_mntns_view_lookup(a, "/escape", cr, &vp);
@@ -71,8 +78,10 @@ ns_views(ktest_ctx_hdl_t *ctx)
 	NS_CHECK(error == EBUSY, "destroy did not retain a busy mount tree");
 	error = lx_mntns_view_lookup(a, "/sub/private", cr, &vp);
 	NS_CHECK(error == 0, "busy view became unusable after failed destroy");
-	VN_RELE(vp); vp = NULL;
-	VN_RELE(held); held = NULL;
+	VN_RELE(vp);
+	vp = NULL;
+	VN_RELE(held);
+	held = NULL;
 	error = lx_mntns_view_destroy(a, cr);
 	if (error == 0)
 		a = NULL;
