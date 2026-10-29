@@ -314,31 +314,25 @@ lx_prctl(int opt, uintptr_t arg2, uintptr_t arg3)
 			}
 
 			/*
-			 * Some Linux applications install seccomp BPF rules.
-			 * For example, Elasticsearch installs rules that
-			 * prevent fork/exec. Since Illumos doesn't have an
-			 * analogous system call rule engine, for now we just
-			 * pretend and lie that the rule installation
-			 * succeeded.
+			 * lx does not enforce seccomp filters.  Success here
+			 * would falsely imply system call restrictions.
+			 * Return EINVAL for unsupported filter mode, as Linux
+			 * does.  Keep the probe for callers.
 			 */
 			/* So we can track who needs this */
 			DTRACE_PROBE(lx__SECCOMP);
-			return (0);
+			return (set_errno(EINVAL));
 		}
 		break;
 	}
 
 	case LX_PR_GET_SECCOMP: {
 		/*
-		 * Some Linux applications (such as Elasticsearch) use
-		 * PR_SET_SECCOMP to install seccomp BPF rules, and then query
-		 * the status, and fail unless the query indicates its rules
-		 * are installed. Since we return success in LX_PR_SET_SECCOMP,
-		 * we assume here that the application has intended to install
-		 * its rules, so we return SECCOMP_MODE_FILTER indicating that
-		 * its rules are installed.
+		 * No filters are installed, and strict mode is unsupported.
+		 * Report SECCOMP_MODE_DISABLED rather than claiming that the
+		 * caller is executing under a filter.
 		 */
-		return (SECCOMP_MODE_FILTER);
+		return (0);
 	}
 
 	default:
