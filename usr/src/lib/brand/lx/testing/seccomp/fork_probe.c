@@ -163,6 +163,71 @@ static int bad_parent_tid(void) { return (bad_tid(1)); }
 static int bad_child_tid(void) { return (bad_tid(0)); }
 
 static int
+readonly_child_tid(void)
+{
+    int *tid = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    pid_t pid;
+    if (tid == MAP_FAILED)
+        return (1);
+    *tid = 1234;
+    if (mprotect(tid, 4096, PROT_READ) || deny(SYS_getppid))
+        return (1);
+    pid = syscall(SYS_clone, SIGCHLD | CLONE_CHILD_SETTID,
+        NULL, NULL, tid, NULL);
+    if (pid == 0)
+        _exit(*tid != 1234 || !restricted());
+    return (reap(pid) || *tid != 1234);
+}
+
+static int
+stack_child(void *arg)
+{
+    return (arg != (void *)0x1234 || !restricted());
+}
+
+static int
+clone_stack(void)
+{
+    void *stack = mmap(NULL, 65536, PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (stack == MAP_FAILED || deny(SYS_getppid))
+        return (1);
+    return (reap(clone(stack_child, (char *)stack + 65536, SIGCHLD,
+        (void *)0x1234)));
+}
+
+static int
+clone_no_signal(void)
+{
+    pid_t pid;
+    int status;
+    if (deny(SYS_getppid))
+        return (1);
+    pid = syscall(SYS_clone, 0, NULL, NULL, NULL, NULL);
+    if (pid == 0)
+        _exit(!restricted());
+    return (pid < 0 || waitpid(pid, &status, __WCLONE) != pid ||
+        status != 0);
+}
+
+static int
+child_native_escape(void)
+{
+    pid_t pid;
+    int status;
+    if (deny(SYS_getppid))
+        return (1);
+    pid = syscall(SYS_fork);
+    if (pid == 0) {
+        __asm__ volatile("int $0x91" ::: "memory", "cc");
+        _exit(1);
+    }
+    return (pid < 0 || waitpid(pid, &status, 0) != pid ||
+        !WIFSIGNALED(status) || WTERMSIG(status) != SIGSYS);
+}
+
+static int
 unsupported_flags(void)
 {
     if (deny(SYS_getppid))
@@ -222,9 +287,12 @@ main(void)
 #define RUN(fn) do { count++; failed += run(#fn, fn); } while (0)
     RUN(raw_fork); RUN(libc_fork); RUN(clone_tids); RUN(clear_tid);
     RUN(child_stacking); RUN(memory_fds); RUN(fork_policy); RUN(handler_fork);
-    RUN(bad_parent_tid); RUN(bad_child_tid);
-    if (access("/native/usr/bin/uname", X_OK) == 0)
+    RUN(bad_parent_tid); RUN(bad_child_tid); RUN(readonly_child_tid);
+    RUN(clone_stack); RUN(clone_no_signal);
+    if (access("/native/usr/bin/uname", X_OK) == 0) {
         RUN(unsupported_flags);
+        RUN(child_native_escape);
+    }
 #undef RUN
     printf("%d fork checks, %d failed\n", count, failed);
     return (failed != 0);
