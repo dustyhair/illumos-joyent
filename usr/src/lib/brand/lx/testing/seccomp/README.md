@@ -387,9 +387,12 @@ https://docs.kernel.org/userspace-api/seccomp_filter.html.
 
 ## Private mount-tree backend
 
-The internal lx_mntns backend creates detached LOFS roots with nosub and
-private tmpfs grafts. Namespace construction must explicitly copy existing
-submounts. It uses the caller's credentials and does not grant mount privileges.
+The internal lx_mntns backend creates detached LOFS roots with nosub,
+private tmpfs grafts, and directory or regular-file binds. The snapshot entry
+point collects visible existing submounts, pins their source vnodes, and
+recreates parent mounts before nested mounts. It excludes obscured stacked
+mounts and returns EAGAIN if the global mount list changes during capture.
+It uses the caller's credentials and does not grant mount privileges.
 No Linux namespace syscall enables this backend yet. unshare remains EPERM
 and clone namespace requests still fail.
 
@@ -408,6 +411,24 @@ PID, IPC and network namespaces. An explicit Linux control uses
 can leave an inherited permissions profile unrestricted and is not evidence
 of sandbox success. The real lx clone request is 0x78020011 and returns
 EINVAL. Private mount views are only one part of the required implementation.
-UID/GID maps, scoped credentials, inherited submount snapshots, bind/remount,
-proc views, PID/IPC/network isolation and process lifecycle integration remain
-unimplemented. Do not claim normal Codex sandbox acceptance from this test.
+UID/GID maps, scoped credentials, remount, proc views, PID/IPC/network
+isolation and process lifecycle integration remain unimplemented. Do not claim normal Codex sandbox acceptance from this test.
+
+The snapshot acceptance VM also passes repeated checks for pre-existing
+and nested mounts, covered physical files, stacked mounts, read-only/noexec
+inheritance, later source mounts, source overmount after capture, private
+nested covers, regular-file read-only binds and mismatched bind types. The
+original regression suite passes with the new LOFS module loaded. The kernel
+LOFS pinned-source argument requires MS_SYSSPACE and MS_DATA together; the
+native mount syscall strips MS_SYSSPACE and userspace cannot supply a vnode.
+Pinned sources do not follow later overmounts. Normal pathname LOFS mounts
+keep their existing behavior.
+
+These entry points are internal and still require native mount privilege.
+Snapshot capture currently discovers submounts from canonical global mount
+paths and traverses them with the caller's credentials. It does not implement
+namespace cloning from an existing detached view, inherited inaccessible
+submounts, concurrent directory-rename handling, root overlays, recursive
+binds, remount policy changes or deferred teardown after process exit. Those
+must be completed before enabling a Linux mount namespace interface. No
+Linux namespace request succeeds merely because this backend exists.

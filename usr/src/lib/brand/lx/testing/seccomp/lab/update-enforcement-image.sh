@@ -1,0 +1,35 @@
+#!/bin/bash
+set -euo pipefail
+export PATH=/opt/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+lab=/build/workspaces/lx/lab
+ws=/build/workspaces/lx/illumos
+if ! test -f "$lab/boot_archive.before-enforce"; then
+    cp "$lab/boot_archive" "$lab/boot_archive.before-enforce"
+fi
+lo=$(pfexec lofiadm -a "$lab/boot_archive")
+cleanup() {
+    pfexec umount "$lab/mnt-root" || true
+    pfexec lofiadm -d "$lo"
+}
+trap cleanup EXIT
+pfexec mount -F ufs "$lo" "$lab/mnt-root"
+test -f "$lab/mnt-root/lab/offline-lx-guest"
+pfexec cp "$ws/usr/src/uts/i86pc/unix/obj64/unix" "$lab/mnt-root/platform/i86pc/kernel/amd64/unix"
+pfexec cp "$ws/usr/src/uts/intel/genunix/obj64/genunix" "$lab/mnt-root/kernel/amd64/genunix"
+pfexec cp "$ws/usr/src/uts/intel/lofs/obj64/lofs" "$lab/mnt-root/kernel/fs/amd64/lofs"
+pfexec cp "$ws/usr/src/uts/intel/lx_brand/obj64/lx_brand" "$lab/mnt-root/kernel/brand/amd64/lx_brand"
+pfexec cp "$ws/usr/src/uts/intel/lx_proc/obj64/lx_proc" "$lab/mnt-root/kernel/fs/amd64/lx_proc"
+pfexec mkdir -p "$lab/mnt-root/kernel/exec/amd64"
+pfexec cp "$ws/usr/src/uts/intel/elfexec/obj64/elfexec" "$lab/mnt-root/kernel/exec/amd64/elfexec"
+pfexec cp "$lab/lx-root.tar" "$lab/mnt-root/lab/lx-root.tar"
+pfexec cp "$lab/enforcement-test.sh" "$lab/mnt-root/lab/enforcement-test.sh"
+pfexec chmod 0555 "$lab/mnt-root/lab/enforcement-test.sh"
+if test -f "$ws/usr/src/uts/intel/lx_namespace_ktest/obj64/lx_namespace_ktest"; then
+    pfexec cp "$ws/usr/src/uts/intel/lx_namespace_ktest/obj64/lx_namespace_ktest" "$lab/mnt-root/lab/lx_namespace_ktest"
+    pfexec cp "$lab/namespace-test.sh" "$lab/mnt-root/lab/namespace-test.sh"
+    pfexec cp "$lab/namespace-source.bin" "$lab/mnt-root/lab/namespace-source.bin"
+    pfexec chmod 0555 "$lab/mnt-root/lab/namespace-test.sh"
+fi
+
+digest -a sha256 "$lab/mnt-root/platform/i86pc/kernel/amd64/unix" "$lab/mnt-root/kernel/amd64/genunix" "$lab/mnt-root/kernel/brand/amd64/lx_brand" "$lab/mnt-root/kernel/fs/amd64/lx_proc" "$lab/mnt-root/kernel/fs/amd64/lofs" "$lab/mnt-root/kernel/exec/amd64/elfexec" "$lab/lx-root/test/enforcement_probe"
+df -h "$lab/mnt-root"
