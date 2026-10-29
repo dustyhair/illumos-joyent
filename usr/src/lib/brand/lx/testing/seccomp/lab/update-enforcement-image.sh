@@ -29,6 +29,10 @@ if test -f "$ws/usr/src/uts/intel/lx_namespace_ktest/obj64/lx_namespace_ktest"; 
     pfexec cp "$lab/namespace-test.sh" "$lab/mnt-root/lab/namespace-test.sh"
     pfexec cp "$lab/namespace-source.bin" "$lab/mnt-root/lab/namespace-source.bin"
     pfexec chmod 0555 "$lab/mnt-root/lab/namespace-test.sh"
+    if test -f "$lab/userns-test.sh"; then
+        pfexec cp "$lab/userns-test.sh" "$lab/mnt-root/lab/userns-test.sh"
+        pfexec chmod 0555 "$lab/mnt-root/lab/userns-test.sh"
+    fi
 fi
 
 digest -a sha256 "$lab/mnt-root/platform/i86pc/kernel/amd64/unix" "$lab/mnt-root/kernel/amd64/genunix" "$lab/mnt-root/kernel/brand/amd64/lx_brand" "$lab/mnt-root/kernel/fs/amd64/lx_proc" "$lab/mnt-root/kernel/fs/amd64/lofs" "$lab/mnt-root/kernel/exec/amd64/elfexec" "$lab/lx-root/test/enforcement_probe"
