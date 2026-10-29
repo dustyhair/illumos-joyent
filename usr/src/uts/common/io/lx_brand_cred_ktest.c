@@ -200,6 +200,7 @@ lx_brand_cred_test_access(ktest_ctx_hdl_t *ctx)
 	BC_CHECK(priv_proc_cred_perm(zero, target, NULL, VREAD) == 0 &&
 	    priv_proc_cred_perm(basic, target, NULL, VREAD) == 0,
 	    "namespace ownership did not authorize descendant access");
+	target->p_flag = 0;
 	initial_real = crdup(basic);
 	BC_CHECK(crsetresuid(initial_real, crgetruid(basic),
 	    crgetuid(basic) + 1, crgetsuid(basic)) == 0,

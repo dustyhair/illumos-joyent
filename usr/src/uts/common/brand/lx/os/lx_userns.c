@@ -297,7 +297,7 @@ lx_userns_cred_perm(const cred_t *source, const cred_t *target, int mode)
 	if (lx_userns_has_cap(&actor, target_ns, LX_USERNS_PTRACE))
 		return (0);
 	if (from == NULL) {
-		/* Native administrators retain their existing process authority. */
+		/* Retain native process authority for native administrators. */
 		return (secpolicy_proc_access(source) == 0 ?
 		    BRAND_CRED_DEFER : EACCES);
 	}
