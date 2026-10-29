@@ -380,13 +380,10 @@ lx_sigdeliver_kernel(int sig, k_siginfo_t *sip, void (*handler)())
 	}
 	frame->info.signo = ls;
 	if (sip != NULL) {
-		frame->info.code = lx_stol_sigcode(sip->si_code);
-		if (ls == LX_SIGILL || ls == LX_SIGBUS || ls == LX_SIGFPE ||
-		    ls == LX_SIGSEGV) {
-			uint64_t fault = (uintptr_t)sip->si_addr;
-			bcopy(&fault, frame->info.data, sizeof (fault));
-			frame->uc.context.cr2 = ls == LX_SIGSEGV ? fault : 0;
-		} else {
+		frame->info.code = sip->si_code == SI_NOINFO ? 0x80 :
+		    lx_stol_sigcode(sip->si_code);
+		/* Select only the initialized union member for this source. */
+		if (SI_FROMUSER(sip)) {
 			int32_t pid = sip->si_pid;
 			uint32_t uid = sip->si_uid;
 			bcopy(&pid, frame->info.data, sizeof (pid));
@@ -398,22 +395,28 @@ lx_sigdeliver_kernel(int sig, k_siginfo_t *sip, void (*handler)())
 				bcopy(&value, frame->info.data + 8,
 				    sizeof (value));
 			}
-			if (ls == LX_SIGCHLD) {
-				int32_t status = sip->si_status;
-				uint64_t utime =
-				    (uint64_t)sip->si_utime * 100 / hz;
-				uint64_t stime =
-				    (uint64_t)sip->si_stime * 100 / hz;
-				if (sip->si_code != CLD_EXITED && status > 0 &&
-				    status < NSIG)
-					status = stol_signo[status];
-				bcopy(&status, frame->info.data + 8,
-				    sizeof (status));
-				bcopy(&utime, frame->info.data + 16,
-				    sizeof (utime));
-				bcopy(&stime, frame->info.data + 24,
-				    sizeof (stime));
-			}
+		} else if (ls == LX_SIGILL || ls == LX_SIGBUS ||
+		    ls == LX_SIGFPE || ls == LX_SIGSEGV) {
+			uint64_t fault = (uintptr_t)sip->si_addr;
+			bcopy(&fault, frame->info.data, sizeof (fault));
+			frame->uc.context.cr2 = ls == LX_SIGSEGV ? fault : 0;
+		} else if (ls == LX_SIGCHLD) {
+			int32_t pid = sip->si_pid, status = sip->si_status;
+			uint32_t uid = sip->si_uid;
+			uint64_t utime = (uint64_t)sip->si_utime * 100 / hz;
+			uint64_t stime = (uint64_t)sip->si_stime * 100 / hz;
+			if (sip->si_code != CLD_EXITED && status > 0 && status < NSIG)
+				status = stol_signo[status];
+			bcopy(&pid, frame->info.data, sizeof (pid));
+			bcopy(&uid, frame->info.data + 4, sizeof (uid));
+			bcopy(&status, frame->info.data + 8, sizeof (status));
+			bcopy(&utime, frame->info.data + 16, sizeof (utime));
+			bcopy(&stime, frame->info.data + 24, sizeof (stime));
+		} else if (ls == LX_SIGPOLL) {
+			int64_t band = sip->si_band;
+			int32_t fd = sip->si_fd;
+			bcopy(&band, frame->info.data, sizeof (band));
+			bcopy(&fd, frame->info.data + 8, sizeof (fd));
 		}
 	}
 	if (copyout_nowatch(frame, (void *)address, sizeof (*frame)) != 0) {

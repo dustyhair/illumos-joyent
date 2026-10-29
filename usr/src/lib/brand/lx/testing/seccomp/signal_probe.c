@@ -29,6 +29,7 @@ static uid_t self_uid;
 static pid_t expected_sender;
 static int ack_fd;
 static uintptr_t saved_frame;
+static volatile uintptr_t fault_resume;
 static unsigned char altstack_mem[65536] __attribute__((aligned(16)));
 static int is_lx, skipped;
 
@@ -495,6 +496,59 @@ pwr_reset(void)
 	return (2);
 }
 
+static void
+segv_handler(int sig, siginfo_t *info, void *context)
+{
+	ucontext_t *uc = context;
+
+	hits++;
+	if (sig != SIGSEGV || info == NULL || info->si_signo != SIGSEGV ||
+	    raw3(SYS_getppid, 0, 0, 0) != -EACCES)
+		problem = 10;
+	if (fault_resume != 0) {
+		if (info->si_code != SEGV_MAPERR || info->si_addr != (void *)1)
+			problem = 11;
+		uc->uc_mcontext.gregs[REG_RIP] = fault_resume;
+	} else if (info->si_code != SI_TKILL || info->si_pid != self_pid ||
+	    info->si_uid != self_uid) {
+		problem = 12;
+	}
+}
+
+static int
+segv_setup(void)
+{
+	struct sigaction sa;
+
+	self_pid = getpid();
+	self_tid = syscall(SYS_gettid);
+	self_uid = getuid();
+	memset(&sa, 0, sizeof (sa));
+	sa.sa_sigaction = segv_handler;
+	sa.sa_flags = SA_SIGINFO;
+	return (sigaction(SIGSEGV, &sa, NULL) != 0 || filter() != 0);
+}
+
+static int
+user_segv_info(void)
+{
+	if (segv_setup() != 0 || send_self(SIGSEGV) != 0)
+		return (1);
+	return (hits != 1 || problem || raw3(SYS_getppid, 0, 0, 0) != -EACCES);
+}
+
+static int
+fault_recovery(void)
+{
+	if (segv_setup() != 0)
+		return (1);
+	__asm__ volatile("leaq 1f(%%rip), %%rax; movq %%rax, %[resume]; "
+	    "movq (%%rcx), %%rax; 1:"
+	    : [resume] "=m" (fault_resume) : "c" ((uintptr_t)1)
+	    : "rax", "memory");
+	return (hits != 1 || problem || raw3(SYS_getppid, 0, 0, 0) != -EACCES);
+}
+
 static int
 boundary_syscalls(void)
 {
@@ -561,6 +615,7 @@ main(void)
 	RUN(sse_preservation, 0);
 	RUN(avx_preservation, 0);
 	RUN(read_eintr, 0); RUN(read_restart, 0); RUN(pwr_reset, SIGPWR);
+	RUN(user_segv_info, 0); RUN(fault_recovery, 0);
 	if (is_lx) {
 		RUN(bad_cs, SIGSEGV); RUN(bad_ss, SIGSEGV);
 		RUN(bad_iopl, SIGSEGV); RUN(bad_ip, SIGSEGV);
