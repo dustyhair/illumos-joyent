@@ -1386,6 +1386,8 @@ lx_emulate_user(klwp_t *lwp, int syscall_num, uintptr_t *args)
 	 * code for a system call we cannot emulate in the kernel.
 	 */
 	VERIFY(lwpd->br_stack_mode == LX_STACK_MODE_BRAND);
+	if (lx_seccomp_active(lwptoproc(lwp)))
+		exit(CLD_KILLED, SIGSYS);
 
 	/*
 	 * The AMD64 ABI requires us to align the return address on the stack
@@ -1583,6 +1585,8 @@ lx_emulate_user32(klwp_t *lwp, int syscall_num, uintptr_t *args)
 	 * code for a system call we cannot emulate in the kernel.
 	 */
 	VERIFY(lwpd->br_stack_mode == LX_STACK_MODE_BRAND);
+	if (lx_seccomp_active(lwptoproc(lwp)))
+		exit(CLD_KILLED, SIGSYS);
 
 	/*
 	 * We begin at the current native stack pointer, and reserve space for

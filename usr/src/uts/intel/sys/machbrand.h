@@ -47,6 +47,12 @@ struct brand_mach_ops {
 
 #endif	/* _ASM */
 
+/* Entry ABI passed to the LWP syscall interposer. */
+#define	BRAND_ENTRY_NATIVE	0
+#define	BRAND_ENTRY_AMD64	1
+#define	BRAND_ENTRY_COMPAT	2
+#define	BRAND_ENTRY_VSYS	3
+
 #define	BRAND_CB_SYSENTER	0
 #define	BRAND_CB_INT80		1
 #define	BRAND_CB_INT91		2

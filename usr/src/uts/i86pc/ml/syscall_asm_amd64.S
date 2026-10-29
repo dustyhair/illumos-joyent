@@ -540,7 +540,9 @@ noprod_sys_syscall:
 
 	pushq	%rax
 	subq	$8, %rsp	/* align stack for call to C */
-	INDIRECT_CALL_REG(rdi)
+	movq	%rdi, %rdx
+	movl	$BRAND_ENTRY_AMD64, %edi
+	INDIRECT_CALL_REG(rdx)
 	addq	$8, %rsp
 
 	/*
@@ -868,6 +870,7 @@ _syscall32_save:
 	jz	_syscall32_no_brand
 
 	movb	$LWP_SYS, LWP_STATE(%r14)
+	movl	$BRAND_ENTRY_COMPAT, %edi
 	INDIRECT_CALL_REG(rax)
 
 	/*

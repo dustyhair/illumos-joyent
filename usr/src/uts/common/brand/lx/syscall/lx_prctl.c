@@ -299,37 +299,14 @@ lx_prctl(int opt, uintptr_t arg2, uintptr_t arg3, uintptr_t arg4,
 		return (ttolwp(curthread)->lwp_no_new_privs);
 	}
 
-	case LX_PR_SET_SECCOMP: {
-		if (arg2 == SECCOMP_MODE_FILTER) {
-			if (arg3 == (uintptr_t)NULL) {
-				/*
-				 * prctl(2) says PR_SET_SECCOMP should indicate
-				 * EFAULT if arg3 is an invalid address.
-				 */
-				return (set_errno(EFAULT));
-			}
-
-			/*
-			 * lx does not enforce seccomp filters.  Success here
-			 * would falsely imply system call restrictions.
-			 * Return EINVAL for unsupported filter mode, as Linux
-			 * does.  Keep the probe for callers.
-			 */
-			/* So we can track who needs this */
-			DTRACE_PROBE(lx__SECCOMP);
+	case LX_PR_SET_SECCOMP:
+		if (arg2 != SECCOMP_MODE_FILTER)
 			return (set_errno(EINVAL));
-		}
-		break;
-	}
+		DTRACE_PROBE(lx__SECCOMP);
+		return (lx_seccomp_install(arg3));
 
-	case LX_PR_GET_SECCOMP: {
-		/*
-		 * No filters are installed, and strict mode is unsupported.
-		 * Report SECCOMP_MODE_DISABLED rather than claiming that the
-		 * caller is executing under a filter.
-		 */
-		return (0);
-	}
+	case LX_PR_GET_SECCOMP:
+		return (lx_seccomp_active(curproc) ? SECCOMP_MODE_FILTER : 0);
 
 	default:
 		break;

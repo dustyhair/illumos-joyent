@@ -579,7 +579,14 @@ lx_pagefault(proc_t *p, klwp_t *lwp, caddr_t addr, enum fault_type type,
 static void
 lx_clearbrand(proc_t *p, boolean_t lwps_ok)
 {
+	struct lx_seccomp_filter *filter;
+
 	lx_clone_grp_exit(p, lwps_ok);
+	mutex_enter(&p->p_lock);
+	filter = ptolxproc(p)->l_seccomp;
+	ptolxproc(p)->l_seccomp = NULL;
+	mutex_exit(&p->p_lock);
+	lx_seccomp_rele(filter);
 }
 
 /*
@@ -1351,6 +1358,10 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 	lx_brand_registration_t reg;
 	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
 
+	/* Native brand commands must never remove an installed guard. */
+	if (lx_seccomp_active(p))
+		exit(CLD_KILLED, SIGSYS);
+
 	/*
 	 * There is one operation that is suppored for non-branded
 	 * process.  B_EXEC_BRAND.  This is the equilivant of an
@@ -1968,6 +1979,7 @@ lx_copy_procdata(proc_t *cp, proc_t *pp)
 	VERIFY((ppd = pp->p_brand_data) != NULL);
 
 	bcopy(ppd, cpd, sizeof (lx_proc_data_t));
+	lx_seccomp_hold(cpd->l_seccomp);
 	mutex_exit(&pp->p_lock);
 
 	/* Clear any aio contexts from child */

@@ -2691,7 +2691,7 @@ lxpr_read_status_common(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf,
 	rlim64_t	fdlim;
 	size_t		vsize = 0, nlocked = 0, rss = 0, stksize = 0;
 	boolean_t	printsz = B_FALSE;
-	uint_t		no_new_privs = 0;
+	uint_t		no_new_privs = 0, seccomp = 0;
 
 
 	p = lxpr_lock_pid(lxpnp, tid, ZOMB_OK, &t);
@@ -2742,6 +2742,7 @@ lxpr_read_status_common(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf,
 		status = "Z (zombie)";
 	}
 
+	seccomp = lx_seccomp_active(p) ? 2 : 0;
 	up = PTOU(p);
 	mutex_enter(&p->p_crlock);
 	crhold(cr = p->p_cred);
@@ -2852,8 +2853,9 @@ lxpr_read_status_common(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf,
 	    "CapPrm:\t%016x\n"
 	    "CapEff:\t%016x\n"
 	    "CapBnd:\t%016llx\n"
-	    "NoNewPrivs:\t%u\n",
-	    0, 0, 0, 0x1fffffffffLL, no_new_privs);
+	    "NoNewPrivs:\t%u\n"
+	    "Seccomp:\t%u\n",
+	    0, 0, 0, 0x1fffffffffLL, no_new_privs, seccomp);
 }
 
 /*

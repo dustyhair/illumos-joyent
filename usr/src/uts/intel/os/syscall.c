@@ -56,6 +56,7 @@
 #include <sys/aio_impl.h>
 #include <sys/copyops.h>
 #include <sys/priv.h>
+#include <sys/machbrand.h>
 #include <sys/msacct.h>
 
 int syscalltrace = 0;
@@ -163,6 +164,15 @@ syscall_entry(kthread_t *t, long *argp)
 	 * t_sysnum for this thread, will charge ahead and dereference lwp_ap.
 	 */
 	lwp->lwp_ap = argp;		/* for get_syscall_args */
+
+	/*
+	 * sysenter and legacy lcall reach native dispatch through here,
+	 * without the assembly LWP interposer used by syscall/int80/int91.
+	 * Give that interposer a chance to forbid native execution first.
+	 */
+	if (lwp->lwp_brand_syscall != NULL &&
+	    lwp->lwp_brand_syscall(BRAND_ENTRY_NATIVE) == 0)
+		return (&sysent_err);
 
 	code = rp->r_r0;
 	t->t_sysnum = (short)code;

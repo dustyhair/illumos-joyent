@@ -371,6 +371,9 @@ typedef struct lx_proc_data {
 	 * needs to setup this mask.
 	 */
 	uint32_t l_coredump_filter;
+
+	/* Experimental single-LWP seccomp guard, protected by p_lock. */
+	struct lx_seccomp_filter *l_seccomp;
 } lx_proc_data_t;
 
 #endif	/* _KERNEL */
@@ -562,6 +565,7 @@ struct lx_lwp_data {
 	uint_t	br_ptrace_event;
 	ulong_t	br_ptrace_eventmsg;
 
+	int	br_syscall_entry;	/* kernel-supplied entry ABI */
 	int	br_syscall_num;		/* current system call number */
 	boolean_t br_syscall_restart;	/* should restart on EINTR */
 
@@ -711,7 +715,14 @@ extern void lx_divert(klwp_t *, uintptr_t);
 extern int lx_runexe(klwp_t *, void *);
 extern void lx_switch_to_native(klwp_t *);
 
-extern int lx_syscall_enter(void);
+extern int lx_syscall_enter(int);
+extern long lx_seccomp(uintptr_t, uintptr_t, uintptr_t);
+extern long lx_seccomp_install(uintptr_t);
+extern boolean_t lx_seccomp_active(proc_t *);
+extern void lx_seccomp_enter(klwp_t *, int);
+extern boolean_t lx_seccomp_check(klwp_t *, int);
+extern void lx_seccomp_hold(struct lx_seccomp_filter *);
+extern void lx_seccomp_rele(struct lx_seccomp_filter *);
 extern void lx_syscall_return(klwp_t *, int, long);
 
 extern void lx_trace_sysenter(int, uintptr_t *);

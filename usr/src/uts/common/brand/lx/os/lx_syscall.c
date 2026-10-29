@@ -304,7 +304,7 @@ lx_syscall_unsup_msg(lx_sysent_t *s, int syscall_num, int unsup_reason)
  * return 0.
  */
 int
-lx_syscall_enter(void)
+lx_syscall_enter(int entry)
 {
 	klwp_t *lwp = ttolwp(curthread);
 	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
@@ -321,6 +321,10 @@ lx_syscall_enter(void)
 	 * structure.
 	 */
 	VERIFY(lwpd != NULL);
+	lx_seccomp_enter(lwp, entry);
+	if (entry == BRAND_ENTRY_NATIVE)
+		return (1);
+	lwpd->br_syscall_entry = entry;
 
 	if (lwpd->br_stack_mode != LX_STACK_MODE_BRAND) {
 		/*
@@ -354,6 +358,8 @@ lx_syscall_enter(void)
 	 * Check that the system call number is within the bounds we expect.
 	 */
 	syscall_num = lwpd->br_syscall_num;
+	if (!lx_seccomp_check(lwp, syscall_num))
+		return (0);
 	if (syscall_num < 0 || syscall_num > LX_MAX_SYSCALL(lwp)) {
 		lx_syscall_unsup_msg(NULL, syscall_num, 0);
 
@@ -390,6 +396,10 @@ lx_syscall_enter(void)
 		lx_syscall_return(lwp, syscall_num, -1);
 		return (0);
 	}
+
+	/* Single-LWP experimental processes can terminate in-kernel. */
+	if (lx_seccomp_active(curproc) && syscall_num == 231)
+		exit(CLD_EXITED, args[0] & 0xff);
 
 	if (s->sy_callc != NULL) {
 		/*
@@ -485,7 +495,7 @@ lx_vsyscall_enter(proc_t *p, klwp_t *lwp, int scnum)
 	rp->r_rip = raddr;
 	rp->r_rsp += sizeof (uintptr_t);
 
-	(void) lx_syscall_enter();
+	(void) lx_syscall_enter(BRAND_ENTRY_VSYS);
 }
 
 boolean_t
@@ -1217,7 +1227,7 @@ lx_sysent_t lx_sysent64[] = {
 	{"sched_setattr", lx_sched_setattr,	0,		3}, /* 314 */
 	{"sched_getattr", lx_sched_getattr,	0,		4}, /* 315 */
 	{"renameat2", NULL,			NOSYS_NULL,	0}, /* 316 */
-	{"seccomp",	NULL,			NOSYS_NULL,	0}, /* 317 */
+	{"seccomp",	lx_seccomp,		0,		3}, /* 317 */
 	{"getrandom",	lx_getrandom,		0,		3}, /* 318 */
 	{"memfd_create", NULL,			NOSYS_NULL,	0}, /* 319 */
 	{"kexec_file_load", NULL,		NOSYS_NULL,	0}, /* 320 */

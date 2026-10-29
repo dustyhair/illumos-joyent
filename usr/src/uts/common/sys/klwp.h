@@ -197,7 +197,7 @@ typedef struct _klwp {
 	 * lwp_brand_syscall		- brand syscall interposer
 	 */
 	void	*lwp_brand;
-	int	(*lwp_brand_syscall)(void);
+	int	(*lwp_brand_syscall)(int);
 
 	struct psinfo *lwp_spymaster;	/* if an agent LWP, our spymaster */
 } klwp_t;
