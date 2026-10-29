@@ -118,18 +118,81 @@ Profile credential replacement, forced privilege configuration, tracing,
 zone entry, and concurrent credential-change scenarios still need dedicated
 runtime coverage. The probes do not establish seccomp or namespace support.
 
+## Seccomp BPF core
+
+`usr/src/common/brand/lx/lx_seccomp_bpf.c` implements the seccomp-specific
+classic BPF verifier and interpreter. It is linked into `lx_brand` but has
+no syscall enforcement caller. Both `prctl` and `seccomp` continue rejecting
+filter installation. This change does not enable Codex's sandbox.
+
+The core accepts at most 4096 instructions, aligned word loads within the
+64-byte x86 Linux metadata ABI, initialized scratch memory, forward jumps,
+and the ALU/return operations accepted by Linux seccomp. Packet loads,
+ancillary data, invalid opcode bits, MOD, constant division by zero and
+constant shifts of 32 or more are rejected. Variable shifts use x86's
+low-five-bit shift count. Metadata words use Linux x86 byte order, without
+packet-filter byte swapping. The evaluator returns the opaque action word;
+its caller must interpret and enforce it. The verifier's scratch validation
+also matches Linux's conservative handling of instructions following RET.
+
+Callers must copy the program and metadata into kernel-owned storage,
+allocate the verifier workspace off-stack, and keep accepted programs
+immutable throughout evaluation. The core owns no task state or memory.
+
+Build the differential runner on Linux x86-64, setting `ws` to this checkout:
+
+```sh
+cc -std=c11 -Wall -Wextra -Werror -O2 \
+    -I"$ws/usr/src/common/brand/lx" \
+    "$ws/usr/src/common/brand/lx/lx_seccomp_bpf.c" \
+    "$ws/usr/src/lib/brand/lx/testing/seccomp/bpf_oracle.c" \
+    -o bpf_oracle
+./bpf_oracle linux-vectors.bin --exhaustive
+```
+
+Each native comparison installs a candidate filter in a separate child.
+A prefix permits unrelated syscalls so the child can report its result.
+The runner compares Linux installation decisions and observable action
+results, then records the program, captured metadata and expected raw core
+result. It exhausts all 65536 opcode encodings and covers branch/scratch
+joins, seeded control-flow mutations, ALU edges, invalid metadata accesses,
+maximum program length and actions. Sixteen additional literal ABI cases
+check every metadata word, including negative syscall numbers and the i386
+architecture value. Those literals do not exercise i386 syscall entry.
+API guards are checked separately. Any mismatch exits nonzero.
+
+`lx_seccomp_ktest` depends on `lx_brand` and calls the actual kernel core,
+using the generated binary corpus as input. Build the release and debug
+`uts/intel/lx_brand` and `uts/intel/lx_seccomp_ktest` targets. In the isolated
+VM, copy the release test module and corpus under `/lab`, then run:
+
+```sh
+modload /lab/lx_seccomp_ktest
+ktest run -i /lab/linux-vectors.bin lx_seccomp:bpf:vectors
+```
+
+The fixture is little-endian and intended for x86. A 16-byte header contains
+magic 0x4c585342, version 1, record count and zero. Each record contains four
+32-bit fields: instruction count, expected validity, expected raw result,
+and zero. Then come 64 metadata bytes and the 8-byte instructions. Invalid
+programs have no evaluation expectation. The kernel test bounds every
+record and rejects truncated or trailing input.
+
 ## Remaining implementation
 
-1. Extend the no-new-privileges validation to i386 and the remaining native
+1. Extend no-new-privileges validation to i386 and the remaining native
    privilege paths, and validate a complete platform build before deployment.
-2. Implement seccomp program copy-in and classic BPF validation, then evaluation
-   at the syscall boundary. Preserve the Linux ABI's argument byte order,
-   architecture, instruction pointer and syscall number. Handle i386 and x86-64
-   and reject unsupported entry paths safely. Network-packet BPF evaluation is
-   not a drop-in seccomp implementation.
-3. Add filter lifetime, inheritance, stacking, action precedence, errno mapping,
-   signals and thread synchronization. Ensure brand escape and native syscall
-   paths cannot bypass a filter. Test these before reporting filtering as supported.
+2. Add seccomp program copy-in, immutable filter lifetime, inheritance,
+   stacking, action precedence, signals, Linux errno mapping and thread
+   synchronization. The BPF core alone provides none of these.
+3. Close native execution and context-restoration escapes before accepting
+   any filter. `lx_syscall_enter` currently hands some calls to user-space
+   native emulation; filtering only that dispatcher is insufficient.
+   Audit `B_EXEC_NATIVE`, brand-native syscalls, restored native stack modes,
+   tracing and signal return. Metadata must capture all six raw arguments
+   before `lx_emulate_args`, including arguments that lx later dereferences
+   or rewrites. Handle unknown calls, i386, x86-64, x32 and alternate entry
+   instructions explicitly, with no unfiltered fallback.
 4. Add user and mount namespaces, UID/GID maps, namespace descriptors, mount
    propagation and the remaining namespace operations actually used by the
    installed bubblewrap build. Reject unsupported isolation requests explicitly.
@@ -139,6 +202,8 @@ runtime coverage. The probes do not establish seccomp or namespace support.
 
 The current source locations are:
 
+- `usr/src/common/brand/lx/lx_seccomp_bpf.c` and `lx_seccomp_bpf.h`
+- `usr/src/uts/common/io/lx_seccomp_ktest.c`
 - `usr/src/uts/common/brand/lx/syscall/lx_prctl.c`
 - `usr/src/uts/common/brand/lx/syscall/lx_miscsys.c`, `lx_unshare`
 - `usr/src/uts/common/brand/lx/os/lx_syscall.c`, syscall tables and dispatch

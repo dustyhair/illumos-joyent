@@ -2400,6 +2400,7 @@ KTEST_OBJS += ktest.o
 MAC_KTEST_OBJS += mac_ktest.o
 KTEST_KTEST_OBJS += ktest_selftest.o
 STREAM_KTEST_OBJS += stream_ktest.o
+LX_SECCOMP_KTEST_OBJS += lx_seccomp_ktest.o
 
 #
 # EEPROM framework driver
