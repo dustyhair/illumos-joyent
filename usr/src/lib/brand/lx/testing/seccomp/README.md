@@ -178,6 +178,16 @@ and zero. Then come 64 metadata bytes and the 8-byte instructions. Invalid
 programs have no evaluation expectation. The kernel test bounds every
 record and rejects truncated or trailing input.
 
+The x86-64 acceptance run passed 67163 native Linux comparisons and 16
+literal ABI cases. The focused 1643-case run passed with AddressSanitizer
+and UndefinedBehaviorSanitizer. In the isolated SmartOS VM, the actual
+`lx_brand` core passed all 67179 corpus records through ktest; malformed
+header, truncated-instruction and trailing-data inputs produced the expected
+ktest errors. All 17 no-new-privileges regressions also passed without skips.
+Release and debug modules built cleanly; runtime coverage used release.
+Filtering remained unsupported, as required. This was a mixed platform
+image and does not establish a complete platform build or i386 entry support.
+
 ## Remaining implementation
 
 1. Extend no-new-privileges validation to i386 and the remaining native

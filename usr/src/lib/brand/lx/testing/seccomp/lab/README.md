@@ -99,3 +99,52 @@ logs for subsequent development, but do not leave the VM consuming RAM.
 
 i386, configured profile/forced-privilege paths, tracing, and concurrent
 credential transitions remain outside the demonstrated acceptance result.
+
+## Seccomp BPF core acceptance
+
+The BPF milestone adds a stateless core to `lx_brand` and a separate test
+module. It does not install filters or enforce syscall restrictions.
+The kernel source is commit `d3bb62568aa2f39eaa8db903a93201fc5707a472`;
+the final guest driver is `4d75812602`. Clean release/debug builds of
+`lx_brand` and `lx_seccomp_ktest` passed. Existing `genunix` and `lx_proc`
+from the no-new-privileges milestone were retained in the private archive.
+
+Generate the corpus using the parent README's Linux oracle. The acceptance
+corpus contains 67179 records, including 67163 native Linux comparisons and
+16 literal ABI cases. Its SHA-256 is
+`202bea0c2d04d55ad8ab0a371180e8e11f7a13dd0db7143b5bd28c2b334d8f25`.
+Put it at `/lab/linux-vectors.bin`, the test module at
+`/lab/lx_seccomp_ktest`, and `bpf-test.sh` under `/lab` in the private archive.
+
+The base image lacks the ktest command and driver. This lab reused the
+existing build proto's command, library and driver. Install the command
+at `/lab/ktest`, `libktest.so.1` under `/lib/amd64`, the driver at
+`/kernel/drv/amd64/ktest`, and its configuration at `/kernel/drv/ktest.conf`.
+SmartOS mounts a separate compressed `/usr` during boot, so writing a command
+under `/usr/bin` in the RAM root does not make it available after boot.
+The guest driver creates the ktest device if necessary.
+
+Prepare three small negative fixtures from one corpus record. Set the
+header count to one, then omit the last instruction byte for the truncated
+case, append one byte for the trailing case, or use an invalid header magic.
+Name them `/lab/bpf-bad-truncated.bin`, `/lab/bpf-bad-trailing.bin` and
+`/lab/bpf-bad-header.bin`. Full copies of the corpus are unnecessary and can
+exhaust the private archive's free space.
+
+Run `/lab/guest-test.sh && /lab/bpf-test.sh` from the private serial console.
+The final clean boot passed the 17 privilege regressions and all 67179 BPF
+records. Each negative fixture produced an expected ktest ERROR and exit 1;
+the combined driver returned 0 and printed `LX_BPF_PASS`. The unchanged
+seccomp probe returned 77 because syscall filtering remains unsupported.
+Save the console output before exporting the disposable pool and powering
+off. The first BPF boot established the privilege regression result but
+failed to find the test command under `/usr`; the acceptance boot used the
+corrected image and a fresh disposable disk, with no serial binary upload.
+
+Release module SHA-256 values:
+
+- `lx_brand`: `ff732834ee17169bb65fb021b20ac489e33d421f663a7d1dab24896c896f2429`
+- `lx_seccomp_ktest`: `f236b903f542908cc08d7f94db3b1cc334b11f58f4f6d998d12db37f57edcd4c`
+
+This remains a mixed-image development test. No physical host kernel,
+boot configuration or existing Debian zone was changed.
