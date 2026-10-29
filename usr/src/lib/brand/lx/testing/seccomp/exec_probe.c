@@ -17,6 +17,7 @@
 
 static const char *self;
 static unsigned char alternate[32768];
+static volatile sig_atomic_t caught_count;
 
 static int
 deny(int nr)
@@ -42,7 +43,7 @@ restricted(void)
         prctl(PR_GET_SECCOMP, 0UL, 0UL, 0UL, 0UL) == 2);
 }
 
-static void caught(int sig) { (void)sig; }
+static void caught(int sig) { (void)sig; caught_count++; }
 
 static int
 prepare(void)
@@ -89,6 +90,13 @@ helper(int argc, char **argv)
         !sigismember(&mask, SIGTERM) || sigaltstack(NULL, &ss) ||
         !(ss.ss_flags & SS_DISABLE))
         return (3);
+    sa.sa_handler = caught;
+    sa.sa_flags = 0;
+    sigemptyset(&sa.sa_mask);
+    if (sigaction(SIGUSR1, &sa, NULL) ||
+        syscall(SYS_kill, syscall(SYS_getpid), SIGUSR1) ||
+        caught_count != 1 || !restricted())
+        return (4);
     return (0);
 }
 
