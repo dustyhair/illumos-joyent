@@ -423,9 +423,14 @@ lx_syscall_enter(int entry)
 		return (0);
 	}
 
-	/* Single-LWP experimental processes can terminate in-kernel. */
-	if (lx_seccomp_active(curproc) &&
-	    (syscall_num == 60 || syscall_num == 231))
+	if (lx_seccomp_active(curproc) && syscall_num == 60) {
+		lwpd->br_exitwhy = CLD_EXITED;
+		lwpd->br_exitwhat = args[0] & 0xff;
+		mutex_enter(&curproc->p_lock);
+		lwp_exit_status(args[0]);
+		return (0);
+	}
+	if (lx_seccomp_active(curproc) && syscall_num == 231)
 		exit(CLD_EXITED, args[0] & 0xff);
 
 	if (s->sy_callc != NULL) {

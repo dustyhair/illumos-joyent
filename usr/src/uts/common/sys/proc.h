@@ -788,6 +788,7 @@ extern	lwpdir_t *lwp_hash_lookup(proc_t *, id_t);
 extern	lwpdir_t *lwp_hash_lookup_and_lock(proc_t *, id_t, kmutex_t **);
 extern	void	lwp_create_done(kthread_t *);
 extern	void	lwp_exit(void);
+extern	void	lwp_exit_status(int);
 extern	void	lwp_pcb_exit(void);
 extern	void	lwp_cleanup(void);
 extern	int	lwp_suspend(kthread_t *);

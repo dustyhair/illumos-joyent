@@ -929,6 +929,13 @@ lwp_ctmpl_clear(klwp_t *lwp, boolean_t is_exec)
 void
 lwp_exit(void)
 {
+	lwp_exit_status(0);
+}
+
+/* Like lwp_exit(), with the exit status to use if this is the last LWP. */
+void
+lwp_exit_status(int status)
+{
 	kthread_t *t = curthread;
 	klwp_t *lwp = ttolwp(t);
 	proc_t *p = ttoproc(t);
@@ -984,7 +991,7 @@ lwp_exit(void)
 	if (!(t->t_proc_flag & TP_DAEMON) &&
 	    p->p_lwpcnt == p->p_lwpdaemon + 1) {
 		mutex_exit(&p->p_lock);
-		if (proc_exit(CLD_EXITED, 0) == 0) {
+		if (proc_exit(CLD_EXITED, status & 0xff) == 0) {
 			/* Restarting init. */
 			return;
 		}

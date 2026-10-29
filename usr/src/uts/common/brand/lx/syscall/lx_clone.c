@@ -145,6 +145,9 @@
 #include <sys/fork.h>
 #include <vm/as.h>
 #include <sys/mman.h>
+#include <sys/archsystm.h>
+#include <sys/klwp.h>
+#include <sys/pool.h>
 
 extern int64_t forksys(int, int);
 
@@ -519,6 +522,83 @@ lx_set_tid_address(int *tidp)
 }
 
 /*
+ * Linux pthread clones share the existing process. No native libc start
+ * routine or stack is used. The new task begins at the Linux clone return
+ * instruction with its own TLS, stack, PID and inherited process guard.
+ */
+static long
+lx_kernel_thread(uint_t flags, uintptr_t *args)
+{
+	proc_t *p = curproc;
+	klwp_t *parent = ttolwp(curthread), *child;
+	lx_lwp_data_t *src = lwptolxlwp(parent), *dst;
+	kthread_t *t;
+	pid_t tid;
+	uint_t allowed = SHARED_AS | LX_CLONE_SYSVSEM | LX_CLONE_SETTLS |
+	    LX_CLONE_PARENT_SETTID | LX_CLONE_CHILD_SETTID |
+	    LX_CLONE_CHILD_CLEARTID | LX_CLONE_DETACH | LX_CLONE_PARENT;
+
+	if ((flags & SHARED_AS) != SHARED_AS || (flags & ~allowed) != 0 ||
+	    args[1] == 0 || args[1] >= (uintptr_t)p->p_as->a_userlimit ||
+	    ((flags & LX_CLONE_SETTLS) != 0 &&
+	    args[4] >= (uintptr_t)p->p_as->a_userlimit))
+		return (set_errno(EINVAL));
+	mutex_enter(&p->p_lock);
+	if (ptolxproc(p)->l_ptrace != 0 || curthread == p->p_agenttp) {
+		mutex_exit(&p->p_lock);
+		return (set_errno(EOPNOTSUPP));
+	}
+	pool_barrier_enter();
+	mutex_exit(&p->p_lock);
+	LWP_MMODEL_NEWLWP();
+	child = lwp_create(lwp_rtt, NULL, 0, p, TS_STOPPED,
+	    curthread->t_pri, &curthread->t_hold, curthread->t_cid, 0);
+	mutex_enter(&p->p_lock);
+	pool_barrier_exit();
+	mutex_exit(&p->p_lock);
+	if (child == NULL)
+		return (set_errno(EAGAIN));
+
+	t = lwptot(child);
+	dst = lwptolxlwp(child);
+	lwp_forkregs(parent, child);
+	if (curthread->t_ctx != NULL)
+		lwp_createctx(curthread, t);
+	lwp_ctmpl_copy(child, parent);
+	lx_affinity_forklwp(parent, child);
+	dst->br_stack_mode = LX_STACK_MODE_BRAND;
+	dst->br_tgid = p->p_pid;
+	if ((flags & LX_CLONE_PARENT) != 0)
+		dst->br_ppid = 0;
+	dst->br_syscall_num = 56;
+	dst->br_syscall_entry = src->br_syscall_entry;
+	bcopy(src->br_syscall_args, dst->br_syscall_args,
+	    sizeof (dst->br_syscall_args));
+	dst->br_lx_fsbase = (flags & LX_CLONE_SETTLS) != 0 ?
+	    args[4] : src->br_lx_fsbase;
+	dst->br_lx_gsbase = src->br_lx_gsbase;
+	child->lwp_pcb.pcb_fsbase = dst->br_lx_fsbase;
+	child->lwp_pcb.pcb_gsbase = dst->br_lx_gsbase;
+	PCB_SET_UPDATE_SEGS(&child->lwp_pcb);
+	lwptoregs(child)->r_sp = args[1];
+	lwptoregs(child)->r_r0 = 0;
+	child->lwp_eosys = JUSTRETURN;
+	t->t_sysnum = curthread->t_sysnum;
+	tid = dst->br_pid;
+	if ((flags & LX_CLONE_PARENT_SETTID) != 0)
+		(void) suword32((void *)args[2], tid);
+	if ((flags & LX_CLONE_CHILD_SETTID) != 0)
+		(void) suword32((void *)args[3], tid);
+	if ((flags & LX_CLONE_CHILD_CLEARTID) != 0)
+		dst->br_clear_ctidp = (void *)args[3];
+	mutex_enter(&p->p_lock);
+	t->t_proc_flag &= ~TP_HOLDLWP;
+	lwp_create_done(t);
+	mutex_exit(&p->p_lock);
+	return (tid);
+}
+
+/*
  * A guarded process cannot invoke libc on its native stack. Fork directly
  * from Linux mode instead. Its child must remain on that same enforced
  * path; none of the copied native libc state is subsequently entered.
@@ -536,6 +616,9 @@ lx_kernel_fork(int nr, uintptr_t *args)
 	boolean_t unsupported;
 
 	VERIFY(lx_seccomp_active(p));
+	if (nr == 56 && args[0] == flags &&
+	    (flags & LX_CLONE_THREAD) != 0)
+		return (lx_kernel_thread(flags, args));
 	if (nr == 56 && (args[0] != flags || (flags & ~allowed) != 0))
 		return (set_errno(EINVAL));
 	if ((flags & LX_CSIGNAL) != 0 &&
