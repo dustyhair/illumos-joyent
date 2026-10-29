@@ -142,7 +142,7 @@ lx_seccomp_install(uintptr_t address)
 	mutex_enter(&p->p_lock);
 	old = pd->l_seccomp;
 	if (p->p_lwpcnt != 1) {
-		error = ENOTSUP;
+		error = EOPNOTSUPP;
 	} else if (old != NULL && (old->sc_depth >= SC_MAXDEPTH ||
 	    old->sc_total + fp.len + 4 > SC_MAXPATH)) {
 		error = ENOMEM;
