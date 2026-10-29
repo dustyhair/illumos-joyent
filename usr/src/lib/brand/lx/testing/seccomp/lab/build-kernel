@@ -1,0 +1,30 @@
+#!/bin/bash
+set -euo pipefail
+export PATH=/build/bin:/opt/local/bin:/opt/local/sbin:/usr/ccs/bin:/usr/bin:/bin:/usr/sbin:/sbin
+workspace=/build/workspaces/lx
+cd "$workspace/illumos"
+mkdir -p "$workspace/log"
+tag=$(date -u +%Y%m%dT%H%M%SZ)
+branch=$(git branch --show-current)
+commit=$(git rev-parse HEAD)
+launcher=$(git -C /build/launcher-tracking rev-parse HEAD 2>/dev/null || echo N/A)
+git status --porcelain > "$workspace/log/$tag.source-status"
+git diff --binary HEAD > "$workspace/log/$tag.source.patch"
+printf '| %s | lx kernel build START | %s | %s | launcher %s; path N/A | source status and patch: /build/workspaces/lx/log/%s.source.* | no install or deploy |\n' \
+    "$tag" "$branch" "$commit" "$launcher" "$tag" >> /build/RUNNING_TESTS.md
+result=0
+"$workspace/build-lx" '
+    cd usr/src/uts/common/sys && dmake priv_const.h priv_names.h &&
+    cd ../rpc && dmake all_h &&
+    cd ../rpcsvc && dmake all_h &&
+    cd ../../intel/genassym && dmake all &&
+    cd ../../i86pc/genassym && dmake all &&
+    cd ../../intel && dmake "$SRC/uts/common/os/priv_const.c" &&
+    cd genunix && dmake clean && dmake all &&
+    cd ../lx_brand && dmake clean && dmake all &&
+    cd ../lx_proc && dmake clean && dmake all
+' > "$workspace/log/$tag.kernel.log" 2>&1 || result=$?
+printf '| %s | lx kernel build END | %s | %s | launcher %s; path N/A | release/debug genunix, lx_brand and lx_proc, isolated output; reused compiler/onbld and seeded proto headers | exit %s; no install or deploy |\n' \
+    "$(date -u +%Y%m%dT%H%M%SZ)" "$branch" "$commit" "$launcher" "$result" >> /build/RUNNING_TESTS.md
+echo "Build exit $result; log: $workspace/log/$tag.kernel.log"
+exit "$result"

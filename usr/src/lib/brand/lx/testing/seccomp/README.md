@@ -56,7 +56,11 @@ and limits inheritable privilege promotion to the old permitted set.
 `PR_SET_NO_NEW_PRIVS` and `PR_GET_NO_NEW_PRIVS` validate all five arguments.
 The lx proc status files expose the target task's `NoNewPrivs` value.
 
-This is a source implementation awaiting patched-kernel runtime validation.
+An isolated x86-64 SmartOS VM passed all 17 no-new-privileges checks with
+no skips. The test image contains the rebuilt release `genunix`, `lx_brand`
+and `lx_proc` modules over an existing platform image. This is a mixed-image
+development result, not a clean full-platform validation. See
+[the lab notes](lab/README.md) for the boot method and acceptance details.
 It is not evidence that lx can safely install seccomp filters yet.
 
 Build the Linux test and Linux identity helper in Linux or lx:
@@ -116,8 +120,8 @@ runtime coverage. The probes do not establish seccomp or namespace support.
 
 ## Remaining implementation
 
-1. Boot-test the no-new-privileges implementation. Validate both ABIs and the
-   remaining native privilege paths before using the flag to authorize filters.
+1. Extend the no-new-privileges validation to i386 and the remaining native
+   privilege paths, and validate a complete platform build before deployment.
 2. Implement seccomp program copy-in and classic BPF validation, then evaluation
    at the syscall boundary. Preserve the Linux ABI's argument byte order,
    architecture, instruction pointer and syscall number. Handle i386 and x86-64
