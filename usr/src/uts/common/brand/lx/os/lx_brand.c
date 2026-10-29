@@ -755,9 +755,11 @@ lx_savecontext(ucontext_t *ucp)
 	 * Linux "user_regs_struct".
 	 */
 
-	if (lwpd->br_stack_mode != LX_STACK_MODE_INIT &&
+	if (lwpd->br_ntv_stack != 0 &&
+	    lwpd->br_stack_mode != LX_STACK_MODE_INIT &&
 	    lwpd->br_stack_mode != LX_STACK_MODE_PREINIT) {
 		/*
+		 * Kernel-only Linux threads have no native stack to restore.
 		 * Record the value of the native stack pointer to restore
 		 * when returning to this branded context:
 		 */
@@ -809,9 +811,11 @@ lx_savecontext32(ucontext32_t *ucp)
 	 * Linux "user_regs_struct".
 	 */
 
-	if (lwpd->br_stack_mode != LX_STACK_MODE_INIT &&
+	if (lwpd->br_ntv_stack != 0 &&
+	    lwpd->br_stack_mode != LX_STACK_MODE_INIT &&
 	    lwpd->br_stack_mode != LX_STACK_MODE_PREINIT) {
 		/*
+		 * Kernel-only Linux threads have no native stack to restore.
 		 * Record the value of the native stack pointer to restore
 		 * when returning to this branded context:
 		 */
