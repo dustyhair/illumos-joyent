@@ -351,7 +351,7 @@ escape_exec(void)
 }
 
 static int
-escape_sigreturn(void)
+invalid_sigreturn(void)
 {
 	if (allow_all() != 0)
 		return (1);
@@ -368,21 +368,24 @@ escape_vsyscall(void)
 	return (2);
 }
 
+static volatile sig_atomic_t signal_seen;
+
 static void
 empty_handler(int sig)
 {
-	(void) sig;
+	signal_seen = sig == SIGUSR1;
 }
 
 static int
-escape_signal(void)
+caught_signal(void)
 {
 	pid_t pid = getpid(), tid = syscall(SYS_gettid);
 
 	if (signal(SIGUSR1, empty_handler) == SIG_ERR || allow_all() != 0)
 		return (1);
-	(void) syscall(SYS_tgkill, pid, tid, SIGUSR1);
-	return (2);
+	if (syscall(SYS_tgkill, pid, tid, SIGUSR1) != 0)
+		return (2);
+	return (!signal_seen);
 }
 
 static atomic_int release_worker;
@@ -512,8 +515,8 @@ main(void)
 	if (lx) {
 		RUN(escape_int80, SIGSYS); RUN(escape_int91, SIGSYS);
 		RUN(escape_fork, SIGSYS); RUN(escape_clone, SIGSYS);
-		RUN(escape_exec, SIGSYS); RUN(escape_sigreturn, SIGSYS);
-		RUN(escape_vsyscall, SIGSYS); RUN(escape_signal, SIGSYS);
+		RUN(escape_exec, SIGSYS); RUN(invalid_sigreturn, SIGSEGV);
+		RUN(escape_vsyscall, SIGSYS); RUN(caught_signal, 0);
 		RUN(multiple_threads, 0); RUN(unsupported_actions, 0);
 		RUN(chain_limit, 0); RUN(path_limit, 0);
 	}

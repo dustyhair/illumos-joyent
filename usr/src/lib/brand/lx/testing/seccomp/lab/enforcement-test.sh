@@ -17,10 +17,23 @@ zlogin -S lx-probe '/test/seccomp_probe'
 probe_rc=$?
 zlogin -S lx-probe '/test/enforcement_probe'
 enforce_rc=$?
+zlogin -S lx-probe '/test/signal_probe'
+signal_rc=$?
+boundary_rc=0
+if test -f /usr/lib/lx_brand.so.1; then
+    zlogin -S lx-probe '/test/boundary32_probe'
+    boundary_rc=$?
+else
+    echo LX_BOUNDARY32_SKIP_NO_NATIVE_EMULATOR
+fi
 set -e
 echo "LX_FILTER_PROBE_EXIT=$probe_rc"
 echo "LX_ENFORCEMENT_PROBE_EXIT=$enforce_rc"
+echo "LX_SIGNAL_PROBE_EXIT=$signal_rc"
+echo "LX_BOUNDARY32_EXIT=$boundary_rc"
 zoneadm -z lx-probe halt
 test "$probe_rc" -eq 0
 test "$enforce_rc" -eq 0
+test "$signal_rc" -eq 0
+test "$boundary_rc" -eq 0
 echo LX_ENFORCEMENT_PASS

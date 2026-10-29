@@ -21,6 +21,7 @@
 #include <sys/debug.h>
 #include <sys/stddef.h>
 #include <sys/lx_brand.h>
+#include <sys/lx_impl.h>
 #include <sys/lx_signal.h>
 #include <sys/lx_ksignal.h>
 #include <vm/as.h>
