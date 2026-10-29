@@ -1,6 +1,6 @@
 #define _GNU_SOURCE
 /* CDDL version 1.0, http://www.illumos.org/license/CDDL. */
-#include "common/lx_userns_model.h"
+#include "lx_userns_model.h"
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/syscall.h>

@@ -1,0 +1,20 @@
+#!/bin/bash
+# CDDL version 1.0, http://www.illumos.org/license/CDDL.
+set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+common=${1:-"$here/../../../../../common/brand/lx"}
+output=${2:-$(mktemp -d "${TMPDIR:-/tmp}/lx-userns.XXXXXX")}
+mkdir -p "$output"
+output=$(cd "$output" && pwd)
+cc -std=c11 -Wall -Wextra -Werror -O2 -I"$common" \
+    "$here/userns_oracle.c" "$common/lx_userns_model.c" -o "$output/userns_oracle"
+cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined \
+    -I"$common" "$here/userns_oracle.c" "$common/lx_userns_model.c" \
+    -o "$output/userns_oracle_sanitize"
+# Bootstrap with the installed bubblewrap profile. Do not change host policy.
+for binary in userns_oracle userns_oracle_sanitize; do
+    bwrap --unshare-user --uid 0 --gid 0 --ro-bind / / --proc /proc \
+        --dev-bind /dev /dev --cap-add ALL -- "$output/$binary" \
+        2>&1 | tee "$output/$binary.log"
+done
+sha256sum "$common/lx_userns_model.c" "$here/userns_oracle.c"
