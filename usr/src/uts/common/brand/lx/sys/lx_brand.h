@@ -378,7 +378,7 @@ typedef struct lx_proc_data {
 
 	/* Kernel signal actions for the opt-in amd64 signal backend. */
 	uint64_t l_sigvalid;
-	lx_ksigaction_t l_sigacts[LX_NSIG + 1];
+	lx_ksigaction_t l_sigacts[LXK_NSIG + 1];
 } lx_proc_data_t;
 
 #endif	/* _KERNEL */

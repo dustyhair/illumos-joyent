@@ -5,6 +5,7 @@
 #include <sys/types.h>
 #include <sys/systm.h>
 #include <sys/brand.h>
+#include <sys/archsystm.h>
 #include <sys/kmem.h>
 #include <sys/errno.h>
 #include <sys/user.h>

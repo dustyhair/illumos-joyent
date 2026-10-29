@@ -5,8 +5,8 @@
 #define	_SYS_LX_KSIGNAL_H
 
 #include <sys/types.h>
-#include <sys/lx_siginfo.h>
-#include <lx_signum.h>
+
+#define	LXK_NSIG 64
 
 #define	LXK_SA_NOCLDSTOP 0x00000001ULL
 #define	LXK_SA_NOCLDWAIT 0x00000002ULL
