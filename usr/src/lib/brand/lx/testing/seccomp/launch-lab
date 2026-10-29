@@ -1,0 +1,19 @@
+#!/bin/bash
+set -euo pipefail
+umask 077
+lab=$(cd "$(dirname "$0")/lab" && pwd)
+if [[ -f "$lab/qemu.pid" ]] && kill -0 "$(cat "$lab/qemu.pid")" 2>/dev/null; then
+    echo "The lx test VM is already running" >&2
+    exit 1
+fi
+cd "$lab"
+exec qemu-system-x86_64 \
+    -name lx-codex-offline-lab \
+    -enable-kvm -cpu host -smp 2 -m 2048 \
+    -cdrom "$lab/lx-lab.iso" -boot d \
+    -drive "file=$lab/zones.qcow2,format=qcow2,if=ide,index=0" \
+    -nic none -display none -no-reboot \
+    -chardev "socket,id=console,path=$lab/serial.sock,server=on,wait=off,logfile=$lab/console.log" \
+    -serial chardev:console \
+    -monitor "unix:$lab/monitor.sock,server=on,wait=off" \
+    -pidfile "$lab/qemu.pid" -daemonize

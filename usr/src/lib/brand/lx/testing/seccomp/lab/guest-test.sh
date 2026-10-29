@@ -10,15 +10,20 @@ uname -a
 digest -a sha256 /kernel/amd64/genunix /kernel/brand/amd64/lx_brand
 diskinfo
 if ! zpool list zones >/dev/null 2>&1; then
+    zpool import -f zones >/dev/null 2>&1 || true
+fi
+if ! zpool list zones >/dev/null 2>&1; then
     # The launcher supplies one blank, disposable 8 GiB SATA test disk.
-    set -- /dev/rdsk/c*t*d0p0
+    set -- $(diskinfo -Hp | awk '$6 == "no" {print $2}')
     test "$#" = 1
-    test -c "$1"
-    disk=${1#/dev/rdsk/}
-    disk=${disk%p0}
+    disk=$1
+    test -c "/dev/rdsk/${disk}p0"
     zpool create -f zones "$disk"
 fi
-zonecfg -z lx-probe 'create -b; set brand=lx; set zonepath=/zones/lx-probe; set autoboot=false; set ip-type=exclusive; add attr; set name=kernel-version; set type=string; set value=5.10.0; end;'
+if ! zonecfg -z lx-probe info >/dev/null 2>&1; then
+    zonecfg -z lx-probe 'create -b; set brand=lx; set zonepath=/zones/lx-probe; set autoboot=false; set ip-type=exclusive; add attr; set name=kernel-version; set type=string; set value=5.10.0; end;'
+fi
+test "$(zoneadm -z lx-probe list -p | cut -d: -f3)" != running
 mkdir -p /zones/lx-probe/root
 chmod 0700 /zones/lx-probe
 cd /zones/lx-probe/root
