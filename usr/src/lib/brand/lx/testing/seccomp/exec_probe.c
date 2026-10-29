@@ -163,7 +163,7 @@ static int
 codex_version(void)
 {
     char *args[] = { "/test/codex-current/bin/codex", "--version", NULL };
-    if (deny(SYS_getppid))
+    if (deny(SYS_socket))
         return (1);
     syscall(SYS_execve, args[0], args, NULL);
     return (9);
