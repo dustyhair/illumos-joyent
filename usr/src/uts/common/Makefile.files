@@ -2426,3 +2426,5 @@ TS511X_OBJS += ts511x.o
 LM7X_OBJS += lm7x.o
 TMP43X_OBJS += tmp43x.o
 AT24C_OBJS += at24c.o
+
+LX_NAMESPACE_KTEST_OBJS += lx_namespace_ktest.o
