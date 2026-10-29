@@ -384,3 +384,30 @@ The current source locations are:
 
 Linux filter semantics are documented at
 https://docs.kernel.org/userspace-api/seccomp_filter.html.
+
+## Private mount-tree backend
+
+The internal lx_mntns backend creates detached LOFS roots with nosub and
+private tmpfs grafts. Namespace construction must explicitly copy existing
+submounts. It uses the caller's credentials and does not grant mount privileges.
+No Linux namespace syscall enables this backend yet. unshare remains EPERM
+and clone namespace requests still fail.
+
+A private VM kernel test creates sibling views, covers one view's subdirectory,
+checks that its private file cannot appear in the sibling or physical source,
+and checks absolute symlink and dot-dot root boundaries. Holding a vnode makes
+destruction return EBUSY; the view remains usable and releases after closing
+the vnode. Two consecutive runs pass, followed by pool export0 and poweroff.
+Release and debug lx_brand and lx_namespace_ktest builds pass. The existing
+17 NNP, 67179 BPF, 29 filter, 31 signal, 15 fork, 7 exec and 5 thread checks
+also pass in that VM. This is a mixed-platform development image.
+
+The current Codex 0.166.0 managed workspace profile requires user, mount,
+PID, IPC and network namespaces. An explicit Linux control uses
+`codex sandbox -P :workspace -- /bin/true`; a legacy sandbox_mode override
+can leave an inherited permissions profile unrestricted and is not evidence
+of sandbox success. The real lx clone request is 0x78020011 and returns
+EINVAL. Private mount views are only one part of the required implementation.
+UID/GID maps, scoped credentials, inherited submount snapshots, bind/remount,
+proc views, PID/IPC/network isolation and process lifecycle integration remain
+unimplemented. Do not claim normal Codex sandbox acceptance from this test.
