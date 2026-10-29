@@ -54,6 +54,7 @@
 #include <sys/procfs.h>
 #include <sys/policy.h>
 #include <sys/cred_impl.h>
+#include <sys/brand.h>
 #include <sys/devpolicy.h>
 #include <sys/atomic.h>
 
