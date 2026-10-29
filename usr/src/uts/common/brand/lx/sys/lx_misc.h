@@ -111,6 +111,9 @@ extern int lx_sigcld_repost(proc_t *, sigqueue_t *);
 extern int lx_ptrace_issig_stop(proc_t *, klwp_t *);
 extern boolean_t lx_ptrace_sig_ignorable(proc_t *, klwp_t *, int);
 
+extern long lx_kernel_fork(int, uintptr_t *);
+extern void lx_kernel_fork_child(klwp_t *, klwp_t *);
+
 extern int lx_helper_clone(int64_t *, int, void *, void *, void *);
 extern int lx_helper_setgroups(int, gid_t *);
 extern int lx_helper_rt_sigqueueinfo(pid_t, int, siginfo_t *);

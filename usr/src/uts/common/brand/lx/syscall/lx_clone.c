@@ -141,6 +141,11 @@
 #include <lx_syscall.h>
 #include <sys/x86_archext.h>
 #include <sys/controlregs.h>
+#include <sys/privregs.h>
+#include <sys/fork.h>
+#include <vm/as.h>
+
+extern int64_t forksys(int, int);
 
 /*
  * We currently only support a single clone-group (CLONE_FS) but the design
@@ -510,4 +515,89 @@ lx_set_tid_address(int *tidp)
 	}
 
 	return (rv);
+}
+
+/*
+ * A guarded process cannot invoke libc on its native stack. Fork directly
+ * from Linux mode instead. Its child must remain on that same enforced
+ * path; none of the copied native libc state is subsequently entered.
+ * Shared-address-space clones, tracing and vfork need separate handling.
+ */
+long
+lx_kernel_fork(int nr, uintptr_t *args)
+{
+	proc_t *p = curproc;
+	lx_proc_data_t *pd = ptolxproc(p);
+	uint_t flags = nr == 57 ? LX_SIGCHLD : args[0];
+	uint_t allowed = LX_CSIGNAL | LX_CLONE_PARENT_SETTID |
+	    LX_CLONE_CHILD_SETTID | LX_CLONE_CHILD_CLEARTID;
+	pid_t pid;
+	int value;
+	boolean_t unsupported;
+
+	VERIFY(lx_seccomp_active(p));
+	if (nr == 56 && (args[0] != flags || (flags & ~allowed) != 0))
+		return (set_errno(EINVAL));
+	if ((flags & LX_CSIGNAL) != 0 &&
+	    (flags & LX_CSIGNAL) != LX_SIGCHLD)
+		return (set_errno(EINVAL));
+	if (nr == 56 && args[1] >= (uintptr_t)p->p_as->a_userlimit)
+		return (set_errno(EINVAL));
+	mutex_enter(&p->p_lock);
+	unsupported = p->p_lwpcnt != 1 || pd->l_ptrace != 0;
+	mutex_exit(&p->p_lock);
+	if (unsupported)
+		return (set_errno(EOPNOTSUPP));
+
+	if ((flags & LX_CLONE_PARENT_SETTID) != 0 &&
+	    (copyin((void *)args[2], &value, sizeof (value)) != 0 ||
+	    suword32((void *)args[2], value) != 0))
+		return (set_errno(EFAULT));
+	if ((flags & LX_CLONE_CHILD_SETTID) != 0 &&
+	    (copyin((void *)args[3], &value, sizeof (value)) != 0 ||
+	    suword32((void *)args[3], value) != 0))
+		return (set_errno(EFAULT));
+
+	pid = (pid_t)forksys(0, (flags & LX_CSIGNAL) == 0 ?
+	    FORK_NOSIGCHLD : 0);
+	if (pid > 0 && (flags & LX_CLONE_PARENT_SETTID) != 0)
+		(void) suword32((void *)args[2], pid);
+	return (pid);
+}
+
+/* Called before a child can run, without either process lock held. */
+void
+lx_kernel_fork_child(klwp_t *parent, klwp_t *child)
+{
+	lx_lwp_data_t *src = lwptolxlwp(parent);
+	lx_lwp_data_t *dst = lwptolxlwp(child);
+	proc_t *cp = lwptoproc(child);
+	uint_t flags;
+
+	if (!lx_seccomp_active(lwptoproc(parent)) ||
+	    src->br_stack_mode != LX_STACK_MODE_BRAND ||
+	    (src->br_syscall_num != 56 && src->br_syscall_num != 57))
+		return;
+	VERIFY(lx_seccomp_active(cp));
+	flags = src->br_syscall_num == 57 ? LX_SIGCHLD :
+	    src->br_syscall_args[0];
+	dst->br_lx_fsbase = src->br_lx_fsbase;
+	dst->br_ntv_fsbase = src->br_ntv_fsbase;
+	dst->br_lx_gsbase = src->br_lx_gsbase;
+	dst->br_ntv_gsbase = src->br_ntv_gsbase;
+	dst->br_syscall_num = src->br_syscall_num;
+	dst->br_syscall_entry = src->br_syscall_entry;
+	bcopy(src->br_syscall_args, dst->br_syscall_args,
+	    sizeof (dst->br_syscall_args));
+	ptolxproc(cp)->l_signal = flags & LX_CSIGNAL;
+	child->lwp_eosys = JUSTRETURN;
+	if (src->br_syscall_num == 56 && src->br_syscall_args[1] != 0)
+		lwptoregs(child)->r_sp = src->br_syscall_args[1];
+	if ((flags & LX_CLONE_CHILD_CLEARTID) != 0)
+		dst->br_clear_ctidp = (void *)src->br_syscall_args[3];
+	if ((flags & LX_CLONE_CHILD_SETTID) != 0) {
+		/* The child has its own address space, and cannot yet execute. */
+		(void) uwrite(cp, &dst->br_pid, sizeof (dst->br_pid),
+		    src->br_syscall_args[3]);
+	}
 }

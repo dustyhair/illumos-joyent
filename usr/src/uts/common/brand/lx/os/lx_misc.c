@@ -611,6 +611,7 @@ lx_forklwp(klwp_t *srclwp, klwp_t *dstlwp)
 	dst->br_lwp_flags = src->br_lwp_flags & BR_CPU_BOUND;
 	dst->br_scall_args = NULL;
 	lx_affinity_forklwp(srclwp, dstlwp);
+	lx_kernel_fork_child(srclwp, dstlwp);
 
 	/*
 	 * Flag so child doesn't ptrace-stop on syscall exit.

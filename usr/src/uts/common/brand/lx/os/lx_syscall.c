@@ -404,6 +404,13 @@ lx_syscall_enter(int entry)
 		return (0);
 	}
 
+	if (lx_seccomp_active(curproc) &&
+	    (syscall_num == 56 || syscall_num == 57)) {
+		ret = lx_kernel_fork(syscall_num, args);
+		lx_syscall_return(lwp, syscall_num, ret);
+		return (0);
+	}
+
 	/* Single-LWP experimental processes can terminate in-kernel. */
 	if (lx_seccomp_active(curproc) && syscall_num == 231)
 		exit(CLD_EXITED, args[0] & 0xff);
