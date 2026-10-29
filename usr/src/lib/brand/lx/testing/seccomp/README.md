@@ -432,3 +432,61 @@ submounts, concurrent directory-rename handling, root overlays, recursive
 binds, remount policy changes or deferred teardown after process exit. Those
 must be completed before enabling a Linux mount namespace interface. No
 Linux namespace request succeeds merely because this backend exists.
+
+## Internal user namespace backend
+
+lx_userns_model.c implements ID-map parsing/composition and Linux capability
+state independently of native privileges. lx_userns.c adds reference-counted
+namespace objects, serialized one-time map publication, captured map-file
+opener credentials, parent/child capability scope, irreversible setgroups
+denial and a native-credential reduction helper. These objects are internal.
+No process enters one through unshare/clone yet, and Linux-visible capget,
+capset or PR_CAPBSET_DROP behavior has not been replaced by this backend.
+
+UID/GID maps flatten parent-relative ranges to backing IDs and preserve
+reader-relative map output. Checks cover overlapping ranges, unmapped parent
+ranges, the reserved -1 ID, a maximum of 340 extents, parent-root SETFCAP
+requirements, opener/current authority, and publication once only. Namespace
+owners use backing IDs. Scoped capability checks never authorize operations
+in an ancestor or unrelated namespace. A namespace owner in the parent has
+authority over its descendants. setgroups denial passes to children.
+
+The per-task capability value stores effective, permitted, inheritable,
+bounding and ambient masks. It models real bounding drops, capset constraints,
+the original eight securebits and locks, ambient changes and ordinary exec
+without file capabilities or setid transitions. Native privileges remain
+separate: the credential helper limits all native sets to the caller's basic
+privileges, preserves backing IDs, enables privilege awareness, and removes
+external policy and pfexec state. This helper alone is not process isolation.
+
+The Linux control runner builds from the checkout:
+
+    bash usr/src/lib/brand/lx/testing/seccomp/run-userns-linux-controls
+
+It uses an installed bubblewrap to create a capability-enabled bootstrap user
+namespace, because the Ubuntu AppArmor policy restricts capabilities in user
+namespaces created directly by unconfined helper executables. The runner
+changes no host security settings. It compares mapping writes, bounding and
+capset changes, securebits/ambient operations, ordinary exec and the nested
+identity mapping used by Codex 0.166.0 bubblewrap. 102 control assertions pass
+without skips, both normally and under ASan/UBSan on codex-testbox. The current
+control boundary inherits the bootstrap namespace's existing ID maps, rather
+than assuming it has the initial namespace's complete mapping.
+
+Clean release/debug lx_brand and lx_namespace_ktest builds pass. The two new
+brand C files also pass a separate Smatch-enabled compile. In the offline VM,
+all four user suites pass: maps, capabilities, native and lifetime. They test
+340-range publication, nested translation, ancestor/sibling confinement,
+Native credential UID/GID retention, native configuration/mount denial,
+32 concurrent pairs of map writers, and reference release through the depth
+limit. The mount views/snapshots and all existing regressions also pass.
+This remains a release-runtime mixed-platform development result.
+
+Process/LWP credential attachment, fork/exec inheritance, procfs file-open
+credential capture, UID/GID translation at every ABI boundary, native-entry
+confinement, cross-namespace process access and resource-specific capability
+checks remain required before exposing namespace syscalls. Namespace quotas,
+setns descriptors, filesystem capabilities, privileged exec and newer
+securebits also need implementation or explicit rejection. The current
+Linux namespace requests remain unsupported, and normal Codex sandbox
+acceptance has not been achieved.
