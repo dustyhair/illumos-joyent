@@ -565,7 +565,6 @@ struct lx_lwp_data {
 	uint_t	br_ptrace_event;
 	ulong_t	br_ptrace_eventmsg;
 
-	int	br_syscall_entry;	/* kernel-supplied entry ABI */
 	int	br_syscall_num;		/* current system call number */
 	boolean_t br_syscall_restart;	/* should restart on EINTR */
 
@@ -621,6 +620,8 @@ struct lx_lwp_data {
 
 	fwaiter_t br_fwaiter;		/* futex upon which we're waiting */
 	uint_t	br_clone_grp_flags;	/* pending clone group */
+
+	int	br_syscall_entry;	/* kernel-supplied entry ABI */
 };
 
 /*
