@@ -167,7 +167,7 @@ typedef struct _klwp {
 	char	lwp_unused;
 	char	lwp_state;	/* Running in User/Kernel mode (no lock req) */
 	ushort_t lwp_nostop;	/* Don't stop this lwp (no lock required) */
-	ushort_t lwp_pad;	/* Reserved for future use */
+	ushort_t lwp_no_new_privs; /* irreversible exec privilege restriction */
 
 	/*
 	 * Last failed privilege.

@@ -378,9 +378,13 @@ exec_common(const char *fname, const char **argp, const char **envp,
 			goto out;
 		}
 
-		/* Don't change the credentials when using old ptrace. */
+		/*
+		 * Keep the profile's access decision, but discard replacement
+		 * credentials under ptrace or the per-LWP exec restriction.
+		 */
 		if (args.pfcred != NULL &&
-		    (p->p_proc_flag & P_PR_PTRACE) != 0) {
+		    ((p->p_proc_flag & P_PR_PTRACE) != 0 ||
+		    ttolwp(curthread)->lwp_no_new_privs != 0)) {
 			crfree(args.pfcred);
 			args.pfcred = NULL;
 			args.scrubenv = B_FALSE;
@@ -773,14 +777,16 @@ gexec(
 		 *
 		 *	E' = P' = (I' + F) & A
 		 *
-		 * But if running under ptrace, we cap I and F with P.
+		 * Under ptrace or no_new_privs, cap I and F with P.
 		 */
 		if ((privflags & (PRIV_RESET|PRIV_FORCED)) != 0) {
-			if ((privflags & PRIV_INCREASE) != 0 &&
-			    (pp->p_proc_flag & P_PR_PTRACE) != 0) {
+			if (ttolwp(curthread)->lwp_no_new_privs != 0 ||
+			    ((privflags & PRIV_INCREASE) != 0 &&
+			    (pp->p_proc_flag & P_PR_PTRACE) != 0)) {
 				priv_intersect(&CR_OPPRIV(cred),
 				    &CR_IPRIV(cred));
-				priv_intersect(&CR_OPPRIV(cred), &fset);
+				if ((privflags & PRIV_FORCED) != 0)
+					priv_intersect(&CR_OPPRIV(cred), &fset);
 			}
 			priv_intersect(&CR_LPRIV(cred), &CR_IPRIV(cred));
 			CR_EPRIV(cred) = CR_PPRIV(cred) = CR_IPRIV(cred);
@@ -1169,7 +1175,8 @@ execsetid(struct vnode *vp, struct vattr *vattrp, uid_t *uidp, uid_t *gidp,
 	if ((CR_FLAGS(cr) & (PRIV_AWARE|PRIV_AWARE_INHERIT)) == PRIV_AWARE)
 		privflags |= PRIV_RESET;
 
-	if ((vp->v_vfsp->vfs_flag & VFS_NOSETUID) == 0) {
+	if ((vp->v_vfsp->vfs_flag & VFS_NOSETUID) == 0 &&
+	    ttolwp(curthread)->lwp_no_new_privs == 0) {
 		/*
 		 * If it's a set-uid root program we perform the
 		 * forced privilege look-aside. This has three possible

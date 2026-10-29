@@ -42,15 +42,82 @@ The seccomp DTrace probe remains available.
 
 This intentionally changes compatibility behavior. Software that previously
 continued after a fictitious successful filter installation may now refuse
-to start. It does not enable Codex's sandbox. `PR_SET_NO_NEW_PRIVS` and
-`PR_GET_NO_NEW_PRIVS` also remain placeholders in this tree and need real
-credential enforcement before they can satisfy sandbox requirements.
+to start. It does not enable Codex's sandbox.
+
+## No-new-privileges implementation and probes
+
+The next change implements an irreversible per-LWP `no_new_privs` flag in
+the common kernel, using an existing reserved field without changing the
+structure layout. New LWPs inherit the creator's flag; fork copies the
+specific parent's LWP state. Common exec retains the flag across Linux
+and native programs, ignores set-id files and their forced privileges,
+discards profile credentials while preserving profile access decisions,
+and limits inheritable privilege promotion to the old permitted set.
+`PR_SET_NO_NEW_PRIVS` and `PR_GET_NO_NEW_PRIVS` validate all five arguments.
+The lx proc status files expose the target task's `NoNewPrivs` value.
+
+This is a source implementation awaiting patched-kernel runtime validation.
+It is not evidence that lx can safely install seccomp filters yet.
+
+Build the Linux test and Linux identity helper in Linux or lx:
+
+```sh
+cc -std=c99 -Wall -Wextra -Werror -O2 -pthread \
+    no_new_privs_probe.c -o no_new_privs_probe
+cc -std=c99 -Wall -Wextra -Werror -O2 identity_probe.c -o identity_probe
+./no_new_privs_probe ./identity_probe
+```
+
+On a native SmartOS builder, compile the native helpers:
+
+```sh
+cc -std=c99 -Wall -Wextra -Werror -O2 \
+    identity_probe.c -o native_identity_probe
+cc -std=c99 -Wall -Wextra -Werror -O2 \
+    native_privilege_probe.c -o native_privilege_probe
+```
+
+Copy those helpers into the lx test directory, then run from a fresh,
+unrestricted root login inside the lx zone:
+
+```sh
+./no_new_privs_probe ./identity_probe \
+    ./native_identity_probe ./native_privilege_probe
+```
+
+The 17 checks cover argument validation, proc task status, irreversible
+setting, task-local state, thread/fork/vfork inheritance, successful and
+failed exec, a native shell bridge, Linux and native set-id binaries,
+and native inheritable privilege promotion. The native privilege helper
+places `proc_setid` in the inheritable set, drops it from effective and
+permitted sets, and execs itself. The control must regain the privilege;
+the restricted case must not regain it.
+
+Root-only set-id tests create a root-owned temporary directory under
+`/var/tmp`, copy the tiny identity helper into it, and mark the copies
+setuid, setgid, or both. The test runner itself is never marked set-id.
+Children drop supplementary groups and all user/group IDs to 65534 before
+exec. Each suppression case has a positive control without the flag.
+Controls must pass to establish that the filesystem and environment
+actually permit set-id execution. The parent removes the helper copies
+and directory at normal exit, including ordinary test failures.
+If forcibly terminated, remove the leftover `/var/tmp/lx-nnp-*` directory
+after verifying it belongs to that test.
+
+Exit 0 means no failures among the checks that ran; it does not mean that
+skipped checks passed. Missing root privileges or optional native helpers
+skip their corresponding checks. Baseline lx is recognized via `/native`
+and expected to start unrestricted; do not run the baseline from a task
+that deliberately inherited `no_new_privs`.
+
+Profile credential replacement, forced privilege configuration, tracing,
+zone entry, and concurrent credential-change scenarios still need dedicated
+runtime coverage. The probes do not establish seccomp or namespace support.
 
 ## Remaining implementation
 
-1. Implement no-new-privileges semantics across exec and task creation, including
-   native execution paths and credential-changing operations. State must be
-   inherited and irreversible with Linux-compatible task scope.
+1. Boot-test the no-new-privileges implementation. Validate both ABIs and the
+   remaining native privilege paths before using the flag to authorize filters.
 2. Implement seccomp program copy-in and classic BPF validation, then evaluation
    at the syscall boundary. Preserve the Linux ABI's argument byte order,
    architecture, instruction pointer and syscall number. Handle i386 and x86-64

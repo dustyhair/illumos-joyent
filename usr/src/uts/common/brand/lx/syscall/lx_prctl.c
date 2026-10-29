@@ -18,6 +18,7 @@
 #include <sys/user.h>
 #include <sys/priv.h>
 #include <sys/brand.h>
+#include <sys/klwp.h>
 #include <sys/cmn_err.h>
 #include <sys/lx_brand.h>
 #include <sys/lx_impl.h>
@@ -68,7 +69,8 @@
 #define	SECCOMP_MODE_FILTER	2
 
 long
-lx_prctl(int opt, uintptr_t arg2, uintptr_t arg3)
+lx_prctl(int opt, uintptr_t arg2, uintptr_t arg3, uintptr_t arg4,
+    uintptr_t arg5)
 {
 	long err;
 	char ebuf[64];
@@ -282,25 +284,19 @@ lx_prctl(int opt, uintptr_t arg2, uintptr_t arg3)
 
 	case LX_PR_SET_NO_NEW_PRIVS: {
 		/*
-		 * On recent versions of Linux more services are starting to set
-		 * NoNewPrivs=yes in their systemd unit file. Since we currently
-		 * just return success for LX_PR_CAPBSET_DROP there is currently
-		 * no need to map this to the illumos privileges.
+		 * This restriction is per task and cannot be cleared.  Keep it
+		 * outside brand data so native exec cannot discard it.
 		 */
+		if (arg2 != 1 || arg3 != 0 || arg4 != 0 || arg5 != 0)
+			return (set_errno(EINVAL));
+		ttolwp(curthread)->lwp_no_new_privs = 1;
 		return (0);
 	}
 
 	case LX_PR_GET_NO_NEW_PRIVS: {
-		/*
-		 * Some Linux applications (such as Elasticsearch) use
-		 * PR_SET_NO_NEW_PRIVS to enable the NoNewPrivs flag, and then
-		 * query the flag status, and fail unless the query indicates
-		 * the flag is enabled. Since we return success in
-		 * LX_PR_SET_NO_NEW_PRIVS, we assume here that the application
-		 * has intended to enable the flag, so we return 1 indicating
-		 * that the flag is enabled.
-		 */
-		return (1);
+		if (arg2 != 0 || arg3 != 0 || arg4 != 0 || arg5 != 0)
+			return (set_errno(EINVAL));
+		return (ttolwp(curthread)->lwp_no_new_privs);
 	}
 
 	case LX_PR_SET_SECCOMP: {

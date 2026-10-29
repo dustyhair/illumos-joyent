@@ -2691,6 +2691,7 @@ lxpr_read_status_common(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf,
 	rlim64_t	fdlim;
 	size_t		vsize = 0, nlocked = 0, rss = 0, stksize = 0;
 	boolean_t	printsz = B_FALSE;
+	uint_t		no_new_privs = 0;
 
 
 	p = lxpr_lock_pid(lxpnp, tid, ZOMB_OK, &t);
@@ -2704,6 +2705,8 @@ lxpr_read_status_common(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf,
 
 	if (t != NULL) {
 		thread_lock(t);
+		if (ttolwp(t) != NULL)
+			no_new_privs = ttolwp(t)->lwp_no_new_privs;
 		switch (t->t_state) {
 		case TS_SLEEP:
 			status = "S (sleeping)";
@@ -2848,8 +2851,9 @@ lxpr_read_status_common(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf,
 	    "CapInh:\t%016x\n"
 	    "CapPrm:\t%016x\n"
 	    "CapEff:\t%016x\n"
-	    "CapBnd:\t%016llx\n",
-	    0, 0, 0, 0x1fffffffffLL);
+	    "CapBnd:\t%016llx\n"
+	    "NoNewPrivs:\t%u\n",
+	    0, 0, 0, 0x1fffffffffLL, no_new_privs);
 }
 
 /*

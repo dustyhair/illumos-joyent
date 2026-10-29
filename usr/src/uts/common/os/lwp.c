@@ -265,6 +265,12 @@ lwp_create(void (*proc)(), caddr_t arg, size_t len, proc_t *p,
 	lwp->lwp_thread = t;
 	lwp->lwp_procp = p;
 	lwp->lwp_sigaltstack.ss_flags = SS_DISABLE;
+	/*
+	 * Inherit the creator's exec restriction for new LWPs.  lwp_fork()
+	 * also copies this state from the particular LWP being duplicated.
+	 */
+	if (curlwp != NULL)
+		lwp->lwp_no_new_privs = curlwp->lwp_no_new_privs;
 	if (curlwp != NULL && curlwp->lwp_childstksz != 0)
 		lwp->lwp_childstksz = curlwp->lwp_childstksz;
 
