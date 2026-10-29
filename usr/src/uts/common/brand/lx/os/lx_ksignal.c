@@ -82,6 +82,8 @@ lx_sigframes_clone(lx_lwp_data_t *dst, const lx_lwp_data_t *src)
 	struct lx_sigrecord **out = &dst->br_sigframes;
 	const struct lx_sigrecord *r;
 
+	if (src == NULL)
+		return;
 	for (r = src->br_sigframes; r != NULL; r = r->prev) {
 		struct lx_sigrecord *copy;
 
