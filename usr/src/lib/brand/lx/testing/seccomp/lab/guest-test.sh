@@ -7,7 +7,7 @@ bootparams | grep -q '^lx_lab=true$'
 test "$(zonename)" = global
 echo LX_LAB_START
 uname -a
-digest -a sha256 /kernel/amd64/genunix /kernel/brand/amd64/lx_brand
+digest -a sha256 /kernel/amd64/genunix /kernel/brand/amd64/lx_brand /kernel/fs/amd64/lx_proc
 diskinfo
 if ! zpool list zones >/dev/null 2>&1; then
     zpool import -f zones >/dev/null 2>&1 || true
@@ -21,17 +21,19 @@ if ! zpool list zones >/dev/null 2>&1; then
     zpool create -f zones "$disk"
 fi
 if ! zonecfg -z lx-probe info >/dev/null 2>&1; then
-    zonecfg -z lx-probe 'create -b; set brand=lx; set zonepath=/zones/lx-probe; set autoboot=false; set ip-type=exclusive; add attr; set name=kernel-version; set type=string; set value=5.10.0; end;'
+    zonecfg -z lx-probe 'create -b; set brand=lx; set zonepath=/zones/lx-probe-zfs; set autoboot=false; set ip-type=exclusive; add attr; set name=kernel-version; set type=string; set value=5.10.0; end;'
 fi
 test "$(zoneadm -z lx-probe list -p | cut -d: -f3)" != running
-mkdir -p /zones/lx-probe/root
-chmod 0700 /zones/lx-probe
-cd /zones/lx-probe/root
+zfs list zones/lx-probe-zfs >/dev/null 2>&1 || zfs create zones/lx-probe-zfs
+mkdir -p /zones/lx-probe-zfs/root
+chmod 0700 /zones/lx-probe-zfs
+cd /zones/lx-probe-zfs/root
 tar xf /lab/lx-root.tar
+mkdir -p checkpoints
 zoneadm -z lx-probe mark -F installed
 zoneadm -z lx-probe boot
 zoneadm list -cv
-modinfo | egrep 'genunix|lx_brand'
+modinfo | egrep 'genunix|lx_brand|lx_proc'
 set +e
 zlogin -S lx-probe /test/no_new_privs_probe /test/identity_probe /test/native_identity_probe /test/native_privilege_probe
 nnp_result=$?
