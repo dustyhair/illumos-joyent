@@ -210,8 +210,9 @@ four-instruction overhead between stacked filters.
 The guard is process-wide and installation requires one LWP. It remains
 visible to any later proc-agent LWP. Normal clone, fork and exec currently
 need native user-space emulation and terminate a guarded process with
-SIGSYS. Signal trampolines, native brand commands, compatibility entry
-instructions and vsyscalls also terminate the process. Both KILL actions
+SIGSYS. Native brand commands, compatibility entry instructions and
+vsyscalls also terminate the process. Tracked amd64 signal handlers use
+the kernel delivery and return path described below. Both KILL actions
 terminate the process; separate per-thread kill semantics are not provided.
 Only `exit_group` has an additional in-kernel path for normal termination.
 These restrictions mean the experiment cannot run Codex's sandbox yet.
@@ -247,13 +248,57 @@ regressions and the BPF corpus. It then changes the experiment switch through
 MDB inside the guarded private VM and runs both enforcement probes. The
 matching `unix`, `genunix`, `lx_brand` and `lx_proc` must all be rebuilt.
 
-The final x86-64 VM run passed all 29 enforcement checks, the original
+The initial enforcement milestone passed all 29 enforcement checks, the original
 filter-denial probe through both installation APIs, all 17 privilege
 regressions without skips, and all 67179 BPF corpus records. Filtering
 was rejected before the experimental switch was enabled. The final LWP
 layout also preserves all 54 previous member offsets and the 440-byte size;
 the entry tag occupies former tail padding, avoiding a layout mismatch
 with other lx modules. These results cover the stated experiment only.
+
+## Experimental amd64 signals
+
+The default-off experiment now handles rt_sigaction, rt_sigprocmask,
+sigaltstack and rt_sigreturn in the kernel. Registered amd64 handlers can
+run in Linux mode under an installed filter. Delivery builds the Linux
+frame directly. Kernel-owned records retain native context bookkeeping,
+including the original extended floating-point state. Return checks the
+most recent frame, user addresses, segment selectors, privileged flags,
+MXCSR and alternate-stack fields before restoring user registers and masks.
+Native-mode entry remains prohibited, including from a handler.
+
+The path supports nested handlers up to 32 records, alternate stacks,
+mask restoration and edits, SA_NODEFER, SA_RESETHAND, interrupted reads
+with and without SA_RESTART, SSE/AVX preservation, source-specific siginfo,
+and context edits for hardware-fault recovery. It requires a Linux restorer.
+Default SIGPWR termination remains correct after a one-shot handler.
+
+This is a restricted ABI experiment. Untracked handlers installed by the
+older user-space bridge cannot be imported. A signal interrupting native
+emulation cannot use this path. There is no i386 kernel signal backend.
+Nonlocal handler exits such as longjmp and user editing of Linux extended
+XSAVE records are not implemented. The LIFO kernel-record requirement is
+stricter than Linux signal-return semantics. Fork and exec under a filter
+remain unsupported. Existing unfiltered legacy signal returns still use
+the older bridge when no kernel frame exists.
+
+The final isolated VM run passed all 31 signal checks with no skips, all
+29 enforcement checks, all 17 no-new-privileges checks and the 67179-record
+BPF corpus. The raw ELF32 boundary probe returned zero. The native Linux
+control passed all 20 common signal checks without skips. Runtime used
+release modules in a mixed platform image, not a clean full-platform build.
+
+Build signal_probe.c on Linux x86-64 with the enforcement probe's compiler
+flags. Run it without inherited filters. Each case creates a separate child
+and installs its own filter. The Linux control has 20 checks. The lx run
+adds invalid selectors, privileged flags, addresses, FP state, missing and
+replayed frames, native entry from a handler, and syscall-table boundaries.
+The raw ELF32 boundary32_probe.s checks reserved syscall 251 and out-of-range
+359/360. It is only for lx, since those numbers identify real Linux calls.
+
+The signal pointer appends to lx_lwp_data. All 54 old field offsets remain
+unchanged; its size grows from 440 to 448 bytes. Rebuild lx_brand and lx_proc
+together. The shared sendsig hook also requires matching unix and genunix.
 
 ## Remaining implementation
 

@@ -206,3 +206,45 @@ poweroff. The experiment remains disabled by default. Full per-task filter
 semantics, native-compatible fork/exec and signal handling, i386 support,
 namespace support, full platform validation and Codex integration remain
 pending. These checks do not establish production sandbox security.
+
+
+## Kernel signal delivery and return acceptance
+
+The signal milestone is kernel commit 75d8932549. The follow-up dcd8731b65
+only wraps one source line; its release/debug lx_brand build also passes.
+The VM acceptance image uses the exact 75d8932549 brand binary. Clean
+release/debug unix and genunix were built at 21073b0983. After correcting
+shared-header and ptrace includes, clean lx_brand and lx_proc builds passed.
+Final clean release/debug lx_brand at 75d8932549 passed. All 54 prior LWP
+field offsets remain unchanged; the appended signal pointer makes the
+structure 448 bytes. See the parent README for the restricted ABI scope.
+
+The offline root adds static signal_probe and the raw ELF32 boundary probe.
+The driver runs them after enabling the experiment. Both installation APIs,
+29 enforcement checks, 31 signal checks, 17 privilege checks and the 67179
+BPF records passed. There were no skipped signal or privilege checks.
+The i386 boundary probe returned zero. Malformed BPF inputs still produce
+expected ktest errors. The combined driver returned zero and printed
+LX_ENFORCEMENT_PASS. The Linux control passed 20 common signal checks.
+
+Coverage includes real SIGSEGV recovery through a user-edited RIP and
+sender metadata for user-generated SIGSEGV, interrupted-read restart,
+SSE/AVX preservation, nested/alternate-stack handlers and rejected invalid
+or replayed returns. A caught handler now succeeds under a filter. The
+invalid bare sigreturn case now terminates with SIGSEGV. Native entries
+from handlers still terminate with SIGSYS. Dispatch now rejects the first
+out-of-range number and the i386 reserved slot explicitly.
+
+Acceptance release SHA-256 values:
+
+- unix: 7c75d8f9fe5950a5d6901a6a46bb4f3b3b5c6418977ba9fab753236de3ad7318
+- genunix: dcd802691c161c265abf934ee3a598e8d7149d91dbb3ba157b7ff56fed6fc9ee
+- lx_brand: b41fe76545a7ba9e4f0c96b79dff553748c3d6d6d31c3e200421fe33005a82ef
+- lx_proc: fc3c53d8130fac74d72cbe7e1e30abd8ed7ef5d11ff6cb4cd9adf5e1e1f02e7c
+- enforcement_probe: 57bb56b563cd6f463ebc45ecbe4f28c529d40105d7fc1060585a46eb20bdc2d8
+
+The normal-loader image reuses the May platform's other modules and
+compressed userland. This is a mixed-image development result. The zone
+was halted, the guest ZFS pool exported, and the local VM powered off.
+The builder's private lofi mapping was detached. Neither production host
+nor Debian zone was changed. Default filtering remains disabled.
