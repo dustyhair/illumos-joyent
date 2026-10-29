@@ -242,7 +242,7 @@ static int lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
     struct intpdata *idata, int level, size_t *execsz, int setid,
     caddr_t exec_file, struct cred *cred, int *brand_action);
 
-static boolean_t lx_native_exec(uint8_t, const char **);
+static int lx_native_exec(uint8_t, const char **);
 static uint32_t lx_map32limit(proc_t *);
 
 static void lx_savecontext(ucontext_t *);
@@ -2599,13 +2599,13 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 	return (0);
 }
 
-boolean_t
+int
 lx_native_exec(uint8_t osabi, const char **interp)
 {
 	if (osabi != ELFOSABI_SOLARIS)
 		return (B_FALSE);
 	if (lx_seccomp_active(curproc))
-		exit(CLD_KILLED, SIGSYS);
+		return (-ENOEXEC);
 
 
 	/*

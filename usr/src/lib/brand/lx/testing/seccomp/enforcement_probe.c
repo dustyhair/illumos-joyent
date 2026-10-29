@@ -352,12 +352,16 @@ guarded_clone(void)
 }
 
 static int
-escape_exec(void)
+native_exec_rejected(void)
 {
+	char *args[] = { "/native/usr/bin/true", NULL };
+
 	if (allow_all() != 0)
 		return (1);
-	(void) syscall(SYS_execve, "/native/usr/bin/true", 0, 0);
-	return (2);
+	errno = 0;
+	return (syscall(SYS_execve, args[0], args, NULL) != -1 ||
+	    errno != ENOEXEC ||
+	    prctl(PR_GET_SECCOMP, 0UL, 0UL, 0UL, 0UL) != 2);
 }
 
 static int
@@ -525,7 +529,7 @@ main(void)
 	if (lx) {
 		RUN(escape_int80, SIGSYS); RUN(escape_int91, SIGSYS);
 		RUN(guarded_fork, 0); RUN(guarded_clone, 0);
-		RUN(escape_exec, SIGSYS); RUN(invalid_sigreturn, SIGSEGV);
+		RUN(native_exec_rejected, 0); RUN(invalid_sigreturn, SIGSEGV);
 		RUN(escape_vsyscall, SIGSYS); RUN(caught_signal, 0);
 		RUN(multiple_threads, 0); RUN(unsupported_actions, 0);
 		RUN(chain_limit, 0); RUN(path_limit, 0);

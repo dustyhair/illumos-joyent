@@ -135,7 +135,8 @@ struct execa;
  * b_exit_with_sig - Instead of sending SIGCLD, exit with custom behavior
  * b_psig_to_proc - Custom additional behavior during psig
  * b_wait_filter - Filter processes from being matched by waitid
- * b_native_exec - Provide interpreter path prefix for executables
+ * b_native_exec - Return 1 for native, 0 for branded, or a negative errno;
+ *                 provide interpreter path prefix for native executables
  * b_ptrace_exectrap - Custom behavior for legacy ptrace traps
  * b_map32limit - Specify alternate limit for MAP_32BIT mappings
  * b_stop_notify - Hook process stop events
@@ -183,7 +184,7 @@ struct brand_ops {
 	int	b_nsig;
 	void	(*b_exit_with_sig)(proc_t *, sigqueue_t *);
 	boolean_t (*b_wait_filter)(proc_t *, proc_t *);
-	boolean_t (*b_native_exec)(uint8_t, const char **);
+	int	(*b_native_exec)(uint8_t, const char **);
 	uint32_t (*b_map32limit)(proc_t *);
 	void	(*b_stop_notify)(proc_t *, klwp_t *, ushort_t, ushort_t);
 	int	(*b_waitid_helper)(idtype_t, id_t, k_siginfo_t *, int,

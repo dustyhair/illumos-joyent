@@ -459,8 +459,14 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 	 */
 	if ((level <= INTP_MAXDEPTH) && (*brand_action != EBA_NATIVE) &&
 	    (PROC_IS_BRANDED(p)) && (BROP(p)->b_native_exec != NULL)) {
-		if (BROP(p)->b_native_exec(ehdrp->e_ident[EI_OSABI],
-		    &args->brand_nroot) == B_TRUE) {
+		int native = BROP(p)->b_native_exec(ehdrp->e_ident[EI_OSABI],
+		    &args->brand_nroot);
+
+		if (native < 0) {
+			error = -native;
+			goto out;
+		}
+		if (native != 0) {
 			ASSERT(ehdrp->e_ident[EI_OSABI]);
 			*brand_action = EBA_NATIVE;
 			/* Add one for the trailing '/' in the path */

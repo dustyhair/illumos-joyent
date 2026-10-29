@@ -145,8 +145,9 @@ native_exec(void)
 {
     if (deny(SYS_getppid))
         return (1);
+    errno = 0;
     do_exec("/native/usr/bin/true", "unused");
-    return (9);
+    return (errno != ENOEXEC || !restricted());
 }
 
 static int
@@ -205,7 +206,7 @@ main(int argc, char **argv)
         "/test/exec_dynamic", X_OK) == 0)
         RUN(dynamic_exec, 0);
     if (access("/native/usr/bin/uname", X_OK) == 0) {
-        RUN(native_exec, SIGSYS);
+        RUN(native_exec, 0);
         if (access("/test/codex-current/bin/codex", X_OK) == 0)
             RUN(codex_version, 0);
     }
