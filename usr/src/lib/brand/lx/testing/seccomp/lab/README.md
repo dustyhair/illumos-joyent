@@ -148,3 +148,61 @@ Release module SHA-256 values:
 
 This remains a mixed-image development test. No physical host kernel,
 boot configuration or existing Debian zone was changed.
+
+## Experimental syscall enforcement acceptance
+
+Kernel changes through `57be18e58c` add a default-off enforcement experiment.
+The full clean build at `cff6161c71` produced release/debug `unix`, `genunix`,
+`lx_brand` and `lx_proc`. The errno correction `afdf401c13` clean-rebuilt
+`lx_brand`; the LWP layout correction `57be18e58c` clean-rebuilt `lx_brand`
+and `lx_proc`. All builds passed. The runtime used release components.
+All outputs were private to the lx workspace. The reused May platform's
+other modules and compressed userland still make this a mixed-image test.
+
+The boot archive needed more room for this milestone. Preserve a backup of
+the private archive, detach all lofi mappings, extend that file to 450 MiB,
+and grow its UFS filesystem to 921600 sectors using the growfs helper from
+the build proto. This applies only to the private RAM-root image, never a
+host disk or pool. Mount it, copy the four release components, the updated
+Linux root tar and `enforcement-test.sh`, then unmount and detach it. Copy
+the same new `unix` to the external ISO boot tree and regenerate the archive
+hash and ISO. The prior BPF-only archive remains available as a backup.
+
+The root tar adds the static Linux `enforcement_probe` under `/test`.
+`enforcement-test.sh` first runs the normal driver with the switch zero and
+then the BPF corpus. It enables `lx_brand`'s `lx_seccomp_experimental` through
+MDB only after checking the private image marker, boot property and global
+zone. It boots the test zone again, runs both filter probes, and halts it.
+Expected output is `LX_ENFORCEMENT_PASS` and combined exit zero. Do not treat
+the old probe's broad 'filtering available' label as full sandbox acceptance;
+its coverage is the simple denial test described in the parent README.
+
+The final boot passed 17 privilege checks, the 67179-record BPF corpus and
+all 29 enforcement checks. The latter include both installation APIs,
+immutability, Linux errno values/zero/clamping, unknown and negative syscall
+numbers, full-width metadata/PC, stacking and kill precedence, invalid input,
+resource limits and multi-LWP rejection. All eight designated escape cases
+terminated with SIGSYS: int80, int91, fork, clone, native exec, sigreturn,
+vsyscall and signal trampoline execution. Filtering was rejected in the
+initial default-off phase and enforced only after the explicit lab switch.
+
+The first enforcement run passed 28/29 checks and exposed ENOTSUP translating
+to Linux ENOSYS in the multi-LWP rejection. Using native EOPNOTSUPP fixed the
+Linux result. A later review found that inserting the entry field in the
+middle shifted offsets read by lx_devfs. Moving it to the tail preserved
+all 54 existing offsets and the 440-byte size, verified from the old and new
+modules' CTF. The final acceptance boot includes both corrections.
+
+Final release SHA-256 values:
+
+- `unix`: `49858b11953027643049698dec17034b54891a8dbfab881d91579f7cfb6d4c81`
+- `genunix`: `8abd8ccb6f5429f61e129efe81836fc9828e8a59c5635ea175941b33843c3ab8`
+- `lx_brand`: `d450af6696176101e5fe2692136541a31392c464a739195a93b9d3d5c16f00ae`
+- `lx_proc`: `1342e833ac321deb52f8f3b16f7c13f57b362d07df26c9154d06ac65059c75c8`
+- Linux enforcement probe: `5b24ea5ec1e34bb602c207cf9894f951f351abd60a24512e4d538614c324c103`
+
+The final test zone was halted and the guest pool exported before normal
+poweroff. The experiment remains disabled by default. Full per-task filter
+semantics, native-compatible fork/exec and signal handling, i386 support,
+namespace support, full platform validation and Codex integration remain
+pending. These checks do not establish production sandbox security.

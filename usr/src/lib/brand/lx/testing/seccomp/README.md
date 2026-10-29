@@ -247,6 +247,14 @@ regressions and the BPF corpus. It then changes the experiment switch through
 MDB inside the guarded private VM and runs both enforcement probes. The
 matching `unix`, `genunix`, `lx_brand` and `lx_proc` must all be rebuilt.
 
+The final x86-64 VM run passed all 29 enforcement checks, the original
+filter-denial probe through both installation APIs, all 17 privilege
+regressions without skips, and all 67179 BPF corpus records. Filtering
+was rejected before the experimental switch was enabled. The final LWP
+layout also preserves all 54 previous member offsets and the 440-byte size;
+the entry tag occupies former tail padding, avoiding a layout mismatch
+with other lx modules. These results cover the stated experiment only.
+
 ## Remaining implementation
 
 1. Extend no-new-privileges validation to i386 and the remaining native
