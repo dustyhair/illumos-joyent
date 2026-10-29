@@ -2131,6 +2131,9 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 	ASSERT(p->p_brand == &lx_brand);
 	ASSERT(lxpd != NULL);
 
+	if (lx_seccomp_active(p) && args->to_model != DATAMODEL_NATIVE)
+		return (ENOEXEC);
+
 	/*
 	 * Start with a separate struct for ELF data instead of inheriting
 	 * values from the currently running binary.  This ensures that fields
@@ -2601,6 +2604,9 @@ lx_native_exec(uint8_t osabi, const char **interp)
 {
 	if (osabi != ELFOSABI_SOLARIS)
 		return (B_FALSE);
+	if (lx_seccomp_active(curproc))
+		exit(CLD_KILLED, SIGSYS);
+
 
 	/*
 	 * If the process root matches the zone root, prepend /native to the

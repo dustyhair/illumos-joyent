@@ -48,6 +48,7 @@
 #include <sys/sdt.h>
 #include <lx_signum.h>
 #include <lx_syscall.h>
+#include <lx_auxv.h>
 #include <sys/proc.h>
 #include <sys/procfs.h>
 #include <net/if.h>
@@ -76,6 +77,77 @@ void
 lx_setrval(klwp_t *lwp, int v1, int v2)
 {
 	lwptoregs(lwp)->r_r0 = 0;
+}
+
+/*
+ * Enter the loaded Linux image directly after a guarded exec. elfexec has
+ * built the initial native-format stack and mapped the Linux executable,
+ * linker and VDSO. Translate the aux vector here instead of running the
+ * brand library with unrestricted native system calls.
+ */
+static void
+lx_kernel_exec_finish(klwp_t *lwp)
+{
+	proc_t *p = lwptoproc(lwp);
+	lx_proc_data_t *pd = ptolxproc(p);
+	lx_lwp_data_t *ld = lwptolxlwp(lwp);
+	struct regs *rp = lwptoregs(lwp);
+	uintptr_t cursor = rp->r_sp, word, output;
+	auxv_t native, linux_aux;
+	uint_t i;
+	k_sigset_t empty;
+
+	VERIFY(lwp_getdatamodel(lwp) == DATAMODEL_NATIVE);
+	if (copyin((void *)cursor, &word, sizeof (word)) != 0 ||
+	    word > NCARGS / sizeof (uintptr_t))
+		goto badstack;
+	cursor += (word + 2) * sizeof (uintptr_t);
+	for (i = 0; i < NCARGS / sizeof (uintptr_t); i++) {
+		if (copyin((void *)cursor, &word, sizeof (word)) != 0)
+			goto badstack;
+		cursor += sizeof (uintptr_t);
+		if (word == 0)
+			break;
+	}
+	if (word != 0)
+		goto badstack;
+	output = cursor;
+	for (i = 0; i < __KERN_NAUXV_IMPL; i++) {
+		if (copyin((void *)cursor, &native, sizeof (native)) != 0)
+			goto badstack;
+		if (native.a_type == AT_NULL)
+			break;
+		if (lx_auxv_stol(&native, &linux_aux, &pd->l_elf_data) == 0) {
+			if (copyout(&linux_aux, (void *)output,
+			    sizeof (linux_aux)) != 0)
+				goto badstack;
+			output += sizeof (linux_aux);
+		}
+		cursor += sizeof (native);
+	}
+	if (i == __KERN_NAUXV_IMPL)
+		goto badstack;
+	bzero(&linux_aux, sizeof (linux_aux));
+	if (copyout(&linux_aux, (void *)output, sizeof (linux_aux)) != 0)
+		goto badstack;
+
+	ld->br_stack_mode = LX_STACK_MODE_BRAND;
+	rp->r_pc = pd->l_elf_data.ed_ldentry;
+	rp->r_rdx = 0;
+	/* Linux resets the clone termination signal across exec. */
+	sigemptyset(&empty);
+	mutex_enter(&p->p_lock);
+	pd->l_signal = LX_SIGCHLD;
+	p->p_pidflag &= ~(CLDNOSIGCHLD | CLDWAITPID);
+	/* Native SIGPWR ignores by default; the Linux default terminates. */
+	pd->l_sigvalid |= 1ULL << (LX_SIGPWR - 1);
+	setsigact(ltos_signo[LX_SIGPWR], (void (*)(int))2, &empty,
+	    SA_SIGINFO);
+	mutex_exit(&p->p_lock);
+	return;
+
+badstack:
+	exit(CLD_KILLED, SIGSEGV);
 }
 
 /*
@@ -153,6 +225,8 @@ lx_exec()
 	 */
 	rp->r_r0 = 0;
 	(void) lx_ptrace_stop(LX_PR_SYSEXIT);
+	if (lx_seccomp_active(p))
+		lx_kernel_exec_finish(lwp);
 }
 
 static void

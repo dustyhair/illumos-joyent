@@ -44,6 +44,7 @@
 #include <sys/lx_impl.h>
 #include <sys/lx_misc.h>
 #include <lx_errno.h>
+#include <sys/exec.h>
 
 
 /*
@@ -401,6 +402,17 @@ lx_syscall_enter(int entry)
 	if (lx_sig_kernel_syscall(lwp, syscall_num, args, &ret)) {
 		if (lwpd->br_eosys == NORMALRETURN)
 			lx_syscall_return(lwp, syscall_num, ret);
+		return (0);
+	}
+
+	if (lx_seccomp_active(curproc) && syscall_num == 59) {
+		error = exec_common((const char *)args[0],
+		    (const char **)args[1], (const char **)args[2],
+		    NULL, EBA_NONE);
+		if (error != 0) {
+			(void) set_errno(error);
+			lx_syscall_return(lwp, syscall_num, -1);
+		}
 		return (0);
 	}
 
