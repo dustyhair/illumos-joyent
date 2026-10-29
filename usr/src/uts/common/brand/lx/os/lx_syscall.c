@@ -360,7 +360,7 @@ lx_syscall_enter(int entry)
 	syscall_num = lwpd->br_syscall_num;
 	if (!lx_seccomp_check(lwp, syscall_num))
 		return (0);
-	if (syscall_num < 0 || syscall_num > LX_MAX_SYSCALL(lwp)) {
+	if (syscall_num < 0 || syscall_num >= LX_MAX_SYSCALL(lwp)) {
 		lx_syscall_unsup_msg(NULL, syscall_num, 0);
 
 		(void) set_errno(ENOTSUP);
