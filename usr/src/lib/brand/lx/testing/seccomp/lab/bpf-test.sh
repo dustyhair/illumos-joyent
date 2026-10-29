@@ -7,6 +7,10 @@ bootparams | grep -q '^lx_lab=true$'
 test "$(zonename)" = global
 echo LX_BPF_START
 digest -a sha256 /kernel/brand/amd64/lx_brand /lab/lx_seccomp_ktest /lab/linux-vectors.bin
+if ! test -c /dev/ktest; then
+    add_drv ktest
+    devfsadm -i ktest
+fi
 modload /lab/lx_seccomp_ktest
 ktest list lx_seccomp:bpf:vectors
 ktest run -i /lab/linux-vectors.bin lx_seccomp:bpf:vectors
