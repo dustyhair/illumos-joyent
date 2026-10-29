@@ -57,6 +57,7 @@ struct ksid;
 struct ksidlist;
 struct credklpd;
 struct credgrp;
+struct brand_cred;
 
 struct auditinfo_addr;			/* cred.h is included in audit.h */
 
@@ -84,6 +85,8 @@ extern int supgroupmember(gid_t, const cred_t *);
 extern int hasprocperm(const cred_t *, const cred_t *);
 extern int prochasprocperm(struct proc *, struct proc *, const cred_t *);
 extern int crcmp(const cred_t *, const cred_t *);
+extern struct brand_cred *crgetbrand(const cred_t *);
+extern void crsetbrand(cred_t *, struct brand_cred *);
 extern cred_t *zone_kcred(void);
 
 extern uid_t crgetuid(const cred_t *);

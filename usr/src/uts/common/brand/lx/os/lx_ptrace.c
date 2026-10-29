@@ -1039,8 +1039,8 @@ lx_ptrace_attach(pid_t lx_pid)
 	 * We now hold the lock on the tracee.  Attempt to install ourselves
 	 * as the tracer.
 	 */
-	if (curproc != rproc && priv_proc_cred_perm(curproc->p_cred, rproc,
-	    NULL, VWRITE) != 0) {
+	if (curproc != rproc && priv_proc_cred_perm(CRED(), rproc,
+	    NULL, VWRITE | PRIV_PROC_REALCREDS) != 0) {
 		/*
 		 * This process does not have permission to trace the remote
 		 * process.

@@ -102,6 +102,7 @@ struct uarg;
 struct brand_mach_ops;
 struct intpdata;
 struct execa;
+struct brand_cred;
 
 /*
  * Common structure to define hooks for brand operation.
@@ -155,6 +156,9 @@ struct execa;
  * b_clearbrand - Perform any actions necessary when clearing the brand.
  * b_rpc_statd - Upcall to rpc.statd running within the zone
  * b_acct_out - Output properly formatted accounting record
+ * b_cred_free - Release immutable brand-specific credential data
+ * b_cred_proc_perm - Return BRAND_CRED_DEFER for native policy, zero to
+ *                    authorize, or an errno to deny process access
  */
 struct brand_ops {
 	void	(*b_init_brand_data)(zone_t *, kmutex_t *);
@@ -207,6 +211,9 @@ struct brand_ops {
 	void	(*b_clearbrand)(proc_t *, boolean_t);
 	void	(*b_rpc_statd)(int, void *, void *);
 	void	(*b_acct_out)(struct vnode *, int);
+	void	(*b_cred_free)(struct brand_cred *);
+	int	(*b_cred_proc_perm)(const struct cred *, const struct cred *,
+	    int);
 };
 
 /*
@@ -221,6 +228,19 @@ typedef struct brand {
 } brand_t;
 
 extern brand_t native_brand;
+
+/* Immutable payload shared by credential copies; its brand remains loaded. */
+typedef struct brand_cred {
+	uint_t bc_refs;
+	brand_t *bc_brand;
+} brand_cred_t;
+
+#define	BRAND_CRED_DEFER	(-1)
+extern void brand_cred_init(brand_cred_t *, brand_t *);
+extern void brand_cred_hold(brand_cred_t *);
+extern void brand_cred_rele(brand_cred_t *);
+extern int brand_cred_proc_perm(const struct cred *, const struct cred *, int);
+extern boolean_t brand_in_use(brand_t *);
 
 /*
  * Convenience macros

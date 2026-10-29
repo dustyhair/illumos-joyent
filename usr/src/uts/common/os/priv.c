@@ -571,6 +571,8 @@ priv_proc_cred_perm(const cred_t *scr, proc_t *tp, cred_t **pcr, int mode)
 {
 	const priv_set_t *eset;
 	int idsmatch;
+	uid_t uid;
+	gid_t gid;
 	cred_t *tcr;
 	int res = 0;
 
@@ -579,15 +581,11 @@ priv_proc_cred_perm(const cred_t *scr, proc_t *tp, cred_t **pcr, int mode)
 	crhold(tcr = tp->p_cred);
 	mutex_exit(&tp->p_crlock);
 
-	if (scr == tcr && !(tp->p_flag & SNOCD))
-		goto out;
-
-	idsmatch = (scr->cr_uid == tcr->cr_uid &&
-	    scr->cr_uid == tcr->cr_ruid &&
-	    scr->cr_uid == tcr->cr_suid &&
-	    scr->cr_gid == tcr->cr_gid &&
-	    scr->cr_gid == tcr->cr_rgid &&
-	    scr->cr_gid == tcr->cr_sgid &&
+	uid = (mode & PRIV_PROC_REALCREDS) ? scr->cr_ruid : scr->cr_uid;
+	gid = (mode & PRIV_PROC_REALCREDS) ? scr->cr_rgid : scr->cr_gid;
+	idsmatch = (uid == tcr->cr_uid &&
+	    uid == tcr->cr_ruid && uid == tcr->cr_suid &&
+	    gid == tcr->cr_gid && gid == tcr->cr_rgid && gid == tcr->cr_sgid &&
 	    !(tp->p_flag & SNOCD));
 
 	/*
@@ -598,6 +596,16 @@ priv_proc_cred_perm(const cred_t *scr, proc_t *tp, cred_t **pcr, int mode)
 		res = EACCES;
 		goto out;
 	}
+
+	/* Branded security state must be checked before native shortcuts. */
+	if (scr->cr_brand != NULL || tcr->cr_brand != NULL) {
+		res = brand_cred_proc_perm(scr, tcr, mode);
+		if (res != BRAND_CRED_DEFER)
+			goto out;
+		res = 0;
+	}
+	if (scr == tcr && !(tp->p_flag & SNOCD))
+		goto out;
 
 	if (!(mode & VWRITE)) {
 		if (!idsmatch && secpolicy_proc_owner(scr, tcr, 0) != 0)

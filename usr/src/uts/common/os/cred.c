@@ -40,6 +40,7 @@
  */
 
 #include <sys/types.h>
+#include <sys/brand.h>
 #include <sys/sysmacros.h>
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -259,6 +260,7 @@ cralloc_flags(int flgs)
 	cr->cr_ksid = NULL;
 	cr->cr_klpd = NULL;
 	cr->cr_grps = NULL;
+	cr->cr_brand = NULL;
 	return (cr);
 }
 
@@ -290,6 +292,8 @@ crget(void)
 	cred_t *cr = kmem_cache_alloc(cred_cache, KM_SLEEP);
 
 	bcopy(zone_kcred(), cr, crsize);
+	if (cr->cr_brand)
+		brand_cred_hold(cr->cr_brand);
 	cr->cr_ref = 1;
 	zone_cred_hold(cr->cr_zone);
 	if (cr->cr_label)
@@ -370,6 +374,8 @@ crfree(cred_t *cr)
 			kcrsid_rele(cr->cr_ksid);
 		if (cr->cr_grps)
 			crgrprele(cr->cr_grps);
+		if (cr->cr_brand)
+			brand_cred_rele(cr->cr_brand);
 
 		kmem_cache_free(cred_cache, cr);
 	}
@@ -397,6 +403,8 @@ crcopy(cred_t *cr)
 		crklpd_hold(newcr->cr_klpd);
 	if (newcr->cr_grps)
 		crgrphold(newcr->cr_grps);
+	if (newcr->cr_brand)
+		brand_cred_hold(newcr->cr_brand);
 	crfree(cr);
 	newcr->cr_ref = 2;		/* caller gets two references */
 	return (newcr);
@@ -423,6 +431,8 @@ crcopy_to(cred_t *oldcr, cred_t *newcr)
 		crklpd_hold(newcr->cr_klpd);
 	if (newcr->cr_grps)
 		crgrphold(newcr->cr_grps);
+	if (newcr->cr_brand)
+		brand_cred_hold(newcr->cr_brand);
 	if (nkcr) {
 		newcr->cr_ksid = nkcr;
 		kcrsidcopy_to(oldcr->cr_ksid, newcr->cr_ksid);
@@ -457,6 +467,8 @@ crdup_flags(const cred_t *cr, int flgs)
 		kcrsid_hold(newcr->cr_ksid);
 	if (newcr->cr_grps)
 		crgrphold(newcr->cr_grps);
+	if (newcr->cr_brand)
+		brand_cred_hold(newcr->cr_brand);
 	newcr->cr_ref = 1;
 	return (newcr);
 }
@@ -487,6 +499,8 @@ crdup_to(cred_t *oldcr, cred_t *newcr)
 		crklpd_hold(newcr->cr_klpd);
 	if (newcr->cr_grps)
 		crgrphold(newcr->cr_grps);
+	if (newcr->cr_brand)
+		brand_cred_hold(newcr->cr_brand);
 	if (nkcr) {
 		newcr->cr_ksid = nkcr;
 		kcrsidcopy_to(oldcr->cr_ksid, newcr->cr_ksid);
@@ -661,6 +675,7 @@ crcmp(const cred_t *cr1, const cred_t *cr2)
 	    cr1->cr_ruid == cr2->cr_ruid &&
 	    cr1->cr_rgid == cr2->cr_rgid &&
 	    cr1->cr_zone == cr2->cr_zone &&
+	    cr1->cr_brand == cr2->cr_brand &&
 	    ((grp1 = cr1->cr_grps) == (grp2 = cr2->cr_grps) ||
 	    (grp1 != NULL && grp2 != NULL &&
 	    grp1->crg_ngroups == grp2->crg_ngroups &&
@@ -669,6 +684,25 @@ crcmp(const cred_t *cr1, const cred_t *cr2)
 		return (!priv_isequalset(&CR_OEPRIV(cr1), &CR_OEPRIV(cr2)));
 	}
 	return (1);
+}
+
+struct brand_cred *
+crgetbrand(const cred_t *cr)
+{
+	return (cr->cr_brand);
+}
+
+void
+crsetbrand(cred_t *cr, struct brand_cred *data)
+{
+	brand_cred_t *old = cr->cr_brand;
+
+	ASSERT(cr->cr_ref <= 2);
+	if (old == data)
+		return;
+	brand_cred_hold(data);
+	cr->cr_brand = data;
+	brand_cred_rele(old);
 }
 
 /*

@@ -29,5 +29,8 @@ extern int lx_userns_groups_write(lx_userns_t *, const lx_userns_cred_t *,
 extern int lx_userns_may_setgroups(lx_userns_t *);
 extern int lx_userns_has_cap(const lx_userns_cred_t *, lx_userns_t *, uint_t);
 extern cred_t *lx_userns_native_cred(cred_t *);
+extern cred_t *lx_userns_native_for(cred_t *, const lx_userns_cred_t *);
+extern void lx_userns_cred_free(struct brand_cred *);
+extern int lx_userns_cred_perm(const cred_t *, const cred_t *, int);
 
 #endif /* _SYS_LX_USERNS_H */

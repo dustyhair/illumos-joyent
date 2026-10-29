@@ -87,6 +87,7 @@ struct cred {
 	struct credklpd *cr_klpd;	/* pointer to the cred's klpd */
 	credsid_t	*cr_ksid;	/* pointer to SIDs */
 	credgrp_t	*cr_grps;	/* supplemental groups */
+	struct brand_cred *cr_brand;	/* optional immutable brand state */
 					/* audit info is defined dynamically */
 					/* and valid only when audit enabled */
 	/* auditinfo_addr_t	cr_auinfo;	audit info */

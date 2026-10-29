@@ -8,4 +8,14 @@ test "$(zonename)" = global
 for suite in maps capabilities native lifetime; do
     /lab/ktest run "lx_namespace:user:$suite"
 done
+/lab/ktest run lx_namespace:user:credentials
+cleanup() {
+    zoneadm -z lx-probe halt
+}
+trap cleanup EXIT
+zoneadm -z lx-probe boot
+/lab/ktest run lx_namespace:user:access
+cleanup
+trap - EXIT
+/lab/ktest run lx_namespace:user:credentials
 echo LX_USERNS_BACKEND_PASS

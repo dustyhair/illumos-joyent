@@ -228,6 +228,8 @@ extern boolean_t priv_isemptyset(const priv_set_t *);
 extern boolean_t priv_isfullset(const priv_set_t *);
 extern boolean_t priv_isequalset(const priv_set_t *, const priv_set_t *);
 extern boolean_t priv_issubset(const priv_set_t *, const priv_set_t *);
+/* Select real IDs/permitted masks for brand ptrace access checks. */
+#define	PRIV_PROC_REALCREDS	0x10000
 extern int priv_proc_cred_perm(const struct cred *, struct proc *,
 	struct cred **, int);
 extern void priv_intersect(const priv_set_t *, priv_set_t *);

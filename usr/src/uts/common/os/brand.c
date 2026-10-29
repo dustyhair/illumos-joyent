@@ -24,6 +24,9 @@
  */
 
 #include <sys/kmem.h>
+#include <sys/atomic.h>
+#include <sys/debug.h>
+#include <sys/cred.h>
 #include <sys/errno.h>
 #include <sys/systm.h>
 #include <sys/cmn_err.h>
@@ -64,6 +67,7 @@ brand_t native_brand = {
  */
 struct brand_list {
 	int			bl_refcnt;
+	uint_t			bl_credrefs;
 	struct brand_list	*bl_next;
 	brand_t			*bl_brand;
 };
@@ -139,6 +143,7 @@ brand_register(brand_t *brand)
 
 	list->bl_brand = brand;
 	list->bl_refcnt = 0;
+	list->bl_credrefs = 0;
 	list->bl_next = brand_list;
 	brand_list = list;
 
@@ -177,7 +182,7 @@ brand_unregister(brand_t *brand)
 		return (EINVAL);
 	}
 
-	if (list->bl_refcnt > 0) {
+	if (list->bl_refcnt > 0 || list->bl_credrefs > 0) {
 		cmn_err(CE_WARN, "Unregistering brand %s which is still in use",
 		    brand->b_name);
 		mutex_exit(&brand_list_lock);
@@ -294,6 +299,85 @@ brand_zone_count(struct brand *bp)
 	mutex_exit(&brand_list_lock);
 
 	return (cnt);
+}
+
+boolean_t
+brand_in_use(brand_t *brand)
+{
+	struct brand_list *list;
+	boolean_t busy = B_FALSE;
+
+	mutex_enter(&brand_list_lock);
+	for (list = brand_list; list != NULL; list = list->bl_next) {
+		if (list->bl_brand == brand) {
+			busy = list->bl_refcnt != 0 || list->bl_credrefs != 0;
+			break;
+		}
+	}
+	mutex_exit(&brand_list_lock);
+	return (busy);
+}
+
+void
+brand_cred_init(brand_cred_t *data, brand_t *brand)
+{
+	struct brand_list *list;
+
+	VERIFY(brand->b_ops->b_cred_free != NULL);
+	VERIFY(brand->b_ops->b_cred_proc_perm != NULL);
+	data->bc_refs = 1;
+	data->bc_brand = brand;
+	mutex_enter(&brand_list_lock);
+	for (list = brand_list; list != NULL; list = list->bl_next) {
+		if (list->bl_brand == brand) {
+			list->bl_credrefs++;
+			break;
+		}
+	}
+	VERIFY(list != NULL);
+	mutex_exit(&brand_list_lock);
+}
+
+void
+brand_cred_hold(brand_cred_t *data)
+{
+	if (data != NULL)
+		atomic_inc_uint(&data->bc_refs);
+}
+
+void
+brand_cred_rele(brand_cred_t *data)
+{
+	struct brand_list *list;
+	brand_t *brand;
+
+	if (data == NULL || atomic_dec_uint_nv(&data->bc_refs) != 0)
+		return;
+	brand = data->bc_brand;
+	/* Keep the module reference until its callback has returned. */
+	brand->b_ops->b_cred_free(data);
+	mutex_enter(&brand_list_lock);
+	for (list = brand_list; list != NULL; list = list->bl_next) {
+		if (list->bl_brand == brand) {
+			VERIFY3U(list->bl_credrefs, !=, 0);
+			list->bl_credrefs--;
+			break;
+		}
+	}
+	VERIFY(list != NULL);
+	mutex_exit(&brand_list_lock);
+}
+
+int
+brand_cred_proc_perm(const cred_t *source, const cred_t *target, int mode)
+{
+	brand_cred_t *data = crgetbrand(source);
+
+	if (data == NULL)
+		data = crgetbrand(target);
+	if (data == NULL)
+		return (BRAND_CRED_DEFER);
+	return (data->bc_brand->b_ops->b_cred_proc_perm(source, target, mode));
 }
 
 void
@@ -1109,10 +1193,9 @@ brand_solaris_fini(char **emul_table, struct modlinkage *modlinkage,
 	int err;
 
 	/*
-	 * If there are any zones using this brand, we can't allow it
-	 * to be unloaded.
+	 * Zones and immutable credential payloads both keep the brand in use.
 	 */
-	if (brand_zone_count(pbrand))
+	if (brand_in_use(pbrand))
 		return (EBUSY);
 
 	kmem_free(*emul_table, NSYSCALL);

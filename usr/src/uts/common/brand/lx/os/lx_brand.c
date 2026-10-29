@@ -168,6 +168,7 @@
 #include <sys/archsystm.h>
 #include <sys/zone.h>
 #include <sys/brand.h>
+#include <sys/lx_userns.h>
 #include <sys/sdt.h>
 #include <sys/x86_archext.h>
 #include <sys/controlregs.h>
@@ -314,7 +315,9 @@ struct brand_ops lx_brops = {
 	B_FALSE,			/* b_intp_parse_arg */
 	lx_clearbrand,			/* b_clearbrand */
 	lx_upcall_statd,		/* b_rpc_statd */
-	lx_acct_out			/* b_acct_out */
+	lx_acct_out,			/* b_acct_out */
+	lx_userns_cred_free,		/* b_cred_free */
+	lx_userns_cred_perm		/* b_cred_proc_perm */
 };
 
 struct brand_mach_ops lx_mops = {
@@ -2703,10 +2706,9 @@ _fini(void)
 	int futex_done = 0;
 
 	/*
-	 * If there are any zones using this brand, we can't allow it to be
-	 * unloaded.
+	 * Zones and immutable credential payloads both keep the brand loaded.
 	 */
-	if (brand_zone_count(&lx_brand))
+	if (brand_in_use(&lx_brand))
 		return (EBUSY);
 
 	lx_ptrace_fini();

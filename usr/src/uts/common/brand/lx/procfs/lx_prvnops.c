@@ -6660,7 +6660,8 @@ lxpr_doaccess(lxpr_node_t *lxpnp, boolean_t shallow, int mode, int flags,
 		if ((tp = lxpr_lock(lxpnp, ZOMB_OK)) == NULL) {
 			return (ENOENT);
 		}
-		if (tp == curproc || secpolicy_proc_access(cr) == 0 ||
+		if (tp == curproc || (crgetbrand(cr) == NULL &&
+		    secpolicy_proc_access(cr) == 0) ||
 		    priv_proc_cred_perm(cr, tp, NULL, mode) == 0) {
 			allow_pid_access = B_TRUE;
 		}
@@ -6718,7 +6719,8 @@ lxpr_doaccess(lxpr_node_t *lxpnp, boolean_t shallow, int mode, int flags,
 	 * Allow access to those (root) possessing the correct privilege or
 	 * already authorized against a pid-specific resource.
 	 */
-	if (allow_pid_access || secpolicy_proc_access(cr) == 0) {
+	if (allow_pid_access || (crgetbrand(cr) == NULL &&
+	    secpolicy_proc_access(cr) == 0)) {
 		return (0);
 	}
 

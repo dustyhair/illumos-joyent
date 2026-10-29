@@ -5,12 +5,14 @@
  */
 #include <sys/types.h>
 #include <sys/atomic.h>
+#include <sys/brand.h>
 #include <sys/debug.h>
 #include <sys/kmem.h>
 #include <sys/systm.h>
 #include <sys/errno.h>
 #include <sys/cred_impl.h>
 #include <sys/priv_impl.h>
+#include <sys/policy.h>
 #include <sys/lx_userns.h>
 
 struct lx_userns {
@@ -228,4 +230,82 @@ lx_userns_native_cred(cred_t *source)
 	CR_FLAGS(reduced) &= ~(PRIV_AWARE_RESET | PRIV_PFEXEC | PRIV_XPOLICY);
 	crsetcrklpd(reduced, NULL);
 	return (reduced);
+}
+
+#define	LX_USERNS_PTRACE	19
+
+/* Only namespace credentials allocate this payload; it is immutable. */
+typedef struct lx_userns_native {
+	brand_cred_t un_cred;
+	lx_userns_t *un_namespace;
+	lx_caps_t un_caps;
+} lx_userns_native_t;
+
+extern brand_t lx_brand;
+
+cred_t *
+lx_userns_native_for(cred_t *source, const lx_userns_cred_t *actor)
+{
+	lx_userns_native_t *data = kmem_alloc(sizeof (*data), KM_SLEEP);
+	cred_t *cred = lx_userns_native_cred(source);
+
+	/* Entry to the initial namespace must never use this constructor. */
+	VERIFY(actor->luc_ns->un_parent != NULL);
+	data->un_namespace = actor->luc_ns;
+	lx_userns_hold(data->un_namespace);
+	data->un_caps = actor->luc_caps;
+	brand_cred_init(&data->un_cred, &lx_brand);
+	crsetbrand(cred, &data->un_cred);
+	brand_cred_rele(&data->un_cred);
+	return (cred);
+}
+
+void
+lx_userns_cred_free(brand_cred_t *data)
+{
+	lx_userns_native_t *native = (lx_userns_native_t *)data;
+
+	lx_userns_rele(native->un_namespace);
+	kmem_free(native, sizeof (*native));
+}
+
+int
+lx_userns_cred_perm(const cred_t *source, const cred_t *target, int mode)
+{
+	const lx_userns_native_t *from = (void *)crgetbrand(source);
+	const lx_userns_native_t *to = (void *)crgetbrand(target);
+	lx_userns_cred_t actor = { 0 };
+	lx_userns_t *target_ns, *root;
+	uint64_t mask;
+
+	/* A different brand's credential is outside every lx user namespace. */
+	if (from != NULL && from->un_cred.bc_brand != &lx_brand)
+		return (EACCES);
+	if (to != NULL && to->un_cred.bc_brand != &lx_brand)
+		return (EACCES);
+	VERIFY(from != NULL || to != NULL);
+	root = from != NULL ? from->un_namespace : to->un_namespace;
+	while (root->un_parent != NULL)
+		root = root->un_parent;
+	actor.luc_ns = from != NULL ? from->un_namespace : root;
+	actor.luc_uid = crgetuid(source);
+	actor.luc_gid = crgetgid(source);
+	if (from != NULL)
+		actor.luc_caps = from->un_caps;
+	target_ns = to != NULL ? to->un_namespace : root;
+	/* Namespace ownership grants authority to its owner in the parent. */
+	if (lx_userns_has_cap(&actor, target_ns, LX_USERNS_PTRACE))
+		return (0);
+	if (from == NULL) {
+		/* Native administrators retain their existing process authority. */
+		return (secpolicy_proc_access(source) == 0 ?
+		    BRAND_CRED_DEFER : EACCES);
+	}
+	if (to == NULL || from->un_namespace != to->un_namespace)
+		return (EACCES);
+	mask = (mode & PRIV_PROC_REALCREDS) ? from->un_caps.lc_permitted :
+	    from->un_caps.lc_effective;
+	if ((to->un_caps.lc_permitted & ~mask) != 0)
+		return (EACCES);
+	return (BRAND_CRED_DEFER);
 }
