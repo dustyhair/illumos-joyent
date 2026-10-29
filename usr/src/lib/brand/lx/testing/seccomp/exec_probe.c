@@ -163,7 +163,21 @@ static int
 codex_version(void)
 {
     char *args[] = { "/test/codex-current/bin/codex", "--version", NULL };
-    if (deny(SYS_socket))
+    /* Deny Internet sockets while retaining local IPC. */
+    struct sock_filter code[] = {
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
+            offsetof(struct seccomp_data, nr)),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_socket, 0, 4),
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
+            offsetof(struct seccomp_data, args[0])),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, 2, 1, 0),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, 10, 0, 1),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | EACCES),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW)
+    };
+    struct sock_fprog fp = { sizeof (code) / sizeof (code[0]), code };
+    if (prctl(PR_SET_NO_NEW_PRIVS, 1UL, 0UL, 0UL, 0UL) != 0 ||
+        syscall(SYS_seccomp, 1, 0, &fp) != 0)
         return (1);
     syscall(SYS_execve, args[0], args, NULL);
     return (9);

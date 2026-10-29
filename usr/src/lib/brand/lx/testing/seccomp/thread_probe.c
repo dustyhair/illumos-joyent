@@ -1,6 +1,7 @@
 /* CDDL version 1.0, http://www.illumos.org/license/CDDL. */
 #define _GNU_SOURCE
 #include <errno.h>
+#include <fenv.h>
 #include <linux/filter.h>
 #include <linux/seccomp.h>
 #include <pthread.h>
@@ -53,14 +54,17 @@ worker(void *arg)
     unsigned long value = (uintptr_t)arg;
     if (tls_value != 0 || !restricted() ||
         syscall(SYS_getpid) != parent_pid ||
-        syscall(SYS_gettid) == parent_tid)
+        syscall(SYS_gettid) == parent_tid || fegetround() != FE_DOWNWARD)
         return ((void *)1);
+    if (fesetround(FE_UPWARD))
+        return ((void *)4);
     tls_value = value;
     for (int i = 0; i < 50; i++) {
         if (pthread_mutex_lock(&mutex))
             return ((void *)2);
         count++;
-        if (pthread_mutex_unlock(&mutex) || tls_value != value)
+        if (pthread_mutex_unlock(&mutex) || tls_value != value ||
+            fegetround() != FE_UPWARD)
             return ((void *)3);
     }
     return ((void *)0x1234);
@@ -72,7 +76,7 @@ pthread_tls_join(void)
     pthread_t threads[4];
     void *result;
     tls_value = 0xbeef;
-    if (install())
+    if (fesetround(FE_DOWNWARD) || install())
         return (1);
     for (unsigned int i = 0; i < 4; i++) {
         int error = pthread_create(&threads[i], NULL, worker,
@@ -86,7 +90,8 @@ pthread_tls_join(void)
         if (pthread_join(threads[i], &result) || result != (void *)0x1234)
             return (3);
     }
-    return (count != 200 || tls_value != 0xbeef || !restricted());
+    return (count != 200 || tls_value != 0xbeef || !restricted() ||
+        fegetround() != FE_DOWNWARD);
 }
 
 static void
