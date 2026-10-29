@@ -7,6 +7,8 @@
 #include <sys/errno.h>
 #include <sys/debug.h>
 #include <sys/kmem.h>
+#include <sys/fs/lofs_info.h>
+#include <sys/refstr.h>
 #include <sys/mount.h>
 #include <sys/pathname.h>
 #include <sys/systm.h>
@@ -28,9 +30,11 @@ struct lx_mntns_view {
 
 static int
 lx_mntns_mount(const char *source, const char *path, const char *type,
-    const char *options, int flags, vnode_t *covered, cred_t *cr, vfs_t **out)
+    const char *options, int flags, vnode_t *covered, vnode_t *sourcevp,
+    cred_t *cr, vfs_t **out)
 {
 	struct mounta args;
+	lofs_mount_args_t loargs;
 	char *opts = kmem_zalloc(MAX_MNTOPT_STR, KM_SLEEP);
 	int error;
 
@@ -43,6 +47,13 @@ lx_mntns_mount(const char *source, const char *path, const char *type,
 	args.fstype = (char *)type;
 	args.optptr = opts;
 	args.optlen = MAX_MNTOPT_STR;
+	if (sourcevp != NULL) {
+		loargs.lma_version = LOFS_MOUNT_ARGS_VERSION;
+		loargs.lma_source = sourcevp;
+		args.flags |= MS_DATA;
+		args.dataptr = (char *)&loargs;
+		args.datalen = sizeof (loargs);
+	}
 	*out = NULL;
 	error = domount((char *)type, &args, covered, cr, out);
 	kmem_free(opts, MAX_MNTOPT_STR);
@@ -50,7 +61,7 @@ lx_mntns_mount(const char *source, const char *path, const char *type,
 }
 
 static int
-lx_mntns_lookup(lx_mntns_view_t *view, const char *path, cred_t *cr,
+lx_mntns_lookup_at(vnode_t *root, const char *path, cred_t *cr,
     vnode_t **out)
 {
 	struct pathname pn;
@@ -63,42 +74,30 @@ lx_mntns_lookup(lx_mntns_view_t *view, const char *path, cred_t *cr,
 		return (error);
 	pn_skipslash(&pn);
 	/* lookuppnvp consumes the start and non-global root references. */
-	VN_HOLD(view->lv_root);
-	if (view->lv_root != rootdir)
-		VN_HOLD(view->lv_root);
-	error = lookuppnvp(&pn, NULL, FOLLOW, NULL, out, view->lv_root,
-	    view->lv_root, cr);
+	VN_HOLD(root);
+	if (root != rootdir)
+		VN_HOLD(root);
+	error = lookuppnvp(&pn, NULL, FOLLOW, NULL, out, root, root, cr);
 	pn_free(&pn);
 	return (error);
 }
 
-int
-lx_mntns_view_create(const char *source, cred_t *cr, lx_mntns_view_t **out)
+static int
+lx_mntns_create(vnode_t *source, cred_t *cr, lx_mntns_view_t **out)
 {
 	lx_mntns_view_t *view;
-	vnode_t *covered;
 	int error;
 
 	*out = NULL;
-	if (source == NULL || source[0] != '/')
-		return (EINVAL);
-	if ((error = lookupname(source, UIO_SYSSPACE, FOLLOW, NULL,
-	    &covered)) != 0)
-		return (error);
-	if (covered->v_type != VDIR) {
-		VN_RELE(covered);
+	if (source->v_type != VDIR)
 		return (ENOTDIR);
-	}
 	view = kmem_zalloc(sizeof (*view), KM_SLEEP);
 	mutex_init(&view->lv_lock, NULL, MUTEX_DEFAULT, NULL);
-	/*
-	 * A detached root is never mounted over the source. nosub prevents
-	 * later source mounts from leaking into this private view. Existing
-	 * submounts must be copied explicitly by namespace construction.
-	 */
-	error = lx_mntns_mount(source, "/", "lofs", "nosub", MS_NOSPLICE,
-	    covered, cr, &view->lv_vfs);
-	VN_RELE(covered);
+	/* Source is pinned; domount must not resolve its pathname again. */
+	error = lx_mntns_mount("lx-private-root", "/", "lofs",
+	    (source->v_vfsp->vfs_flag & VFS_NOEXEC) != 0 ?
+	    "nosub,noexec" : "nosub", MS_NOSPLICE, source, source, cr,
+	    &view->lv_vfs);
 	if (error != 0)
 		goto fail;
 	if ((error = VFS_ROOT(view->lv_vfs, &view->lv_root)) != 0) {
@@ -115,13 +114,216 @@ fail:
 }
 
 int
+lx_mntns_view_create(const char *source, cred_t *cr, lx_mntns_view_t **out)
+{
+	vnode_t *vp;
+	int error;
+
+	*out = NULL;
+	if (source == NULL || source[0] != '/')
+		return (EINVAL);
+	if ((error = lookupname(source, UIO_SYSSPACE, FOLLOW, NULL, &vp)) != 0)
+		return (error);
+	error = lx_mntns_create(vp, cr, out);
+	VN_RELE(vp);
+	return (error);
+}
+
+/* The caller holds lv_lock; a covered vnode must belong to this view. */
+static boolean_t
+lx_mntns_owns(lx_mntns_view_t *view, vnode_t *vp)
+{
+	lx_mntns_mount_t *mount;
+
+	if (vp->v_vfsp == view->lv_vfs)
+		return (B_TRUE);
+	for (mount = view->lv_mounts; mount != NULL; mount = mount->lm_next) {
+		if (vp->v_vfsp == mount->lm_vfs)
+			return (B_TRUE);
+	}
+	return (B_FALSE);
+}
+
+int
+lx_mntns_view_bind(lx_mntns_view_t *view, vnode_t *source,
+    const char *path, boolean_t readonly, cred_t *cr)
+{
+	lx_mntns_mount_t *mount;
+	vnode_t *covered;
+	const char *options;
+	int error;
+
+	if (path == NULL || path[0] != '/' || strcmp(path, "/") == 0 ||
+	    (source->v_type != VDIR && source->v_type != VREG))
+		return (EINVAL);
+	mount = kmem_zalloc(sizeof (*mount), KM_SLEEP);
+	mutex_enter(&view->lv_lock);
+	if ((error = lx_mntns_lookup_at(view->lv_root, path, cr,
+	    &covered)) != 0)
+		goto out;
+	if (!lx_mntns_owns(view, covered) ||
+	    covered->v_type != source->v_type) {
+		error = EINVAL;
+	} else {
+		/* Keep noexec when binding a source from another view. */
+		options = (source->v_vfsp->vfs_flag & VFS_NOEXEC) != 0 ?
+		    "nosub,noexec" : "nosub";
+		error = lx_mntns_mount("lx-private-bind", path, "lofs", options,
+		    readonly ? MS_RDONLY : 0, covered, source, cr,
+		    &mount->lm_vfs);
+	}
+	VN_RELE(covered);
+	if (error == 0) {
+		mount->lm_next = view->lv_mounts;
+		view->lv_mounts = mount;
+		mount = NULL;
+	}
+out:
+	mutex_exit(&view->lv_lock);
+	if (mount != NULL)
+		kmem_free(mount, sizeof (*mount));
+	return (error);
+}
+
+/* A held VFS identifies the mount instance; it does not prevent unmount. */
+typedef struct lx_mntns_snapshot {
+	vfs_t *ls_vfs;
+	refstr_t *ls_path;
+	vnode_t *ls_root;
+	struct lx_mntns_snapshot *ls_next;
+} lx_mntns_snapshot_t;
+
+int
+lx_mntns_view_snapshot(const char *source, cred_t *cr, lx_mntns_view_t **out)
+{
+	lx_mntns_snapshot_t *list = NULL, *entry, **link;
+	lx_mntns_view_t *view = NULL;
+	vfs_t *vfsp;
+	vnode_t *root = NULL, *vp;
+	char *path = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+	size_t len, count = 0;
+	timespec_t before, after;
+	int error;
+
+	*out = NULL;
+	if (source == NULL || source[0] != '/') {
+		error = EINVAL;
+		goto out;
+	}
+	if ((error = lookupname(source, UIO_SYSSPACE, FOLLOW, NULL,
+	    &root)) != 0)
+		goto out;
+	if (root->v_type != VDIR) {
+		error = ENOTDIR;
+		goto out;
+	}
+	if ((error = vnodetopath(rootdir, root, path, MAXPATHLEN, cr)) != 0)
+		goto out;
+	len = strcmp(path, "/") == 0 ? 0 : strlen(path);
+
+	/* Collect names without doing pathname lookup under the VFS lock. */
+	vfs_list_read_lock();
+	vfs_mnttab_modtime(&before);
+	vfsp = rootvfs;
+	do {
+		const char *name = refstr_value(vfsp->vfs_mntpt);
+
+		if (strncmp(name, path, len) != 0 || name[len] != '/' ||
+		    name[len + 1] == '\0')
+			continue;
+		if (++count > 4096) {
+			error = E2BIG;
+			break;
+		}
+		entry = kmem_zalloc(sizeof (*entry), KM_NOSLEEP);
+		if (entry == NULL) {
+			error = ENOMEM;
+			break;
+		}
+		entry->ls_vfs = vfsp;
+		VFS_HOLD(vfsp);
+		entry->ls_path = vfsp->vfs_mntpt;
+		refstr_hold(entry->ls_path);
+		/* Parents must be grafted before their nested submounts. */
+		for (link = &list; *link != NULL; link = &(*link)->ls_next) {
+			if (strlen(refstr_value((*link)->ls_path)) >
+			    strlen(name))
+				break;
+		}
+		entry->ls_next = *link;
+		*link = entry;
+	} while ((vfsp = vfsp->vfs_next) != rootvfs);
+	vfs_list_unlock();
+	if (error != 0)
+		goto out;
+
+	/*
+	 * Resolve visible roots through the captured source, never by a
+	 * second global pathname. Obscured/stacked mounts are not copied.
+	 * A vnode pins each source after lookup. If any mount changed while
+	 * collecting, return EAGAIN before creating the new tree.
+	 */
+	for (entry = list; entry != NULL; entry = entry->ls_next) {
+		error = lx_mntns_lookup_at(root,
+		    refstr_value(entry->ls_path) + len, cr, &vp);
+		if (error == ENOENT || error == ENOTDIR) {
+			error = 0;
+			continue;
+		}
+		if (error != 0)
+			goto out;
+		if (vp->v_vfsp == entry->ls_vfs && (vp->v_flag & VROOT))
+			entry->ls_root = vp;
+		else
+			VN_RELE(vp);
+	}
+	vfs_list_read_lock();
+	vfs_mnttab_modtime(&after);
+	vfs_list_unlock();
+	if (before.tv_sec != after.tv_sec || before.tv_nsec != after.tv_nsec) {
+		error = EAGAIN;
+		goto out;
+	}
+	if ((error = lx_mntns_create(root, cr, &view)) != 0)
+		goto out;
+	for (entry = list; entry != NULL; entry = entry->ls_next) {
+		if (entry->ls_root == NULL)
+			continue;
+		error = lx_mntns_view_bind(view, entry->ls_root,
+		    refstr_value(entry->ls_path) + len, B_FALSE, cr);
+		if (error != 0)
+			break;
+	}
+	if (error == 0) {
+		*out = view;
+		view = NULL;
+	}
+out:
+	while ((entry = list) != NULL) {
+		list = entry->ls_next;
+		if (entry->ls_root != NULL)
+			VN_RELE(entry->ls_root);
+		VFS_RELE(entry->ls_vfs);
+		refstr_rele(entry->ls_path);
+		kmem_free(entry, sizeof (*entry));
+	}
+	if (root != NULL)
+		VN_RELE(root);
+	/* No references to a failed, unpublished tree have escaped. */
+	if (view != NULL)
+		VERIFY0(lx_mntns_view_destroy(view, cr));
+	kmem_free(path, MAXPATHLEN);
+	return (error);
+}
+
+int
 lx_mntns_view_lookup(lx_mntns_view_t *view, const char *path, cred_t *cr,
     vnode_t **out)
 {
 	int error;
 
 	mutex_enter(&view->lv_lock);
-	error = lx_mntns_lookup(view, path, cr, out);
+	error = lx_mntns_lookup_at(view->lv_root, path, cr, out);
 	mutex_exit(&view->lv_lock);
 	return (error);
 }
@@ -137,14 +339,15 @@ lx_mntns_view_tmpfs(lx_mntns_view_t *view, const char *path, cred_t *cr)
 		return (EINVAL);
 	mount = kmem_zalloc(sizeof (*mount), KM_SLEEP);
 	mutex_enter(&view->lv_lock);
-	if ((error = lx_mntns_lookup(view, path, cr, &covered)) != 0)
+	if ((error = lx_mntns_lookup_at(view->lv_root, path, cr,
+	    &covered)) != 0)
 		goto out;
-	/* Only graft onto an alias belonging to this view's detached root. */
-	if (covered->v_vfsp != view->lv_vfs || covered->v_type != VDIR) {
+	/* Only graft onto a mount belonging to this view. */
+	if (!lx_mntns_owns(view, covered) || covered->v_type != VDIR) {
 		error = EINVAL;
 	} else {
 		error = lx_mntns_mount("swap", path, "tmpfs", "mode=0700",
-		    MS_NOSUID, covered, cr, &mount->lm_vfs);
+		    MS_NOSUID, covered, NULL, cr, &mount->lm_vfs);
 	}
 	VN_RELE(covered);
 	if (error == 0) {

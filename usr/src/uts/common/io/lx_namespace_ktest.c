@@ -2,9 +2,12 @@
  * CDDL version 1.0, http://www.illumos.org/license/CDDL.
  */
 #include <sys/ktest.h>
+#include <sys/kmem.h>
 #include <sys/errno.h>
 #include <sys/pathname.h>
 #include <sys/vnode.h>
+#include <sys/vfs.h>
+#include <sys/mount.h>
 #include <sys/lx_mntns.h>
 
 /* Only the disposable lab driver prepares this private source tree. */
@@ -107,6 +110,176 @@ out:
 #undef NS_CHECK
 }
 
+static int
+ns_cover(const char *path, cred_t *cr, vfs_t **out)
+{
+	struct mounta args;
+	vnode_t *vp;
+	char options[MAX_MNTOPT_STR] = "mode=0700";
+	int error;
+
+	*out = NULL;
+	if ((error = lookupname((char *)path, UIO_SYSSPACE, FOLLOW, NULL,
+	    &vp)) != 0)
+		return (error);
+	bzero(&args, sizeof (args));
+	args.spec = "swap";
+	args.dir = (char *)path;
+	args.fstype = "tmpfs";
+	args.flags = MS_SYSSPACE | MS_OPTIONSTR | MS_OVERLAY | MS_NOMNTTAB;
+	args.optptr = options;
+	args.optlen = sizeof (options);
+	error = domount("tmpfs", &args, vp, cr, out);
+	VN_RELE(vp);
+	return (error);
+}
+
+static int
+ns_uncover(vfs_t *vfsp, cred_t *cr)
+{
+	int error;
+
+	if ((error = vn_vfswlock(vfsp->vfs_vnodecovered)) != 0)
+		return (error);
+	if ((error = dounmount(vfsp, 0, cr)) == 0)
+		VFS_RELE(vfsp);
+	return (error);
+}
+
+static void
+ns_snapshot(ktest_ctx_hdl_t *ctx)
+{
+	uchar_t *input;
+	size_t size;
+	lx_mntns_view_t *a = NULL, *b = NULL;
+	vnode_t *vp = NULL, *source = NULL;
+	vfs_t *later = NULL, *cover = NULL;
+	cred_t *cr = CRED();
+	char *path = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+	int error = 0;
+	boolean_t passed = B_FALSE;
+
+	ktest_get_input(ctx, &input, &size);
+	if (size < 2 || size > MAXPATHLEN || input[size - 1] != 0 ||
+	    strlen((char *)input) != size - 1 ||
+	    strncmp((char *)input, "/zones/lx-ns-kernel/", 20) != 0) {
+		KT_ERROR(ctx, "invalid private namespace fixture path");
+		kmem_free(path, MAXPATHLEN);
+		return;
+	}
+#define	NS_CHECK(expr, why) do { \
+	if (!(expr)) { \
+		KT_FAIL(ctx, "%s, error=%d", why, error); \
+		goto out; \
+	} \
+} while (0)
+	error = lx_mntns_view_snapshot((char *)input, cr, &a);
+	NS_CHECK(error == 0, "cannot snapshot source into A");
+	error = lx_mntns_view_snapshot((char *)input, cr, &b);
+	NS_CHECK(error == 0, "cannot snapshot source into B");
+	error = lx_mntns_view_lookup(a, "/existing/mounted", cr, &vp);
+	NS_CHECK(error == 0, "pre-existing tmpfs missing in snapshot");
+	VN_RELE(vp);
+	vp = NULL;
+	error = lx_mntns_view_lookup(a, "/existing/deep/nested", cr, &vp);
+	NS_CHECK(error == 0, "nested source mount missing in snapshot");
+	VN_RELE(vp);
+	vp = NULL;
+	error = lx_mntns_view_lookup(a, "/existing/underlying", cr, &vp);
+	NS_CHECK(error == ENOENT, "snapshot exposed covered physical file");
+	error = lx_mntns_view_lookup(a, "/stacked/visible", cr, &vp);
+	NS_CHECK(error == 0, "top stacked source mount missing");
+	VN_RELE(vp);
+	vp = NULL;
+	error = lx_mntns_view_lookup(a, "/stacked/hidden", cr, &vp);
+	NS_CHECK(error == ENOENT, "snapshot exposed lower stacked mount");
+	error = lx_mntns_view_lookup(a, "/readonly/file", cr, &vp);
+	NS_CHECK(error == 0, "source read-only bind missing");
+	NS_CHECK(vn_is_readonly(vp), "source read-only restriction lost");
+	NS_CHECK((vp->v_vfsp->vfs_flag & VFS_NOEXEC) != 0,
+	    "source noexec restriction lost");
+	error = VOP_ACCESS(vp, VWRITE, 0, cr, NULL);
+	NS_CHECK(error == EROFS, "source read-only bind allows write access");
+	VN_RELE(vp);
+	vp = NULL;
+
+	(void) snprintf(path, MAXPATHLEN, "%s/existing", (char *)input);
+	error = lookupname(path, UIO_SYSSPACE, FOLLOW, NULL, &source);
+	NS_CHECK(error == 0, "cannot pin original source mount");
+	error = ns_cover(path, cr, &cover);
+	NS_CHECK(error == 0, "cannot overmount original source");
+	error = lx_mntns_view_bind(a, source, "/pin", B_FALSE, cr);
+	NS_CHECK(error == 0, "cannot bind a pinned overmounted source");
+	VN_RELE(source);
+	source = NULL;
+	error = lx_mntns_view_lookup(a, "/pin/mounted", cr, &vp);
+	NS_CHECK(error == 0, "pinned bind followed a later source overmount");
+	VN_RELE(vp);
+	vp = NULL;
+	error = lx_mntns_view_lookup(a, "/existing/deep/nested", cr, &vp);
+	NS_CHECK(error == 0, "source overmount changed nested snapshot");
+	VN_RELE(vp);
+	vp = NULL;
+
+	(void) snprintf(path, MAXPATHLEN, "%s/later", (char *)input);
+	error = ns_cover(path, cr, &later);
+	NS_CHECK(error == 0, "cannot mount later source submount");
+	error = lx_mntns_view_lookup(a, "/later/original", cr, &vp);
+	NS_CHECK(error == 0, "later source mount propagated into snapshot");
+	VN_RELE(vp);
+	vp = NULL;
+	error = lx_mntns_view_tmpfs(a, "/existing/deep", cr);
+	NS_CHECK(error == 0, "cannot cover imported nested mount privately");
+	error = lx_mntns_view_lookup(a, "/existing/deep/nested", cr, &vp);
+	NS_CHECK(error == ENOENT, "private nested cover failed");
+	error = lx_mntns_view_lookup(b, "/existing/deep/nested", cr, &vp);
+	NS_CHECK(error == 0, "private nested cover changed sibling snapshot");
+	VN_RELE(vp);
+	vp = NULL;
+
+	error = lx_mntns_view_lookup(b, "/existing/mounted", cr, &source);
+	NS_CHECK(error == 0, "cannot find regular file bind source");
+	error = lx_mntns_view_bind(a, source, "/bind-target", B_TRUE, cr);
+	NS_CHECK(error == 0, "cannot bind a regular file read-only");
+	error = lx_mntns_view_lookup(a, "/bind-target", cr, &vp);
+	NS_CHECK(error == 0 && vp->v_type == VREG,
+	    "regular file bind missing");
+	error = VOP_ACCESS(vp, VWRITE, 0, cr, NULL);
+	NS_CHECK(error == EROFS, "regular file bind allows write access");
+	VN_RELE(vp);
+	vp = NULL;
+	error = lx_mntns_view_bind(a, source, "/sub", B_FALSE, cr);
+	NS_CHECK(error == EINVAL, "bind accepted mismatched file types");
+	VN_RELE(source);
+	source = NULL;
+	passed = B_TRUE;
+out:
+	if (vp != NULL)
+		VN_RELE(vp);
+	if (source != NULL)
+		VN_RELE(source);
+	if (a != NULL && lx_mntns_view_destroy(a, cr) != 0) {
+		KT_ERROR(ctx, "snapshot A cleanup failed");
+		passed = B_FALSE;
+	}
+	if (b != NULL && lx_mntns_view_destroy(b, cr) != 0) {
+		KT_ERROR(ctx, "snapshot B cleanup failed");
+		passed = B_FALSE;
+	}
+	if (cover != NULL && ns_uncover(cover, cr) != 0) {
+		KT_ERROR(ctx, "source overmount cleanup failed");
+		passed = B_FALSE;
+	}
+	if (later != NULL && ns_uncover(later, cr) != 0) {
+		KT_ERROR(ctx, "later source mount cleanup failed");
+		passed = B_FALSE;
+	}
+	kmem_free(path, MAXPATHLEN);
+	if (passed)
+		KT_PASS(ctx);
+#undef NS_CHECK
+}
+
 static struct modlmisc ns_modlmisc = {
 	.misc_modops = &mod_miscops,
 	.misc_linkinfo = "lx namespace tests"
@@ -127,6 +300,8 @@ _init(void)
 		return (error);
 	if ((error = ktest_add_suite(km, "mount", &ks)) != 0 ||
 	    (error = ktest_add_test(ks, "views", ns_views,
+	    KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "snapshot", ns_snapshot,
 	    KTEST_FLAG_INPUT)) != 0 ||
 	    (error = ktest_register_module(km)) != 0) {
 		ktest_free_module(km);

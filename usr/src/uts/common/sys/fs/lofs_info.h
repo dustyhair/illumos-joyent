@@ -108,6 +108,16 @@ struct lfsnode {
 #define	vtoli(VFSP)	((struct loinfo *)((VFSP)->vfs_data))
 
 #ifdef _KERNEL
+/*
+ * Optional MS_SYSSPACE | MS_DATA input for a pinned source. The caller
+ * holds lma_source throughout domount(). User mounts cannot set SYSSPACE.
+ */
+#define	LOFS_MOUNT_ARGS_VERSION	1
+typedef struct lofs_mount_args {
+	uint_t lma_version;
+	struct vnode *lma_source;
+} lofs_mount_args_t;
+
 extern struct vfs *lo_realvfs(struct vfs *, struct vnode **);
 extern void lofs_subrinit(void);
 extern void lofs_subrfini(void);

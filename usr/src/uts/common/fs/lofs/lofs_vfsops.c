@@ -159,6 +159,7 @@ lo_mount(struct vfs *vfsp, struct vnode *vp, struct mounta *uap,
 	struct vnode *realrootvp;
 	struct loinfo *li;
 	int nodev;
+	boolean_t pinned = B_FALSE;
 
 	nodev = vfs_optionisset(vfsp, MNTOPT_NODEVICES, NULL);
 
@@ -186,9 +187,22 @@ lo_mount(struct vfs *vfsp, struct vnode *vp, struct mounta *uap,
 	 * Find real root, and make vfs point to real vfs
 	 */
 
-	if (error = lookupname(uap->spec, (uap->flags & MS_SYSSPACE) ?
-	    UIO_SYSSPACE : UIO_USERSPACE, FOLLOW, NULLVPP, &realrootvp))
+	if ((uap->flags & (MS_SYSSPACE | MS_DATA)) ==
+	    (MS_SYSSPACE | MS_DATA)) {
+		lofs_mount_args_t *args = (void *)uap->dataptr;
+
+		if (uap->datalen != sizeof (*args) || args == NULL ||
+		    args->lma_version != LOFS_MOUNT_ARGS_VERSION ||
+		    args->lma_source == NULL)
+			return (EINVAL);
+		pinned = B_TRUE;
+		realrootvp = args->lma_source;
+		VN_HOLD(realrootvp);
+	} else if ((error = lookupname(uap->spec,
+	    (uap->flags & MS_SYSSPACE) ? UIO_SYSSPACE : UIO_USERSPACE,
+	    FOLLOW, NULLVPP, &realrootvp)) != 0) {
 		return (error);
+	}
 
 	/*
 	 * Enforce MAC policy if needed.
@@ -300,7 +314,8 @@ lo_mount(struct vfs *vfsp, struct vnode *vp, struct mounta *uap,
 	 * filesystem AUTOFS mounted as result of the VOP_ACCESS()
 	 * call not the AUTOFS node itself.
 	 */
-	if (vn_mountedvfs(realrootvp) != NULL) {
+	/* A pinned source already identifies the requested mount instance. */
+	if (!pinned && vn_mountedvfs(realrootvp) != NULL) {
 		if (error = traverse(&realrootvp)) {
 			VN_RELE(realrootvp);
 			return (error);
