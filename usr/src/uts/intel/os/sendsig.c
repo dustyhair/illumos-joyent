@@ -219,7 +219,12 @@ sendsig(int sig, k_siginfo_t *sip, void (*hdlr)())
 		 * accounting for the 128-byte reserved region.
 		 */
 		newstack = 0;
-		fp = BROP(p)->b_sendsig_stack(sig) - STACK_RESERVE;
+		int status = -1;
+
+		fp = BROP(p)->b_sendsig_stack(sig, sip, hdlr, &status);
+		if (status >= 0)
+			return (status);
+		fp -= STACK_RESERVE;
 	} else if (newstack) {
 		fp = (caddr_t)(SA((uintptr_t)lwp->lwp_sigaltstack.ss_sp) +
 		    SA(lwp->lwp_sigaltstack.ss_size) - STACK_ALIGN);
@@ -494,7 +499,11 @@ sendsig32(int sig, k_siginfo_t *sip, void (*hdlr)())
 		 * Use the stack pointer value provided by the brand:
 		 */
 		newstack = 0;
-		fp = BROP(p)->b_sendsig_stack(sig);
+		int status = -1;
+
+		fp = BROP(p)->b_sendsig_stack(sig, sip, hdlr, &status);
+		if (status >= 0)
+			return (status);
 	} else if (newstack) {
 		fp = (caddr_t)(SA32((uintptr_t)lwp->lwp_sigaltstack.ss_sp) +
 		    SA32(lwp->lwp_sigaltstack.ss_size) - STACK_ALIGN32);

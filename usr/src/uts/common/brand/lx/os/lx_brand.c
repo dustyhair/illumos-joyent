@@ -247,7 +247,7 @@ static uint32_t lx_map32limit(proc_t *);
 
 static void lx_savecontext(ucontext_t *);
 static void lx_restorecontext(ucontext_t *);
-static caddr_t lx_sendsig_stack(int);
+static caddr_t lx_sendsig_stack(int, k_siginfo_t *, void (*)(), int *);
 static void lx_sendsig(int);
 #if defined(_SYSCALL32_IMPL)
 static void lx_savecontext32(ucontext32_t *);
@@ -592,15 +592,19 @@ lx_clearbrand(proc_t *p, boolean_t lwps_ok)
 /*
  * This hook runs prior to sendsig() processing and allows us to nominate
  * an alternative stack pointer for delivery of the signal handling frame.
- * Critically, this routine should _not_ modify any LWP state as the
- * savecontext() does not run until after this hook.
+ * Kernel-owned Linux delivery may complete the operation here. When using
+ * the native fallback, do not modify LWP state before savecontext runs.
  */
 /* ARGSUSED */
 static caddr_t
-lx_sendsig_stack(int sig)
+lx_sendsig_stack(int sig, k_siginfo_t *sip, void (*handler)(), int *status)
 {
 	klwp_t *lwp = ttolwp(curthread);
 	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
+
+	*status = lx_sigdeliver_kernel(sig, sip, handler);
+	if (*status >= 0)
+		return (NULL);
 
 	/*
 	 * We want to take signal delivery on the native stack, but only if

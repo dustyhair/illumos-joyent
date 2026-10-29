@@ -397,6 +397,13 @@ lx_syscall_enter(int entry)
 		return (0);
 	}
 
+	lwpd->br_eosys = NORMALRETURN;
+	if (lx_sig_kernel_syscall(lwp, syscall_num, args, &ret)) {
+		if (lwpd->br_eosys == NORMALRETURN)
+			lx_syscall_return(lwp, syscall_num, ret);
+		return (0);
+	}
+
 	/* Single-LWP experimental processes can terminate in-kernel. */
 	if (lx_seccomp_active(curproc) && syscall_num == 231)
 		exit(CLD_EXITED, args[0] & 0xff);
@@ -790,7 +797,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"io_submit",	lx_io_submit,		0,		3}, /* 248 */
 	{"io_cancel",	lx_io_cancel,		0,		3}, /* 249 */
 	{"fadvise64",	lx_fadvise64_32,	0,		5}, /* 250 */
-	{"nosys",	NULL,			0,		0}, /* 251 */
+	{"nosys",	NULL,			NOSYS_NULL,	0}, /* 251 */
 	{"group_exit",	NULL,			0,		1}, /* 252 */
 	{"lookup_dcookie", NULL,		NOSYS_NO_EQUIV,	0}, /* 253 */
 	{"epoll_create", lx_epoll_create,	0,		1}, /* 254 */

@@ -43,6 +43,7 @@
 #include <sys/lx_futex.h>
 #include <sys/lx_userhz.h>
 #include <sys/uuid.h>
+#include <sys/lx_ksignal.h>
 #endif
 
 #ifdef	__cplusplus
@@ -374,6 +375,10 @@ typedef struct lx_proc_data {
 
 	/* Experimental single-LWP seccomp guard, protected by p_lock. */
 	struct lx_seccomp_filter *l_seccomp;
+
+	/* Kernel signal actions for the opt-in amd64 signal backend. */
+	uint64_t l_sigvalid;
+	lx_ksigaction_t l_sigacts[LX_NSIG + 1];
 } lx_proc_data_t;
 
 #endif	/* _KERNEL */
@@ -622,6 +627,7 @@ struct lx_lwp_data {
 	uint_t	br_clone_grp_flags;	/* pending clone group */
 
 	int	br_syscall_entry;	/* kernel-supplied entry ABI */
+	struct lx_sigrecord *br_sigframes; /* private signal return records */
 };
 
 /*
@@ -718,6 +724,11 @@ extern void lx_switch_to_native(klwp_t *);
 
 extern int lx_syscall_enter(int);
 extern long lx_seccomp(uintptr_t, uintptr_t, uintptr_t);
+extern int lx_seccomp_experimental;
+extern int lx_sigdeliver_kernel(int, k_siginfo_t *, void (*)());
+extern boolean_t lx_sig_kernel_syscall(klwp_t *, int, uintptr_t *, long *);
+extern void lx_sigframes_free(lx_lwp_data_t *);
+extern void lx_sigframes_clone(lx_lwp_data_t *, const lx_lwp_data_t *);
 extern long lx_seccomp_install(uintptr_t);
 extern boolean_t lx_seccomp_active(proc_t *);
 extern void lx_seccomp_enter(klwp_t *, int);

@@ -98,6 +98,9 @@ lx_exec()
 	 * invalid; clear them.
 	 */
 	pd->l_handler = (uintptr_t)NULL;
+	pd->l_sigvalid = 0;
+	bzero(pd->l_sigacts, sizeof (pd->l_sigacts));
+	lx_sigframes_free(lwpd);
 
 	/*
 	 * If this was a multi-threaded Linux process and this lwp wasn't the
@@ -377,6 +380,7 @@ lx_freelwp(klwp_t *lwp)
 	VERIFY(lwpd->br_ptrace_tracer == NULL);
 	VERIFY(lwpd->br_ptrace_accord == NULL);
 
+	lx_sigframes_free(lwpd);
 	lwp->lwp_brand = NULL;
 	kmem_free(lwpd, sizeof (struct lx_lwp_data));
 }
@@ -413,6 +417,8 @@ lx_lwpdata_alloc(proc_t *p)
 	lpidp->lxp_pidp = pidp;
 	lwpd->br_lpid = lpidp;
 	lwpd->br_affinitymask = affmask;
+	if (p != curproc && curproc->p_brand == &lx_brand)
+		lx_sigframes_clone(lwpd, ttolxlwp(curthread));
 
 	return (lwpd);
 }
@@ -430,6 +436,7 @@ lx_lwpdata_free(void *lwpbd)
 	VERIFY(lwpd->br_lpid != NULL);
 	VERIFY(lwpd->br_affinitymask != NULL);
 
+	lx_sigframes_free(lwpd);
 	cpuset_free(lwpd->br_affinitymask);
 	if (lwpd->br_lpid->lxp_pidp != NULL) {
 		(void) pid_rele(lwpd->br_lpid->lxp_pidp);

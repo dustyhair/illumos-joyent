@@ -145,7 +145,9 @@ struct execa;
  * b_sig_ignorable - Disallow discarding of signals
  * b_savecontext - Alter context during savecontext
  * b_restorecontext - Alter context during restorecontext
- * b_sendsig_stack - Override stack used for signal delivery
+ * b_sendsig_stack - Override signal stack or complete signal delivery;
+ *                   output status -1 uses the returned stack, 0/1 returns
+ *                   failure/success directly from sendsig
  * b_setid_clear - Override setid_clear behavior
  * b_pagefault - Trap pagefault events
  * b_intp_parse_arg - Controls interpreter argument handling (allow 1 or all)
@@ -194,7 +196,8 @@ struct brand_ops {
 	void	(*b_savecontext32)(ucontext32_t *);
 #endif
 	void	(*b_restorecontext)(ucontext_t *);
-	caddr_t	(*b_sendsig_stack)(int);
+	caddr_t	(*b_sendsig_stack)(int, k_siginfo_t *, void (*)(),
+	    int *);
 	void	(*b_sendsig)(int);
 	int	(*b_setid_clear)(vattr_t *vap, cred_t *cr);
 	int	(*b_pagefault)(proc_t *, klwp_t *, caddr_t, enum fault_type,

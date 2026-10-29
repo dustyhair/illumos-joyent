@@ -351,6 +351,7 @@ LX_BRAND_OBJS  =		\
 	lx_rlimit.o		\
 	lx_rw.o			\
 	lx_sched.o		\
+	lx_ksignal.o	\
 	lx_seccomp.o	\
 	lx_seccomp_bpf.o	\
 	lx_signal.o		\
