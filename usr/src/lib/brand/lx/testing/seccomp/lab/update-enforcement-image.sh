@@ -21,6 +21,15 @@ pfexec cp "$ws/usr/src/uts/intel/lx_brand/obj64/lx_brand" "$lab/mnt-root/kernel/
 pfexec cp "$ws/usr/src/uts/intel/lx_proc/obj64/lx_proc" "$lab/mnt-root/kernel/fs/amd64/lx_proc"
 pfexec mkdir -p "$lab/mnt-root/kernel/exec/amd64"
 pfexec cp "$ws/usr/src/uts/intel/elfexec/obj64/elfexec" "$lab/mnt-root/kernel/exec/amd64/elfexec"
+if test "${LX_LAB_UPDATE_USERLIBS:-0}" = 1; then
+    pfexec mkdir -p "$lab/mnt-root/usr/lib/amd64"
+    pfexec cp "$ws/usr/src/lib/brand/lx/lx_brand/i386/lx_brand.so.1" \
+        "$lab/mnt-root/usr/lib/lx_brand.so.1"
+    pfexec cp "$ws/usr/src/lib/brand/lx/lx_brand/amd64/lx_brand.so.1" \
+        "$lab/mnt-root/usr/lib/amd64/lx_brand.so.1"
+    digest -a sha256 "$lab/mnt-root/usr/lib/lx_brand.so.1" \
+        "$lab/mnt-root/usr/lib/amd64/lx_brand.so.1"
+fi
 pfexec cp "$lab/lx-root.tar" "$lab/mnt-root/lab/lx-root.tar"
 pfexec cp "$lab/enforcement-test.sh" "$lab/mnt-root/lab/enforcement-test.sh"
 pfexec chmod 0555 "$lab/mnt-root/lab/enforcement-test.sh"
