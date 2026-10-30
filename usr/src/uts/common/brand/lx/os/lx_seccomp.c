@@ -72,7 +72,7 @@ lx_kernel_restricted(proc_t *p)
 {
 	lx_proc_data_t *pd = ptolxproc(p);
 
-	return (pd != NULL && (pd->l_seccomp != NULL ||
+	return (pd != NULL && (pd->l_seccomp != NULL || pd->l_mntns != NULL ||
 	    (pd->l_flags & LX_PROC_USERNS) != 0));
 }
 
@@ -214,7 +214,7 @@ lx_seccomp_check(klwp_t *lwp, int nr)
 
 		if (action != SC_ALLOW && action != SC_ERRNO) {
 			lx_seccomp_rele(head);
-			/* Both experimental KILL actions terminate the process. */
+				/* Both KILL actions terminate the process. */
 			exit(CLD_KILLED, SIGSYS);
 			return (B_FALSE);
 		}

@@ -387,6 +387,9 @@ typedef struct lx_proc_data {
 
 	/* User namespace owning the address space; NULL is the initial one. */
 	struct lx_userns *l_userns_mmap;
+
+	/* Mount-view reference; native root/cwd hold their own vnodes. */
+	struct lx_mntns_view *l_mntns;
 } lx_proc_data_t;
 
 #endif	/* _KERNEL */

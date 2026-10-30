@@ -5,6 +5,7 @@
  */
 #include <sys/types.h>
 #include <sys/atomic.h>
+#include <sys/brand.h>
 #include <sys/disp.h>
 #include <sys/dtrace.h>
 #include <sys/errno.h>
@@ -14,11 +15,16 @@
 #include <sys/refstr.h>
 #include <sys/mount.h>
 #include <sys/pathname.h>
+#include <sys/proc.h>
 #include <sys/systm.h>
 #include <sys/taskq_impl.h>
 #include <sys/vfs.h>
 #include <sys/vnode.h>
+#include <sys/user.h>
+#include <sys/lx_brand.h>
 #include <sys/lx_mntns.h>
+
+extern brand_t lx_brand;
 
 typedef struct lx_mntns_mount {
 	vfs_t *lm_vfs;
@@ -257,6 +263,88 @@ lx_mntns_owns(lx_mntns_view_t *view, vnode_t *vp)
 			return (B_TRUE);
 	}
 	return (B_FALSE);
+}
+
+/* Preparation may block; never call it while holding a process lock. */
+int
+lx_mntns_state_prepare(lx_mntns_view_t *view, const char *cwd, cred_t *cr,
+    lx_mntns_state_t *state)
+{
+	int error;
+
+	bzero(state, sizeof (*state));
+	lx_mntns_view_hold(view);
+	state->lms_view = view;
+	mutex_enter(&view->lv_lock);
+	VN_HOLD(state->lms_root = view->lv_root);
+	error = lx_mntns_lookup_at(view->lv_root, cwd, cr, &state->lms_cwd);
+	if (error == 0 && state->lms_cwd->v_type != VDIR)
+		error = ENOTDIR;
+	if (error == 0 && !lx_mntns_owns(view, state->lms_cwd))
+		error = EOPNOTSUPP;
+	if (error == 0)
+		error = VOP_ACCESS(state->lms_cwd, VEXEC, 0, cr, NULL);
+	mutex_exit(&view->lv_lock);
+	if (error != 0)
+		lx_mntns_state_fini(state);
+	return (error);
+}
+
+void
+lx_mntns_state_fini(lx_mntns_state_t *state)
+{
+	if (state->lms_root != NULL)
+		VN_RELE(state->lms_root);
+	if (state->lms_cwd != NULL)
+		VN_RELE(state->lms_cwd);
+	if (state->lms_cwdname != NULL)
+		refstr_rele(state->lms_cwdname);
+	if (state->lms_view != NULL)
+		lx_mntns_view_rele(state->lms_view);
+	bzero(state, sizeof (*state));
+}
+
+/*
+ * Publish prepared references without sleeping under p_lock. The caller
+ * keeps the expected old vnodes held while preparing and revalidating the
+ * target. Success returns the old process references in state, to release
+ * outside p_lock. No Linux syscall or namespace authority is supplied here.
+ */
+int
+lx_mntns_proc_swap(proc_t *p, vnode_t *expected_root, vnode_t *expected_cwd,
+    lx_mntns_state_t *state)
+{
+	lx_mntns_state_t old;
+	lx_proc_data_t *pd = ptolxproc(p);
+	kthread_t *task = p->p_tlist;
+	user_t *up = PTOU(p);
+
+	ASSERT(MUTEX_HELD(&p->p_lock));
+	if (p->p_brand != &lx_brand || pd == NULL || !lx_kernel_restricted(p))
+		return (EPERM);
+	if (state->lms_view == NULL || state->lms_root == NULL ||
+	    state->lms_cwd == NULL || p->p_lwpcnt != 1 || task == NULL ||
+	    (task->t_proc_flag & TP_KTHREAD) != 0)
+		return (EINVAL);
+	if ((p->p_flag & SVFORK) != 0 || pd->l_ptrace != 0 ||
+	    lx_clone_grp_member(pd, LX_CLONE_FS))
+		return (EOPNOTSUPP);
+	if ((p != curproc && p->p_stat != SIDL &&
+	    task->t_state != TS_STOPPED) ||
+	    lwptolxlwp(ttolwp(task))->br_stack_mode != LX_STACK_MODE_BRAND)
+		return (EBUSY);
+	if (up->u_rdir != expected_root || up->u_cdir != expected_cwd)
+		return (EAGAIN);
+	old.lms_view = pd->l_mntns;
+	old.lms_root = up->u_rdir;
+	old.lms_cwd = up->u_cdir;
+	old.lms_cwdname = up->u_cwd;
+	pd->l_mntns = state->lms_view;
+	up->u_rdir = state->lms_root;
+	up->u_cdir = state->lms_cwd;
+	up->u_cwd = state->lms_cwdname;
+	*state = old;
+	return (0);
 }
 
 /* A VFS reference alone does not prevent native unmount of a live graft. */

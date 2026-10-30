@@ -7,6 +7,9 @@
 #include <sys/types.h>
 #include <sys/cred.h>
 #include <sys/vnode.h>
+#include <sys/refstr.h>
+
+struct proc;
 
 /*
  * Private mount-tree backend. Linux namespace syscalls are not enabled by
@@ -16,6 +19,19 @@
  * All path arguments are kernel strings. Returned vnodes must be released.
  */
 typedef struct lx_mntns_view lx_mntns_view_t;
+/* Prepared references become process-owned atomically under p_lock. */
+typedef struct lx_mntns_state {
+	lx_mntns_view_t *lms_view;
+	vnode_t *lms_root;
+	vnode_t *lms_cwd;
+	refstr_t *lms_cwdname;
+} lx_mntns_state_t;
+
+extern int lx_mntns_state_prepare(lx_mntns_view_t *, const char *, cred_t *,
+    lx_mntns_state_t *);
+extern void lx_mntns_state_fini(lx_mntns_state_t *);
+extern int lx_mntns_proc_swap(struct proc *, vnode_t *, vnode_t *,
+    lx_mntns_state_t *);
 extern void lx_mntns_init(void);
 extern boolean_t lx_mntns_busy(void);
 extern void lx_mntns_fini(void);

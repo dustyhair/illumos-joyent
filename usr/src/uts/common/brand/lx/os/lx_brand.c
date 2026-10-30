@@ -354,6 +354,8 @@ lx_proc_exit(proc_t *p)
 {
 	lx_proc_data_t *lxpd;
 	proc_t *cp;
+	lx_mntns_view_t *view;
+	boolean_t deathsig;
 
 	lx_clone_grp_exit(p, B_FALSE);
 	/* Cleanup any outstanding aio contexts */
@@ -362,11 +364,15 @@ lx_proc_exit(proc_t *p)
 	mutex_enter(&p->p_lock);
 	VERIFY((lxpd = ptolxproc(p)) != NULL);
 	VERIFY(lxpd->l_ptrace == 0);
-	if ((lxpd->l_flags & LX_PROC_CHILD_DEATHSIG) == 0) {
-		mutex_exit(&p->p_lock);
-		return;
-	}
+	/* Release at exit, even if the process remains an unreaped zombie. */
+	view = lxpd->l_mntns;
+	lxpd->l_mntns = NULL;
+	deathsig = (lxpd->l_flags & LX_PROC_CHILD_DEATHSIG) != 0;
 	mutex_exit(&p->p_lock);
+	if (view != NULL)
+		lx_mntns_view_rele(view);
+	if (!deathsig)
+		return;
 
 	/* Check for children which desire notification of parental death. */
 	mutex_enter(&pidlock);
@@ -623,6 +629,7 @@ lx_clearbrand(proc_t *p, boolean_t lwps_ok)
 {
 	struct lx_seccomp_filter *filter;
 	lx_userns_t *memory;
+	lx_mntns_view_t *view;
 
 	lx_clone_grp_exit(p, lwps_ok);
 	mutex_enter(&p->p_lock);
@@ -630,9 +637,13 @@ lx_clearbrand(proc_t *p, boolean_t lwps_ok)
 	ptolxproc(p)->l_seccomp = NULL;
 	memory = ptolxproc(p)->l_userns_mmap;
 	ptolxproc(p)->l_userns_mmap = NULL;
+	view = ptolxproc(p)->l_mntns;
+	ptolxproc(p)->l_mntns = NULL;
 	mutex_exit(&p->p_lock);
 	lx_seccomp_rele(filter);
 	lx_userns_rele(memory);
+	if (view != NULL)
+		lx_mntns_view_rele(view);
 }
 
 /*
@@ -2038,6 +2049,8 @@ lx_copy_procdata(proc_t *cp, proc_t *pp)
 	lx_seccomp_hold(cpd->l_seccomp);
 	if (cpd->l_userns_mmap != NULL)
 		lx_userns_hold(cpd->l_userns_mmap);
+	if (cpd->l_mntns != NULL)
+		lx_mntns_view_hold(cpd->l_mntns);
 	mutex_exit(&pp->p_lock);
 
 	/* Clear any aio contexts from child */

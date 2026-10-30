@@ -10,7 +10,13 @@
 #include <sys/mount.h>
 #include <sys/systm.h>
 #include <sys/sysmacros.h>
+#include <sys/brand.h>
+#include <sys/proc.h>
+#include <sys/zone.h>
+#include <sys/lx_brand.h>
 #include <sys/lx_mntns.h>
+
+extern brand_t lx_brand;
 
 extern void lx_userns_test_maps(ktest_ctx_hdl_t *);
 extern void lx_userns_test_caps(ktest_ctx_hdl_t *);
@@ -595,6 +601,265 @@ out:
 #undef NS_CHECK
 }
 
+static boolean_t
+ns_process_pid(ktest_ctx_hdl_t *ctx, pid_t *pid)
+{
+	uchar_t *input;
+	size_t size, i;
+
+	*pid = 0;
+	ktest_get_input(ctx, &input, &size);
+	if (size < 2 || size > 10 || input[size - 1] != 0)
+		return (B_FALSE);
+	for (i = 0; i + 1 < size; i++) {
+		if (input[i] < '0' || input[i] > '9' || *pid >= 10000000)
+			return (B_FALSE);
+		*pid = *pid * 10 + input[i] - '0';
+	}
+	return (*pid > 1);
+}
+
+static void
+ns_process_enter(ktest_ctx_hdl_t *ctx, boolean_t reject)
+{
+	zone_t *zone = NULL;
+	proc_t *p = NULL;
+	pid_t pid;
+	cred_t *base = NULL;
+	struct lx_seccomp_filter *filter = NULL;
+	vnode_t *root = NULL, *cwd = NULL, *vp = NULL;
+	lx_mntns_view_t *view = NULL;
+	lx_mntns_state_t state = { 0 };
+	vattr_t attr;
+	char *path = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+	int error = 0;
+	boolean_t passed = B_FALSE;
+
+#define	MP_CHECK(expr, why) do { \
+	if (!(expr)) { \
+		KT_FAIL(ctx, "%s, error=%d", why, error); \
+		goto out; \
+	} \
+} while (0)
+	MP_CHECK(ns_process_pid(ctx, &pid), "invalid process PID");
+	zone = zone_find_by_name("lx-probe");
+	MP_CHECK(zone != NULL && lx_lpid_lock(pid, zone, 0, &p, NULL) == 0,
+	    "cannot find stopped process fixture");
+	MP_CHECK(p->p_brand == &lx_brand && p->p_lwpcnt == 1 &&
+	    p->p_tlist != NULL && p->p_tlist->t_state == TS_STOPPED &&
+	    p->p_user.u_cdir != NULL &&
+	    strcmp(p->p_user.u_comm, "mount_proc") == 0 &&
+	    ptolxproc(p)->l_mntns == NULL &&
+	    lx_kernel_restricted(p) == !reject,
+	    "target is not the stopped root/cwd fixture");
+	mutex_enter(&p->p_crlock);
+	crhold(base = p->p_cred);
+	mutex_exit(&p->p_crlock);
+	root = p->p_user.u_rdir;
+	if (root != NULL)
+		VN_HOLD(root);
+	VN_HOLD(cwd = p->p_user.u_cdir);
+	filter = ptolxproc(p)->l_seccomp;
+	lx_seccomp_hold(filter);
+	mutex_exit(&p->p_lock);
+	p = NULL;
+	error = vnodetopath(root != NULL ? root : zone->zone_rootvp,
+	    cwd, path, MAXPATHLEN, base);
+	MP_CHECK(error == 0 && strcmp(path, "/test/mnt-proc/cwd") == 0,
+	    "fixture cwd differs from the expected namespace path");
+	error = lx_mntns_view_snapshot(zone->zone_rootpath, CRED(), &view);
+	MP_CHECK(error == 0, "cannot snapshot process root");
+	error = lx_mntns_view_tmpfs(view, "/test/mnt-proc/covered", CRED());
+	MP_CHECK(error == 0, "cannot create process-private mount");
+	error = lx_mntns_view_lookup(view, "/test/mnt-proc/covered",
+	    CRED(), &vp);
+	MP_CHECK(error == 0, "cannot find private mount root");
+	bzero(&attr, sizeof (attr));
+	attr.va_mask = AT_UID | AT_GID;
+	attr.va_uid = crgetuid(base);
+	attr.va_gid = crgetgid(base);
+	error = VOP_SETATTR(vp, &attr, 0, CRED(), NULL);
+	MP_CHECK(error == 0, "cannot assign private filesystem ownership");
+	VN_RELE(vp);
+	vp = NULL;
+	error = ns_make(view, "/test/mnt-proc/covered", "private", VREG, base);
+	MP_CHECK(error == 0, "cannot create process-private file");
+	error = lx_mntns_view_lookup(view, "/test/mnt-proc/source", base, &vp);
+	MP_CHECK(error == 0, "cannot find read-only bind source");
+	error = lx_mntns_view_bind(view, vp, "/test/mnt-proc/bind-target",
+	    B_TRUE, CRED());
+	MP_CHECK(error == 0, "cannot create process read-only bind");
+	VN_RELE(vp);
+	vp = NULL;
+	error = lx_mntns_state_prepare(view, "/test/mnt-proc/source", base,
+	    &state);
+	MP_CHECK(error == ENOTDIR && state.lms_view == NULL &&
+	    state.lms_root == NULL && state.lms_cwd == NULL,
+	    "failed cwd preparation retained references");
+	error = lx_mntns_state_prepare(view, "/test/mnt-proc/cwd", base,
+	    &state);
+	MP_CHECK(error == 0, "cannot prepare process root/cwd references");
+	MP_CHECK(lx_lpid_lock(pid, zone, 0, &p, NULL) == 0,
+	    "process fixture disappeared during preparation");
+	MP_CHECK(p->p_brand == &lx_brand && p->p_cred == base &&
+	    ptolxproc(p)->l_seccomp == filter &&
+	    strcmp(p->p_user.u_comm, "mount_proc") == 0,
+	    "process identity changed during preparation");
+	if (!reject) {
+		error = lx_mntns_proc_swap(p, root, NULL, &state);
+		MP_CHECK(error == EAGAIN && ptolxproc(p)->l_mntns == NULL &&
+		    p->p_user.u_rdir == root && p->p_user.u_cdir == cwd,
+		    "stale expected cwd changed process state");
+	}
+	error = lx_mntns_proc_swap(p, root, cwd, &state);
+	if (reject) {
+		MP_CHECK(error == EPERM && ptolxproc(p)->l_mntns == NULL &&
+		    p->p_user.u_rdir == root && p->p_user.u_cdir == cwd,
+		    "unguarded process acquired private root/cwd");
+	} else {
+		MP_CHECK(error == 0 && ptolxproc(p)->l_mntns == view &&
+		    p->p_user.u_rdir != root && p->p_user.u_cdir != cwd &&
+		    p->p_user.u_cwd == NULL,
+		    "private root/cwd publication failed");
+	}
+	passed = B_TRUE;
+out:
+	if (p != NULL)
+		mutex_exit(&p->p_lock);
+	lx_mntns_state_fini(&state);
+	if (vp != NULL)
+		VN_RELE(vp);
+	if (view != NULL)
+		lx_mntns_view_rele(view);
+	if (root != NULL)
+		VN_RELE(root);
+	if (cwd != NULL)
+		VN_RELE(cwd);
+	lx_seccomp_rele(filter);
+	if (base != NULL)
+		crfree(base);
+	if (zone != NULL)
+		zone_rele(zone);
+	kmem_free(path, MAXPATHLEN);
+	if (reject && !ns_wait_idle()) {
+		KT_ERROR(ctx, "rejected process entry leaked a mount view");
+		passed = B_FALSE;
+	}
+	if (passed)
+		KT_PASS(ctx);
+#undef MP_CHECK
+}
+
+static void
+ns_process_attach(ktest_ctx_hdl_t *ctx)
+{
+	ns_process_enter(ctx, B_FALSE);
+}
+
+static void
+ns_process_reject(ktest_ctx_hdl_t *ctx)
+{
+	ns_process_enter(ctx, B_TRUE);
+}
+
+static void
+ns_process_inspect(ktest_ctx_hdl_t *ctx, boolean_t zombie)
+{
+	zone_t *zone = NULL;
+	proc_t *p = NULL;
+	pid_t pid;
+	lx_mntns_view_t *view = NULL;
+	vnode_t *root = NULL, *cwd = NULL, *vp = NULL;
+	cred_t *cr = NULL;
+	int error = 0;
+	boolean_t passed = B_FALSE;
+
+#define	MP_CHECK(expr, why) do { \
+	if (!(expr)) { \
+		KT_FAIL(ctx, "%s, error=%d", why, error); \
+		goto out; \
+	} \
+} while (0)
+	MP_CHECK(ns_process_pid(ctx, &pid), "invalid inspection PID");
+	zone = zone_find_by_name("lx-probe");
+	MP_CHECK(zone != NULL && lx_lpid_lock(pid, zone,
+	    zombie ? LXP_ZOMBOK : 0, &p, NULL) == 0,
+	    "cannot find process to inspect");
+	MP_CHECK(p->p_brand == &lx_brand &&
+	    strcmp(p->p_user.u_comm, "mount_proc") == 0,
+	    "inspection target is not the fixture");
+	if (zombie) {
+		MP_CHECK(p->p_stat == SZOMB && p->p_tlist == NULL &&
+		    ptolxproc(p)->l_mntns == NULL,
+		    "unreaped zombie retained its mount-view reference");
+		passed = B_TRUE;
+		goto out;
+	}
+	MP_CHECK(ptolxproc(p)->l_mntns != NULL && p->p_lwpcnt == 1 &&
+	    p->p_tlist != NULL && p->p_tlist->t_state == TS_STOPPED &&
+	    lx_kernel_restricted(p), "orphan lost its inherited mount view");
+	view = ptolxproc(p)->l_mntns;
+	lx_mntns_view_hold(view);
+	VN_HOLD(root = p->p_user.u_rdir);
+	VN_HOLD(cwd = p->p_user.u_cdir);
+	crhold(cr = p->p_cred);
+	mutex_exit(&p->p_lock);
+	p = NULL;
+	error = lx_mntns_view_lookup(view, "/", cr, &vp);
+	MP_CHECK(error == 0 && vp == root, "orphan has a different root vnode");
+	VN_RELE(vp);
+	vp = NULL;
+	error = lx_mntns_view_lookup(view, "/test/mnt-proc/cwd", cr, &vp);
+	MP_CHECK(error == 0 && vp == cwd, "orphan has a different cwd vnode");
+	VN_RELE(vp);
+	vp = NULL;
+	error = lx_mntns_view_destroy(view, CRED());
+	if (error == 0)
+		view = NULL;
+	MP_CHECK(error == EBUSY, "orphan did not own its inherited reference");
+	passed = B_TRUE;
+out:
+	if (p != NULL)
+		mutex_exit(&p->p_lock);
+	if (vp != NULL)
+		VN_RELE(vp);
+	if (root != NULL)
+		VN_RELE(root);
+	if (cwd != NULL)
+		VN_RELE(cwd);
+	if (view != NULL)
+		lx_mntns_view_rele(view);
+	if (cr != NULL)
+		crfree(cr);
+	if (zone != NULL)
+		zone_rele(zone);
+	if (passed)
+		KT_PASS(ctx);
+#undef MP_CHECK
+}
+
+static void
+ns_process_member(ktest_ctx_hdl_t *ctx)
+{
+	ns_process_inspect(ctx, B_FALSE);
+}
+
+static void
+ns_process_zombie(ktest_ctx_hdl_t *ctx)
+{
+	ns_process_inspect(ctx, B_TRUE);
+}
+
+static void
+ns_process_idle(ktest_ctx_hdl_t *ctx)
+{
+	if (!ns_wait_idle()) {
+		KT_FAIL(ctx, "process exit leaked private mount views");
+		return;
+	}
+	KT_PASS(ctx);
+}
+
 static struct modlmisc ns_modlmisc = {
 	.misc_modops = &mod_miscops,
 	.misc_linkinfo = "lx namespace tests"
@@ -622,6 +887,16 @@ _init(void)
 	    KTEST_FLAG_INPUT)) != 0 ||
 	    (error = ktest_add_test(ks, "lifetime", ns_lifetime,
 	    KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "process_attach", ns_process_attach,
+	    KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "process_reject", ns_process_reject,
+	    KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "process_member", ns_process_member,
+	    KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "process_zombie", ns_process_zombie,
+	    KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "process_idle", ns_process_idle,
+	    0)) != 0 ||
 	    (error = ktest_add_suite(km, "user", &ks)) != 0 ||
 	    (error = ktest_add_test(ks, "maps", lx_userns_test_maps, 0)) != 0 ||
 	    (error = ktest_add_test(ks, "capabilities", lx_userns_test_caps,
