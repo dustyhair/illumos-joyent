@@ -1,3 +1,6 @@
+Kernel rmdir and accepted-stream credentials are documented in
+[RMDIR-ACCEPT.md](RMDIR-ACCEPT.md).
+
 Native per-message stream credentials are documented in
 [STREAM-CREDENTIALS.md](STREAM-CREDENTIALS.md).
 

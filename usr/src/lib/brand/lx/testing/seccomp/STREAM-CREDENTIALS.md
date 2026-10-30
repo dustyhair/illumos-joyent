@@ -59,8 +59,9 @@ native_control 14924d8abaa6476e777c40eeea6d26668e05fa65fbf128fbbfc4481a0d09da27
 
 ## Remaining work
 
-Accept/listener option inheritance and data queued before accept need separate
-controls and implementation review. Stream coalescing, MSG_PEEK/WAITALL,
+Accept/listener inheritance and live/exited preaccept senders are now
+validated in RMDIR-ACCEPT.md. Option changes while data is queued still need
+separate controls and implementation review. Stream coalescing, MSG_PEEK/WAITALL,
 credential changes while flow-controlled, option changes on queued messages,
 Native ancillary layout assumptions and SCM-specific 32-bit controls need
 further coverage. Administrative PID target/lifetime semantics are still open.
