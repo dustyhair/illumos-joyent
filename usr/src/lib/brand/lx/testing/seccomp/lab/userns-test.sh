@@ -17,7 +17,7 @@ trap cleanup EXIT
 (cd /zones/lx-probe-zfs/root &&
     tar xf /lab/lx-root.tar ./test/proc_maps_baseline \
         ./test/cap_syscalls_probe ./test/cap_syscalls_probe32 ./test/scope_caps \
-        ./test/dynamic/scope_caps)
+        ./test/dynamic/scope_caps ./test/scope_ids ./test/dynamic/scope_ids)
 mkdir -p /zones/lx-probe-zfs/root/test/scope-setid
 cp /zones/lx-probe-zfs/root/test/scope_caps /zones/lx-probe-zfs/root/test/scope-setid/scope_caps
 chmod 4755 /zones/lx-probe-zfs/root/test/scope-setid/scope_caps
@@ -29,11 +29,13 @@ zlogin -S lx-probe /test/cap_syscalls_probe
 zlogin -S lx-probe '/test/cap_syscalls_probe --filter'
 zlogin -S lx-probe /test/cap_syscalls_probe32
 echo LX_CAPABILITIES32_EXIT=0
-for probe in /test/scope_caps /test/dynamic/scope_caps; do
-    if test "$probe" = /test/scope_caps; then
-        scope_log=/lab/scope-caps.log
+for probe in /test/scope_caps /test/dynamic/scope_caps \
+    /test/scope_ids /test/dynamic/scope_ids; do
+    scope_log=/lab/$(echo "$probe" | tr / _).log
+    if [[ "$probe" = */scope_ids ]]; then
+        expected='SCOPE_IDS cases=13 failures=0'
     else
-        scope_log=/lab/scope-caps-dynamic.log
+        expected='SCOPE_CAPS cases=19 failures=0'
     fi
     zlogin -S lx-probe "$probe" > "$scope_log" 2>&1 &
     scope_job=$!
@@ -66,7 +68,7 @@ for probe in /test/scope_caps /test/dynamic/scope_caps; do
         cat "$scope_log"
         exit 1
     fi
-    grep -q '^SCOPE_CAPS cases=19 failures=0$' "$scope_log"
+    grep -qx "$expected" "$scope_log"
 done
 cleanup
 trap - EXIT

@@ -529,7 +529,10 @@ retry:
 	    crgetuid(identity), crgetsuid(identity)));
 	VERIFY0(crsetresgid(summary, crgetrgid(identity),
 	    crgetgid(identity), crgetsgid(identity)));
-	if (summary->cr_grps != identity->cr_grps)
+	if (summary->cr_grps != identity->cr_grps &&
+	    (crgetngroups(summary) != crgetngroups(identity) ||
+	    bcmp(crgetgroups(summary), crgetgroups(identity),
+	    crgetngroups(identity) * sizeof (gid_t)) != 0))
 		VERIFY0(crsetgroups(summary, crgetngroups(identity),
 		    (gid_t *)crgetgroups(identity)));
 	oldruid = crgetruid(base);

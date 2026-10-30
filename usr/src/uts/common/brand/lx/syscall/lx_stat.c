@@ -24,6 +24,7 @@
 #include <sys/mode.h>
 #include <sys/stat.h>
 #include <sys/lx_brand.h>
+#include <sys/lx_userns.h>
 #include <sys/lx_fcntl.h>
 #include <sys/lx_types.h>
 #include <sys/lx_impl.h>
@@ -197,6 +198,8 @@ lx_stat_common(vnode_t *vp, cred_t *cr, void *outp, lx_stat_fmt_t fmt,
 	}
 
 	lx_stat_xlate_dev(&vattr);
+	vattr.va_uid = lx_userns_id_visible(CRED(), 0, vattr.va_uid);
+	vattr.va_gid = lx_userns_id_visible(CRED(), 1, vattr.va_gid);
 
 	if (fmt == LXF_STAT32) {
 		struct lx_stat32 sb;

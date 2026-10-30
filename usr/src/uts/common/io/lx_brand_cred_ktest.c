@@ -432,6 +432,8 @@ lx_userns_test_scope_attach(ktest_ctx_hdl_t *ctx)
 	lx_userns_t *ns = NULL;
 	lx_userns_cred_t actor = { 0 };
 	boolean_t passed = B_FALSE;
+	const char *map;
+	boolean_t identities;
 
 	ktest_get_input(ctx, &input, &size);
 	BC_CHECK(size >= 2 && size <= 10 && input[size - 1] == 0,
@@ -445,11 +447,14 @@ lx_userns_test_scope_attach(ktest_ctx_hdl_t *ctx)
 	BC_CHECK(zone != NULL && pid > 1 &&
 	    lx_lpid_lock(pid, zone, 0, &p, NULL) == 0,
 	    "cannot find stopped lab process");
-	BC_CHECK(p->p_lwpcnt == 1 && strcmp(p->p_user.u_comm,
-	    "scope_caps") == 0 && p->p_tlist != NULL &&
+	BC_CHECK(p->p_lwpcnt == 1 && (strcmp(p->p_user.u_comm,
+	    identities ? "scope_ids" : "scope_caps") == 0 ||
+	    strcmp(p->p_user.u_comm, "scope_ids") == 0) && p->p_tlist != NULL &&
 	    p->p_tlist->t_state == TS_STOPPED &&
 	    ptolxproc(p)->l_flags == 0 && crgetbrand(p->p_cred) == NULL,
 	    "target is not the fresh stopped fixture");
+	identities = strcmp(p->p_user.u_comm, "scope_ids") == 0;
+	map = identities ? "0 1000 3\n42 0 1" : "0 0 1";
 	mutex_enter(&p->p_crlock);
 	crhold(base = p->p_cred);
 	mutex_exit(&p->p_crlock);
@@ -460,8 +465,10 @@ lx_userns_test_scope_attach(ktest_ctx_hdl_t *ctx)
 	actor.luc_ns = ztolxzd(zone)->lxzd_userns;
 	lx_caps_new_namespace(&actor.luc_caps);
 	BC_CHECK(lx_userns_child_create(&actor, &ns) == 0 &&
-	    lx_userns_map_write(ns, 0, &actor, &actor, "0 0 1", 5, 0) == 0 &&
-	    lx_userns_map_write(ns, 1, &actor, &actor, "0 0 1", 5, 0) == 0,
+	    lx_userns_map_write(ns, 0, &actor, &actor, map,
+	    strlen(map), 0) == 0 &&
+	    lx_userns_map_write(ns, 1, &actor, &actor, map,
+	    strlen(map), 0) == 0,
 	    "cannot prepare private fixture namespace");
 	actor.luc_ns = ns;
 	scoped = lx_userns_native_for(base, &actor);
