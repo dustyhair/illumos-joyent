@@ -85,6 +85,15 @@ lx_brand_cred_test_copies(ktest_ctx_hdl_t *ctx)
 			crfree(copy);
 		copy = NULL;
 	}
+	bzero(&actor.luc_caps, sizeof (actor.luc_caps));
+	copy = lx_userns_native_for(CRED(), &actor);
+	BC_CHECK(!lx_userns_traceme(copy, original) &&
+	    lx_userns_traceme(original, copy) &&
+	    !lx_userns_traceme(original, CRED()) &&
+	    lx_userns_traceme(CRED(), original),
+	    "TRACEME ignored scoped capability or ancestor authority");
+	crfree(copy);
+	copy = NULL;
 	keep = crdup(original);
 	crfree(original);
 	original = NULL;

@@ -763,9 +763,9 @@ lx_userns_traceme(const cred_t *parent, const cred_t *child)
 	const lx_userns_native_t *to = (void *)crgetbrand(child);
 	lx_userns_cred_t actor;
 
-	/* Preserve the existing initial-namespace implementation. */
+	/* A descendant credential cannot trace an initial-namespace task. */
 	if (to == NULL)
-		return (B_TRUE);
+		return (crgetbrand(parent) == NULL);
 	if (lx_userns_tracer_capable(parent, child))
 		return (B_TRUE);
 	return (lx_userns_map_actor(parent, to->un_namespace, &actor) == 0 &&
