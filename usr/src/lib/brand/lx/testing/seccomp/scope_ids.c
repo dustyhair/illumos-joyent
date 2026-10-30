@@ -329,6 +329,15 @@ int main(int argc, char **argv)
     run("mapped identities and auxv across exec", exec_ids);
     run("mapped file ownership and native access", file_access);
     run("glibc broadcasts identity changes from a worker", libc_broadcast);
+    if (argc == 1) {
+        unsigned group = 1;
+        CHECK(root_ids() == 0);
+        CHECK(syscall(SYS_setgroups, 1, &group) == 0);
+        CHECK(syscall(SYS_setresgid, 1, 1, 1) == 0);
+        CHECK(syscall(SYS_setresuid, 1, 1, 1) == 0);
+        printf("SID_READY_PID=%d\n", getpid()); fflush(stdout);
+        raise(SIGSTOP);
+    }
     printf("SCOPE_IDS cases=%d failures=%d\n", cases, failures);
     return failures != 0;
 }

@@ -50,7 +50,16 @@ for probe in /test/scope_caps /test/dynamic/scope_caps \
     /lab/ktest run -i /lab/scope-target.bin lx_namespace:user:scope_attach
     kill -CONT "$scope_pid"
     scope_done=0
+    sid_checked=0
     for attempt in {1..30}; do
+        sid_pid=$(sed -n 's/^SID_READY_PID=//p' "$scope_log")
+        if test "$sid_checked" = 0 && test -n "$sid_pid"; then
+            [[ "$sid_pid" = "$scope_pid" ]]
+            printf '%s\0' "$sid_pid" > /lab/scope-target.bin
+            /lab/ktest run -i /lab/scope-target.bin lx_namespace:user:scope_sids
+            sid_checked=1
+            kill -CONT "$sid_pid"
+        fi
         if ! kill -0 "$scope_job" 2>/dev/null; then
             scope_done=1
             break
@@ -69,6 +78,9 @@ for probe in /test/scope_caps /test/dynamic/scope_caps \
         exit 1
     fi
     grep -qx "$expected" "$scope_log"
+    if [[ "$probe" = */scope_ids ]]; then
+        test "$sid_checked" = 1
+    fi
 done
 cleanup
 trap - EXIT

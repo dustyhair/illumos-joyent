@@ -18,6 +18,8 @@ extern void lx_brand_cred_test_copies(ktest_ctx_hdl_t *);
 extern void lx_brand_cred_test_access(ktest_ctx_hdl_t *);
 extern void lx_proc_maps_test(ktest_ctx_hdl_t *);
 extern void lx_userns_test_scope_attach(ktest_ctx_hdl_t *);
+extern void lx_userns_test_scope_sids(ktest_ctx_hdl_t *);
+extern void lx_userns_test_scope_sids_fini(void);
 extern void lx_cap_native_test(ktest_ctx_hdl_t *);
 
 /* Only the disposable lab driver prepares this private source tree. */
@@ -331,6 +333,8 @@ _init(void)
 	    0)) != 0 ||
 	    (error = ktest_add_test(ks, "scope_attach",
 	    lx_userns_test_scope_attach, KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "scope_sids",
+	    lx_userns_test_scope_sids, KTEST_FLAG_INPUT)) != 0 ||
 	    (error = ktest_register_module(km)) != 0) {
 		ktest_free_module(km);
 		return (error);
@@ -345,8 +349,10 @@ _fini(void)
 {
 	int error = mod_remove(&ns_modlinkage);
 
-	if (error == 0)
+	if (error == 0) {
 		ktest_unregister_module("lx_namespace");
+		lx_userns_test_scope_sids_fini();
+	}
 	return (error);
 }
 

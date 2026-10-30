@@ -11,6 +11,7 @@
 #include <sys/systm.h>
 #include <sys/errno.h>
 #include <sys/cred_impl.h>
+#include <sys/sid.h>
 #include <sys/priv_impl.h>
 #include <sys/policy.h>
 #include <sys/lx_userns.h>
@@ -535,6 +536,14 @@ retry:
 	    crgetngroups(identity) * sizeof (gid_t)) != 0))
 		VERIFY0(crsetgroups(summary, crgetngroups(identity),
 		    (gid_t *)crgetgroups(identity)));
+	/* Match the representative's immutable native SID payload as well. */
+	if (summary->cr_ksid != identity->cr_ksid) {
+		if (identity->cr_ksid != NULL)
+			kcrsid_hold(identity->cr_ksid);
+		if (summary->cr_ksid != NULL)
+			kcrsid_rele(summary->cr_ksid);
+		summary->cr_ksid = identity->cr_ksid;
+	}
 	oldruid = crgetruid(base);
 	newruid = crgetruid(summary);
 	counted = oldruid != newruid;
@@ -795,6 +804,7 @@ lx_userns_setids(int nr, uintptr_t *args)
 	boolean_t capable;
 	cred_t *candidate;
 	lx_caps_t caps = data->un_caps;
+	ksid_t sid, *ksp = NULL;
 
 	old[0] = gid ? crgetrgid(CRED()) : crgetruid(CRED());
 	old[1] = gid ? crgetgid(CRED()) : crgetuid(CRED());
@@ -843,6 +853,19 @@ lx_userns_setids(int nr, uintptr_t *args)
 		crfree(candidate);
 		return (EINVAL);
 	}
+	if (next[1] != old[1]) {
+		if (next[1] > MAXUID) {
+			if ((gid ? ksid_lookupbygid(curproc->p_zone, next[1],
+			    &sid) : ksid_lookupbyuid(curproc->p_zone, next[1],
+			    &sid)) != 0) {
+				crfree(candidate);
+				return (EINVAL);
+			}
+			ksp = &sid;
+		}
+		/* crsetsid consumes the lookup's domain reference. */
+		crsetsid(candidate, ksp, gid ? KSID_GROUP : KSID_USER);
+	}
 	lx_userns_publish(curthread, candidate);
 	crfree(candidate);
 	return (0);
@@ -855,6 +878,8 @@ lx_userns_groups(int nr, int count, uintptr_t address)
 	gid_t *groups;
 	cred_t *candidate;
 	int n = crgetngroups(CRED()), error = 0, i;
+	boolean_t ephemeral = B_FALSE;
+	ksidlist_t *sidlist = NULL;
 
 	if (nr == 115) {
 		if (count < 0 || (count != 0 && count < n))
@@ -885,18 +910,31 @@ lx_userns_groups(int nr, int count, uintptr_t address)
 	}
 	for (i = 0; i < count; i++) {
 		groups[i] = lx_userns_id(data->un_namespace, 1, groups[i], 1);
-		if (groups[i] == UINT32_MAX) {
+		if (groups[i] == UINT32_MAX ||
+		    !VALID_GID(groups[i], curproc->p_zone)) {
 			error = EINVAL;
 			goto out;
 		}
+		if (groups[i] > MAXUID)
+			ephemeral = B_TRUE;
+	}
+	if (ephemeral && (sidlist = kcrsid_gidstosids(curproc->p_zone,
+	    count, groups)) == NULL) {
+		error = EINVAL;
+		goto out;
 	}
 	candidate = lx_userns_with_caps(CRED(), &data->un_caps);
 	if (crsetgroups(candidate, count, groups) != 0)
 		error = EINVAL;
-	else
+	else {
+		crsetsidlist(candidate, sidlist);
+		sidlist = NULL;
 		lx_userns_publish(curthread, candidate);
+	}
 	crfree(candidate);
 out:
+	if (sidlist != NULL)
+		ksidlist_rele(sidlist);
 	if (groups != NULL)
 		kmem_free(groups, count * sizeof (*groups));
 	return (error == 0 ? 0 : set_errno(error));

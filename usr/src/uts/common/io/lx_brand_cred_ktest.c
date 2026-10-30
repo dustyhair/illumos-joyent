@@ -3,6 +3,8 @@
  */
 #include <sys/types.h>
 #include <sys/cred_impl.h>
+#include <sys/atomic.h>
+#include <sys/sid.h>
 #include <sys/zone.h>
 #include <sys/param.h>
 #include <sys/ktest.h>
@@ -418,6 +420,104 @@ out:
 		KT_PASS(ctx);
 }
 
+/* Retain only native SID metadata, never a zone or branded credential. */
+static credsid_t *lx_scope_seed;
+
+void
+lx_userns_test_scope_sids_fini(void)
+{
+	credsid_t *seed = atomic_swap_ptr(&lx_scope_seed, NULL);
+
+	if (seed != NULL)
+		kcrsid_rele(seed);
+}
+
+static void
+lx_scope_seed_sids(cred_t *cr)
+{
+	ksid_t sid = { 0 };
+	ksidlist_t *list = kmem_zalloc(KSIDLIST_MEM(1), KM_SLEEP);
+
+	sid.ks_domain = ksid_lookupdomain("S-1-5-21-110-220-330");
+	sid.ks_rid = 100;
+	crsetsid(cr, &sid, KSID_USER);
+	sid.ks_domain = ksid_lookupdomain("S-1-5-21-110-220-330");
+	sid.ks_rid = 101;
+	crsetsid(cr, &sid, KSID_GROUP);
+	list->ksl_ref = list->ksl_nsid = 1;
+	list->ksl_sids[0].ks_domain =
+	    ksid_lookupdomain("S-1-5-21-110-220-330");
+	list->ksl_sids[0].ks_rid = 102;
+	crsetsidlist(cr, list);
+}
+
+void
+lx_userns_test_scope_sids(ktest_ctx_hdl_t *ctx)
+{
+	uchar_t *input;
+	size_t size, i;
+	pid_t pid = 0;
+	zone_t *zone = NULL;
+	proc_t *p = NULL;
+	cred_t *task = NULL, *summary = NULL;
+	credsid_t *seed = atomic_swap_ptr(&lx_scope_seed, NULL);
+	boolean_t passed = B_FALSE;
+
+	ktest_get_input(ctx, &input, &size);
+	BC_CHECK(size >= 2 && size <= 10 && input[size - 1] == 0,
+	    "invalid SID fixture PID input");
+	for (i = 0; i + 1 < size; i++) {
+		BC_CHECK(input[i] >= '0' && input[i] <= '9' &&
+		    pid < 10000000, "invalid SID fixture PID");
+		pid = pid * 10 + input[i] - '0';
+	}
+	zone = zone_find_by_name("lx-probe");
+	BC_CHECK(zone != NULL && pid > 1 &&
+	    lx_lpid_lock(pid, zone, 0, &p, NULL) == 0,
+	    "cannot find stopped SID fixture");
+	BC_CHECK(p->p_lwpcnt == 1 && p->p_tlist != NULL &&
+	    p->p_tlist->t_state == TS_STOPPED &&
+	    strcmp(p->p_user.u_comm, "scope_ids") == 0 &&
+	    (ptolxproc(p)->l_flags & LX_PROC_USERNS) != 0,
+	    "target is not the stopped scoped SID fixture");
+	mutex_enter(&p->p_crlock);
+	crhold(task = p->p_tlist->t_cred);
+	crhold(summary = p->p_cred);
+	mutex_exit(&p->p_crlock);
+	mutex_exit(&p->p_lock);
+	p = NULL;
+	BC_CHECK(seed != NULL &&
+	    seed->kr_sidx[KSID_USER].ks_domain != NULL &&
+	    seed->kr_sidx[KSID_GROUP].ks_domain != NULL &&
+	    seed->kr_sidlist != NULL,
+	    "identity changes mutated the shared original SID payload");
+	BC_CHECK(crgetuid(task) == 1001 && crgetgid(task) == 1001 &&
+	    crgetuid(summary) == 1001 && crgetgid(summary) == 1001,
+	    "fixture did not complete mapped effective ID changes");
+	BC_CHECK(crgetsid(task, KSID_USER) == NULL &&
+	    crgetsid(task, KSID_GROUP) == NULL &&
+	    crgetsidlist(task) == NULL,
+	    "task retained stale native SID metadata");
+	BC_CHECK(crgetsid(summary, KSID_USER) == NULL &&
+	    crgetsid(summary, KSID_GROUP) == NULL &&
+	    crgetsidlist(summary) == NULL,
+	    "process summary retained stale native SID metadata");
+	passed = B_TRUE;
+out:
+	if (p != NULL)
+		mutex_exit(&p->p_lock);
+	if (task != NULL)
+		crfree(task);
+	if (summary != NULL)
+		crfree(summary);
+	if (seed != NULL)
+		kcrsid_rele(seed);
+	if (zone != NULL)
+		zone_rele(zone);
+	if (passed)
+		KT_PASS(ctx);
+}
+
 /* Trusted lab-only entry, never reachable through a Linux namespace syscall. */
 void
 lx_userns_test_scope_attach(ktest_ctx_hdl_t *ctx)
@@ -471,6 +571,8 @@ lx_userns_test_scope_attach(ktest_ctx_hdl_t *ctx)
 	    "cannot prepare private fixture namespace");
 	actor.luc_ns = ns;
 	scoped = lx_userns_native_for(base, &actor);
+	if (identities)
+		lx_scope_seed_sids(scoped);
 	BC_CHECK(lx_lpid_lock(pid, zone, 0, &p, NULL) == 0,
 	    "fixture disappeared before attachment");
 	task = p->p_tlist;
@@ -492,6 +594,14 @@ lx_userns_test_scope_attach(ktest_ctx_hdl_t *ctx)
 	p = NULL;
 	crfree(old_process);
 	crfree(old_task);
+	if (identities) {
+		credsid_t *old;
+
+		kcrsid_hold(scoped->cr_ksid);
+		old = atomic_swap_ptr(&lx_scope_seed, scoped->cr_ksid);
+		if (old != NULL)
+			kcrsid_rele(old);
+	}
 	passed = B_TRUE;
 out:
 	if (p != NULL)
