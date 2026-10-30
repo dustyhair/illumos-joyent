@@ -50,6 +50,8 @@ modload /lab/lx_namespace_ktest
 /lab/ktest run -i /lab/namespace-source.bin lx_namespace:mount:lifetime
 /lab/ktest run -i /lab/namespace-source.bin lx_namespace:mount:quota
 /lab/ktest run -i /lab/namespace-source.bin lx_namespace:mount:quota
+/lab/ktest run -i /lab/namespace-source.bin lx_namespace:mount:owner
+/lab/ktest run -i /lab/namespace-source.bin lx_namespace:mount:owner
 test -f "$src/sub/original"
 test ! -e "$src/sub/private"
 cleanup
