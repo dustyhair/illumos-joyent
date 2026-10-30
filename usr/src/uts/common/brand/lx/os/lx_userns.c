@@ -252,7 +252,7 @@ typedef struct lx_userns_native {
 	brand_cred_t un_cred;
 	lx_userns_t *un_namespace;
 	lx_caps_t un_caps;
-	boolean_t un_exec_gain;
+	boolean_t un_exec_nodump;
 } lx_userns_native_t;
 
 extern brand_t lx_brand;
@@ -267,7 +267,7 @@ lx_userns_native_attach(cred_t *cred, const lx_userns_cred_t *actor)
 	data->un_namespace = actor->luc_ns;
 	lx_userns_hold(data->un_namespace);
 	data->un_caps = actor->luc_caps;
-	data->un_exec_gain = B_FALSE;
+	data->un_exec_nodump = B_FALSE;
 	brand_cred_init(&data->un_cred, &lx_brand);
 	crsetbrand(cred, &data->un_cred);
 	brand_cred_rele(&data->un_cred);
@@ -309,7 +309,7 @@ lx_userns_exec(proc_t *process, const cred_t *cred)
 	old = pd->l_userns_mmap;
 	pd->l_userns_mmap = owner;
 	pd->l_flags &= ~LX_PROC_NO_DUMP;
-	if (data != NULL && data->un_exec_gain) {
+	if (data != NULL && data->un_exec_nodump) {
 		pd->l_flags |= LX_PROC_NO_DUMP;
 		process->p_flag |= SNOCD;
 	}
@@ -850,8 +850,10 @@ lx_userns_cred_exec(const cred_t *source, cred_t *candidate, vnode_t *vp,
 	}
 	lx_userns_native_limit(candidate);
 	lx_userns_native_attach(candidate, &actor);
-	((lx_userns_native_t *)crgetbrand(candidate))->un_exec_gain =
-	    (actor.luc_caps.lc_permitted & ~data->un_caps.lc_permitted) != 0;
+	((lx_userns_native_t *)crgetbrand(candidate))->un_exec_nodump =
+	    (actor.luc_caps.lc_permitted & ~data->un_caps.lc_permitted) != 0 ||
+	    crgetuid(candidate) != crgetuid(source) ||
+	    crgetgid(candidate) != crgetgid(source);
 	return (0);
 }
 

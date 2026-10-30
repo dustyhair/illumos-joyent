@@ -483,6 +483,73 @@ static int traceme_task_snapshot(void)
     CHECK(pthread_join(sibling, NULL) == 0);
     return error;
 }
+static int mixed_image(char **argv)
+{
+    uint64_t expected = strtoull(argv[2], NULL, 16);
+    CHECK(ids(0, 0, 1, 1) && ids(1, 0, 1, 1));
+    CHECK(getauxval(AT_UID) == 0 && getauxval(AT_EUID) == 1);
+    CHECK(getauxval(AT_GID) == 0 && getauxval(AT_EGID) == 1);
+    CHECK(capbits(0) == 0 && capbits(1) == expected);
+    return 0;
+}
+static int mixed_nnp(int keep)
+{
+    CHECK(root_ids() == 0);
+    CHECK(prctl(PR_SET_SECUREBITS, SECBIT_NO_SETUID_FIXUP, 0, 0, 0) == 0);
+    uint64_t full = capbits(1);
+    CHECK(syscall(SYS_setresgid, 0, 1, 1) == 0);
+    CHECK(syscall(SYS_setresuid, 0, 1, 1) == 0);
+    CHECK(prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0);
+    if (!keep) {
+        CHECK(drop_caps() == 0);
+        char *args[] = {(char *)self, "--reset-image", "0", NULL};
+        syscall(SYS_execve, self, args, NULL);
+        return 1;
+    }
+    char caps[32];
+    snprintf(caps, sizeof(caps), "%llx", (unsigned long long)full);
+    char *args[] = {(char *)self, "--mixed-image", caps, NULL};
+    syscall(SYS_execve, self, args, NULL);
+    return 1;
+}
+static int mixed_nnp_drop(void) { return mixed_nnp(0); }
+static int mixed_nnp_keep(void) { return mixed_nnp(1); }
+static int trace_inherit(void)
+{
+    int status;
+    pid_t child = fork(); CHECK(child >= 0);
+    if (child == 0) {
+        if (ptrace(PTRACE_TRACEME, 0, NULL, NULL)) _exit(102);
+        raise(SIGSTOP);
+        pid_t grandchild = fork();
+        if (grandchild == 0) _exit(7);
+        if (grandchild < 0 || waitpid(grandchild, &status, 0) != grandchild ||
+            !WIFEXITED(status) || WEXITSTATUS(status) != 7) _exit(103);
+        _exit(0);
+    }
+    CHECK(waitpid(child, &status, 0) == child && WIFSTOPPED(status));
+    CHECK(ptrace(PTRACE_SETOPTIONS, child, NULL, (void *)PTRACE_O_TRACEFORK) == 0);
+    CHECK(ptrace(PTRACE_CONT, child, NULL, NULL) == 0);
+    unsigned long grandchild = 0;
+    int child_done = 0, grandchild_done = 0;
+    for (int events = 0; events < 40 && (!child_done || !grandchild_done); events++) {
+        pid_t got = waitpid(-1, &status, __WALL);
+        CHECK(got > 0);
+        if (WIFEXITED(status)) {
+            if (got == child) { CHECK(WEXITSTATUS(status) == 0); child_done = 1; }
+            else { CHECK(got == (pid_t)grandchild && WEXITSTATUS(status) == 7); grandchild_done = 1; }
+            continue;
+        }
+        CHECK(WIFSTOPPED(status));
+        if ((unsigned)status >> 16 == PTRACE_EVENT_FORK)
+            CHECK(ptrace(PTRACE_GETEVENTMSG, got, NULL, &grandchild) == 0 && grandchild > 0);
+        int signal = WSTOPSIG(status) == SIGCHLD ? SIGCHLD : 0;
+        CHECK(ptrace(PTRACE_CONT, got, NULL, (void *)(uintptr_t)signal) == 0);
+    }
+    CHECK(child_done && grandchild_done && grandchild != 0);
+    printf("TRACE_INHERIT_PASS\n");
+    return 0;
+}
 static int image_check(void)
 {
     CHECK(ids(0, 1, 1, 1) && ids(1, 1, 1, 1));
@@ -519,6 +586,12 @@ static int map_file(pid_t p, const char *name)
 }
 int main(int argc, char **argv)
 {
+    if (argc == 2 && !strcmp(argv[1], "--unscoped-trace")) return trace_inherit();
+    if (argc == 3 && !strcmp(argv[1], "--mixed-image")) return mixed_image(argv);
+    if (argc == 3 && !strcmp(argv[1], "--reset-image")) {
+        CHECK(prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) != 1);
+        return trace_image(argc, argv);
+    }
     if (argc >= 3 && !strcmp(argv[1], "--trace-image")) return trace_image(argc, argv);
     if (argc == 2 && !strcmp(argv[1], "--image")) return image_check();
     self = argv[0];
@@ -569,6 +642,8 @@ int main(int argc, char **argv)
     run("TRACEME rejects weaker parent", traceme_denied);
     run("tracer exit clears exec restriction", tracer_exits);
     run("TRACEME parent permission uses task credential", traceme_task_snapshot);
+    run("NNP mixed-ID exec restricts gain and resets effective IDs", mixed_nnp_drop);
+    run("NNP mixed-ID exec without gain preserves effective IDs", mixed_nnp_keep);
     if (argc == 1) {
         unsigned group = 1;
         CHECK(root_ids() == 0);
