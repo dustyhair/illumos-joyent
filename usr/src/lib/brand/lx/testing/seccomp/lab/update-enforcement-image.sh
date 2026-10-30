@@ -23,6 +23,9 @@ trap cleanup EXIT
 pfexec mount -F ufs "$lo" "$lab/mnt-root"
 test -f "$lab/mnt-root/lab/offline-lx-guest"
 pfexec cp "$ws/usr/src/uts/i86pc/unix/obj64/unix" "$lab/mnt-root/platform/i86pc/kernel/amd64/unix"
+# The bootloader payload must match the archive copy used by krtld.
+pfexec cp "$lab/mnt-root/platform/i86pc/kernel/amd64/unix" "$lab/kernel-unix"
+digest -a sha256 "$lab/kernel-unix" | awk '{print $NF}' > "$lab/boot-unix.sha256"
 pfexec cp "$ws/usr/src/uts/intel/genunix/obj64/genunix" "$lab/mnt-root/kernel/amd64/genunix"
 pfexec cp "$ws/usr/src/uts/intel/lofs/obj64/lofs" "$lab/mnt-root/kernel/fs/amd64/lofs"
 pfexec cp "$ws/usr/src/uts/intel/lx_brand/obj64/lx_brand" "$lab/mnt-root/kernel/brand/amd64/lx_brand"
