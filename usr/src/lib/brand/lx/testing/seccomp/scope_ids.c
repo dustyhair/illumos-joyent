@@ -604,27 +604,31 @@ static int scm_lengths(void)
     }
     return 0;
 }
-static ssize_t scm_send(int fd, const struct ucred *cred)
+static ssize_t scm_sendn(int fd, const struct ucred *cred, unsigned count)
 {
     char byte = 'x'; struct iovec iov = { &byte, 1 };
-    union { struct cmsghdr align; char data[CMSG_SPACE(sizeof(struct ucred))]; } buf;
+    union { struct cmsghdr align; char data[2*CMSG_SPACE(sizeof(struct ucred))]; } buf;
     memset(&buf, 0, sizeof(buf));
     struct msghdr msg = { .msg_iov = &iov, .msg_iovlen = 1 };
     if (cred) {
-        msg.msg_control = buf.data; msg.msg_controllen = sizeof(buf.data);
+        msg.msg_control = buf.data; msg.msg_controllen = count*CMSG_SPACE(sizeof(*cred));
         struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
-        cmsg->cmsg_level = SOL_SOCKET; cmsg->cmsg_type = SCM_CREDENTIALS;
-        cmsg->cmsg_len = CMSG_LEN(sizeof(*cred));
-        memcpy(CMSG_DATA(cmsg), cred, sizeof(*cred));
+        for (unsigned i = 0; i < count; i++, cmsg = CMSG_NXTHDR(&msg,cmsg)) {
+            cmsg->cmsg_level = SOL_SOCKET; cmsg->cmsg_type = SCM_CREDENTIALS;
+            cmsg->cmsg_len = CMSG_LEN(sizeof(*cred));
+            memcpy(CMSG_DATA(cmsg), &cred[i], sizeof(*cred));
+        }
     }
     return sendmsg(fd, &msg, MSG_NOSIGNAL);
 }
-static int scm_roundtrip(int kind, const struct ucred *claim, unsigned uid, unsigned gid)
+static ssize_t scm_send(int fd, const struct ucred *cred)
+{ return scm_sendn(fd, cred, cred != NULL); }
+static int scm_roundtrip(int kind, const struct ucred *claim, unsigned count, unsigned uid, unsigned gid)
 {
     int pair[2], one = 1;
     CHECK(socketpair(AF_UNIX, kind, 0, pair) == 0);
     CHECK(setsockopt(pair[1], SOL_SOCKET, SO_PASSCRED, &one, sizeof(one)) == 0);
-    CHECK(scm_send(pair[0], claim) == 1);
+    CHECK(scm_sendn(pair[0], claim, count) == 1);
     char byte; struct iovec iov = { &byte, 1 };
     union { struct cmsghdr align; char data[256]; } buf;
     struct msghdr msg = { .msg_iov = &iov, .msg_iovlen = 1,
@@ -646,8 +650,8 @@ static int scm_explicit(void)
 {
     CHECK(drop_caps() == 0);
     struct ucred claim = { getpid(), getuid(), getgid() };
-    CHECK(scm_roundtrip(SOCK_DGRAM, &claim, 42, 42) == 0);
-    CHECK(scm_roundtrip(SOCK_STREAM, &claim, 42, 42) == 0);
+    CHECK(scm_roundtrip(SOCK_DGRAM, &claim, 1, 42, 42) == 0);
+    CHECK(scm_roundtrip(SOCK_STREAM, &claim, 1, 42, 42) == 0);
     return 0;
 }
 static int scm_real(void)
@@ -656,20 +660,23 @@ static int scm_real(void)
     CHECK(syscall(SYS_setresgid, 1, 2, 0) == 0);
     CHECK(syscall(SYS_setresuid, 1, 2, 0) == 0);
     CHECK(drop_caps() == 0);
-    CHECK(scm_roundtrip(SOCK_DGRAM, NULL, 1, 1) == 0);
-    CHECK(scm_roundtrip(SOCK_STREAM, NULL, 1, 1) == 0);
+    CHECK(scm_roundtrip(SOCK_DGRAM, NULL, 0, 1, 1) == 0);
+    CHECK(scm_roundtrip(SOCK_STREAM, NULL, 0, 1, 1) == 0);
     for (unsigned id = 0; id <= 2; id++) {
         struct ucred claim = { getpid(), id, id };
-        CHECK(scm_roundtrip(SOCK_DGRAM, &claim, id, id) == 0);
-        CHECK(scm_roundtrip(SOCK_STREAM, &claim, id, id) == 0);
+        CHECK(scm_roundtrip(SOCK_DGRAM, &claim, 1, id, id) == 0);
+        CHECK(scm_roundtrip(SOCK_STREAM, &claim, 1, id, id) == 0);
     }
     return 0;
 }
 static int scm_privileged(void)
 {
     struct ucred claim = { getpid(), 2, 0 };
-    CHECK(scm_roundtrip(SOCK_DGRAM, &claim, 2, 0) == 0);
-    CHECK(scm_roundtrip(SOCK_STREAM, &claim, 2, 0) == 0);
+    CHECK(scm_roundtrip(SOCK_DGRAM, &claim, 1, 2, 0) == 0);
+    CHECK(scm_roundtrip(SOCK_STREAM, &claim, 1, 2, 0) == 0);
+    struct ucred claims[2] = {{getpid(),0,1}, {getpid(),2,0}};
+    CHECK(scm_roundtrip(SOCK_DGRAM, claims, 2, 2, 0) == 0);
+    CHECK(scm_roundtrip(SOCK_STREAM, claims, 2, 2, 0) == 0);
     return 0;
 }
 static int scm_denied(void)
