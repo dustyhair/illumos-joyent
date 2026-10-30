@@ -309,7 +309,7 @@ lx_userns_exec(proc_t *process, const cred_t *cred)
 	old = pd->l_userns_mmap;
 	pd->l_userns_mmap = owner;
 	pd->l_flags &= ~LX_PROC_NO_DUMP;
-	if (data != NULL && data->un_exec_nodump) {
+	if (owner != NULL && data->un_exec_nodump) {
 		pd->l_flags |= LX_PROC_NO_DUMP;
 		process->p_flag |= SNOCD;
 	}

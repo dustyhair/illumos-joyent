@@ -523,8 +523,13 @@ static int trace_inherit(void)
         raise(SIGSTOP);
         pid_t grandchild = fork();
         if (grandchild == 0) _exit(7);
-        if (grandchild < 0 || waitpid(grandchild, &status, 0) != grandchild ||
-            !WIFEXITED(status) || WEXITSTATUS(status) != 7) _exit(103);
+        pid_t waited = grandchild < 0 ? -1 : waitpid(grandchild, &status, 0);
+        if (grandchild < 0 || waited != grandchild ||
+            !WIFEXITED(status) || WEXITSTATUS(status) != 7) {
+            fprintf(stderr, "inherit child pid=%d waited=%d status=%#x errno=%d\n",
+                grandchild, waited, status, errno);
+            _exit(103);
+        }
         _exit(0);
     }
     CHECK(waitpid(child, &status, 0) == child && WIFSTOPPED(status));
@@ -536,7 +541,10 @@ static int trace_inherit(void)
         pid_t got = waitpid(-1, &status, __WALL);
         CHECK(got > 0);
         if (WIFEXITED(status)) {
-            if (got == child) { CHECK(WEXITSTATUS(status) == 0); child_done = 1; }
+            if (got == child) {
+                if (WEXITSTATUS(status) != 0) fprintf(stderr, "inherit parent status=%#x\n", status);
+                CHECK(WEXITSTATUS(status) == 0); child_done = 1;
+            }
             else { CHECK(got == (pid_t)grandchild && WEXITSTATUS(status) == 7); grandchild_done = 1; }
             continue;
         }
