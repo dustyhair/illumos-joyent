@@ -58,13 +58,13 @@ for variant in static dynamic; do
             option=
             test "$mode" != reject || option=--unrestricted
             echo "MOUNT_PROCESS_CASE_START variant=$variant uid=$uid mode=$mode"
-            zlogin -S lx-probe "$probe $drop $option" > "$log" 2>&1 &
+            zlogin -S lx-probe "$probe $drop $option" < /dev/null > "$log" 2>&1 &
             job=$!
             wait_marker "$log" '^MP_READY_PID='
             target=$(sed -n 's/^MP_READY_PID=//p' "$log")
             wait_stopped "$target"
             ktest_pid "process_$mode" "$target"
-            zlogin -S lx-probe "$probe $drop --outside"
+            zlogin -S lx-probe "$probe $drop --outside" < /dev/null
             kill -CONT "$target"
             if test "$mode" = attach; then
                 wait_marker "$log" '^MP_ZOMBIE_PID='
@@ -86,7 +86,7 @@ for variant in static dynamic; do
                 wait "$job"
             fi
             ktest run -o RESULT,LINE,REASON lx_namespace:mount:process_idle
-            zlogin -S lx-probe "$probe $drop --outside"
+            zlogin -S lx-probe "$probe $drop --outside" < /dev/null
             test ! -e "$fixture/covered/private"
             echo "MOUNT_PROCESS_CASE_PASS variant=$variant uid=$uid mode=$mode"
         done
