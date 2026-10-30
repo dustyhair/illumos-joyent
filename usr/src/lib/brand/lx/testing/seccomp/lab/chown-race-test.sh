@@ -41,14 +41,19 @@ for probe in /test/scope_ids /test/dynamic/scope_ids; do
     path=/zones/lx-probe-zfs/root/tmp/lx-chown-race-$target_pid
     cat > /lab/chown-race.d <<DSCRIPT
 BEGIN { printf("CHOWN_TRACE_READY\n"); }
-fbt:zfs:zfs_setattr:entry /pid == $target_pid/ { self->checks=0; self->granted=0; }
+fbt:zfs:zfs_setattr:entry /pid == $target_pid/ { self->granted=0; }
 fbt:unix:brand_cred_vnode_setattr:entry /pid == $target_pid/ {
-    self->uid=((vattr_t *)arg3)->va_uid; self->gid=((vattr_t *)arg3)->va_gid; self->checks++;
+    self->uid=((vattr_t *)arg3)->va_uid; self->gid=((vattr_t *)arg3)->va_gid;
 }
-fbt:unix:brand_cred_vnode_setattr:return /pid == $target_pid && self->checks == 1 && arg1 == 0 && self->uid == 1001 && self->delays < 10/ {
-    self->granted=1; self->delays++; chill(17000000);
+fbt:genunix:secpolicy_vnode_setattr:entry /pid == $target_pid/ {
+    self->eligible=((vattr_t *)arg3)->va_uid == 1001;
 }
-fbt:unix:brand_cred_vnode_setattr:return /pid == $target_pid && self->checks > 1 && self->granted && self->uid == 2000 && self->gid == 2000/ {
+fbt:genunix:secpolicy_vnode_setattr:return /pid == $target_pid && self->eligible && arg1 == 0 && self->delays < 10/ {
+    self->granted=1; self->delays++;
+    printf("SCOPED_CHOWN_EARLY_GRANT delay=%u\n", self->delays);
+    chill(2000000 + (self->delays % 7) * 1000000);
+}
+fbt:unix:brand_cred_vnode_setattr:return /pid == $target_pid && self->granted && self->uid == 2000 && self->gid == 2000/ {
     printf("SCOPED_CHOWN_STALE_CHECK uid=%u gid=%u result=%d\n",self->uid,self->gid,arg1);
     if(arg1 == 1) { printf("SCOPED_CHOWN_STALE_DENIED\n"); }
     else { printf("SCOPED_CHOWN_STALE_VIOLATION\n"); exit(1); }
