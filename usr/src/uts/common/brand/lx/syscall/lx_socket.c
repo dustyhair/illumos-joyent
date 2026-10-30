@@ -4165,7 +4165,8 @@ lx_getsockopt_socket(sonode_t *so, int optname, void *optval,
 				    lcred->lxu_uid);
 				lcred->lxu_gid = lx_userns_id_visible(CRED(), 1,
 				    lcred->lxu_gid);
-				if (lcred->lxu_pid == curzone->zone_proc_initpid)
+				if (lcred->lxu_pid ==
+				    curzone->zone_proc_initpid)
 					lcred->lxu_pid = 1;
 			}
 		}
