@@ -13,8 +13,12 @@ cleanup() {
     zoneadm -z lx-probe halt
 }
 trap cleanup EXIT
+(cd /zones/lx-probe-zfs/root &&
+    tar xf /lab/lx-root.tar ./test/proc_maps_baseline)
 zoneadm -z lx-probe boot
 /lab/ktest run lx_namespace:user:access
+/lab/ktest run lx_namespace:user:proc_maps
+zlogin -S lx-probe /test/proc_maps_baseline
 cleanup
 trap - EXIT
 /lab/ktest run lx_namespace:user:credentials
