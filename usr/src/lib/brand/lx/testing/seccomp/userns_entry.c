@@ -251,6 +251,7 @@ static void run(const char *name,int (*fn)(void))
 }
 int main(int argc,char **argv)
 {
+    setvbuf(stdout,NULL,_IOLBF,0);
     self=argv[0];if(argc!=2)return 2;
     if(!strcmp(argv[1],"--image"))return image();
     if(!strcmp(argv[1],"--disabled"))return denied(EPERM);
