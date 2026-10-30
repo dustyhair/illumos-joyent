@@ -18,6 +18,7 @@
 #include <sys/lx_cap.h>
 #include <sys/lx_misc.h>
 #include <sys/lx_brand.h>
+#include <sys/lx_mntns.h>
 #include <sys/proc.h>
 #include <sys/machbrand.h>
 #include <sys/vnode.h>
@@ -776,23 +777,31 @@ lx_userns_clone_install(klwp_t *child, const cred_t *prepared)
 }
 
 /*
- * Publish the first or a nested namespace only for a single, unshared task.
- * Allocation and credential release stay outside native process locks.
- * The backing IDs and the address-space owner's namespace do not change.
+ * Prepare credentials and filesystem state before either is published.
+ * A single task and private FS state let the final p_lock/p_crlock exchange
+ * commit both changes without sleeping or leaving a partial unshare.
  */
 long
-lx_userns_unshare(uintptr_t flags)
+lx_namespace_unshare(uintptr_t flags)
 {
 	proc_t *p = curproc;
 	lx_proc_data_t *pd = ptolxproc(p);
 	lx_lwp_data_t *lwpd = ttolxlwp(curthread);
+	boolean_t user = (flags & LX_CLONE_NEWUSER) != 0;
+	boolean_t mount = (flags & LX_CLONE_NEWNS) != 0;
 	cred_t *source = NULL, *base = NULL, *scoped = NULL;
-	cred_t *old_process, *old_task;
+	cred_t *old_process = NULL, *old_task = NULL;
+	vnode_t *root = NULL, *cwd = NULL;
+	lx_mntns_view_t *view = NULL;
+	lx_mntns_state_t state = { 0 };
 	int error;
 
-	if (!lx_userns_experimental || (flags & LX_CLONE_NEWUSER) == 0)
+	if ((!user && !mount) || (user && !lx_userns_experimental))
 		return (set_errno(EPERM));
-	if ((flags & ~(LX_CLONE_NEWUSER | LX_CLONE_FS)) != 0)
+	/* Retain the previous unsupported-combination error while disabled. */
+	if (mount && !lx_mntns_entry_enabled())
+		return (set_errno(user ? EINVAL : EPERM));
+	if ((flags & ~(LX_CLONE_NEWUSER | LX_CLONE_NEWNS | LX_CLONE_FS)) != 0)
 		return (set_errno(EINVAL));
 	if (get_udatamodel() != DATAMODEL_NATIVE ||
 	    lwpd->br_syscall_entry != BRAND_ENTRY_AMD64 ||
@@ -801,28 +810,45 @@ lx_userns_unshare(uintptr_t flags)
 
 	mutex_enter(&p->p_lock);
 	error = lx_userns_entry_check(p);
+	if (error == 0 && mount && pd->l_ptrace != 0)
+		error = EOPNOTSUPP;
 	if (error == 0) {
 		mutex_enter(&p->p_crlock);
 		crhold(source = CRED());
 		crhold(base = p->p_cred);
 		mutex_exit(&p->p_crlock);
+		if (mount) {
+			if ((root = PTOU(p)->u_rdir) != NULL)
+				VN_HOLD(root);
+			VN_HOLD(cwd = PTOU(p)->u_cdir);
+			if ((view = pd->l_mntns) != NULL)
+				lx_mntns_view_hold(view);
+		}
 	}
 	mutex_exit(&p->p_lock);
 	if (error != 0)
 		return (set_errno(error));
 
-	if ((error = lx_userns_cred_create(source, &scoped)) != 0)
+	if (user && (error = lx_userns_cred_create(source, &scoped)) != 0)
+		goto out;
+	if (mount && (error = lx_mntns_entry_prepare(user ? scoped : source,
+	    root, cwd, view, &state)) != 0)
 		goto out;
 
 	mutex_enter(&p->p_lock);
 	mutex_enter(&p->p_crlock);
 	error = lx_userns_entry_check(p);
 	if (error == 0 && (p->p_cred != base || CRED() != source ||
-	    crgetruid(scoped) != crgetruid(base)))
+	    (user && crgetruid(scoped) != crgetruid(base)) ||
+	    (mount && pd->l_mntns != view)))
 		error = EAGAIN;
-	if (error == 0 && !lx_userns_experimental)
+	if (error == 0 && ((user && !lx_userns_experimental) ||
+	    (mount && !lx_mntns_entry_enabled())))
 		error = EPERM;
-	if (error == 0) {
+	if (error == 0 && mount)
+		error = lx_mntns_proc_swap(p, root, cwd, &state);
+	/* Prepared credential publication cannot fail after this point. */
+	if (error == 0 && user) {
 		old_process = p->p_cred;
 		old_task = curthread->t_cred;
 		crhold(scoped);
@@ -832,11 +858,18 @@ lx_userns_unshare(uintptr_t flags)
 	}
 	mutex_exit(&p->p_crlock);
 	mutex_exit(&p->p_lock);
-	if (error == 0) {
+	if (old_process != NULL)
 		crfree(old_process);
+	if (old_task != NULL)
 		crfree(old_task);
-	}
 out:
+	lx_mntns_state_fini(&state);
+	if (root != NULL)
+		VN_RELE(root);
+	if (cwd != NULL)
+		VN_RELE(cwd);
+	if (view != NULL)
+		lx_mntns_view_rele(view);
 	if (scoped != NULL)
 		crfree(scoped);
 	crfree(base);

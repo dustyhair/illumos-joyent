@@ -21,7 +21,7 @@ typedef struct lx_userns_cred {
 	lx_caps_t luc_caps;
 } lx_userns_cred_t;
 
-extern long lx_userns_unshare(uintptr_t);
+extern long lx_namespace_unshare(uintptr_t);
 extern boolean_t lx_userns_clone_enabled(void);
 extern int lx_userns_clone_prepare(cred_t **);
 extern void lx_userns_clone_install(struct _klwp *, const cred_t *);

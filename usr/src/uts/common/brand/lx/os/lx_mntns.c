@@ -24,12 +24,16 @@
 #include <sys/zone.h>
 #include <sys/lx_brand.h>
 #include <sys/lx_misc.h>
+#include <sys/machbrand.h>
 #include <sys/lx_cap.h>
 #include <sys/lx_userns.h>
 #include <sys/lx_mntns.h>
 #include <lx_syscall.h>
 
 extern brand_t lx_brand;
+
+/* Public mount-namespace entry remains disabled outside disposable tests. */
+int lx_mntns_experimental = 0;
 
 typedef struct lx_mntns_mount {
 	vfs_t *lm_vfs;
@@ -441,7 +445,14 @@ lx_mntns_proc_swap(proc_t *p, vnode_t *expected_root, vnode_t *expected_cwd,
 	user_t *up = PTOU(p);
 
 	ASSERT(MUTEX_HELD(&p->p_lock));
-	if (p->p_brand != &lx_brand || pd == NULL || !lx_kernel_restricted(p))
+	if (p->p_brand != &lx_brand || pd == NULL)
+		return (EPERM);
+	/* Only current amd64 unshare may activate the guard. */
+	if (!lx_kernel_restricted(p) && (p != curproc || task != curthread ||
+	    get_udatamodel() != DATAMODEL_NATIVE ||
+	    ttolxlwp(curthread)->br_syscall_entry != BRAND_ENTRY_AMD64 ||
+	    ttolxlwp(curthread)->br_syscall_num != 272 ||
+	    ttolxlwp(curthread)->br_stack_mode != LX_STACK_MODE_BRAND))
 		return (EPERM);
 	if (state->lms_view != NULL && (ztolxzd(p->p_zone) == NULL ||
 	    state->lms_view->lv_budget !=
@@ -551,35 +562,27 @@ typedef struct lx_mntns_snapshot {
 	struct lx_mntns_snapshot *ls_next;
 } lx_mntns_snapshot_t;
 
-int
-lx_mntns_view_snapshot(const char *source, cred_t *cr, cred_t *owner,
+/* Consumes a reservation; the caller holds root and the global prefix. */
+static int
+lx_mntns_snapshot(vnode_t *root, const char *path, cred_t *cr, cred_t *owner,
     lx_mntns_budget_t *budget, lx_mntns_view_t **out)
 {
 	lx_mntns_snapshot_t *list = NULL, *entry, **link;
 	lx_mntns_view_t *view = NULL;
 	vfs_t *vfsp;
-	vnode_t *root = NULL, *vp;
-	char *path;
+	vnode_t *vp;
 	size_t len, count = 0;
 	timespec_t before, after;
 	int error;
 
 	*out = NULL;
-	if (source == NULL || source[0] != '/' || owner == NULL)
-		return (EINVAL);
-	if ((error = lx_mntns_charge(budget)) != 0)
-		return (error);
-	path = kmem_alloc(MAXPATHLEN, KM_SLEEP);
-	if ((error = lookupname(source, UIO_SYSSPACE, FOLLOW, NULL,
-	    &root)) != 0)
-		goto out;
 	if (root->v_type != VDIR) {
 		error = ENOTDIR;
 		goto out;
 	}
-	if ((error = vnodetopath(rootdir, root, path, MAXPATHLEN, cr)) != 0)
-		goto out;
-	len = strcmp(path, "/") == 0 ? 0 : strlen(path);
+	len = strlen(path);
+	while (len != 0 && path[len - 1] == '/')
+		len--;
 
 	/* Collect names without doing pathname lookup under the VFS lock. */
 	vfs_list_read_lock();
@@ -670,11 +673,35 @@ out:
 		refstr_rele(entry->ls_path);
 		kmem_free(entry, sizeof (*entry));
 	}
-	if (root != NULL)
-		VN_RELE(root);
 	/* No references to a failed, unpublished tree have escaped. */
 	if (view != NULL)
 		VERIFY0(lx_mntns_view_destroy(view, cr));
+	lx_mntns_uncharge(budget);
+	return (error);
+}
+
+int
+lx_mntns_view_snapshot(const char *source, cred_t *cr, cred_t *owner,
+    lx_mntns_budget_t *budget, lx_mntns_view_t **out)
+{
+	vnode_t *root = NULL;
+	char *path;
+	int error;
+
+	*out = NULL;
+	if (source == NULL || source[0] != '/' || owner == NULL)
+		return (EINVAL);
+	if ((error = lx_mntns_charge(budget)) != 0)
+		return (error);
+	path = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+	if ((error = lookupname(source, UIO_SYSSPACE, FOLLOW, NULL,
+	    &root)) == 0 && (error = vnodetopath(rootdir, root, path,
+	    MAXPATHLEN, cr)) == 0) {
+		error = lx_mntns_snapshot(root, path, cr, owner, budget, out);
+		budget = NULL;
+	}
+	if (root != NULL)
+		VN_RELE(root);
 	lx_mntns_uncharge(budget);
 	kmem_free(path, MAXPATHLEN);
 	return (error);
@@ -752,6 +779,56 @@ out:
 		VERIFY0(lx_mntns_view_destroy(view, cr));
 	lx_mntns_uncharge(budget);
 	mutex_exit(&source->lv_lock);
+	return (error);
+}
+
+boolean_t
+lx_mntns_entry_enabled(void)
+{
+	return (lx_mntns_experimental != 0);
+}
+
+/*
+ * The actor remains unprivileged natively. This kernel-only credential is
+ * used solely to build the authorized private tree and later reclaim it.
+ * Root/cwd and source are held snapshots, revalidated at publication.
+ */
+int
+lx_mntns_entry_prepare(cred_t *owner, vnode_t *root, vnode_t *cwd,
+    lx_mntns_view_t *source, lx_mntns_state_t *state)
+{
+	lx_mntns_view_t *view = NULL;
+	lx_zone_data_t *zone = ztolxzd(curzone);
+	lx_mntns_budget_t *budget;
+	cred_t *native;
+	char *path;
+	int error;
+
+	bzero(state, sizeof (*state));
+	if (zone == NULL || !lx_mntns_entry_enabled() ||
+	    crgetzone(owner) != curzone ||
+	    !lx_userns_cred_capable(owner, owner, LX_CAP_SYS_ADMIN))
+		return (EPERM);
+	budget = zone->lxzd_mntns_budget;
+	if (root == NULL)
+		root = curzone->zone_rootvp;
+	path = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+	if ((error = vnodetopath(root, cwd, path, MAXPATHLEN, owner)) != 0)
+		goto out_path;
+	native = crdup(curzone->zone_kcred);
+	if (source != NULL) {
+		error = lx_mntns_view_clone(source, native, owner, &view);
+	} else if ((error = lx_mntns_charge(budget)) == 0) {
+		error = lx_mntns_snapshot(root, curzone->zone_rootpath,
+		    native, owner, budget, &view);
+	}
+	if (error == 0)
+		error = lx_mntns_state_prepare(view, path, owner, state);
+	if (view != NULL)
+		lx_mntns_view_rele(view);
+	crfree(native);
+out_path:
+	kmem_free(path, MAXPATHLEN);
 	return (error);
 }
 

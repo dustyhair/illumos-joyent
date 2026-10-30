@@ -39,6 +39,9 @@ typedef struct lx_mntns_state {
 	refstr_t *lms_cwdname;
 } lx_mntns_state_t;
 
+extern boolean_t lx_mntns_entry_enabled(void);
+extern int lx_mntns_entry_prepare(cred_t *, vnode_t *, vnode_t *,
+    lx_mntns_view_t *, lx_mntns_state_t *);
 extern int lx_mntns_state_prepare(lx_mntns_view_t *, const char *, cred_t *,
     lx_mntns_state_t *);
 extern void lx_mntns_state_fini(lx_mntns_state_t *);

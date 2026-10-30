@@ -443,7 +443,7 @@ lx_acct(char *p)
 long
 lx_unshare(uintptr_t flags)
 {
-	return (lx_userns_unshare(flags));
+	return (lx_namespace_unshare(flags));
 }
 
 /*
