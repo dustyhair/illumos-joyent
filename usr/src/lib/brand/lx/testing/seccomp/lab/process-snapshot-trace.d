@@ -25,3 +25,19 @@ fbt:lx_brand:lx_mntns_view_snapshot:return
     printf("PROCESS_SNAPSHOT_RETURN error=%d\n", arg1);
     self->snapshot = 0;
 }
+
+fbt:lx_brand:lx_mntns_mount:entry
+/self->snapshot/
+{
+    self->mountpath = arg1;
+    printf("PROCESS_MOUNT path=%s covered=%p type=%d flags=%x\n",
+        stringof(arg1), arg5, ((struct vnode *)arg5)->v_type, arg4);
+}
+
+fbt:lx_brand:lx_mntns_mount:return
+/self->mountpath/
+{
+    printf("PROCESS_MOUNT_RETURN path=%s error=%d\n",
+        stringof(self->mountpath), arg1);
+    self->mountpath = 0;
+}
