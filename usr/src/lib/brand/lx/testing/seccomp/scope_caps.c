@@ -136,8 +136,9 @@ static void *worker(void *unused)
     pid_t child = syscall(SYS_fork);
     if (child == 0) {
         caps_t got;
-        int ok = getcaps(0, &got) == 0 && got.e == 0 && got.p == 0 && got.i == 0;
-        syscall(SYS_exit, ok ? 0 : 1);
+        int status = getcaps(0, &got) != 0 ? 32 + errno :
+            got.e ? 2 : got.p ? 3 : got.i ? 4 : 0;
+        syscall(SYS_exit, status);
         __builtin_unreachable();
     }
     int status;
