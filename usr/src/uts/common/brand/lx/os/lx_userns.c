@@ -20,6 +20,7 @@
 #include <sys/lx_brand.h>
 #include <sys/proc.h>
 #include <sys/vnode.h>
+#include <sys/stat.h>
 #include <sys/vfs.h>
 
 struct lx_userns {
@@ -490,7 +491,8 @@ lx_userns_cred_setattr(const cred_t *cred, struct vnode *vp,
 		if (locked_fs) {
 			authority = 0;
 			/* FOWNER needs the UID; FSETID needs both inode IDs. */
-			if (!groupmember(old->va_gid, cred) &&
+			if ((want->va_mode & S_ISGID) != 0 &&
+			    !groupmember(old->va_gid, cred) &&
 			    ((data->un_caps.lc_effective &
 			    LX_CAP_BIT(LX_CAP_FSETID)) == 0 ||
 			    lx_userns_id(data->un_namespace, 0, old->va_uid,
