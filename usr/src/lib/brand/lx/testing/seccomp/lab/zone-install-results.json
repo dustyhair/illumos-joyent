@@ -1,0 +1,14 @@
+{
+  "recorded_utc": "2026-10-30T20:03:26.076514+00:00",
+  "codex_version": "0.166.0",
+  "node_version": "24.19.0",
+  "npm_version": "11.17.0",
+  "registry": "https://registry.npmjs.org/",
+  "linux_control": "npm install --offline --prefix control-prefix --no-audit --no-fund @openai/codex@0.166.0",
+  "linux_control_result": "installed 2 packages; codex-cli 0.166.0",
+  "lx_install_result": "VM76: fresh offline npm install and source-matched shell/file/pipe/child/exit7/held-open PTY PASS as root and UID65534",
+  "isolation_strategy": "User requested continuing bubblewrap implementation; zone-only tests retained as installation/runtime evidence",
+  "host_deployment": false,
+  "pty_tail_result": "Unresolved: Linux0/30 missing; lx dash5/30, native6/30, traced dash6/30. Standalone post-close PTY reads0/30 with and without tcdrain. Trace24 EIO for30 commands; cause unproven.",
+  "vm_shutdown": "zones export0; syncing file systems done; QEMU1707413 exited"
+}
