@@ -27,6 +27,7 @@ for probe in /test/userns_entry /test/dynamic/userns_entry; do
         exit 1
     fi
     grep -qx 'USERNS_ENTRY cases=15 failures=0' "$log"
+    /lab/ktest run lx_namespace:user:zone_budget_idle
 done
 zoneadm -z lx-probe halt
 zonecfg -z lx-probe 'select attr name=max-user-namespaces; set value=0; end;'

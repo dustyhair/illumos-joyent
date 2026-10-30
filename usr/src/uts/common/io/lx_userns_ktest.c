@@ -703,3 +703,30 @@ lx_userns_test_zone_budget_hold(ktest_ctx_hdl_t *ctx)
 {
 	lx_userns_zone_budget(ctx, B_FALSE);
 }
+
+/* Real entry may outlive waitpid until native deferred cleanup drops refs. */
+void
+lx_userns_test_zone_budget_idle(ktest_ctx_hdl_t *ctx)
+{
+	zone_t *zone = zone_find_by_name("lx-probe");
+	uint32_t maximum, used = UINT32_MAX;
+	uint_t attempt;
+	boolean_t passed = B_FALSE;
+
+	NS_CHECK(zone != NULL && zone->zone_brand == &lx_brand,
+	    "private lx-probe zone missing");
+	for (attempt = 0; attempt < 200; attempt++) {
+		lx_userns_budget_get(ztolxzd(zone)->lxzd_userns,
+		    &maximum, &used);
+		if (used == 0)
+			break;
+		delay(drv_usectohz(50000));
+	}
+	NS_CHECK(used == 0, "namespace objects survived deferred cleanup");
+	passed = B_TRUE;
+out:
+	if (zone != NULL)
+		zone_rele(zone);
+	if (passed)
+		KT_PASS(ctx);
+}
