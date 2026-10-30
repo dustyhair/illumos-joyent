@@ -263,7 +263,7 @@ lx_userns_test_native(ktest_ctx_hdl_t *ctx)
 	    PRIV_XPOLICY)) == 0, "native privilege awareness flags unsafe");
 	NS_CHECK(secpolicy_sys_config(reduced, B_TRUE) == EPERM,
 	    "namespace native credential can configure host");
-	NS_CHECK(lx_mntns_view_create("/", reduced, &view) == EPERM &&
+	NS_CHECK(lx_mntns_view_create("/", reduced, NULL, &view) == EPERM &&
 	    view == NULL,
 	    "reduced native credential can mount outside a scoped operation");
 	passed = B_TRUE;

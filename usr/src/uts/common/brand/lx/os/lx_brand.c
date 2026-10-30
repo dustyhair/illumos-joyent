@@ -419,6 +419,16 @@ lx_setattr(zone_t *zone, int attr, void *ubuf, size_t ubufsz)
 	lx_zone_data_t *lxzd = (lx_zone_data_t *)zone->zone_brand_data;
 
 	switch (attr) {
+	case LX_ATTR_MNTNS_MAX: {
+		uint32_t maximum;
+
+		if (ubufsz != sizeof (maximum))
+			return (ERANGE);
+		if (copyin(ubuf, &maximum, sizeof (maximum)) != 0)
+			return (EFAULT);
+		lx_mntns_budget_set(lxzd->lxzd_mntns_budget, maximum);
+		return (0);
+	}
 	case LX_ATTR_USERNS_MAX: {
 		uint32_t maximum;
 
@@ -484,6 +494,19 @@ lx_getattr(zone_t *zone, int attr, void *ubuf, size_t *ubufsz)
 	int len;
 
 	switch (attr) {
+	case LX_ATTR_MNTNS_MAX:
+	case LX_ATTR_MNTNS_USED: {
+		uint32_t maximum, used, value;
+
+		if (*ubufsz < sizeof (value))
+			return (ERANGE);
+		lx_mntns_budget_get(lxzd->lxzd_mntns_budget, &maximum, &used);
+		value = attr == LX_ATTR_MNTNS_MAX ? maximum : used;
+		if (copyout(&value, ubuf, sizeof (value)) != 0)
+			return (EFAULT);
+		*ubufsz = sizeof (value);
+		return (0);
+	}
 	case LX_ATTR_USERNS_MAX:
 	case LX_ATTR_USERNS_USED: {
 		uint32_t maximum, used, value;
@@ -1276,6 +1299,8 @@ lx_init_brand_data(zone_t *zone, kmutex_t *zsl)
 	    LX_KERN_VERSION_MAX);
 	data->lxzd_pipe_max_sz = lx_pipe_max_default;
 	data->lxzd_userns = lx_userns_root_create();
+	data->lxzd_mntns_budget =
+	    lx_mntns_budget_create(LX_MNTNS_DEFAULT_MAX);
 
 	zone->zone_brand_data = data;
 
@@ -1333,6 +1358,7 @@ lx_free_brand_data(zone_t *zone)
 	zone->zone_brand_data = NULL;
 	mutex_destroy(&data->lxzd_lock);
 	lx_userns_rele(data->lxzd_userns);
+	lx_mntns_budget_rele(data->lxzd_mntns_budget);
 	kmem_free(data, sizeof (*data));
 }
 

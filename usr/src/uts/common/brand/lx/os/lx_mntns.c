@@ -21,6 +21,7 @@
 #include <sys/vfs.h>
 #include <sys/vnode.h>
 #include <sys/user.h>
+#include <sys/zone.h>
 #include <sys/lx_brand.h>
 #include <sys/lx_misc.h>
 #include <sys/lx_mntns.h>
@@ -35,10 +36,19 @@ typedef struct lx_mntns_mount {
 	struct lx_mntns_mount *lm_next;
 } lx_mntns_mount_t;
 
+/* The zone and each reserved view own a reference to this account. */
+struct lx_mntns_budget {
+	kmutex_t lb_lock;
+	volatile uint_t lb_refs;
+	uint32_t lb_max;
+	uint32_t lb_used;
+};
+
 struct lx_mntns_view {
 	kmutex_t lv_lock;
 	volatile uint_t lv_refs;
 	cred_t *lv_cred;
+	lx_mntns_budget_t *lv_budget;
 	taskq_ent_t lv_reap_ent;
 	timeout_id_t lv_timeout;
 	vnode_t *lv_root;
@@ -52,6 +62,74 @@ static volatile uint_t lx_mntns_nviews;
 
 static int lx_mntns_destroy(lx_mntns_view_t *, cred_t *);
 static void lx_mntns_reap(void *);
+
+lx_mntns_budget_t *
+lx_mntns_budget_create(uint32_t maximum)
+{
+	lx_mntns_budget_t *budget = kmem_zalloc(sizeof (*budget), KM_SLEEP);
+
+	mutex_init(&budget->lb_lock, NULL, MUTEX_DEFAULT, NULL);
+	budget->lb_refs = 1;
+	budget->lb_max = maximum;
+	return (budget);
+}
+
+void
+lx_mntns_budget_rele(lx_mntns_budget_t *budget)
+{
+	if (atomic_dec_uint_nv(&budget->lb_refs) == 0) {
+		VERIFY0(budget->lb_used);
+		mutex_destroy(&budget->lb_lock);
+		kmem_free(budget, sizeof (*budget));
+	}
+}
+
+void
+lx_mntns_budget_set(lx_mntns_budget_t *budget, uint32_t maximum)
+{
+	mutex_enter(&budget->lb_lock);
+	budget->lb_max = maximum;
+	mutex_exit(&budget->lb_lock);
+}
+
+void
+lx_mntns_budget_get(lx_mntns_budget_t *budget, uint32_t *maximum,
+    uint32_t *used)
+{
+	mutex_enter(&budget->lb_lock);
+	*maximum = budget->lb_max;
+	*used = budget->lb_used;
+	mutex_exit(&budget->lb_lock);
+}
+
+/* A reservation holds its account through failed or deferred cleanup. */
+static int
+lx_mntns_charge(lx_mntns_budget_t *budget)
+{
+	if (budget == NULL)
+		return (curzone == global_zone ? 0 : EPERM);
+	mutex_enter(&budget->lb_lock);
+	if (budget->lb_used >= budget->lb_max) {
+		mutex_exit(&budget->lb_lock);
+		return (ENOSPC);
+	}
+	budget->lb_used++;
+	atomic_inc_uint(&budget->lb_refs);
+	mutex_exit(&budget->lb_lock);
+	return (0);
+}
+
+static void
+lx_mntns_uncharge(lx_mntns_budget_t *budget)
+{
+	if (budget == NULL)
+		return;
+	mutex_enter(&budget->lb_lock);
+	VERIFY3U(budget->lb_used, !=, 0);
+	budget->lb_used--;
+	mutex_exit(&budget->lb_lock);
+	lx_mntns_budget_rele(budget);
+}
 
 void
 lx_mntns_init(void)
@@ -193,19 +271,24 @@ lx_mntns_lookup_at(vnode_t *root, const char *path, cred_t *cr,
 	return (lx_mntns_lookup_path(root, path, cr, out, NULL));
 }
 
+/* Consumes one reserved charge on both success and failure. */
 static int
-lx_mntns_create(vnode_t *source, cred_t *cr, lx_mntns_view_t **out)
+lx_mntns_create(vnode_t *source, cred_t *cr, lx_mntns_budget_t *budget,
+    lx_mntns_view_t **out)
 {
 	lx_mntns_view_t *view;
 	int error;
 
 	*out = NULL;
-	if (source->v_type != VDIR)
+	if (source->v_type != VDIR) {
+		lx_mntns_uncharge(budget);
 		return (ENOTDIR);
+	}
 	view = kmem_zalloc(sizeof (*view), KM_SLEEP);
 	mutex_init(&view->lv_lock, NULL, MUTEX_DEFAULT, NULL);
 	view->lv_refs = 1;
 	view->lv_cred = cr;
+	view->lv_budget = budget;
 	crhold(cr);
 	atomic_inc_uint(&lx_mntns_nviews);
 	mutex_enter(&lx_mntns_lock);
@@ -231,13 +314,15 @@ lx_mntns_create(vnode_t *source, cred_t *cr, lx_mntns_view_t **out)
 fail:
 	crfree(view->lv_cred);
 	mutex_destroy(&view->lv_lock);
+	lx_mntns_uncharge(view->lv_budget);
 	kmem_free(view, sizeof (*view));
 	atomic_dec_uint(&lx_mntns_nviews);
 	return (error);
 }
 
 int
-lx_mntns_view_create(const char *source, cred_t *cr, lx_mntns_view_t **out)
+lx_mntns_view_create(const char *source, cred_t *cr,
+    lx_mntns_budget_t *budget, lx_mntns_view_t **out)
 {
 	vnode_t *vp;
 	int error;
@@ -245,9 +330,14 @@ lx_mntns_view_create(const char *source, cred_t *cr, lx_mntns_view_t **out)
 	*out = NULL;
 	if (source == NULL || source[0] != '/')
 		return (EINVAL);
-	if ((error = lookupname(source, UIO_SYSSPACE, FOLLOW, NULL, &vp)) != 0)
+	if ((error = lx_mntns_charge(budget)) != 0)
 		return (error);
-	error = lx_mntns_create(vp, cr, out);
+	if ((error = lookupname(source, UIO_SYSSPACE, FOLLOW, NULL,
+	    &vp)) != 0) {
+		lx_mntns_uncharge(budget);
+		return (error);
+	}
+	error = lx_mntns_create(vp, cr, budget, out);
 	VN_RELE(vp);
 	return (error);
 }
@@ -324,6 +414,9 @@ lx_mntns_proc_swap(proc_t *p, vnode_t *expected_root, vnode_t *expected_cwd,
 	ASSERT(MUTEX_HELD(&p->p_lock));
 	if (p->p_brand != &lx_brand || pd == NULL || !lx_kernel_restricted(p))
 		return (EPERM);
+	if (state->lms_view != NULL && state->lms_view->lv_budget !=
+	    ztolxzd(p->p_zone)->lxzd_mntns_budget)
+		return (EXDEV);
 	if (state->lms_view == NULL || state->lms_root == NULL ||
 	    state->lms_cwd == NULL || p->p_lwpcnt != 1 || task == NULL ||
 	    (task->t_proc_flag & TP_KTHREAD) != 0)
@@ -428,22 +521,24 @@ typedef struct lx_mntns_snapshot {
 } lx_mntns_snapshot_t;
 
 int
-lx_mntns_view_snapshot(const char *source, cred_t *cr, lx_mntns_view_t **out)
+lx_mntns_view_snapshot(const char *source, cred_t *cr,
+    lx_mntns_budget_t *budget, lx_mntns_view_t **out)
 {
 	lx_mntns_snapshot_t *list = NULL, *entry, **link;
 	lx_mntns_view_t *view = NULL;
 	vfs_t *vfsp;
 	vnode_t *root = NULL, *vp;
-	char *path = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+	char *path;
 	size_t len, count = 0;
 	timespec_t before, after;
 	int error;
 
 	*out = NULL;
-	if (source == NULL || source[0] != '/') {
-		error = EINVAL;
-		goto out;
-	}
+	if (source == NULL || source[0] != '/')
+		return (EINVAL);
+	if ((error = lx_mntns_charge(budget)) != 0)
+		return (error);
+	path = kmem_alloc(MAXPATHLEN, KM_SLEEP);
 	if ((error = lookupname(source, UIO_SYSSPACE, FOLLOW, NULL,
 	    &root)) != 0)
 		goto out;
@@ -518,7 +613,9 @@ lx_mntns_view_snapshot(const char *source, cred_t *cr, lx_mntns_view_t **out)
 		error = EAGAIN;
 		goto out;
 	}
-	if ((error = lx_mntns_create(root, cr, &view)) != 0)
+	error = lx_mntns_create(root, cr, budget, &view);
+	budget = NULL;
+	if (error != 0)
 		goto out;
 	for (entry = list; entry != NULL; entry = entry->ls_next) {
 		if (entry->ls_root == NULL)
@@ -547,6 +644,7 @@ out:
 	/* No references to a failed, unpublished tree have escaped. */
 	if (view != NULL)
 		VERIFY0(lx_mntns_view_destroy(view, cr));
+	lx_mntns_uncharge(budget);
 	kmem_free(path, MAXPATHLEN);
 	return (error);
 }
@@ -574,10 +672,13 @@ lx_mntns_view_clone(lx_mntns_view_t *source, cred_t *cr,
 	lx_mntns_clone_mount_t *list = NULL, *entry;
 	lx_mntns_mount_t *mount;
 	lx_mntns_view_t *view = NULL;
+	lx_mntns_budget_t *budget = source->lv_budget;
 	size_t count = 0;
 	int error = 0;
 
 	*out = NULL;
+	if ((error = lx_mntns_charge(budget)) != 0)
+		return (error);
 	mutex_enter(&source->lv_lock);
 	for (mount = source->lv_mounts; mount != NULL;
 	    mount = mount->lm_next) {
@@ -594,7 +695,9 @@ lx_mntns_view_clone(lx_mntns_view_t *source, cred_t *cr,
 		if (error != 0)
 			goto out;
 	}
-	if ((error = lx_mntns_create(source->lv_root, cr, &view)) != 0)
+	error = lx_mntns_create(source->lv_root, cr, budget, &view);
+	budget = NULL;
+	if (error != 0)
 		goto out;
 	for (entry = list; entry != NULL; entry = entry->lc_next) {
 		error = lx_mntns_bind(view, entry->lc_source,
@@ -614,6 +717,7 @@ out:
 	}
 	if (view != NULL)
 		VERIFY0(lx_mntns_view_destroy(view, cr));
+	lx_mntns_uncharge(budget);
 	mutex_exit(&source->lv_lock);
 	return (error);
 }
@@ -705,6 +809,7 @@ lx_mntns_destroy(lx_mntns_view_t *view, cred_t *cr)
 	mutex_exit(&view->lv_lock);
 	crfree(view->lv_cred);
 	mutex_destroy(&view->lv_lock);
+	lx_mntns_uncharge(view->lv_budget);
 	kmem_free(view, sizeof (*view));
 	atomic_dec_uint(&lx_mntns_nviews);
 	return (0);

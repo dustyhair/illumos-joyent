@@ -170,8 +170,11 @@ typedef enum lx_ptrace_options {
 #define	LX_ATTR_TTY_GID		(ZONE_ATTR_BRAND_ATTRS + 2)
 #define	LX_ATTR_USERNS_MAX	(ZONE_ATTR_BRAND_ATTRS + 3)
 #define	LX_ATTR_USERNS_USED	(ZONE_ATTR_BRAND_ATTRS + 4)
+#define	LX_ATTR_MNTNS_MAX	(ZONE_ATTR_BRAND_ATTRS + 5)
+#define	LX_ATTR_MNTNS_USED	(ZONE_ATTR_BRAND_ATTRS + 6)
 
 #define	LX_USERNS_DEFAULT_MAX	1024U
+#define	LX_MNTNS_DEFAULT_MAX	64U
 
 /*
  * Aux vector containing phdr of Linux executable and ehdr of interpreter
@@ -679,6 +682,7 @@ typedef struct lx_zone_data {
 	lx_audit_enbl_t	lxzd_audit_enabled;	/* auditing? */
 	struct lx_audit_state *lxzd_audit_state; /* zone's audit state */
 	struct lx_userns *lxzd_userns;		/* initial user namespace */
+	struct lx_mntns_budget *lxzd_mntns_budget;
 } lx_zone_data_t;
 
 /* LWP br_lwp_flags values */

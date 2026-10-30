@@ -130,7 +130,8 @@ lxs_remove_autofsck()
  * Extract any lx-supported attributes from the zone configuration file.
  */
 static void
-lxs_getattrs(zone_dochandle_t zdh, char **krelease, uint32_t *userns_max)
+lxs_getattrs(zone_dochandle_t zdh, char **krelease, uint32_t *userns_max,
+    uint32_t *mntns_max)
 {
 	struct zone_attrtab	attrtab;
 	int			err;
@@ -147,15 +148,22 @@ lxs_getattrs(zone_dochandle_t zdh, char **krelease, uint32_t *userns_max)
 
 	bzero(*krelease, LX_KERN_RELEASE_MAX);
 	*userns_max = LX_USERNS_DEFAULT_MAX;
+	*mntns_max = LX_MNTNS_DEFAULT_MAX;
 	while ((err = zonecfg_getattrent(zdh, &attrtab)) == Z_OK) {
 		if (strcmp(attrtab.zone_attr_name,
-		    "max-user-namespaces") == 0) {
+		    "max-user-namespaces") == 0 ||
+		    strcmp(attrtab.zone_attr_name,
+		    "max-mount-namespaces") == 0) {
 			uint64_t maximum;
 
 			if (zonecfg_get_attr_uint(&attrtab, &maximum) != Z_OK ||
 			    maximum > UINT32_MAX)
 				lxs_err(gettext("invalid namespace limit"));
-			*userns_max = (uint32_t)maximum;
+			if (strcmp(attrtab.zone_attr_name,
+			    "max-user-namespaces") == 0)
+				*userns_max = (uint32_t)maximum;
+			else
+				*mntns_max = (uint32_t)maximum;
 		}
 		if ((strcmp(attrtab.zone_attr_name, "kernel-version") == 0) &&
 		    (zonecfg_get_attr_string(&attrtab, *krelease,
@@ -246,7 +254,7 @@ lxs_boot()
 	zoneid_t	zoneid;
 	zone_dochandle_t zdh;
 	char		*krelease;
-	uint32_t	userns_max;
+	uint32_t	userns_max, mntns_max;
 
 	lxs_remove_initctl();
 	lxs_remove_autofsck();
@@ -260,7 +268,7 @@ lxs_boot()
 	}
 
 	/* Extract any relevant attributes from the config file. */
-	lxs_getattrs(zdh, &krelease, &userns_max);
+	lxs_getattrs(zdh, &krelease, &userns_max, &mntns_max);
 	zonecfg_fini_handle(zdh);
 
 	/*
@@ -287,6 +295,10 @@ lxs_boot()
 	    sizeof (userns_max)) < 0)
 		lxs_err(gettext("unable to set user namespace limit"));
 
+	if (zone_setattr(zoneid, LX_ATTR_MNTNS_MAX, &mntns_max,
+	    sizeof (mntns_max)) < 0)
+		lxs_err(gettext("unable to set mount namespace limit"));
+
 	lxs_set_ttygid(zoneid);
 
 	return (0);
@@ -303,7 +315,7 @@ lxs_verify(char *xmlfile)
 {
 	zone_dochandle_t	handle;
 	char			*krelease;
-	uint32_t		userns_max;
+	uint32_t		userns_max, mntns_max;
 	char			hostidp[HW_HOSTID_LEN];
 	zone_iptype_t		iptype;
 
@@ -333,7 +345,7 @@ lxs_verify(char *xmlfile)
 	}
 
 	/* Extract any relevant attributes from the config file. */
-	lxs_getattrs(handle, &krelease, &userns_max);
+	lxs_getattrs(handle, &krelease, &userns_max, &mntns_max);
 	zonecfg_fini_handle(handle);
 
 	if (krelease) {
