@@ -43,6 +43,8 @@ extern long lx_alarm();
 extern long lx_arch_prctl();
 extern long lx_bind();
 extern long lx_brk();
+extern long lx_capget();
+extern long lx_capset();
 extern long lx_chdir();
 extern long lx_chmod();
 extern long lx_chown();

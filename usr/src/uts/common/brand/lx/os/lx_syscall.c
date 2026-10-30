@@ -336,6 +336,15 @@ lx_syscall_enter(int entry)
 		return (1);
 	}
 
+	/* Refresh native process credentials before Linux dispatch as well. */
+	if (crgetbrand(CRED()) == NULL &&
+	    curthread->t_cred != curproc->p_cred) {
+		cred_t *old = curthread->t_cred;
+
+		curthread->t_cred = crgetcred();
+		crfree(old);
+	}
+
 	/*
 	 * Clear the restartable system call flag.  This flag will be set
 	 * on in the system call handler if the call is a candidate for
@@ -755,8 +764,8 @@ lx_sysent_t lx_sysent32[] = {
 	{"pwrite64",	lx_pwrite32,		0,		5}, /* 181 */
 	{"chown16",	lx_chown16,		0,		3}, /* 182 */
 	{"getcwd",	lx_getcwd,		0,		2}, /* 183 */
-	{"capget",	NULL,			0,		2}, /* 184 */
-	{"capset",	NULL,			0,		2}, /* 185 */
+	{"capget",	lx_capget,		0,		2}, /* 184 */
+	{"capset",	lx_capset,		0,		2}, /* 185 */
 	{"sigaltstack",	NULL,			0,		2}, /* 186 */
 	{"sendfile",	NULL,			0,		4}, /* 187 */
 	{"getpmsg",	NULL,			NOSYS_OBSOLETE,	0}, /* 188 */
@@ -1067,8 +1076,8 @@ lx_sysent_t lx_sysent64[] = {
 	{"setfsuid",	lx_setfsuid,		0,		1}, /* 122 */
 	{"setfsgid",	lx_setfsgid,		0,		1}, /* 123 */
 	{"getsid",	lx_getsid,		0,		1}, /* 124 */
-	{"capget",	NULL,			0,		2}, /* 125 */
-	{"capset",	NULL,			0,		2}, /* 126 */
+	{"capget",	lx_capget,		0,		2}, /* 125 */
+	{"capset",	lx_capset,		0,		2}, /* 126 */
 	{"rt_sigpending", NULL,			0,		2}, /* 127 */
 	{"rt_sigtimedwait", NULL,		0,		4}, /* 128 */
 	{"rt_sigqueueinfo", NULL,		0,		3}, /* 129 */

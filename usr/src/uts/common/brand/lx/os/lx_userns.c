@@ -14,6 +14,7 @@
 #include <sys/priv_impl.h>
 #include <sys/policy.h>
 #include <sys/lx_userns.h>
+#include <sys/lx_cap.h>
 #include <sys/lx_brand.h>
 #include <sys/proc.h>
 
@@ -388,7 +389,6 @@ lx_userns_map_actor(const cred_t *cred, lx_userns_t *scope,
 {
 	const lx_userns_native_t *data = (void *)crgetbrand(cred);
 	lx_userns_t *root = scope, *other;
-	const priv_set_t *effective = &CR_OEPRIV(cred);
 
 	while (root->un_parent != NULL)
 		root = root->un_parent;
@@ -408,13 +408,7 @@ lx_userns_map_actor(const cred_t *cred, lx_userns_t *scope,
 		return (0);
 	}
 	actor->luc_ns = root;
-	if (priv_ismember(effective, PRIV_PROC_SETID)) {
-		actor->luc_caps.lc_effective |= LX_CAP_BIT(LX_CAP_SETUID) |
-		    LX_CAP_BIT(LX_CAP_SETGID);
-	}
-	if (priv_ismember(effective, PRIV_SYS_ADMIN) &&
-	    priv_ismember(effective, PRIV_SYS_MOUNT))
-		actor->luc_caps.lc_effective |= LX_CAP_BIT(LX_CAP_SYS_ADMIN);
+	lx_cap_native_get(cred, &actor->luc_caps);
 	return (0);
 }
 
@@ -435,5 +429,16 @@ lx_userns_map_write_scope(lx_userns_t *ns, lx_userns_t *opener)
 {
 	if (ns->un_parent == NULL || (opener != ns && opener != ns->un_parent))
 		return (EPERM);
+	return (0);
+}
+
+int
+lx_userns_caps_get(const cred_t *cred, lx_caps_t *caps)
+{
+	const lx_userns_native_t *data = (void *)crgetbrand(cred);
+
+	if (data == NULL || data->un_cred.bc_brand != &lx_brand)
+		return (EACCES);
+	*caps = data->un_caps;
 	return (0);
 }

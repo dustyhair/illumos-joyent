@@ -308,6 +308,7 @@ LX_BRAND_OBJS  =		\
 	lx_auxv.o		\
 	lx_brand.o		\
 	lx_brk.o		\
+	lx_cap.o		\
 	lx_chmod.o		\
 	lx_chown.o		\
 	lx_clone.o		\

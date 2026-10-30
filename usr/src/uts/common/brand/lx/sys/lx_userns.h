@@ -33,6 +33,7 @@ extern cred_t *lx_userns_native_for(cred_t *, const lx_userns_cred_t *);
 extern void lx_userns_cred_free(struct brand_cred *);
 extern int lx_userns_cred_perm(const cred_t *, struct proc *,
     const cred_t *, int);
+extern int lx_userns_caps_get(const cred_t *, lx_caps_t *);
 extern void lx_userns_exec(struct proc *, const cred_t *);
 extern int lx_userns_map_actor(const cred_t *, lx_userns_t *,
     lx_userns_cred_t *);

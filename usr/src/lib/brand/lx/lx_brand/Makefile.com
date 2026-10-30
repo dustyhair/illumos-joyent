@@ -28,8 +28,7 @@ LX_CMN  =	$(SRC)/common/brand/lx
 
 LIBRARY =	lx_brand.a
 VERS	=	.1
-COBJS	=	capabilities.o		\
-		clock.o			\
+COBJS	=	clock.o			\
 		clone.o			\
 		debug.o			\
 		dir.o			\

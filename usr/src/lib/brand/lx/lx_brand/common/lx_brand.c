@@ -1140,8 +1140,8 @@ static lx_syscall_handler_t lx_handlers[] = {
 	NULL,				/* 122: setfsuid */
 	NULL,				/* 123: setfsgid */
 	NULL,				/* 124: getsid */
-	lx_capget,			/* 125: capget */
-	lx_capset,			/* 126: capset */
+	NULL,			/* 125: capget */
+	NULL,			/* 126: capset */
 	lx_rt_sigpending,		/* 127: rt_sigpending */
 	lx_rt_sigtimedwait,		/* 128: rt_sigtimedwait */
 	lx_rt_sigqueueinfo,		/* 129: rt_sigqueueinfo */
@@ -1530,8 +1530,8 @@ static lx_syscall_handler_t lx_handlers[] = {
 	NULL,				/* 181: pwrite64 */
 	NULL,				/* 182: chown16 */
 	NULL,				/* 183: getcwd */
-	lx_capget,			/* 184: capget */
-	lx_capset,			/* 185: capset */
+	NULL,			/* 184: capget */
+	NULL,			/* 185: capset */
 	lx_sigaltstack,			/* 186: sigaltstack */
 	lx_sendfile,			/* 187: sendfile */
 	NULL,				/* 188: getpmsg */

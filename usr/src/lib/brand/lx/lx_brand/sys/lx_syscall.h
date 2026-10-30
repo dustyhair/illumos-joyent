@@ -64,8 +64,6 @@ extern long lx_ioctl(uintptr_t, uintptr_t, uintptr_t);
 extern long lx_settimeofday(uintptr_t, uintptr_t);
 extern long lx_mknod(uintptr_t, uintptr_t, uintptr_t);
 
-extern long lx_capget(uintptr_t, uintptr_t);
-extern long lx_capset(uintptr_t, uintptr_t);
 
 extern long lx_clock_nanosleep(int, int flags, struct timespec *,
     struct timespec *);
