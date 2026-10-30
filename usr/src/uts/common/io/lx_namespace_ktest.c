@@ -9,6 +9,7 @@
 #include <sys/vfs.h>
 #include <sys/mount.h>
 #include <sys/systm.h>
+#include <sys/sysmacros.h>
 #include <sys/lx_mntns.h>
 
 extern void lx_userns_test_maps(ktest_ctx_hdl_t *);
@@ -510,7 +511,7 @@ ns_lifetime(ktest_ctx_hdl_t *ctx)
 	NS_CHECK(error == 0, "cannot hold retained file");
 	error = lx_mntns_view_clone(a, cr, &b);
 	NS_CHECK(error == 0, "cannot clone lifetime source");
-	/* The views own the creation credential independently of this caller. */
+	/* Both views hold the creation credential independently of the caller. */
 	crfree(cr);
 	cr = NULL;
 	lx_mntns_view_rele(a);
@@ -544,7 +545,7 @@ ns_lifetime(ktest_ctx_hdl_t *ctx)
 	NS_CHECK(lx_mntns_busy(), "busy detached root was freed too early");
 	VN_RELE(held);
 	held = NULL;
-	NS_CHECK(ns_wait_idle(), "detached root leaked after last vnode release");
+	NS_CHECK(ns_wait_idle(), "detached root leaked after vnode release");
 	passed = B_TRUE;
 out:
 	if (vp != NULL)

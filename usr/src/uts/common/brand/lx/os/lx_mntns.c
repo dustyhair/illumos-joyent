@@ -31,6 +31,7 @@ struct lx_mntns_view {
 	volatile uint_t lv_refs;
 	cred_t *lv_cred;
 	taskq_ent_t lv_reap_ent;
+	timeout_id_t lv_timeout;
 	vnode_t *lv_root;
 	vfs_t *lv_vfs;
 	lx_mntns_mount_t *lv_mounts;
@@ -81,14 +82,24 @@ static void
 lx_mntns_reap(void *arg)
 {
 	lx_mntns_view_t *view = arg;
+	timeout_id_t id;
 	int error;
 
 	VERIFY3U(view->lv_refs, ==, 0);
+	mutex_enter(&view->lv_lock);
+	id = view->lv_timeout;
+	view->lv_timeout = 0;
+	mutex_exit(&view->lv_lock);
+	/* Fence the timeout callback before freeing its argument or module. */
+	if (id != 0)
+		(void) untimeout(id);
 	if ((error = lx_mntns_destroy(view, view->lv_cred)) == 0)
 		return;
-	/* Keep busy roots intact; no forced unmount or spinning taskq worker. */
+	/* Keep busy roots intact and let the taskq service other views. */
 	DTRACE_PROBE1(lx__mntns__reap__retry, int, error);
-	(void) timeout(lx_mntns_dispatch, view, hz);
+	mutex_enter(&view->lv_lock);
+	view->lv_timeout = timeout(lx_mntns_dispatch, view, hz);
+	mutex_exit(&view->lv_lock);
 }
 
 void
