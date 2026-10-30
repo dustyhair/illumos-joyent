@@ -363,9 +363,9 @@ lx_mntns_pin(lx_mntns_mount_t *mount, cred_t *cr)
 	return (error);
 }
 
-int
-lx_mntns_view_bind(lx_mntns_view_t *view, vnode_t *source,
-    const char *path, boolean_t readonly, cred_t *cr)
+static int
+lx_mntns_bind(lx_mntns_view_t *view, vnode_t *source,
+    const char *path, boolean_t readonly, boolean_t copy, cred_t *cr)
 {
 	lx_mntns_mount_t *mount;
 	vnode_t *covered;
@@ -374,7 +374,8 @@ lx_mntns_view_bind(lx_mntns_view_t *view, vnode_t *source,
 	int error;
 
 	if (path == NULL || path[0] != '/' || strcmp(path, "/") == 0 ||
-	    (source->v_type != VDIR && source->v_type != VREG))
+	    (copy ? (source->v_type == VNON || source->v_type == VBAD) :
+	    (source->v_type != VDIR && source->v_type != VREG)))
 		return (EINVAL);
 	mount = kmem_zalloc(sizeof (*mount), KM_SLEEP);
 	resolved = kmem_alloc(MAXPATHLEN, KM_SLEEP);
@@ -383,7 +384,8 @@ lx_mntns_view_bind(lx_mntns_view_t *view, vnode_t *source,
 	    &covered, resolved)) != 0)
 		goto out;
 	if (!lx_mntns_owns(view, covered) ||
-	    covered->v_type != source->v_type) {
+	    (copy ? (covered->v_type == VNON || covered->v_type == VBAD) :
+	    covered->v_type != source->v_type)) {
 		error = EINVAL;
 	} else {
 		/* Keep noexec when binding a source from another view. */
@@ -408,6 +410,13 @@ out:
 	if (mount != NULL)
 		kmem_free(mount, sizeof (*mount));
 	return (error);
+}
+
+int
+lx_mntns_view_bind(lx_mntns_view_t *view, vnode_t *source,
+    const char *path, boolean_t readonly, cred_t *cr)
+{
+	return (lx_mntns_bind(view, source, path, readonly, B_FALSE, cr));
 }
 
 /* A held VFS identifies the mount instance; it does not prevent unmount. */
@@ -514,8 +523,9 @@ lx_mntns_view_snapshot(const char *source, cred_t *cr, lx_mntns_view_t **out)
 	for (entry = list; entry != NULL; entry = entry->ls_next) {
 		if (entry->ls_root == NULL)
 			continue;
-		error = lx_mntns_view_bind(view, entry->ls_root,
-		    refstr_value(entry->ls_path) + len, B_FALSE, cr);
+		/* Native mntfs and namefs roots need not match their cover type. */
+		error = lx_mntns_bind(view, entry->ls_root,
+		    refstr_value(entry->ls_path) + len, B_FALSE, B_TRUE, cr);
 		if (error != 0)
 			break;
 	}
@@ -587,8 +597,8 @@ lx_mntns_view_clone(lx_mntns_view_t *source, cred_t *cr,
 	if ((error = lx_mntns_create(source->lv_root, cr, &view)) != 0)
 		goto out;
 	for (entry = list; entry != NULL; entry = entry->lc_next) {
-		error = lx_mntns_view_bind(view, entry->lc_source,
-		    refstr_value(entry->lc_path), B_FALSE, cr);
+		error = lx_mntns_bind(view, entry->lc_source,
+		    refstr_value(entry->lc_path), B_FALSE, B_TRUE, cr);
 		if (error != 0)
 			goto out;
 	}

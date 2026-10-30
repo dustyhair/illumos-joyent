@@ -5,14 +5,14 @@ fbt:lx_brand:lx_mntns_view_snapshot:entry
     printf("PROCESS_SNAPSHOT source=%s\n", stringof(arg0));
 }
 
-fbt:lx_brand:lx_mntns_view_bind:entry
+fbt:lx_brand:lx_mntns_bind:entry
 /self->snapshot/
 {
     self->bindpath = arg2;
     self->bindtype = ((struct vnode *)arg1)->v_type;
 }
 
-fbt:lx_brand:lx_mntns_view_bind:return
+fbt:lx_brand:lx_mntns_bind:return
 /self->bindpath/
 {
     printf("PROCESS_BIND path=%s type=%d error=%d\n",

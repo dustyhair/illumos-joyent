@@ -628,7 +628,7 @@ ns_process_enter(ktest_ctx_hdl_t *ctx, boolean_t reject)
 	cred_t *base = NULL;
 	struct lx_seccomp_filter *filter = NULL;
 	vnode_t *root = NULL, *cwd = NULL, *vp = NULL;
-	lx_mntns_view_t *view = NULL;
+	lx_mntns_view_t *view = NULL, *copy = NULL;
 	lx_mntns_state_t state = { 0 };
 	vattr_t attr;
 	char *path = kmem_alloc(MAXPATHLEN, KM_SLEEP);
@@ -691,6 +691,11 @@ ns_process_enter(ktest_ctx_hdl_t *ctx, boolean_t reject)
 	MP_CHECK(error == 0, "cannot create process read-only bind");
 	VN_RELE(vp);
 	vp = NULL;
+	error = lx_mntns_view_clone(view, CRED(), &copy);
+	MP_CHECK(error == 0, "cannot clone real process mount topology");
+	lx_mntns_view_rele(view);
+	view = copy;
+	copy = NULL;
 	error = lx_mntns_state_prepare(view, "/test/mnt-proc/source", base,
 	    &state);
 	MP_CHECK(error == ENOTDIR && state.lms_view == NULL &&
@@ -731,6 +736,8 @@ out:
 		VN_RELE(vp);
 	if (view != NULL)
 		lx_mntns_view_rele(view);
+	if (copy != NULL)
+		lx_mntns_view_rele(copy);
 	if (root != NULL)
 		VN_RELE(root);
 	if (cwd != NULL)
