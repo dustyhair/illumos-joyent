@@ -2022,6 +2022,7 @@ tl_wput_data_ser(mblk_t *mp, tl_endpt_t *tep)
 	 * fastpath for data. Ignore flow control if tep is closing.
 	 */
 	if ((peer_tep != NULL) &&
+	    (peer_tep->te_flag & TL_SOCKUCRED) == 0 &&
 	    !peer_tep->te_closing &&
 	    ((tep->te_state == TS_DATA_XFER) ||
 	    (tep->te_state == TS_WREQ_ORDREL)) &&
@@ -4495,6 +4496,82 @@ tl_info_req(mblk_t *mp, tl_endpt_t *tep)
 }
 
 /*
+ * Append native per-message credentials without copying data blocks.  Socket
+ * descriptor messages reserve this space in sockfs; keep their original dblk
+ * and free routine so that fdbuf_verify() retains its ownership guarantees.
+ * The caller holds the connected endpoints' serializer.
+ */
+static mblk_t *
+tl_stream_ucred(mblk_t *mp, tl_endpt_t *tep, tl_endpt_t *peer)
+{
+	struct T_optdata_req *req;
+	cred_t *cr;
+	pid_t cpid;
+	mblk_t *out;
+	t_scalar_t flags = 0;
+	size_t olen = 0, ooff = 0, need;
+
+	cr = msg_getcred(mp, &cpid);
+	if (cr == NULL) {
+		tl_merror(tep->te_wq, mp, EPROTO);
+		return (NULL);
+	}
+	if (DB_TYPE(mp) == M_PROTO) {
+		union T_primitives *prim = (void *)mp->b_rptr;
+
+		if (prim->type == T_OPTDATA_REQ) {
+			req = (void *)mp->b_rptr;
+			if (req->OPT_length < 0 || req->OPT_offset < 0 ||
+			    (req->OPT_length != 0 &&
+			    (req->OPT_offset < sizeof (*req) ||
+			    req->OPT_offset > MBLKL(mp) ||
+			    req->OPT_length > MBLKL(mp) - req->OPT_offset))) {
+				tl_merror(tep->te_wq, mp, EPROTO);
+				return (NULL);
+			}
+			olen = req->OPT_length;
+			ooff = req->OPT_offset;
+			flags = req->DATA_flag;
+		} else {
+			ASSERT3S(prim->type, ==, T_DATA_REQ);
+			flags = prim->data_req.MORE_flag;
+		}
+	}
+
+	need = sizeof (*req) + olen + sizeof (struct T_opthdr) +
+	    OPTLEN(ucredminsize(cr));
+	if (DB_TYPE(mp) == M_DATA) {
+		out = allocb_tmpl(need, mp);
+		if (out != NULL)
+			out->b_cont = mp;
+	} else {
+		/* As with datagrams, an fdbuf cannot be reallocated. */
+		if (mp->b_datap->db_frtnp != NULL &&
+		    (mp->b_datap->db_ref != 1 || MBLKSIZE(mp) < need)) {
+			tl_merror(tep->te_wq, mp, EPROTO);
+			return (NULL);
+		}
+		out = reallocb(mp, MAX(need, MBLKL(mp)), 1);
+	}
+	if (out == NULL) {
+		tl_memrecover(tep->te_wq, mp, need);
+		return (NULL);
+	}
+	if (olen != 0)
+		bcopy(out->b_rptr + ooff, out->b_rptr + sizeof (*req), olen);
+	DB_TYPE(out) = M_PROTO;
+	req = (void *)out->b_rptr;
+	req->PRIM_type = T_OPTDATA_REQ;
+	req->DATA_flag = flags;
+	req->OPT_offset = sizeof (*req);
+	req->OPT_length = need - sizeof (*req);
+	tl_fill_option(out->b_rptr + sizeof (*req) + olen, cr, cpid,
+	    TL_SOCKUCRED, peer->te_credp);
+	out->b_wptr = out->b_rptr + need;
+	return (out);
+}
+
+/*
  * Handle M_DATA, T_data_req and T_optdata_req.
  * If this is a socket pass through T_optdata_req options unmodified.
  */
@@ -4679,6 +4756,12 @@ tl_data(mblk_t *mp, tl_endpt_t *tep)
 		    "tl_data:rx side:invalid state"));
 		tl_merror(peer_tep->te_wq, mp, EPROTO);
 		return;
+	}
+	if (IS_SOCKET(tep) && (peer_tep->te_flag & TL_SOCKUCRED) != 0) {
+		mp = tl_stream_ucred(mp, tep, peer_tep);
+		if (mp == NULL)
+			return;
+		prim = (void *)mp->b_rptr;
 	}
 	if (DB_TYPE(mp) == M_PROTO) {
 		/* reuse message block - just change REQ to IND */
@@ -6257,15 +6340,6 @@ tl_set_opt(queue_t *wq, uint_t mgmt_flags, int level, int name, uint_t inlen,
 		 */
 		switch (name) {
 		case SO_RECVUCRED:
-			/*
-			 * We only support this for datagram sockets;
-			 * getpeerucred handles the connection oriented
-			 * transports.
-			 */
-			if (!IS_CLTS(tep)) {
-				error = EINVAL;
-				break;
-			}
 			if (*(int *)invalp == 0)
 				tep->te_flag &= ~TL_SOCKUCRED;
 			else

@@ -116,7 +116,6 @@ typedef struct lx_group_req32 {
 #endif /* defined(_SYSCALL32_IMPL) */
 
 /* lxsad_flags */
-#define	LXSAD_FL_STRCRED	0x1
 #define	LXSAD_FL_EMULSEQPKT	0x2
 /* These two work together to implement Linux SO_REUSEADDR semantics. */
 #define	LXSAD_FL_EMULRUADDR	0x4
@@ -1283,89 +1282,6 @@ lx_cmsg_set_cloexec(void *input, socklen_t inlen)
 	}
 }
 
-static int
-lx_cmsg_try_ucred(sonode_t *so, struct nmsghdr *msg, socklen_t origlen)
-{
-	lx_socket_aux_data_t *sad;
-	struct cmsghdr *cmsg = NULL;
-	int msgsize;
-	cred_t *cred;
-
-	if (origlen == 0) {
-		return (0);
-	}
-	sad = lx_sad_acquire(SOTOV(so));
-	if ((sad->lxsad_flags & LXSAD_FL_STRCRED) == 0) {
-		mutex_exit(&sad->lxsad_lock);
-		return (0);
-	}
-	mutex_exit(&sad->lxsad_lock);
-
-	mutex_enter(&so->so_lock);
-	if (so->so_peercred == NULL) {
-		mutex_exit(&so->so_lock);
-		return (0);
-	}
-	crhold(cred = so->so_peercred);
-	mutex_exit(&so->so_lock);
-
-	msgsize = ucredminsize(cred) + sizeof (struct cmsghdr);
-	if (msg->msg_control == NULL) {
-		msg->msg_controllen = msgsize;
-		msg->msg_control = cmsg = kmem_zalloc(msgsize, KM_SLEEP);
-	} else {
-		/*
-		 * The so_recvmsg operation may have allocated a msg_control
-		 * buffer which precisely fits all returned cmsgs.  We must
-		 * manually verify the length of that cmsg data and reallocate
-		 * the buffer if it lacks the necessary space.
-		 */
-		uintptr_t start = (uintptr_t)msg->msg_control;
-		uintptr_t end = start + msg->msg_controllen;
-
-		ASSERT(msg->msg_controllen > 0);
-		cmsg = (struct cmsghdr *)msg->msg_control;
-		while (CMSG_VALID(cmsg, start, end) != 0) {
-			if (cmsg->cmsg_level == SOL_SOCKET &&
-			    cmsg->cmsg_type == SCM_UCRED) {
-				/*
-				 * If some later code change results in a ucred
-				 * being attached anyways, there is no need for
-				 * us to do it manually
-				 */
-				crfree(cred);
-				return (0);
-			}
-			cmsg = CMSG_NEXT(cmsg);
-		}
-		if (((uintptr_t)cmsg + msgsize) > end) {
-			socklen_t offset = (uintptr_t)cmsg - start;
-			socklen_t newsize = offset + msgsize;
-			void *newbuf;
-
-			if (newsize < msg->msg_controllen) {
-				/* size overflow, bail */
-				crfree(cred);
-				return (-1);
-			}
-			newbuf = kmem_alloc(newsize, KM_SLEEP);
-			bcopy(msg->msg_control, newbuf, msg->msg_controllen);
-			kmem_free(msg->msg_control, msg->msg_controllen);
-
-			msg->msg_control = newbuf;
-			msg->msg_controllen = newsize;
-			cmsg = (struct cmsghdr *)((uintptr_t)newbuf + offset);
-		}
-	}
-
-	cmsg->cmsg_level = SOL_SOCKET;
-	cmsg->cmsg_type = SCM_UCRED;
-	cmsg->cmsg_len = msgsize;
-	(void) cred2ucred(cred, so->so_cpid, CMSG_CONTENT(cmsg), CRED());
-	crfree(cred);
-	return (0);
-}
-
 static lx_socket_aux_data_t *
 lx_sad_acquire(vnode_t *vp)
 {
@@ -1900,19 +1816,7 @@ lx_recv_common(int sock, struct nmsghdr *msg, xuio_t *xuiop, int flags,
 			lx_cmsg_set_cloexec(msg->msg_control,
 			    msg->msg_controllen);
 		}
-		if (so->so_family == AF_UNIX &&
-		    (so->so_mode & SM_CONNREQUIRED) != 0) {
-			/*
-			 * It may be necessary to append a SCM_UCRED cmsg to
-			 * the controls if SO_PASSCRED is set on a
-			 * connection-oriented AF_UNIX socket.
-			 *
-			 * See lx_setsockopt_socket for more details.
-			 */
-			if (lx_cmsg_try_ucred(so, msg, controllen) != 0) {
-				msg->msg_flags |= MSG_CTRUNC;
-			}
-		}
+
 
 		error = stol_cmsgs_copyout(msg->msg_control,
 		    msg->msg_controllen, control, controllenp, controllen);
@@ -3751,45 +3655,7 @@ lx_setsockopt_socket(sonode_t *so, int optname, void *optval, socklen_t optlen)
 		}
 		break;
 
-	case LX_SO_PASSCRED:
-		/*
-		 * In many cases, the Linux SO_PASSCRED is mapped to the SunOS
-		 * SO_RECVUCRED to enable the passing of peer credential
-		 * information via received cmsgs.  One exception is for
-		 * connection-oriented AF_UNIX sockets which do not yet support
-		 * that option.  Instead, we track the setting internally and,
-		 * when there is appropriate cmsg space, emulate the credential
-		 * passing by querying the STREAMS ioctl.
-		 *
-		 * Note: this approach is broken for the case when a process
-		 * sets up a Unix-domain socket with SO_PASSCRED, then forks
-		 * one or more children, and expects to use the cmsg cred to
-		 * accurately know which child pid sent the message (currently
-		 * a pid is recorded when the socket is connected, not for each
-		 * msg sent). getpeerucred(3c) suffers from the same problem.
-		 * We have a workaround in lx_socketpair (use DGRAM if
-		 * SEQPACKET), but the general case requires enhancing our
-		 * streams support to allow passing credential cmsgs on a
-		 * connection-oriented Unix socket.
-		 */
-		if (so->so_family == AF_UNIX &&
-		    (so->so_mode & SM_CONNREQUIRED) != 0) {
-			lx_socket_aux_data_t *sad;
 
-			if (optlen != sizeof (int)) {
-				return (EINVAL);
-			}
-			intval = (int *)optval;
-			sad = lx_sad_acquire(SOTOV(so));
-			if (*intval == 0) {
-				sad->lxsad_flags &= ~LXSAD_FL_STRCRED;
-			} else {
-				sad->lxsad_flags |= LXSAD_FL_STRCRED;
-			}
-			mutex_exit(&sad->lxsad_lock);
-			return (0);
-		}
-		break;
 	}
 
 	if (!lx_sockopt_lookup(sockopts_tbl, &optname, &optlen)) {
@@ -4167,24 +4033,6 @@ lx_getsockopt_socket(sonode_t *so, int optname, void *optval,
 		*optlen = sizeof (int);
 		return (error);
 
-	case LX_SO_PASSCRED:
-		/*
-		 * Special handling for connection-oriented AF_UNIX sockets.
-		 * See lx_setsockopt_socket for more details.
-		 */
-		if (so->so_family == AF_UNIX &&
-		    (so->so_mode & SM_CONNREQUIRED) != 0) {
-			if (*optlen < sizeof (int)) {
-				return (EINVAL);
-			}
-			sad = lx_sad_acquire(SOTOV(so));
-			*intval = ((sad->lxsad_flags & LXSAD_FL_STRCRED) == 0 ?
-			    0 : 1);
-			*optlen = sizeof (int);
-			mutex_exit(&sad->lxsad_lock);
-			return (0);
-		}
-		break;
 
 	case LX_SO_REUSEPORT:
 		/*

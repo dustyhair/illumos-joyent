@@ -698,6 +698,72 @@ static int scm_denied(void)
     CHECK(recv(pair[1], &byte, 1, MSG_DONTWAIT) == -1 && errno == EAGAIN);
     close(pair[0]); close(pair[1]); return 0;
 }
+static int stream_receive(int fd, pid_t pid, unsigned id)
+{
+    char byte; struct iovec iov = { &byte, 1 };
+    union { struct cmsghdr align; char data[256]; } buf;
+    struct msghdr msg = {.msg_iov=&iov,.msg_iovlen=1,.msg_control=buf.data,.msg_controllen=sizeof(buf.data)};
+    CHECK(recvmsg(fd,&msg,0)==1 && !(msg.msg_flags & MSG_CTRUNC));
+    unsigned count=0;
+    for (struct cmsghdr *c=CMSG_FIRSTHDR(&msg);c;c=CMSG_NXTHDR(&msg,c)) {
+        if(c->cmsg_level!=SOL_SOCKET || c->cmsg_type!=SCM_CREDENTIALS) continue;
+        struct ucred got; CHECK(c->cmsg_len==CMSG_LEN(sizeof(got))); memcpy(&got,CMSG_DATA(c),sizeof(got));
+        if(got.pid!=pid || got.uid!=id || got.gid!=id)
+            fprintf(stderr,"stream got=%d/%u/%u expected=%d/%u/%u\n",got.pid,got.uid,got.gid,pid,id,id);
+        CHECK(got.pid==pid && got.uid==id && got.gid==id); count++;
+    }
+    CHECK(count==1); return 0;
+}
+static int stream_sender(void)
+{
+    CHECK(root_ids()==0);
+    int pair[2],one=1,status; CHECK(socketpair(AF_UNIX,SOCK_STREAM,0,pair)==0);
+    CHECK(setsockopt(pair[1],SOL_SOCKET,SO_PASSCRED,&one,sizeof(one))==0);
+    socklen_t len=sizeof(one); one=0;
+    CHECK(getsockopt(pair[1],SOL_SOCKET,SO_PASSCRED,&one,&len)==0 && one==1);
+    pid_t child=fork(); CHECK(child>=0);
+    if(child==0) {
+        close(pair[1]); CHECK(write(pair[0],"a",1)==1);
+        CHECK(syscall(SYS_setresgid,1,1,1)==0 && syscall(SYS_setresuid,1,1,1)==0);
+        struct iovec iov={ (void *)"b",1 };
+        CHECK(syscall(SYS_writev,pair[0],&iov,1)==1);
+        _exit(0);
+    }
+    CHECK(stream_receive(pair[1],child,0)==0);
+    CHECK(stream_receive(pair[1],child,1)==0);
+    CHECK(waitpid(child,&status,0)==child && WIFEXITED(status) && WEXITSTATUS(status)==0);
+    CHECK(syscall(SYS_setresgid,2,2,2)==0 && syscall(SYS_setresuid,2,2,2)==0);
+    CHECK(write(pair[0],"c",1)==1 && stream_receive(pair[1],getpid(),2)==0);
+    close(pair[0]);close(pair[1]);return 0;
+}
+static int stream_rights(void)
+{
+    CHECK(root_ids()==0);
+    int pair[2],one=1; CHECK(socketpair(AF_UNIX,SOCK_STREAM,0,pair)==0);
+    CHECK(setsockopt(pair[1],SOL_SOCKET,SO_PASSCRED,&one,sizeof(one))==0);
+    char path[]="/tmp/lx-stream-fd-XXXXXX"; int file=mkstemp(path);
+    CHECK(file>=0 && unlink(path)==0 && write(file,"Z",1)==1 && lseek(file,0,SEEK_SET)==0);
+    union {struct cmsghdr align; char data[CMSG_SPACE(sizeof(int))];} control;
+    memset(&control,0,sizeof(control)); char byte='x'; struct iovec iov={&byte,1};
+    struct msghdr msg={.msg_iov=&iov,.msg_iovlen=1,.msg_control=control.data,.msg_controllen=sizeof(control.data)};
+    struct cmsghdr *c=CMSG_FIRSTHDR(&msg);c->cmsg_level=SOL_SOCKET;c->cmsg_type=SCM_RIGHTS;c->cmsg_len=CMSG_LEN(sizeof(file));memcpy(CMSG_DATA(c),&file,sizeof(file));
+    CHECK(sendmsg(pair[0],&msg,0)==1);close(file);
+    union {struct cmsghdr align;char data[256];} recvcontrol;
+    msg.msg_control=recvcontrol.data;msg.msg_controllen=sizeof(recvcontrol.data);
+    CHECK(recvmsg(pair[1],&msg,MSG_CMSG_CLOEXEC)==1 && !(msg.msg_flags&MSG_CTRUNC));
+    unsigned rights=0,creds=0;
+    for(c=CMSG_FIRSTHDR(&msg);c;c=CMSG_NXTHDR(&msg,c)) {
+        CHECK(c->cmsg_level==SOL_SOCKET);
+        if(c->cmsg_type==SCM_RIGHTS) {
+            int fd;CHECK(c->cmsg_len==CMSG_LEN(sizeof(fd)));memcpy(&fd,CMSG_DATA(c),sizeof(fd));
+            CHECK((fcntl(fd,F_GETFD)&FD_CLOEXEC)!=0 && read(fd,&byte,1)==1 && byte=='Z');close(fd);rights++;
+        } else if(c->cmsg_type==SCM_CREDENTIALS) {
+            struct ucred cr;CHECK(c->cmsg_len==CMSG_LEN(sizeof(cr)));memcpy(&cr,CMSG_DATA(c),sizeof(cr));
+            CHECK(cr.pid==getpid() && cr.uid==0 && cr.gid==0);creds++;
+        } else CHECK(0);
+    }
+    CHECK(rights==1 && creds==1);close(pair[0]);close(pair[1]);return 0;
+}
 /* Capture native identities before the trusted fixture attaches its map. */
 static int prepare_peer_fixtures(void)
 {
@@ -996,6 +1062,8 @@ int main(int argc, char **argv)
     run("socket credentials use real IDs and accept owned saved IDs", scm_real);
     run("socket credentials accept scoped SETUID and SETGID claims", scm_privileged);
     run("socket credential forgery and unmapped IDs are rejected", scm_denied);
+    run("stream credentials follow fork, writev and sender ID changes", stream_sender);
+    run("stream credentials preserve descriptor passing and CLOEXEC", stream_rights);
     run("peer credentials use the reader namespace and overflow IDs", peer_inherited);
     run("peer credentials translate fresh mapped identities", peer_mapped);
     run("peer credentials retain the connection snapshot", peer_cached);

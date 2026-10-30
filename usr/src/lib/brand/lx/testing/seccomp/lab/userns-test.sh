@@ -55,7 +55,7 @@ for probe in /test/scope_caps /test/dynamic/scope_caps \
     /test/scope_ids /test/dynamic/scope_ids; do
     scope_log=/lab/$(echo "$probe" | tr / _).log
     if [[ "$probe" = */scope_ids ]]; then
-        expected='SCOPE_IDS cases=47 failures=0'
+        expected='SCOPE_IDS cases=49 failures=0'
     else
         expected='SCOPE_CAPS cases=19 failures=0'
     fi
