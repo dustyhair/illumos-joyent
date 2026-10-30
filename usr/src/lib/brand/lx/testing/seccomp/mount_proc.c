@@ -5,6 +5,7 @@
 #include <grp.h>
 #include <limits.h>
 #include <linux/filter.h>
+#include <linux/capability.h>
 #include <linux/seccomp.h>
 #include <sched.h>
 #include <signal.h>
@@ -21,6 +22,7 @@
 static const char *base = "/test/mnt-proc";
 static int report = STDOUT_FILENO;
 static int failures;
+static int linux_control;
 
 static void
 check(int ok, const char *name)
@@ -87,12 +89,56 @@ outside(void)
 }
 
 static void
+mount_guard_checks(void)
+{
+    struct __user_cap_header_struct header = {
+        .version = _LINUX_CAPABILITY_VERSION_3
+    };
+    struct __user_cap_data_struct caps[2] = { 0 };
+    char source[PATH_MAX], target[PATH_MAX];
+    int wanted, before = failures;
+
+    check(syscall(SYS_capget, &header, caps) == 0, "private-capget");
+    wanted = (caps[0].effective & (1U << CAP_SYS_ADMIN)) ?
+        EOPNOTSUPP : EPERM;
+    path("source", source);
+    path("covered", target);
+    errno = 0;
+    check(mount("tmpfs", target, "tmpfs", MS_NOSUID, "mode=0700") == -1 &&
+        errno == wanted, "private-tmpfs-gate");
+    path("bind-target", target);
+    errno = 0;
+    check(mount(source, target, NULL, MS_BIND, NULL) == -1 &&
+        errno == wanted, "private-bind-gate");
+    errno = 0;
+    check(mount(NULL, target, NULL, MS_REMOUNT, NULL) == -1 &&
+        errno == wanted, "private-remount-gate");
+    path("covered", target);
+    errno = 0;
+    check(mount("none", target, "nfs", 0, NULL) == -1 &&
+        errno == wanted, "private-nfs-gate");
+    errno = 0;
+    check(umount2(target, 0) == -1 && errno == wanted,
+        "private-umount-gate");
+    errno = 0;
+    check(umount2(target, MNT_FORCE) == -1 && errno == wanted,
+        "private-force-umount-gate");
+    errno = 0;
+    check(umount2(target, MNT_DETACH) == -1 && errno == wanted,
+        "private-detach-gate");
+    dprintf(report, "MP_MOUNT_GUARD uid=%ld expected_errno=%d cases=7 failures=%d\n",
+        (long)getuid(), wanted, failures - before);
+}
+
+static void
 inside(void)
 {
     char p[PATH_MAX], cwd[PATH_MAX], expected[PATH_MAX];
     int fd;
     long n;
 
+    if (!linux_control)
+        mount_guard_checks();
     path("cwd", expected);
     check(getcwd(cwd, sizeof (cwd)) != NULL && !strcmp(cwd, expected),
         "private-cwd");
@@ -151,10 +197,22 @@ linux_setup(uid_t owner)
         mount(NULL, target, NULL, MS_BIND | MS_REMOUNT | MS_RDONLY, NULL);
 }
 
+static void
+exec_child(const char *executable, const char *mode, char *fdarg)
+{
+    char *args[] = { (char *)executable, "--base", (char *)base,
+        (char *)mode, fdarg, NULL, NULL };
+
+    if (linux_control)
+        args[5] = "--linux";
+    execv(executable, args);
+    _exit(90);
+}
+
 int
 main(int argc, char **argv)
 {
-    int i, drop = 0, linux_control = 0, unrestricted = 0, outside_mode = 0;
+    int i, drop = 0, unrestricted = 0, outside_mode = 0;
     int child_mode = 0, result = -1, status;
     char p[PATH_MAX], fdarg[32];
     pid_t child;
@@ -229,11 +287,8 @@ main(int argc, char **argv)
     inside();
     snprintf(fdarg, sizeof (fdarg), "%d", result);
     child = fork();
-    if (child == 0) {
-        execl(argv[0], argv[0], "--base", base, "--exit-child", fdarg,
-            (char *)NULL);
-        _exit(90);
-    }
+    if (child == 0)
+        exec_child(argv[0], "--exit-child", fdarg);
     memset(&info, 0, sizeof (info));
     check(child > 0 && waitid(P_PID, child, &info, WEXITED | WNOWAIT) == 0 &&
         info.si_pid == child && info.si_code == CLD_KILLED &&
@@ -244,11 +299,8 @@ main(int argc, char **argv)
     check(waitpid(child, &status, 0) == child && WIFSIGNALED(status) &&
         WTERMSIG(status) == SIGKILL, "reap-killed-child");
     child = fork();
-    if (child == 0) {
-        execl(argv[0], argv[0], "--base", base, "--inherited", fdarg,
-            (char *)NULL);
-        _exit(91);
-    }
+    if (child == 0)
+        exec_child(argv[0], "--inherited", fdarg);
     check(child > 0 && waitpid(child, &status, WUNTRACED) == child &&
         WIFSTOPPED(status) && WSTOPSIG(status) == SIGSTOP, "orphan-child-stop");
     printf("MP_ORPHAN_PID=%ld\n", (long)child);

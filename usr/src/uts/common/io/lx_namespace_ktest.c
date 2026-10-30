@@ -787,7 +787,7 @@ ns_owner(ktest_ctx_hdl_t *ctx)
 	error = lx_mntns_view_create((char *)input, CRED(), parent, NULL,
 	    &initial);
 	NS_CHECK(error == 0, "cannot create initial-scope view");
-	error = lx_mntns_view_snapshot((char *)input, CRED(), full, NULL,
+	error = lx_mntns_view_snapshot((char *)input, CRED(), weak, NULL,
 	    &owned);
 	NS_CHECK(error == 0, "cannot create owned snapshot");
 	error = lx_mntns_view_clone(owned, CRED(), nested, &copy);
@@ -809,8 +809,8 @@ ns_owner(ktest_ctx_hdl_t *ctx)
 	    lx_mntns_view_capable(initial, CRED()),
 	    "scoped authority escaped or lost parent owner authority");
 	saved = crdup(full);
-	crfree(full);
-	full = NULL;
+	crfree(weak);
+	weak = NULL;
 	NS_CHECK(lx_mntns_view_capable(owned, saved),
 	    "view did not retain its immutable owner credential");
 	passed = B_TRUE;
