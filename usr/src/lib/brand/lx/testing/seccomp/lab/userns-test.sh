@@ -111,6 +111,7 @@ for probe in /test/scope_caps /test/dynamic/scope_caps \
         test "$sid_checked" = 1
     fi
 done
+/lab/chown-race-test.sh
 cleanup
 trap - EXIT
 /lab/ktest run lx_namespace:user:credentials

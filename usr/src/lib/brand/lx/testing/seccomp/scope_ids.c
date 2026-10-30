@@ -1112,6 +1112,21 @@ static int cap_chown_task(void)
     CHECK(fchown(cap_chown_task_fd,1,2)==0 && owner_is(cap_chown_task_fd,1,2));
     close(cap_chown_task_fd);return 0;
 }
+static int chown_race_probe(void)
+{
+    CHECK(root_ids()==0);
+    char path[128];snprintf(path,sizeof(path),"/tmp/lx-chown-race-%d",getpid());
+    int fd=open(path,O_CREAT|O_EXCL|O_RDWR|O_CLOEXEC,0600);CHECK(fd>=0);
+    CHECK(fchown(fd,1,1)==0);
+    printf("CHOWN_RACE_ARM_PID=%d\n",getpid());fflush(stdout);raise(SIGSTOP);
+    unsigned allowed=0,denied=0;
+    for(unsigned i=0;i<1000;i++) {
+        if(fchown(fd,0,0)==0) allowed++;
+        else {CHECK(errno==EPERM);denied++;}
+    }
+    close(fd);printf("CHOWN_RACE_PROBE_PASS allowed=%u denied=%u\n",allowed,denied);
+    return 0;
+}
 static int image_check(void)
 {
     CHECK(ids(0, 1, 1, 1) && ids(1, 1, 1, 1));
@@ -1157,6 +1172,8 @@ int main(int argc, char **argv)
     if (argc >= 3 && !strcmp(argv[1], "--trace-image")) return trace_image(argc, argv);
     if (argc == 2 && !strcmp(argv[1], "--image")) return image_check();
     self = argv[0];
+    int race_mode=argc==2 && !strcmp(argv[1],"--chown-race");
+    if(race_mode) argc=1;
     if (argc == 2 && !strcmp(argv[1], "--scm-length-only")) return scm_lengths();
     CHECK(prepare_peer_fixtures() == 0);
     if (argc == 2 && !strcmp(argv[1], "--linux")) {
@@ -1177,6 +1194,7 @@ int main(int argc, char **argv)
         raise(SIGSTOP);
     } else return 2;
     setvbuf(stdout, NULL, _IOLBF, 0);
+    if(race_mode) return chown_race_probe();
     run("mapped getters and privileged setters", mapped_ids);
     run("mapping validation and failed-update atomicity", validation);
     run("saved UID restoration and capability fixups", saved_ids);
