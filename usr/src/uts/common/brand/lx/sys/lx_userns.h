@@ -7,6 +7,9 @@
 #include <sys/cred.h>
 #include <lx_userns_model.h>
 
+struct kthread;
+struct klwp;
+
 /* Internal objects only; no Linux namespace syscall is enabled here. */
 typedef struct lx_userns lx_userns_t;
 typedef struct lx_userns_cred {
