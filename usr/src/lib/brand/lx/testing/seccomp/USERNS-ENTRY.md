@@ -12,8 +12,9 @@ flags return EINVAL. Flags retain their full native argument width, so
 reserved high bits cannot be truncated into an accepted request. Requests
 without NEWUSER retain EPERM. Chrooted entry returns EPERM. Multiple LWPs
 return EINVAL. Existing shared-FS clone groups, vfork children, i386 and
-alternate entry modes return EOPNOTSUPP. This does not implement the other
-Linux namespaces, namespace clone flags or setns.
+alternate entry modes return EOPNOTSUPP. Experimental user-namespace clone is
+described in [USERNS-CLONE.md](USERNS-CLONE.md). Other Linux namespaces and
+setns remain unsupported.
 
 ## Credential publication
 
@@ -81,9 +82,9 @@ VM68 passed 15+15 entry cases, both idle checks, zero-budget controls and
 both canonical drivers before the final high-bit argument correction.
 
 The newest Codex sandboxed workflow is not yet accepted. Bubblewrap still
-needs namespace clone entry and complete mount, PID, IPC and network
-isolation. Native emulation gaps beyond this syscall remain. This guarded
-entry milestone does not substitute the outer zone for Codex's sandbox.
+needs combined namespace clone entry and complete mount, PID, IPC and
+network isolation. Native emulation gaps beyond this syscall remain. This
+guarded entry milestone does not substitute the outer zone for Codex's sandbox.
 
 ## VM69 acceptance
 
