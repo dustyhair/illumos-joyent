@@ -573,6 +573,37 @@ static int trace_inherit(void)
     printf("TRACE_INHERIT_DETACH_PASS\n");
     return 0;
 }
+/* Malformed credentials must fail before any payload access or send. */
+static int scm_lengths(void)
+{
+    for (int dropped = 0; dropped < 2; dropped++) {
+        if (dropped) CHECK(drop_caps() == 0);
+        for (int kind = 0; kind < 2; kind++) {
+            int pair[2];
+            CHECK(socketpair(AF_UNIX, kind ? SOCK_STREAM : SOCK_DGRAM, 0, pair) == 0);
+            for (unsigned size = 0; size <= 16; size++) {
+                if (size == sizeof(struct ucred)) continue;
+                union { struct cmsghdr align; unsigned char data[CMSG_SPACE(16)]; } control;
+                memset(&control, 0, sizeof(control));
+                char byte = 'x';
+                struct iovec iov = { &byte, 1 };
+                struct msghdr msg = { .msg_iov = &iov, .msg_iovlen = 1,
+                    .msg_control = control.data, .msg_controllen = CMSG_SPACE(size) };
+                struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
+                cmsg->cmsg_level = SOL_SOCKET;
+                cmsg->cmsg_type = SCM_CREDENTIALS;
+                cmsg->cmsg_len = CMSG_LEN(size);
+                errno = 0;
+                CHECK(sendmsg(pair[0], &msg, MSG_NOSIGNAL) == -1 && errno == EINVAL);
+            }
+            char byte;
+            errno = 0;
+            CHECK(recv(pair[1], &byte, 1, MSG_DONTWAIT) == -1 && errno == EAGAIN);
+            close(pair[0]); close(pair[1]);
+        }
+    }
+    return 0;
+}
 /* Capture native identities before the trusted fixture attaches its map. */
 static int prepare_peer_fixtures(void)
 {
@@ -815,6 +846,7 @@ int main(int argc, char **argv)
     if (argc >= 3 && !strcmp(argv[1], "--trace-image")) return trace_image(argc, argv);
     if (argc == 2 && !strcmp(argv[1], "--image")) return image_check();
     self = argv[0];
+    if (argc == 2 && !strcmp(argv[1], "--scm-length-only")) return scm_lengths();
     CHECK(prepare_peer_fixtures() == 0);
     if (argc == 2 && !strcmp(argv[1], "--linux")) {
         pid_t p = fork(); int status;
@@ -865,6 +897,7 @@ int main(int argc, char **argv)
     run("TRACEME parent permission uses task credential", traceme_task_snapshot);
     run("NNP mixed-ID exec restricts gain and resets effective IDs", mixed_nnp_drop);
     run("NNP mixed-ID exec without gain preserves effective IDs", mixed_nnp_keep);
+    run("malformed socket credentials reject short and oversized payloads", scm_lengths);
     run("peer credentials use the reader namespace and overflow IDs", peer_inherited);
     run("peer credentials translate fresh mapped identities", peer_mapped);
     run("peer credentials retain the connection snapshot", peer_cached);

@@ -829,6 +829,11 @@ stol_conv_ucred(struct cmsghdr *inmsg, struct cmsghdr *omsg)
 static int
 ltos_conv_ucred(struct cmsghdr *inmsg, struct cmsghdr *omsg)
 {
+	/* Validate in the sizing pass, before reading the payload. */
+	if (inmsg->cmsg_len != sizeof (struct cmsghdr) +
+	    sizeof (lx_ucred_t))
+		return (-EINVAL);
+
 	if (omsg != NULL) {
 		struct ucred_s *uc;
 		prcred_t *pc;
