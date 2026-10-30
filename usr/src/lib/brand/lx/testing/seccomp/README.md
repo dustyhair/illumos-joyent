@@ -914,3 +914,41 @@ VM46 support and the native FSS class remain over the mixed May platform.
 No ZFS format/feature, physical host, production Debian zone or host boot
 installation changed. Full-platform and actual Codex sandboxed workflow
 validation remain required. Public namespace creation remains disabled.
+
+
+## Copying private mount views
+
+`lx_mntns_view_clone` copies an existing detached view using new LOFS mount
+instances over the same backing vnodes. It replays the private mounts in
+creation order, including mounts hidden by later overmounts. File contents
+remain shared; later mount operations stay within their respective views.
+Mount targets retain the paths resolved by `lookuppnvp`, using `refstr_t`.
+This also supports regular-file binds without reverse vnode path recovery.
+
+This is an internal backend prototype. Its recorded paths require a stable
+directory hierarchy for the source and copy lifetimes. Copies pin source
+vnodes, so a source view must be retained on EBUSY and copies destroyed
+before their sources. Process root/cwd ownership, concurrent rename handling
+and deferred teardown remain unfinished. No Linux mount-namespace syscall
+publishes these views yet.
+
+The release VM78 passed the mount-copy test twice directly and twice through
+the canonical user-namespace driver. Checks cover imported/private/nested and
+hidden mounts, copies of copies, distinct mount instances, shared filesystem
+updates, private subsequent overmounts, normalized target paths, regular-file
+binds, read-only/noexec/nodev/nosetuid inheritance, root boundaries and busy
+source retention followed by cleanup. Existing mount-view/snapshot tests,
+BPF corpus/malformed controls, enforcement/signal/fork/exec/thread/clock/i386
+and user-namespace/capability/identity/FSS/ACL/race regressions also passed.
+
+Both experimental switches were reset to zero. The zone halted, the pool
+exported successfully and the VM completed filesystem sync before poweroff.
+The touched brand and namespace-test modules were clean-built in release
+and debug; runtime used release on the retained mixed VM73 platform.
+This is not a complete platform build or Codex sandbox acceptance.
+
+The explicit `codex sandbox -P :workspace` diagnostic still reaches two
+bubblewrap clone requests with flags `0x78020011`, both returning EINVAL.
+Mount/PID/IPC/network namespace integration and the remaining bubblewrap
+mount operations are still required. `lab/bubblewrap-trace.sh` records that
+request; its DTrace exit status is not the sandbox result.

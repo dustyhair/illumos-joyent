@@ -1,0 +1,44 @@
+{
+  "recorded_utc": "2026-10-30T20:15:44.066036+00:00",
+  "vm": 78,
+  "branch": "lx/codex-sandbox",
+  "kernel_source_commit": "69ca250c6df6b06deae54f28a7cad9edab670d97",
+  "diagnostic_source_commit": "8f72b0fb8abc9a53d26efd9df0c80d24f40f02f6",
+  "clean_builds": [
+    "lx_brand release/debug",
+    "lx_namespace_ktest release/debug"
+  ],
+  "runtime": "release on mixed retained VM73 common kernel, LOFS, ZFS, user libraries and platform",
+  "brand_sha256": "10c525226ff61eca2a6828d2206f4574484ec539d6a818c092cb90de51eaf030",
+  "ktest_sha256": "c162103055f28f2e2c203def688d7deb8238207e96597bd0bb7a6bfb6fa1a414",
+  "mount_clone_direct_runs": 2,
+  "mount_clone_canonical_runs": 2,
+  "enforcement_driver_exit": 0,
+  "userns_driver_exit": 0,
+  "bpf_driver_exit": 0,
+  "bubblewrap_clone_flags": "0x78020011",
+  "bubblewrap_clone_results": [
+    -22,
+    -22
+  ],
+  "sandbox_accepted": false,
+  "experimental_switches_at_end": {
+    "userns": 0,
+    "seccomp": 0
+  },
+  "pool_export_exit": 0,
+  "synced_poweroff": true,
+  "qemu_pid_exited": 1760028,
+  "evidence_file": "lx-sandbox/lab/evidence/boot-78-mount-clone-acceptance.log",
+  "evidence_sha256": "bf9e66ba733e0aab54501f5adf2a1df9115bb0ed0ce27d4df2d81774a0d5a851",
+  "launcher_commit": "670ad873f1036fe820680d5e07c21a0079ac5b44",
+  "launcher_path": "lx-sandbox/launch-lab",
+  "launcher_sha256": "ece2f8445e5745dd320cc1f837a51ca7dc206f9798292dfdb41f71ddffc16739",
+  "limitations": [
+    "stable directory hierarchy throughout view lifetimes",
+    "copies pin source vnodes; no deferred teardown",
+    "no process namespace publication/root/cwd ownership",
+    "mount/PID/IPC/network isolation and remaining bubblewrap operations incomplete"
+  ],
+  "host_deployment": false
+}
