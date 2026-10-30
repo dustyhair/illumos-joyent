@@ -364,7 +364,7 @@ ns_clone(ktest_ctx_hdl_t *ctx)
 	NS_CHECK(error == 0, "cannot create private source file");
 	error = ns_make(a, "/sub", "deep", VDIR, cr);
 	NS_CHECK(error == 0, "cannot create nested mountpoint");
-	error = lx_mntns_view_tmpfs(a, "/sub/deep", cr);
+	error = lx_mntns_view_tmpfs(a, "/sub/../sub/deep", cr);
 	NS_CHECK(error == 0, "cannot create private nested mount");
 	error = ns_make(a, "/sub/deep", "nested", VREG, cr);
 	NS_CHECK(error == 0, "cannot create nested source file");
@@ -414,6 +414,10 @@ ns_clone(ktest_ctx_hdl_t *ctx)
 	NS_CHECK(vn_is_readonly(vp), "clone lost read-only bind policy");
 	NS_CHECK((vp->v_vfsp->vfs_flag & VFS_NOEXEC) != 0,
 	    "clone lost noexec bind policy");
+	NS_CHECK((vp->v_vfsp->vfs_flag &
+	    (VFS_NODEVICES | VFS_NOSETUID)) ==
+	    (VFS_NODEVICES | VFS_NOSETUID),
+	    "clone lost nodev or nosetuid bind policy");
 	error = VOP_ACCESS(vp, VWRITE, 0, cr, NULL);
 	NS_CHECK(error == EROFS, "cloned read-only bind permits write");
 	VN_RELE(vp);

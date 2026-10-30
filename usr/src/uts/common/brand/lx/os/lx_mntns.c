@@ -18,6 +18,7 @@
 
 typedef struct lx_mntns_mount {
 	vfs_t *lm_vfs;
+	refstr_t *lm_path;
 	struct lx_mntns_mount *lm_next;
 } lx_mntns_mount_t;
 
@@ -61,10 +62,10 @@ lx_mntns_mount(const char *source, const char *path, const char *type,
 }
 
 static int
-lx_mntns_lookup_at(vnode_t *root, const char *path, cred_t *cr,
-    vnode_t **out)
+lx_mntns_lookup_path(vnode_t *root, const char *path, cred_t *cr,
+    vnode_t **out, char *resolved)
 {
-	struct pathname pn;
+	struct pathname pn, rpn;
 	int error;
 
 	*out = NULL;
@@ -72,14 +73,29 @@ lx_mntns_lookup_at(vnode_t *root, const char *path, cred_t *cr,
 		return (EINVAL);
 	if ((error = pn_get(path, UIO_SYSSPACE, &pn)) != 0)
 		return (error);
+	if (resolved != NULL)
+		pn_alloc(&rpn);
 	pn_skipslash(&pn);
 	/* lookuppnvp consumes the start and non-global root references. */
 	VN_HOLD(root);
 	if (root != rootdir)
 		VN_HOLD(root);
-	error = lookuppnvp(&pn, NULL, FOLLOW, NULL, out, root, root, cr);
+	error = lookuppnvp(&pn, resolved != NULL ? &rpn : NULL,
+	    FOLLOW, NULL, out, root, root, cr);
+	if (resolved != NULL) {
+		if (error == 0)
+			(void) strlcpy(resolved, rpn.pn_path, MAXPATHLEN);
+		pn_free(&rpn);
+	}
 	pn_free(&pn);
 	return (error);
+}
+
+static int
+lx_mntns_lookup_at(vnode_t *root, const char *path, cred_t *cr,
+    vnode_t **out)
+{
+	return (lx_mntns_lookup_path(root, path, cr, out, NULL));
 }
 
 static int
@@ -151,15 +167,17 @@ lx_mntns_view_bind(lx_mntns_view_t *view, vnode_t *source,
 	lx_mntns_mount_t *mount;
 	vnode_t *covered;
 	const char *options;
+	char *resolved;
 	int error;
 
 	if (path == NULL || path[0] != '/' || strcmp(path, "/") == 0 ||
 	    (source->v_type != VDIR && source->v_type != VREG))
 		return (EINVAL);
 	mount = kmem_zalloc(sizeof (*mount), KM_SLEEP);
+	resolved = kmem_alloc(MAXPATHLEN, KM_SLEEP);
 	mutex_enter(&view->lv_lock);
-	if ((error = lx_mntns_lookup_at(view->lv_root, path, cr,
-	    &covered)) != 0)
+	if ((error = lx_mntns_lookup_path(view->lv_root, path, cr,
+	    &covered, resolved)) != 0)
 		goto out;
 	if (!lx_mntns_owns(view, covered) ||
 	    covered->v_type != source->v_type) {
@@ -174,12 +192,14 @@ lx_mntns_view_bind(lx_mntns_view_t *view, vnode_t *source,
 	}
 	VN_RELE(covered);
 	if (error == 0) {
+		mount->lm_path = refstr_alloc(resolved);
 		mount->lm_next = view->lv_mounts;
 		view->lv_mounts = mount;
 		mount = NULL;
 	}
 out:
 	mutex_exit(&view->lv_lock);
+	kmem_free(resolved, MAXPATHLEN);
 	if (mount != NULL)
 		kmem_free(mount, sizeof (*mount));
 	return (error);
@@ -318,7 +338,7 @@ out:
 
 typedef struct lx_mntns_clone_mount {
 	vnode_t *lc_source;
-	char *lc_path;
+	refstr_t *lc_path;
 	struct lx_mntns_clone_mount *lc_next;
 } lx_mntns_clone_mount_t;
 
@@ -328,8 +348,9 @@ typedef struct lx_mntns_clone_mount {
  * overmount. The new LOFS instances pin the original backing vnodes: file
  * contents remain shared, while subsequent mount operations stay private.
  *
- * This backend still requires a stable source directory hierarchy. It does
- * not publish a process namespace or provide deferred unmount. In particular,
+ * The recorded paths require a stable directory hierarchy for the lifetime
+ * of the source and copy. This backend does not publish a process namespace
+ * or provide deferred unmount. In particular,
  * the caller must retain a source view while a clone pins any of its vnodes.
  */
 int
@@ -351,15 +372,10 @@ lx_mntns_view_clone(lx_mntns_view_t *source, cred_t *cr,
 			goto out;
 		}
 		entry = kmem_zalloc(sizeof (*entry), KM_SLEEP);
-		entry->lc_path = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+		entry->lc_path = mount->lm_path;
+		refstr_hold(entry->lc_path);
 		entry->lc_next = list;
 		list = entry;
-		/* Use the covered vnode for regular-file mountpoints too. */
-		error = vnodetopath(source->lv_root,
-		    mount->lm_vfs->vfs_vnodecovered, entry->lc_path,
-		    MAXPATHLEN, cr);
-		if (error != 0)
-			goto out;
 		error = VFS_ROOT(mount->lm_vfs, &entry->lc_source);
 		if (error != 0)
 			goto out;
@@ -368,7 +384,7 @@ lx_mntns_view_clone(lx_mntns_view_t *source, cred_t *cr,
 		goto out;
 	for (entry = list; entry != NULL; entry = entry->lc_next) {
 		error = lx_mntns_view_bind(view, entry->lc_source,
-		    entry->lc_path, B_FALSE, cr);
+		    refstr_value(entry->lc_path), B_FALSE, cr);
 		if (error != 0)
 			goto out;
 	}
@@ -379,7 +395,7 @@ out:
 		list = entry->lc_next;
 		if (entry->lc_source != NULL)
 			VN_RELE(entry->lc_source);
-		kmem_free(entry->lc_path, MAXPATHLEN);
+		refstr_rele(entry->lc_path);
 		kmem_free(entry, sizeof (*entry));
 	}
 	if (view != NULL)
@@ -405,14 +421,16 @@ lx_mntns_view_tmpfs(lx_mntns_view_t *view, const char *path, cred_t *cr)
 {
 	lx_mntns_mount_t *mount;
 	vnode_t *covered;
+	char *resolved;
 	int error;
 
 	if (path == NULL || path[0] != '/' || strcmp(path, "/") == 0)
 		return (EINVAL);
 	mount = kmem_zalloc(sizeof (*mount), KM_SLEEP);
+	resolved = kmem_alloc(MAXPATHLEN, KM_SLEEP);
 	mutex_enter(&view->lv_lock);
-	if ((error = lx_mntns_lookup_at(view->lv_root, path, cr,
-	    &covered)) != 0)
+	if ((error = lx_mntns_lookup_path(view->lv_root, path, cr,
+	    &covered, resolved)) != 0)
 		goto out;
 	/* Only graft onto a mount belonging to this view. */
 	if (!lx_mntns_owns(view, covered) || covered->v_type != VDIR) {
@@ -423,12 +441,14 @@ lx_mntns_view_tmpfs(lx_mntns_view_t *view, const char *path, cred_t *cr)
 	}
 	VN_RELE(covered);
 	if (error == 0) {
+		mount->lm_path = refstr_alloc(resolved);
 		mount->lm_next = view->lv_mounts;
 		view->lv_mounts = mount;
 		mount = NULL;
 	}
 out:
 	mutex_exit(&view->lv_lock);
+	kmem_free(resolved, MAXPATHLEN);
 	if (mount != NULL)
 		kmem_free(mount, sizeof (*mount));
 	return (error);
@@ -451,6 +471,7 @@ lx_mntns_view_destroy(lx_mntns_view_t *view, cred_t *cr)
 			goto busy;
 		view->lv_mounts = mount->lm_next;
 		VFS_RELE(mount->lm_vfs);
+		refstr_rele(mount->lm_path);
 		kmem_free(mount, sizeof (*mount));
 	}
 	VN_RELE(view->lv_root);
