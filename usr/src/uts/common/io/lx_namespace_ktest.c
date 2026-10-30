@@ -468,6 +468,25 @@ ns_wait_idle(void)
 	return (!lx_mntns_busy());
 }
 
+static int
+ns_native_unmount(lx_mntns_view_t *view, const char *path, cred_t *cr)
+{
+	vnode_t *vp;
+	vfs_t *vfsp;
+	int error;
+
+	if ((error = lx_mntns_view_lookup(view, path, cr, &vp)) != 0)
+		return (error);
+	vfsp = vp->v_vfsp;
+	VFS_HOLD(vfsp);
+	VN_RELE(vp);
+	/* Only the view's own root hold should keep this graft busy. */
+	error = ns_uncover(vfsp, cr);
+	if (error != 0)
+		VFS_RELE(vfsp);
+	return (error);
+}
+
 static void
 ns_lifetime(ktest_ctx_hdl_t *ctx)
 {
@@ -505,12 +524,21 @@ ns_lifetime(ktest_ctx_hdl_t *ctx)
 	lx_mntns_view_rele(a);
 	error = lx_mntns_view_tmpfs(a, "/sub", cr);
 	NS_CHECK(error == 0, "shared view lost its remaining reference");
+	error = ns_native_unmount(a, "/sub", cr);
+	/* A broken kernel may have dismantled the graft; do not revisit it. */
+	if (error == 0)
+		a = NULL;
+	NS_CHECK(error == EBUSY, "native unmount dismantled owned tmpfs");
 	error = ns_make(a, "/sub", "retained", VREG, cr);
 	NS_CHECK(error == 0, "cannot create retained file");
 	error = lx_mntns_view_lookup(a, "/sub/retained", cr, &held);
 	NS_CHECK(error == 0, "cannot hold retained file");
 	error = lx_mntns_view_clone(a, cr, &b);
 	NS_CHECK(error == 0, "cannot clone lifetime source");
+	error = ns_native_unmount(b, "/sub", cr);
+	if (error == 0)
+		b = NULL;
+	NS_CHECK(error == EBUSY, "native unmount dismantled owned LOFS graft");
 	/* The views keep the creation credential after the caller drops it. */
 	crfree(cr);
 	cr = NULL;

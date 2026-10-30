@@ -22,6 +22,7 @@
 
 typedef struct lx_mntns_mount {
 	vfs_t *lm_vfs;
+	vnode_t *lm_root;
 	refstr_t *lm_path;
 	struct lx_mntns_mount *lm_next;
 } lx_mntns_mount_t;
@@ -258,6 +259,20 @@ lx_mntns_owns(lx_mntns_view_t *view, vnode_t *vp)
 	return (B_FALSE);
 }
 
+/* A VFS reference alone does not prevent native unmount of a live graft. */
+static int
+lx_mntns_pin(lx_mntns_mount_t *mount, cred_t *cr)
+{
+	int error;
+
+	if ((error = VFS_ROOT(mount->lm_vfs, &mount->lm_root)) != 0) {
+		VERIFY0(vn_vfswlock(mount->lm_vfs->vfs_vnodecovered));
+		VERIFY0(dounmount(mount->lm_vfs, 0, cr));
+		VFS_RELE(mount->lm_vfs);
+	}
+	return (error);
+}
+
 int
 lx_mntns_view_bind(lx_mntns_view_t *view, vnode_t *source,
     const char *path, boolean_t readonly, cred_t *cr)
@@ -287,6 +302,8 @@ lx_mntns_view_bind(lx_mntns_view_t *view, vnode_t *source,
 		error = lx_mntns_mount("lx-private-bind", path, "lofs", options,
 		    readonly ? MS_RDONLY : 0, covered, source, cr,
 		    &mount->lm_vfs);
+		if (error == 0)
+			error = lx_mntns_pin(mount, cr);
 	}
 	VN_RELE(covered);
 	if (error == 0) {
@@ -535,6 +552,8 @@ lx_mntns_view_tmpfs(lx_mntns_view_t *view, const char *path, cred_t *cr)
 	} else {
 		error = lx_mntns_mount("swap", path, "tmpfs", "mode=0700",
 		    MS_NOSUID, covered, NULL, cr, &mount->lm_vfs);
+		if (error == 0)
+			error = lx_mntns_pin(mount, cr);
 	}
 	VN_RELE(covered);
 	if (error == 0) {
@@ -563,9 +582,13 @@ lx_mntns_destroy(lx_mntns_view_t *view, cred_t *cr)
 		covered = mount->lm_vfs->vfs_vnodecovered;
 		if ((error = vn_vfswlock(covered)) != 0)
 			goto busy;
+		VN_RELE(mount->lm_root);
+		mount->lm_root = NULL;
 		/* dounmount consumes the covered-vnode lock. */
-		if ((error = dounmount(mount->lm_vfs, 0, cr)) != 0)
+		if ((error = dounmount(mount->lm_vfs, 0, cr)) != 0) {
+			VERIFY0(VFS_ROOT(mount->lm_vfs, &mount->lm_root));
 			goto busy;
+		}
 		view->lv_mounts = mount->lm_next;
 		VFS_RELE(mount->lm_vfs);
 		refstr_rele(mount->lm_path);
