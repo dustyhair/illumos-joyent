@@ -514,6 +514,12 @@ static int mixed_nnp(int keep)
 }
 static int mixed_nnp_drop(void) { return mixed_nnp(0); }
 static int mixed_nnp_keep(void) { return mixed_nnp(1); }
+static pid_t inherit_wait(pid_t pid, int *status, int options)
+{
+    pid_t got;
+    do { got = waitpid(pid, status, options); } while (got < 0 && errno == EINTR);
+    return got;
+}
 static int trace_inherit(void)
 {
     int status;
@@ -523,7 +529,7 @@ static int trace_inherit(void)
         raise(SIGSTOP);
         pid_t grandchild = fork();
         if (grandchild == 0) _exit(7);
-        pid_t waited = grandchild < 0 ? -1 : waitpid(grandchild, &status, 0);
+        pid_t waited = grandchild < 0 ? -1 : inherit_wait(grandchild, &status, 0);
         if (grandchild < 0 || waited != grandchild ||
             !WIFEXITED(status) || WEXITSTATUS(status) != 7) {
             fprintf(stderr, "inherit child pid=%d waited=%d status=%#x errno=%d\n",
@@ -532,13 +538,13 @@ static int trace_inherit(void)
         }
         _exit(0);
     }
-    CHECK(waitpid(child, &status, 0) == child && WIFSTOPPED(status));
+    CHECK(inherit_wait(child, &status, 0) == child && WIFSTOPPED(status));
     CHECK(ptrace(PTRACE_SETOPTIONS, child, NULL, (void *)PTRACE_O_TRACEFORK) == 0);
     CHECK(ptrace(PTRACE_CONT, child, NULL, NULL) == 0);
     unsigned long grandchild = 0;
     int child_done = 0, grandchild_done = 0;
     for (int events = 0; events < 40 && (!child_done || !grandchild_done); events++) {
-        pid_t got = waitpid(-1, &status, __WALL);
+        pid_t got = inherit_wait(-1, &status, __WALL);
         CHECK(got > 0);
         if (WIFEXITED(status)) {
             if (got == child) {
