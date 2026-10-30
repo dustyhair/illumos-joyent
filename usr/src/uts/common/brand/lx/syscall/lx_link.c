@@ -123,6 +123,17 @@ lx_isdir(int atfd, char *path)
 	return (is_dir);
 }
 
+/* Keep the cwd reference intact when Linux removes its current directory. */
+long
+lx_rmdir(char *path)
+{
+	int error = vn_remove(path, UIO_USERSPACE, RMDIRECTORY_CWD);
+
+	if (error == EEXIST)
+		error = ENOTEMPTY;
+	return (error == 0 ? 0 : set_errno(error));
+}
+
 long
 lx_unlink(char *path)
 {
@@ -155,7 +166,7 @@ lx_unlinkat(int atfd, char *path, int flag)
 			return (set_errno(EISDIR));
 	}
 	if (err == EEXIST && (flag & AT_REMOVEDIR)) {
-		/* On Linux, an unlink of a non-empty dir returns ENOTEMPTY, not EEXIST. */
+		/* Linux reports ENOTEMPTY for a non-empty directory. */
 		if (lx_isdir(atfd, path))
 			return (set_errno(ENOTEMPTY));
 	}

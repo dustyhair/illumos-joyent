@@ -792,7 +792,8 @@ typedef vattr_t		vattr32_t;
 /*
  * Flags for vnode operations.
  */
-enum rm		{ RMFILE, RMDIRECTORY };	/* rm or rmdir (remove) */
+/* RMDIRECTORY_CWD permits removal of the caller's current directory. */
+enum rm		{ RMFILE, RMDIRECTORY, RMDIRECTORY_CWD };
 enum symfollow	{ NO_FOLLOW, FOLLOW };		/* follow symlinks (or not) */
 enum vcexcl	{ NONEXCL, EXCL };		/* (non)excl create */
 enum create	{ CRCREAT, CRMKNOD, CRMKDIR };	/* reason for create */

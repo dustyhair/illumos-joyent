@@ -270,6 +270,7 @@ extern long lx_umask();
 extern long lx_umount();
 extern long lx_umount2();
 extern long lx_uname();
+extern long lx_rmdir();
 extern long lx_unlink();
 extern long lx_unlinkat();
 extern long lx_unshare();

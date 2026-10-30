@@ -814,6 +814,30 @@ static int stream_accept_case(int exited)
 }
 static int stream_accept_live(void) {return stream_accept_case(0);}
 static int stream_accept_exited(void) {return stream_accept_case(1);}
+static int rmdir_case(void)
+{
+    CHECK(root_ids()==0);
+    char base[]="/tmp/lx-rmdir-XXXXXX";CHECK(mkdtemp(base)!=NULL);
+    int parent=open("/tmp",O_RDONLY|O_DIRECTORY|O_CLOEXEC);
+    int anchor=open(base,O_RDONLY|O_DIRECTORY|O_CLOEXEC);CHECK(parent>=0 && anchor>=0);
+    CHECK(chdir(base)==0 && mkdir("d",0700)==0);
+    int file=open("d/file",O_CREAT|O_EXCL|O_RDWR,0600);CHECK(file>=0);close(file);
+    errno=0;CHECK(rmdir("d")==-1 && errno==ENOTEMPTY);
+    CHECK(unlink("d/file")==0);
+    CHECK(symlink("d","sym")==0);errno=0;CHECK(rmdir("sym")==-1 && errno==ENOTDIR);
+    CHECK(unlink("sym")==0 && rmdir("d")==0);
+    file=open("file",O_CREAT|O_EXCL|O_RDWR,0600);CHECK(file>=0);close(file);
+    errno=0;CHECK(rmdir("file")==-1 && errno==ENOTDIR);CHECK(unlink("file")==0);
+    errno=0;CHECK(rmdir("")==-1 && errno==ENOENT);
+    errno=0;CHECK(syscall(SYS_rmdir,NULL)==-1 && errno==EFAULT);
+    errno=0;CHECK(rmdir(".")==-1 && errno==EINVAL);
+    errno=0;CHECK(rmdir("absent")==-1 && errno==ENOENT);
+    struct stat before,after;CHECK(fstat(anchor,&before)==0);
+    CHECK(rmdir(base)==0 && stat(".",&after)==0);
+    CHECK(before.st_dev==after.st_dev && before.st_ino==after.st_ino);
+    char cwd[256];errno=0;CHECK(getcwd(cwd,sizeof(cwd))==NULL && errno==ENOENT);
+    CHECK(fchdir(parent)==0);close(parent);close(anchor);return 0;
+}
 /* Capture native identities before the trusted fixture attaches its map. */
 static int prepare_peer_fixtures(void)
 {
@@ -1116,6 +1140,7 @@ int main(int argc, char **argv)
     run("stream credentials preserve descriptor passing and CLOEXEC", stream_rights);
     run("accept inherits credentials for a live queued sender", stream_accept_live);
     run("accept preserves queued credentials after sender exit", stream_accept_exited);
+    run("kernel rmdir preserves errors and the removed cwd", rmdir_case);
     run("peer credentials use the reader namespace and overflow IDs", peer_inherited);
     run("peer credentials translate fresh mapped identities", peer_mapped);
     run("peer credentials retain the connection snapshot", peer_cached);

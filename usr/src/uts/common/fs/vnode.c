@@ -1899,6 +1899,10 @@ vn_removeat(vnode_t *startvp, char *fnamep, enum uio_seg seg, enum rm dirflag)
 	struct vfs *dvfsp;	/* ptr to parent dir vfs */
 	int in_crit = 0;
 	int estale_retry = 0;
+	boolean_t allow_cwd = (dirflag == RMDIRECTORY_CWD);
+
+	if (allow_cwd)
+		dirflag = RMDIRECTORY;
 
 top:
 	if (error = pn_get(fnamep, seg, &pn))
@@ -2048,8 +2052,8 @@ top:
 			cwd = PTOU(pp)->u_cdir;
 			VN_HOLD(cwd);
 			mutex_exit(&pp->p_lock);
-			error = VOP_RMDIR(dvp, pn.pn_path, cwd, CRED(),
-			    NULL, 0);
+			error = VOP_RMDIR(dvp, pn.pn_path,
+			    allow_cwd ? dvp : cwd, CRED(), NULL, 0);
 			VN_RELE(cwd);
 		}
 	} else {

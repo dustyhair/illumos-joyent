@@ -636,7 +636,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"kill",	lx_kill,		0,		2}, /* 37 */
 	{"rename",	lx_rename,		0,		2}, /* 38 */
 	{"mkdir",	lx_mkdir,		0,		2}, /* 39 */
-	{"rmdir",	NULL,			0,		1}, /* 40 */
+	{"rmdir",	lx_rmdir,		0,		1}, /* 40 */
 	{"dup",		lx_dup,			0,		1}, /* 41 */
 	{"pipe",	lx_pipe,		0,		1}, /* 42 */
 	{"times",	lx_times,		0,		1}, /* 43 */
@@ -1051,7 +1051,7 @@ lx_sysent_t lx_sysent64[] = {
 	{"fchdir",	lx_fchdir,		0,		1}, /* 81 */
 	{"rename",	lx_rename,		0,		2}, /* 82 */
 	{"mkdir",	lx_mkdir,		0,		2}, /* 83 */
-	{"rmdir",	NULL,			0,		1}, /* 84 */
+	{"rmdir",	lx_rmdir,		0,		1}, /* 84 */
 	{"creat",	lx_creat,		0,		2}, /* 85 */
 	{"link",	lx_link,		0,		2}, /* 86 */
 	{"unlink",	lx_unlink,		0,		1}, /* 87 */
