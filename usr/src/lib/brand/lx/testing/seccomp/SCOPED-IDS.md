@@ -102,12 +102,38 @@ ece2f8445e5745dd320cc1f837a51ca7dc206f9798292dfdb41f71ddffc16739.
 Builder provenance is /build/RUNNING_TESTS.md. Production hosts and zones are
 unchanged.
 
+## VM39 concurrent snapshots
+
+Probe commit 5175d4d108 adds a fourteenth scenario. Two workers each perform
+128 raw UID/GID/group update cycles while the main task reads all three task
+status files for at least 128 rounds. Each UID/GID row must contain one complete
+credential's four ID fields. Each worker retains its own identity, and the
+main task's IDs and groups stay zero. NO_SETUID_FIXUP preserves the workers'
+capabilities during these transitions; glibc broadcasting is tested separately.
+Workers remain alive until sampling ends, so disappearing task directories
+cannot hide a failure. This covers simultaneous publications and reads, not
+all possible lifecycle races or namespace-relative readers.
+
+All 14 cases pass on Linux and VM39 with static and dynamic binaries. VM39
+retains the VM38 kernel/modules and reruns both full drivers successfully,
+including both seeded SID checks and all prior regressions. No kernel change
+was needed for the added test. The final zone halt, credential lifetime check,
+pool export and synced poweroff succeed. Runtime probe hashes are:
+
+```
+ids        bc1e2c05121bb141b693b6f5b71b8f8f60cf53e62889d66786748a94d40183f0
+ids_dyn    e0e3ed7d263b2a5f3b1d59efac4129da5727a3d3fb0c6ad37c9afd72b7cdd9eb
+```
+
+Console evidence is lab/evidence/boot-39-concurrent-identities.log. The same
+mixed-image, ABI and deployment limits stated above apply.
+
 ## Remaining work
 
 This checkpoint covers the listed AMD64 identity interfaces. Separate filesystem
 IDs, remaining ownership-changing and UID-bearing interfaces such as peer
-credentials and siginfo, dead-leader semantics, broader concurrency/procfs
-checks and traced/privileged exec remain unfinished. Native ephemeral SID
+credentials and siginfo, dead-leader semantics, broader lifecycle and procfs checks, and traced/privileged exec remain
+unfinished. Native ephemeral SID
 lookup is reused but was not exercised against an idmap service.
 
 User/mount namespace entry and complete mount, PID, IPC and network isolation
