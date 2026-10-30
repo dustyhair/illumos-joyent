@@ -1655,6 +1655,7 @@ static int chmod_race_probe(int gid_race)
     for(unsigned i=0;i<1000;i++) {
         if(fchmod(fd,gid_race?02750:0644)==0) allowed++;
         else {CHECK(errno==EPERM);denied++;}
+        (void)usleep(1000);
     }
     close(fd);printf("CHMOD_RACE_PROBE_PASS allowed=%u denied=%u\n",allowed,denied);
     return 0;
