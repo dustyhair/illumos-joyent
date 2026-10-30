@@ -47,21 +47,24 @@ fbt:unix:brand_cred_vnode_setattr:entry /pid == $target_pid/ {
     self->uid=((vattr_t *)arg3)->va_uid; self->gid=((vattr_t *)arg3)->va_gid; self->want=(vattr_t *)arg2;
 }
 fbt:genunix:secpolicy_vnode_setattr:entry /pid == $target_pid/ {
-    self->eligible=((vattr_t *)arg3)->va_uid == 1001 && ((vattr_t *)arg3)->va_gid == 1001;
+    self->early_gid=((vattr_t *)arg3)->va_gid;
+    self->eligible=((vattr_t *)arg3)->va_uid == 1001;
 }
-fbt:genunix:secpolicy_vnode_setattr:return /pid == $target_pid && self->eligible && arg1 == 0 && self->delays < 10/ {
+fbt:genunix:secpolicy_vnode_setattr:return /pid == $target_pid && self->eligible && arg1 == 0 && self->delays < 20/ {
     self->granted=1; self->delays++;
     printf("SCOPED_CHMOD_EARLY_GRANT delay=%u\n", self->delays);
     chill(2000000 + (self->delays % 7) * 1000000);
 }
-fbt:unix:brand_cred_vnode_setattr:return /pid == $target_pid && self->granted && self->uid == 1001 && self->gid == 2000/ {
+fbt:unix:brand_cred_vnode_setattr:return /pid == $target_pid && self->granted && self->uid == 1001 && self->gid != self->early_gid/ {
     printf("SCOPED_CHMOD_STALE_CHECK uid=%u gid=%u result=%d mode=%o\n",self->uid,self->gid,arg1,self->want->va_mode);
-    if(arg1 == 0 && (self->want->va_mode & 02000) == 0) { self->stale=1; }
+    if(arg1 == 0 && self->gid == 2000 && (self->want->va_mode & 02000) == 0) { self->stale=1; }
+    else if(arg1 == 0 && self->gid == 1001 && (self->want->va_mode & 02000) != 0) { self->stale=2; }
     else { printf("SCOPED_CHMOD_STALE_VIOLATION\n"); exit(1); }
 }
 fbt:zfs:zfs_setattr:return /pid == $target_pid && self->stale/ {
     printf("SCOPED_CHMOD_STALE_RETURN result=%d mode=%o\n",arg1,((znode_t *)self->zp)->z_mode);
-    if(arg1 == 0 && (((znode_t *)self->zp)->z_mode & 02000) == 0) { printf("SCOPED_CHMOD_SGID_CLEARED\n"); }
+    if(arg1 == 0 && self->stale == 1 && (((znode_t *)self->zp)->z_mode & 02000) == 0) { printf("SCOPED_CHMOD_SGID_CLEARED\n"); }
+    else if(arg1 == 0 && self->stale == 2 && (((znode_t *)self->zp)->z_mode & 02000) != 0) { printf("SCOPED_CHMOD_SGID_RESTORED\n"); }
     else { printf("SCOPED_CHMOD_STALE_VIOLATION\n"); exit(1); }
 }
 DSCRIPT
@@ -92,6 +95,7 @@ DSCRIPT
     cat "$log" "$trace" /lab/mode-gid-racer$tag.log
     grep -q CHMOD_RACE_PROBE_PASS "$log"
     grep -q SCOPED_CHMOD_SGID_CLEARED "$trace"
+    grep -q SCOPED_CHMOD_SGID_RESTORED "$trace"
     ! grep -q SCOPED_CHMOD_STALE_VIOLATION "$trace"
     ! grep -q '^dtrace:' "$trace"
     rm -f "$path"; path=
