@@ -14,6 +14,8 @@
 #include <sys/priv_impl.h>
 #include <sys/policy.h>
 #include <sys/lx_userns.h>
+#include <sys/lx_brand.h>
+#include <sys/proc.h>
 
 struct lx_userns {
 	uint_t un_refs;
@@ -269,21 +271,71 @@ lx_userns_cred_free(brand_cred_t *data)
 	kmem_free(native, sizeof (*native));
 }
 
+void
+lx_userns_exec(proc_t *process, const cred_t *cred)
+{
+	const lx_userns_native_t *data = (void *)crgetbrand(cred);
+	lx_userns_t *old, *owner = NULL;
+	lx_proc_data_t *pd = ptolxproc(process);
+
+	VERIFY(process->p_brand == &lx_brand && pd != NULL);
+	if (data == NULL && pd->l_userns_mmap == NULL)
+		return;
+	if (data != NULL && data->un_cred.bc_brand == &lx_brand) {
+		owner = data->un_namespace;
+		lx_userns_hold(owner);
+	}
+	mutex_enter(&process->p_lock);
+	old = pd->l_userns_mmap;
+	pd->l_userns_mmap = owner;
+	pd->l_flags &= ~LX_PROC_NO_DUMP;
+	mutex_exit(&process->p_lock);
+	lx_userns_rele(old);
+}
+
+/* The credential snapshot alone cannot identify the address-space owner. */
+static boolean_t
+lx_userns_nondump(proc_t *process, lx_userns_t **memory)
+{
+	boolean_t held = MUTEX_HELD(&process->p_lock), nodump;
+	lx_proc_data_t *pd;
+
+	*memory = NULL;
+	if (!held)
+		mutex_enter(&process->p_lock);
+	nodump = (process->p_flag & SNOCD) != 0;
+	if (process->p_brand == &lx_brand &&
+	    (pd = ptolxproc(process)) != NULL) {
+		nodump |= (pd->l_flags & LX_PROC_NO_DUMP) != 0;
+		if (nodump && pd->l_userns_mmap != NULL) {
+			*memory = pd->l_userns_mmap;
+			lx_userns_hold(*memory);
+		}
+	}
+	if (!held)
+		mutex_exit(&process->p_lock);
+	return (nodump);
+}
+
 int
-lx_userns_cred_perm(const cred_t *source, const cred_t *target, int mode)
+lx_userns_cred_perm(const cred_t *source, proc_t *process,
+    const cred_t *target, int mode)
 {
 	const lx_userns_native_t *from = (void *)crgetbrand(source);
 	const lx_userns_native_t *to = (void *)crgetbrand(target);
 	lx_userns_cred_t actor = { 0 };
-	lx_userns_t *target_ns, *root;
+	lx_userns_t *target_ns, *root, *memory;
+	boolean_t samezone, nodump, allowed;
 	uint64_t mask;
 
-	/* A different brand's credential is outside every lx user namespace. */
 	if (from != NULL && from->un_cred.bc_brand != &lx_brand)
 		return (EACCES);
 	if (to != NULL && to->un_cred.bc_brand != &lx_brand)
 		return (EACCES);
 	VERIFY(from != NULL || to != NULL);
+	samezone = crgetzone(source) == crgetzone(target);
+	if (!samezone && from != NULL)
+		return (EACCES);
 	root = from != NULL ? from->un_namespace : to->un_namespace;
 	while (root->un_parent != NULL)
 		root = root->un_parent;
@@ -293,11 +345,26 @@ lx_userns_cred_perm(const cred_t *source, const cred_t *target, int mode)
 	if (from != NULL)
 		actor.luc_caps = from->un_caps;
 	target_ns = to != NULL ? to->un_namespace : root;
-	/* Namespace ownership grants authority to its owner in the parent. */
+
+	/*
+	 * unshare changes credentials, not ownership of an existing address
+	 * space. A non-dumpable image needs authority in that older namespace.
+	 */
+	nodump = lx_userns_nondump(process, &memory);
+	if (nodump) {
+		allowed = samezone && lx_userns_has_cap(&actor,
+		    memory != NULL ? memory : root, LX_USERNS_PTRACE);
+		lx_userns_rele(memory);
+		if (!allowed && (from != NULL ||
+		    secpolicy_proc_access(source) != 0))
+			return (EACCES);
+	}
+	/* Cross-zone native administration still follows native zone policy. */
+	if (!samezone)
+		return (BRAND_CRED_DEFER);
 	if (lx_userns_has_cap(&actor, target_ns, LX_USERNS_PTRACE))
 		return (0);
 	if (from == NULL) {
-		/* Retain native process authority for native administrators. */
 		return (secpolicy_proc_access(source) == 0 ?
 		    BRAND_CRED_DEFER : EACCES);
 	}

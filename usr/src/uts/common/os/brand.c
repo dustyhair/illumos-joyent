@@ -369,7 +369,8 @@ brand_cred_rele(brand_cred_t *data)
 }
 
 int
-brand_cred_proc_perm(const cred_t *source, const cred_t *target, int mode)
+brand_cred_proc_perm(const cred_t *source, proc_t *process,
+    const cred_t *target, int mode)
 {
 	brand_cred_t *data = crgetbrand(source);
 
@@ -377,7 +378,8 @@ brand_cred_proc_perm(const cred_t *source, const cred_t *target, int mode)
 		data = crgetbrand(target);
 	if (data == NULL)
 		return (BRAND_CRED_DEFER);
-	return (data->bc_brand->b_ops->b_cred_proc_perm(source, target, mode));
+	return (data->bc_brand->b_ops->b_cred_proc_perm(source, process,
+	    target, mode));
 }
 
 void

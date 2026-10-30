@@ -583,13 +583,17 @@ static void
 lx_clearbrand(proc_t *p, boolean_t lwps_ok)
 {
 	struct lx_seccomp_filter *filter;
+	lx_userns_t *memory;
 
 	lx_clone_grp_exit(p, lwps_ok);
 	mutex_enter(&p->p_lock);
 	filter = ptolxproc(p)->l_seccomp;
 	ptolxproc(p)->l_seccomp = NULL;
+	memory = ptolxproc(p)->l_userns_mmap;
+	ptolxproc(p)->l_userns_mmap = NULL;
 	mutex_exit(&p->p_lock);
 	lx_seccomp_rele(filter);
+	lx_userns_rele(memory);
 }
 
 /*
@@ -1991,6 +1995,8 @@ lx_copy_procdata(proc_t *cp, proc_t *pp)
 
 	bcopy(ppd, cpd, sizeof (lx_proc_data_t));
 	lx_seccomp_hold(cpd->l_seccomp);
+	if (cpd->l_userns_mmap != NULL)
+		lx_userns_hold(cpd->l_userns_mmap);
 	mutex_exit(&pp->p_lock);
 
 	/* Clear any aio contexts from child */

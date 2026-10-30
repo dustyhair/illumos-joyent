@@ -212,8 +212,8 @@ struct brand_ops {
 	void	(*b_rpc_statd)(int, void *, void *);
 	void	(*b_acct_out)(struct vnode *, int);
 	void	(*b_cred_free)(struct brand_cred *);
-	int	(*b_cred_proc_perm)(const struct cred *, const struct cred *,
-	    int);
+	int	(*b_cred_proc_perm)(const struct cred *, struct proc *,
+	    const struct cred *, int);
 };
 
 /*
@@ -239,7 +239,8 @@ typedef struct brand_cred {
 extern void brand_cred_init(brand_cred_t *, brand_t *);
 extern void brand_cred_hold(brand_cred_t *);
 extern void brand_cred_rele(brand_cred_t *);
-extern int brand_cred_proc_perm(const struct cred *, const struct cred *, int);
+extern int brand_cred_proc_perm(const struct cred *, struct proc *,
+    const struct cred *, int);
 extern boolean_t brand_in_use(brand_t *);
 
 /*

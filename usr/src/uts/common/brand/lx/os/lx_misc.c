@@ -36,6 +36,7 @@
 #include <sys/sem.h>
 #include <sys/brand.h>
 #include <sys/lx_brand.h>
+#include <sys/lx_userns.h>
 #include <sys/lx_misc.h>
 #include <sys/lx_siginfo.h>
 #include <sys/lx_futex.h>
@@ -162,8 +163,9 @@ lx_exec()
 	lx_proc_data_t *pd = ptolxproc(p);
 	struct regs *rp = lwptoregs(lwp);
 
-	/* b_exec is called without p_lock held */
+	/* b_exec is called without p_lock held, after successful exec. */
 	VERIFY(MUTEX_NOT_HELD(&p->p_lock));
+	lx_userns_exec(p, CRED());
 
 	/*
 	 * Any l_handler handlers set as a result of B_REGISTER are now

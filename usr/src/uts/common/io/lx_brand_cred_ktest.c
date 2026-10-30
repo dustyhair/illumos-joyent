@@ -13,6 +13,7 @@
 #include <sys/file.h>
 #include <sys/vnode.h>
 #include <sys/lx_userns.h>
+#include <sys/lx_brand.h>
 
 extern brand_t lx_brand;
 
@@ -34,6 +35,7 @@ lx_brand_cred_test_copies(ktest_ctx_hdl_t *ctx)
 	uint_t variant;
 
 	mutex_init(&target->p_crlock, NULL, MUTEX_DEFAULT, NULL);
+	mutex_init(&target->p_lock, NULL, MUTEX_DEFAULT, NULL);
 	target->p_cred = CRED();
 	BC_CHECK(!brand_in_use(&lx_brand), "test requires all lx zones halted");
 	BC_CHECK(crgetbrand(CRED()) == NULL,
@@ -102,6 +104,7 @@ out:
 		crfree(keep);
 	lx_userns_rele(ns);
 	lx_userns_rele(root);
+	mutex_destroy(&target->p_lock);
 	mutex_destroy(&target->p_crlock);
 	kmem_free(target, sizeof (*target));
 	if (passed)
@@ -139,10 +142,14 @@ lx_brand_cred_test_access(ktest_ctx_hdl_t *ctx)
 	cred_t *basic = lx_userns_native_cred(CRED()), *real = NULL;
 	cred_t *captured = NULL, *initial_real = NULL;
 	proc_t *target = kmem_zalloc(sizeof (*target), KM_SLEEP);
+	lx_proc_data_t *pd = kmem_zalloc(sizeof (*pd), KM_SLEEP);
 	char path[MAXPATHLEN], uidmap[64], gidmap[64];
 	boolean_t passed = B_FALSE;
 
 	mutex_init(&target->p_crlock, NULL, MUTEX_DEFAULT, NULL);
+	mutex_init(&target->p_lock, NULL, MUTEX_DEFAULT, NULL);
+	target->p_brand = &lx_brand;
+	target->p_brand_data = pd;
 	creator.luc_ns = root;
 	creator.luc_uid = crgetuid(CRED());
 	creator.luc_gid = crgetgid(CRED());
@@ -192,11 +199,17 @@ lx_brand_cred_test_access(ktest_ctx_hdl_t *ctx)
 	crfree(captured);
 	captured = NULL;
 	target->p_flag = SNOCD;
+	BC_CHECK(priv_proc_cred_perm(full, target, NULL, VREAD) == EACCES,
+	    "new namespace exposed non-dumpable initial address space");
+	lx_userns_exec(target, full);
 	BC_CHECK(priv_proc_cred_perm(permitted, target, NULL,
 	    VREAD) == EACCES &&
 	    priv_proc_cred_perm(full, target, NULL, VREAD) == 0,
 	    "dumpability or scoped ptrace authority ignored");
 	target->p_cred = descendant;
+	BC_CHECK(priv_proc_cred_perm(zero, target, NULL, VREAD) == EACCES,
+	    "namespace owner exposed older non-dumpable address space");
+	lx_userns_exec(target, descendant);
 	BC_CHECK(priv_proc_cred_perm(zero, target, NULL, VREAD) == 0 &&
 	    priv_proc_cred_perm(basic, target, NULL, VREAD) == 0,
 	    "namespace ownership did not authorize descendant access");
@@ -219,6 +232,17 @@ lx_brand_cred_test_access(ktest_ctx_hdl_t *ctx)
 	    "real-ID process access used effective IDs");
 	BC_CHECK(crcmp(full, zero) != 0,
 	    "credential comparison erased authority");
+	lx_userns_exec(target, zero);
+	mutex_enter(&target->p_lock);
+	pd->l_flags |= LX_PROC_NO_DUMP;
+	mutex_exit(&target->p_lock);
+	BC_CHECK(priv_proc_cred_perm(zero, target, NULL, VREAD) == EACCES &&
+	    priv_proc_cred_perm(full, target, NULL, VREAD) == 0,
+	    "Linux dumpability state did not constrain scoped access");
+	lx_userns_exec(target, zero);
+	BC_CHECK((pd->l_flags & LX_PROC_NO_DUMP) == 0 &&
+	    priv_proc_cred_perm(zero, target, NULL, VREAD) == 0,
+	    "ordinary exec did not reset scoped dumpability");
 
 	(void) snprintf(path, sizeof (path), "/proc/%d/as", curproc->p_ppid);
 	BC_CHECK(bc_open(CRED(), path) == 0,
@@ -258,10 +282,13 @@ out:
 		crfree(zero);
 	if (full != NULL)
 		crfree(full);
+	lx_userns_exec(target, CRED());
+	kmem_free(pd, sizeof (*pd));
 	lx_userns_rele(child);
 	lx_userns_rele(b);
 	lx_userns_rele(a);
 	lx_userns_rele(root);
+	mutex_destroy(&target->p_lock);
 	mutex_destroy(&target->p_crlock);
 	kmem_free(target, sizeof (*target));
 	if (passed)

@@ -600,7 +600,7 @@ priv_proc_cred_perm(const cred_t *scr, proc_t *tp, cred_t **pcr, int mode)
 
 	/* Branded security state must be checked before native shortcuts. */
 	if (scr->cr_brand != NULL || tcr->cr_brand != NULL) {
-		res = brand_cred_proc_perm(scr, tcr, mode);
+		res = brand_cred_proc_perm(scr, tp, tcr, mode);
 		if (res != BRAND_CRED_DEFER)
 			goto out;
 		res = 0;
