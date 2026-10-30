@@ -26,6 +26,14 @@ wait_ready() {
     cat "$file"
     return 1
 }
+wait_stopped() {
+    local pid=$1 i
+    for i in {1..20}; do
+        test "$(ps -p "$pid" -o s | awk 'NR == 2 {print $1}')" = T && return 0
+        sleep 1
+    done
+    return 1
+}
 run_case() {
     local variant=$1 uid=$2 mode=$3 want=$4 phase=$5 filter=${6:-0}
     local probe=/test/mntns_entry drop= extra= job pid log suite
@@ -38,6 +46,7 @@ run_case() {
     job=$!
     wait_ready "$log"
     pid=$(sed -n 's/^MNE_READY_PID=//p' "$log")
+    wait_stopped "$pid"
     suite=entry_reject
     if test "$want" = 0; then
         suite=entry_user_mount
