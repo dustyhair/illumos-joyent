@@ -7,7 +7,15 @@ if ! test -f "$lab/boot_archive.before-enforce"; then
     cp "$lab/boot_archive" "$lab/boot_archive.before-enforce"
 fi
 lo=$(pfexec lofiadm -a "$lab/boot_archive")
+usr_lo=
+usr_mounted=0
 cleanup() {
+    if test "$usr_mounted" = 1; then
+        pfexec umount "$lab/mnt-usr" || true
+    fi
+    if test -n "$usr_lo"; then
+        pfexec lofiadm -d "$usr_lo" || true
+    fi
     pfexec umount "$lab/mnt-root" || true
     pfexec lofiadm -d "$lo"
 }
@@ -22,13 +30,30 @@ pfexec cp "$ws/usr/src/uts/intel/lx_proc/obj64/lx_proc" "$lab/mnt-root/kernel/fs
 pfexec mkdir -p "$lab/mnt-root/kernel/exec/amd64"
 pfexec cp "$ws/usr/src/uts/intel/elfexec/obj64/elfexec" "$lab/mnt-root/kernel/exec/amd64/elfexec"
 if test "${LX_LAB_UPDATE_USERLIBS:-0}" = 1; then
-    pfexec mkdir -p "$lab/mnt-root/usr/lib/amd64"
+    # SmartOS mounts /usr from this compressed UFS image during boot.
+    # Follow tools/build_live: update the detached image, then compress it.
+    usr_image="$lab/usr-lx.work"
+    pfexec cp "$lab/mnt-root/usr.lgz" "$usr_image"
+    pfexec lofiadm -U "$usr_image"
+    usr_lo=$(pfexec lofiadm -a "$usr_image")
+    mkdir -p "$lab/mnt-usr"
+    pfexec mount -F ufs "$usr_lo" "$lab/mnt-usr"
+    usr_mounted=1
+    test -f "$lab/mnt-usr/lib/lx_brand.so.1"
+    test ! -L "$lab/mnt-usr/lib/lx_brand.so.1"
+    test ! -L "$lab/mnt-usr/lib/amd64/lx_brand.so.1"
     pfexec cp "$ws/usr/src/lib/brand/lx/lx_brand/i386/lx_brand.so.1" \
-        "$lab/mnt-root/usr/lib/lx_brand.so.1"
+        "$lab/mnt-usr/lib/lx_brand.so.1"
     pfexec cp "$ws/usr/src/lib/brand/lx/lx_brand/amd64/lx_brand.so.1" \
-        "$lab/mnt-root/usr/lib/amd64/lx_brand.so.1"
-    digest -a sha256 "$lab/mnt-root/usr/lib/lx_brand.so.1" \
-        "$lab/mnt-root/usr/lib/amd64/lx_brand.so.1"
+        "$lab/mnt-usr/lib/amd64/lx_brand.so.1"
+    digest -a sha256 "$lab/mnt-usr/lib/lx_brand.so.1" \
+        "$lab/mnt-usr/lib/amd64/lx_brand.so.1"
+    pfexec umount "$lab/mnt-usr"
+    usr_mounted=0
+    pfexec lofiadm -d "$usr_lo"
+    usr_lo=
+    pfexec lofiadm -C "$usr_image"
+    pfexec cp "$usr_image" "$lab/mnt-root/usr.lgz"
 fi
 pfexec cp "$lab/lx-root.tar" "$lab/mnt-root/lab/lx-root.tar"
 pfexec cp "$lab/enforcement-test.sh" "$lab/mnt-root/lab/enforcement-test.sh"
