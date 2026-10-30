@@ -7,6 +7,18 @@ test -d "$fixture_dir/cache/_cacache"
 test -f "$fixture_dir/control-prefix/node_modules/@openai/codex/package.json"
 test -x "$node_source/bin/node"
 test "$("$node_source/bin/node" --version)" = v24.19.0
+gcc -std=c11 -Wall -Wextra -Werror -O2 -static \
+    "$fixture_dir/zone_codex_audit.c" -o "$fixture_dir/zone_codex_audit"
+gcc -std=c11 -Wall -Wextra -Werror -O2 -static \
+    "$fixture_dir/npm_install_runner.c" -o "$fixture_dir/npm-install-runner"
+"$fixture_dir/zone_codex_audit" \
+    "$fixture_dir/control-prefix/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex" \
+    > "$fixture_dir/audit-linux.log" 2>&1
+(
+    cd "$fixture_dir"
+    sha256sum zone_codex_audit.c zone_codex_audit npm_install_runner.c \
+        npm-install-runner > clients.sha256
+)
 
 runtime_dir=$fixture_dir/runtime
 mkdir -p "$runtime_dir/bin" "$runtime_dir/lib/node_modules"

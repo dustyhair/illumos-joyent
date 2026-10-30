@@ -16,6 +16,15 @@ if ! test -f /mnt/lx-media/lab-install/npm-cache.tar; then
     mount -F hsfs -o ro /dev/dsk/c2t0d0s2 /mnt/lx-media
 fi
 media=/mnt/lx-media/lab-install
+for manifest in payload.sha256 clients.sha256; do
+    while read -r expected file; do
+        actual=$(digest -a sha256 "$media/$file" | awk '{ print $NF }')
+        if test "$actual" != "$expected"; then
+            echo "INSTALL_FIXTURE_CHECKSUM_FAIL=$file"
+            exit 1
+        fi
+    done < "$media/$manifest"
+done
 root=/zones/lx-probe-zfs/root
 run=/var/tmp/lx-npm-install-$$
 mkdir -p "$root$run" "$root/opt/lx-zone-install/runtime"
