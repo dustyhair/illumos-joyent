@@ -1213,7 +1213,7 @@ static int chown_race_probe(void)
     close(fd);printf("CHOWN_RACE_PROBE_PASS allowed=%u denied=%u\n",allowed,denied);
     return 0;
 }
-static int chmod_race_probe(void)
+static int chmod_race_probe(int gid_race)
 {
     CHECK(root_ids()==0);
     char path[128];snprintf(path,sizeof(path),"/tmp/lx-chmod-race-%d",getpid());
@@ -1222,7 +1222,7 @@ static int chmod_race_probe(void)
     printf("CHMOD_RACE_ARM_PID=%d\n",getpid());fflush(stdout);raise(SIGSTOP);
     unsigned allowed=0,denied=0;
     for(unsigned i=0;i<1000;i++) {
-        if(fchmod(fd,0644)==0) allowed++;
+        if(fchmod(fd,gid_race?02750:0644)==0) allowed++;
         else {CHECK(errno==EPERM);denied++;}
     }
     close(fd);printf("CHMOD_RACE_PROBE_PASS allowed=%u denied=%u\n",allowed,denied);
@@ -1246,6 +1246,24 @@ static int chown_acl_probe(void)
     CHECK(fchown(fd,0,0)==-1 && errno==EPERM);
     CHECK(owner_is(fd,1,1));
     close(fd);puts("CHOWN_ACL_PROBE_PASS");return 0;
+}
+static int chmod_acl_probe(void)
+{
+    CHECK(root_ids()==0);
+    char path[128];snprintf(path,sizeof(path),"/tmp/lx-chmod-acl-%d",getpid());
+    int fd=open(path,O_CREAT|O_EXCL|O_RDWR|O_CLOEXEC,0600);CHECK(fd>=0);
+    CHECK(fchown(fd,1,1)==0);
+    printf("CHMOD_ACL_ARM_PID=%d\n",getpid());fflush(stdout);raise(SIGSTOP);
+    CHECK(owner_is(fd,65534,65534) && mode_is(fd,0644));errno=0;
+    CHECK(fchmod(fd,0600)==-1 && errno==EPERM && mode_is(fd,0644));
+    printf("CHMOD_ACL_MAPPED_PID=%d\n",getpid());fflush(stdout);raise(SIGSTOP);
+    CHECK(owner_is(fd,1,1));
+    CHECK(fchmod(fd,0640)==0 && mode_is(fd,0640));
+    printf("CHMOD_ACL_DROP_PID=%d\n",getpid());fflush(stdout);raise(SIGSTOP);
+    CHECK(cap_effective_off(CAP_FOWNER)==0);errno=0;
+    CHECK(fchmod(fd,0600)==-1 && errno==EPERM && mode_is(fd,0640));
+    CHECK(owner_is(fd,1,1));
+    close(fd);puts("CHMOD_ACL_PROBE_PASS");return 0;
 }
 static int image_check(void)
 {
@@ -1295,7 +1313,9 @@ int main(int argc, char **argv)
     int race_mode=argc==2 && !strcmp(argv[1],"--chown-race");
     int acl_mode=argc==2 && !strcmp(argv[1],"--chown-acl");
     int mode_race=argc==2 && !strcmp(argv[1],"--chmod-race");
-    if(race_mode || acl_mode || mode_race) argc=1;
+    int gid_race=argc==2 && !strcmp(argv[1],"--chmod-gid-race");
+    int mode_acl=argc==2 && !strcmp(argv[1],"--chmod-acl");
+    if(race_mode || acl_mode || mode_race || gid_race || mode_acl) argc=1;
     if (argc == 2 && !strcmp(argv[1], "--scm-length-only")) return scm_lengths();
     CHECK(prepare_peer_fixtures() == 0);
     if (argc == 2 && !strcmp(argv[1], "--linux")) {
@@ -1318,7 +1338,8 @@ int main(int argc, char **argv)
     setvbuf(stdout, NULL, _IOLBF, 0);
     if(race_mode) return chown_race_probe();
     if(acl_mode) return chown_acl_probe();
-    if(mode_race) return chmod_race_probe();
+    if(mode_race || gid_race) return chmod_race_probe(gid_race);
+    if(mode_acl) return chmod_acl_probe();
     run("mapped getters and privileged setters", mapped_ids);
     run("mapping validation and failed-update atomicity", validation);
     run("saved UID restoration and capability fixups", saved_ids);

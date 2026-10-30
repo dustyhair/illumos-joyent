@@ -114,6 +114,8 @@ done
 /lab/chown-race-test.sh
 /lab/chown-acl-test.sh
 /lab/chmod-race-test.sh
+/lab/chmod-acl-test.sh
+/lab/chmod-gid-race-test.sh
 cleanup
 trap - EXIT
 /lab/ktest run lx_namespace:user:credentials
