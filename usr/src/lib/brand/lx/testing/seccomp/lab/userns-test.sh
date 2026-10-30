@@ -11,13 +11,8 @@ for suite in maps capabilities native map_authority lifetime budget budget_race;
 done
 /lab/ktest run lx_namespace:user:cap_syscalls
 /lab/ktest run lx_namespace:user:credentials
-chown_tmpfs=0
 cleanup() {
     zoneadm -z lx-probe halt
-    if test "$chown_tmpfs" = 1; then
-        umount /zones/lx-probe-zfs/root/test/chown-tmpfs
-        chown_tmpfs=0
-    fi
 }
 trap cleanup EXIT
 (cd /zones/lx-probe-zfs/root &&
@@ -45,8 +40,9 @@ else
     zonecfg -z lx-probe 'add attr; set name=max-user-namespaces; set type=uint; set value=64; end;'
 fi
 mkdir -p /zones/lx-probe-zfs/root/test/chown-tmpfs
-mount -F tmpfs -o size=16m,mode=1777 swap /zones/lx-probe-zfs/root/test/chown-tmpfs
-chown_tmpfs=1
+if ! zonecfg -z lx-probe info fs dir=/test/chown-tmpfs | grep -q 'dir: /test/chown-tmpfs'; then
+    zonecfg -z lx-probe 'add fs; set dir=/test/chown-tmpfs; set special=swap; set type=tmpfs; add options [size=16m,mode=1777]; end;'
+fi
 zoneadm -z lx-probe ready
 /lab/userns-budget-native --ready lx-probe
 zoneadm -z lx-probe boot
