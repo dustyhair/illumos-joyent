@@ -95,10 +95,36 @@ initial fixed delay also missed races on one run; the final delay uses the
 early policy return and varies its length. VM58 is diagnostic evidence only.
 Final evidence is lab/evidence/boot-59-chown-race-acceptance.log.
 
+## Native ACL take-ownership path
+
+VM60 adds a nontrivial native ZFS ACL with an explicit write_owner grant to
+UID1000. A native process with UID/GID1000 and only the basic effective and
+permitted privilege sets successfully takes ownership of the private inode.
+That positive control proves the ACL works without a native ownership
+privilege override.
+
+The scoped static and dynamic probes each verify three cases through that
+same ACL: an unmapped owner remains protected with full scoped CAP_CHOWN;
+a mapped owner can be changed with effective CAP_CHOWN; and removing the
+effective capability prevents the ownership change. DTrace requires zero
+calls to the generic setattr policy in all three operations and verifies
+both the mandatory brand result and the final ZFS return. The probes also
+verify the resulting file ownership. Existing FBT probes provide all tracing;
+there are no new production kernel hooks or instrumentation.
+
+VM60 final canonical drivers PASS without serial overrides, including the
+new ACL cases, forced races, 57+57 identity and 19+19 capability cases, prior
+regressions and credential lifetime cleanup. Native control helper cstyle and
+GCC -Wall -Wextra -Werror PASS, as do Linux57 static/dynamic controls. Test
+source is fb7749d1ef; kernel source remains af19067878 with the runtime hashes
+above. Evidence is lab/evidence/boot-60-chown-acl-acceptance.log. The mixed
+platform and debug-runtime limitations above still apply.
+
 ## Remaining work
 
-Nontrivial native ACLs and additional filesystem behavior require more
-controls before public namespace entry.
+Additional filesystem behavior still requires controls before public
+namespace entry. Native ACL take-ownership has the controls above; other
+ACL operations are not covered by that acceptance.
 CAP_FOWNER/DAC permissions, separate FSUID/FSGID, mount/PID/IPC/network
 isolation, remaining syscall behavior and public entry remain incomplete.
 On-disk file capabilities remain unsupported. A newest stable installation
