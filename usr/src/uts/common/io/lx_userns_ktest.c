@@ -280,7 +280,7 @@ lx_userns_test_affinity(ktest_ctx_hdl_t *ctx)
 {
 	lx_userns_t *root = lx_userns_root_create(), *a = NULL, *b = NULL;
 	lx_userns_t *sibling = NULL;
-	lx_userns_cred_t actor = { 0 }, child;
+	lx_userns_cred_t actor = { 0 }, child, admin;
 	cred_t *base = crdup(CRED()), *full = NULL, *weak = NULL;
 	cred_t *nested = NULL, *peer = NULL, *target = NULL;
 	boolean_t passed = B_FALSE;
@@ -291,6 +291,10 @@ lx_userns_test_affinity(ktest_ctx_hdl_t *ctx)
 	NS_CHECK(lx_userns_child_create(&actor, &a) == 0 &&
 	    lx_userns_child_create(&actor, &sibling) == 0,
 	    "create sibling affinity namespaces failed");
+	NS_CHECK(lx_userns_map_actor(CRED(), root, &admin) == 0 &&
+	    lx_userns_map_write(a, 0, &admin, &admin, "0 1000 2", 8, 0) == 0 &&
+	    lx_userns_map_write(a, 1, &admin, &admin, "0 1000 1", 8, 0) == 0,
+	    "map parent affinity namespace failed");
 	actor.luc_ns = a;
 	lx_caps_new_namespace(&actor.luc_caps);
 	full = lx_userns_native_for(base, &actor);
