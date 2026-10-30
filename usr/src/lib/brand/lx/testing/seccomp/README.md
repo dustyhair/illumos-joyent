@@ -1,6 +1,7 @@
 # lx seccomp enforcement probe
 
-The latest scoped tracer credential and exec checkpoint is documented in
+The latest ownership and peer-ID translation checkpoint is documented in
+[ID-BOUNDARIES.md](ID-BOUNDARIES.md). Traced exec is documented in
 [TRACED-EXEC.md](TRACED-EXEC.md). Native-backed UID/GID/groups are documented in
 [SCOPED-IDS.md](SCOPED-IDS.md), and ordinary exec in
 [SCOPED-EXEC.md](SCOPED-EXEC.md). Public namespace entry remains disabled.
