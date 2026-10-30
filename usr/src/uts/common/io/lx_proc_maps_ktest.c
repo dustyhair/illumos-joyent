@@ -76,6 +76,17 @@ pm_read(vnode_t *vp, cred_t *opener, char *text, size_t size)
 	return (error);
 }
 
+static boolean_t
+pm_map(vnode_t *vp, cred_t *cred, uint32_t outside, uint32_t count)
+{
+	char actual[128], expected[128];
+
+	(void) snprintf(expected, sizeof (expected), "%10u %10u %10u\n",
+	    0U, outside, count);
+	return (pm_read(vp, cred, actual, sizeof (actual)) == 0 &&
+	    strcmp(actual, expected) == 0);
+}
+
 /*
  * Substitute a namespace only on a private, already-open vnode. Public
  * namespace entry is still disabled. This tests the real VOP paths without
@@ -104,7 +115,6 @@ lx_proc_maps_test(ktest_ctx_hdl_t *ctx)
 	cred_t *full = NULL, *weak = NULL, *reader = NULL;
 	cred_t *basic = lx_userns_native_cred(CRED());
 	char text[256];
-	uint_t inside, outside, count;
 	boolean_t passed = B_FALSE;
 
 	PM_CHECK(pm_open(uidpath, FREAD | FWRITE, CRED(), &uid) == 0 &&
@@ -121,9 +131,7 @@ lx_proc_maps_test(ktest_ctx_hdl_t *ctx)
 	PM_CHECK(pm_open(groupspath, FREAD | FWRITE, CRED(), &groups) == 0 &&
 	    pm_open(gidpath, FREAD | FWRITE, CRED(), &gid) == 0,
 	    "open real gid_map/setgroups fixtures");
-	PM_CHECK(pm_read(uid, CRED(), text, sizeof (text)) == 0 &&
-	    sscanf(text, "%u %u %u", &inside, &outside, &count) == 3 &&
-	    inside == 0 && outside == 0 && count == UINT32_MAX,
+	PM_CHECK(pm_map(uid, CRED(), 0, UINT32_MAX),
 	    "initial map was not the initial namespace identity map");
 
 	creator.luc_ns = root;
@@ -159,9 +167,7 @@ lx_proc_maps_test(ktest_ctx_hdl_t *ctx)
 	    pm_write(uid, full, weak, "0 0 1", 5, 0,
 	    UIO_SYSSPACE, B_FALSE) == EPERM,
 	    "successful map write was not offset-bound and write-once");
-	PM_CHECK(pm_read(uid, reader, text, sizeof (text)) == 0 &&
-	    sscanf(text, "%u %u %u", &inside, &outside, &count) == 3 &&
-	    outside == UINT32_MAX,
+	PM_CHECK(pm_map(uid, reader, UINT32_MAX, 1),
 	    "map read ignored the file credential's namespace");
 	PM_CHECK(pm_write(groups, full, weak, "deny", 4, 0,
 	    UIO_SYSSPACE, B_TRUE) == 0 &&
@@ -171,9 +177,7 @@ lx_proc_maps_test(ktest_ctx_hdl_t *ctx)
 	PM_CHECK(pm_write(gid, full, weak, "0 0 1", 5, 0,
 	    UIO_SYSSPACE, B_TRUE) == 0,
 	    "GID map did not use captured authority and deny-setgroups state");
-	PM_CHECK(pm_read(second, CRED(), text, sizeof (text)) == 0 &&
-	    sscanf(text, "%u %u %u", &inside, &outside, &count) == 3 &&
-	    count == UINT32_MAX,
+	PM_CHECK(pm_map(second, CRED(), 0, UINT32_MAX),
 	    "one open's target namespace replaced another's");
 	crfree(full);
 	full = NULL;
@@ -183,9 +187,7 @@ lx_proc_maps_test(ktest_ctx_hdl_t *ctx)
 	ns = NULL;
 	lx_userns_rele(root);
 	root = NULL;
-	PM_CHECK(pm_read(uid, CRED(), text, sizeof (text)) == 0 &&
-	    sscanf(text, "%u %u %u", &inside, &outside, &count) == 3 &&
-	    count == 1,
+	PM_CHECK(pm_map(uid, CRED(), 0, 1),
 	    "open map did not retain its target namespace");
 	passed = B_TRUE;
 out:
