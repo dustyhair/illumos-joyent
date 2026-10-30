@@ -69,8 +69,8 @@ ece2f8445e5745dd320cc1f837a51ca7dc206f9798292dfdb41f71ddffc16739.
 
 ## Remaining work
 
-Public user namespace entry remains disabled. Resource-scoped filesystem
-capability permissions, separate filesystem IDs, mount/PID/IPC/network
+Public user namespace entry remains disabled. Scoped CHOWN on ZFS/tmpfs is now validated in FS-CHOWN.md. Other
+filesystem capability permissions, separate filesystem IDs, mount/PID/IPC/network
 isolation and other remaining syscall behavior are unfinished. On-disk file
 capabilities remain unsupported. A newest stable installation and actual
 normal sandboxed coding workflow and complete platform validation remain
