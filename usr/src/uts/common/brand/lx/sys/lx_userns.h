@@ -12,7 +12,7 @@ struct _klwp;
 struct vnode;
 struct vattr;
 
-/* Internal objects only; no Linux namespace syscall is enabled here. */
+/* Namespace entry is experimental and disabled by default. */
 typedef struct lx_userns lx_userns_t;
 typedef struct lx_userns_cred {
 	lx_userns_t *luc_ns;
@@ -21,6 +21,7 @@ typedef struct lx_userns_cred {
 	lx_caps_t luc_caps;
 } lx_userns_cred_t;
 
+extern long lx_userns_unshare(uint_t);
 extern lx_userns_t *lx_userns_root_create(void);
 extern int lx_userns_child_create(const lx_userns_cred_t *, lx_userns_t **);
 extern int lx_userns_budget_set(lx_userns_t *, uint32_t);

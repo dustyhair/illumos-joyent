@@ -22,6 +22,10 @@
 #include <sys/vnode.h>
 #include <sys/stat.h>
 #include <sys/vfs.h>
+#include <lx_syscall.h>
+
+/* Only the disposable lab enables entry while namespace support develops. */
+int lx_userns_experimental = 0;
 
 struct lx_userns {
 	uint_t un_refs;
@@ -669,6 +673,101 @@ lx_userns_leader(proc_t *p)
 		}
 	} while ((t = t->t_forw) != p->p_tlist);
 	return (first);
+}
+
+/* p_lock protects native filesystem state and scoped task publication. */
+static int
+lx_userns_entry_check(proc_t *p)
+{
+	lx_proc_data_t *pd = ptolxproc(p);
+	vnode_t *root = PTOU(p)->u_rdir;
+
+	ASSERT(MUTEX_HELD(&p->p_lock));
+	if (p->p_lwpcnt != 1)
+		return (EINVAL);
+	if ((p->p_flag & SVFORK) != 0 ||
+	    lx_clone_grp_member(pd, LX_CLONE_FS))
+		return (EOPNOTSUPP);
+	if (root != NULL && !VN_CMP(root, p->p_zone->zone_rootvp))
+		return (EPERM);
+	return (0);
+}
+
+/*
+ * Publish the first or a nested namespace only for a single, unshared task.
+ * Allocation and credential release stay outside native process locks.
+ * The backing IDs and the address-space owner's namespace do not change.
+ */
+long
+lx_userns_unshare(uint_t flags)
+{
+	proc_t *p = curproc;
+	lx_proc_data_t *pd = ptolxproc(p);
+	lx_lwp_data_t *lwpd = ttolxlwp(curthread);
+	lx_userns_cred_t actor;
+	lx_userns_t *ns = NULL;
+	cred_t *source = NULL, *base = NULL, *scoped = NULL;
+	cred_t *old_process, *old_task;
+	int error;
+
+	if (!lx_userns_experimental || (flags & LX_CLONE_NEWUSER) == 0)
+		return (set_errno(EPERM));
+	if ((flags & ~(LX_CLONE_NEWUSER | LX_CLONE_FS)) != 0)
+		return (set_errno(EINVAL));
+	if (get_udatamodel() != DATAMODEL_NATIVE ||
+	    lwpd->br_syscall_entry != BRAND_ENTRY_AMD64 ||
+	    lwpd->br_stack_mode != LX_STACK_MODE_BRAND)
+		return (set_errno(EOPNOTSUPP));
+
+	mutex_enter(&p->p_lock);
+	error = lx_userns_entry_check(p);
+	if (error == 0) {
+		mutex_enter(&p->p_crlock);
+		crhold(source = CRED());
+		crhold(base = p->p_cred);
+		mutex_exit(&p->p_crlock);
+	}
+	mutex_exit(&p->p_lock);
+	if (error != 0)
+		return (set_errno(error));
+
+	if ((error = lx_userns_map_actor(source,
+	    ztolxzd(p->p_zone)->lxzd_userns, &actor)) != 0 ||
+	    (error = lx_userns_child_create(&actor, &ns)) != 0)
+		goto out;
+	actor.luc_ns = ns;
+	lx_caps_new_namespace(&actor.luc_caps);
+	scoped = lx_userns_native_for(source, &actor);
+
+	mutex_enter(&p->p_lock);
+	mutex_enter(&p->p_crlock);
+	error = lx_userns_entry_check(p);
+	if (error == 0 && (p->p_cred != base || CRED() != source ||
+	    crgetruid(scoped) != crgetruid(base)))
+		error = EAGAIN;
+	if (error == 0 && !lx_userns_experimental)
+		error = EPERM;
+	if (error == 0) {
+		old_process = p->p_cred;
+		old_task = curthread->t_cred;
+		crhold(scoped);
+		crhold(scoped);
+		p->p_cred = curthread->t_cred = scoped;
+		pd->l_flags |= LX_PROC_USERNS;
+	}
+	mutex_exit(&p->p_crlock);
+	mutex_exit(&p->p_lock);
+	if (error == 0) {
+		crfree(old_process);
+		crfree(old_task);
+	}
+out:
+	if (scoped != NULL)
+		crfree(scoped);
+	lx_userns_rele(ns);
+	crfree(base);
+	crfree(source);
+	return (error != 0 ? set_errno(error) : 0);
 }
 
 /*

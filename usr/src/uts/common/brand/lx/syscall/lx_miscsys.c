@@ -19,6 +19,7 @@
 #include <sys/uadmin.h>
 #include <sys/lx_misc.h>
 #include <sys/lx_cap.h>
+#include <sys/lx_userns.h>
 #include <lx_syscall.h>
 
 #define	LINUX_REBOOT_MAGIC1		0xfee1dead
@@ -438,20 +439,11 @@ lx_acct(char *p)
 	return (sysacct(p));
 }
 
-/*
- * Support for Linux namespaces is not yet implemented. Normally we would
- * simply return ENOSYS for this. However, "systemd" uses mount namespaces to
- * provide the PrivateTmp feature for some services. Use of this feature is
- * becoming common and these services will fail to run without namespace
- * support. "systemd" has a fallback to allow these types of services to run if
- * it sees either EACCES or EPERM when it tries to setup the namespace. Until
- * we have namespace support, we return EPERM to workaround this issue.
- */
-/*ARGSUSED*/
+/* Preserve the historical EPERM fallback unless lab entry is enabled. */
 long
 lx_unshare(int flags)
 {
-	return (set_errno(EPERM));
+	return (lx_userns_unshare((uint_t)flags));
 }
 
 /*
