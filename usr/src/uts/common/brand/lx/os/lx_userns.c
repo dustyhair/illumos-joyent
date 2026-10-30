@@ -376,3 +376,56 @@ lx_userns_cred_perm(const cred_t *source, proc_t *process,
 		return (EACCES);
 	return (BRAND_CRED_DEFER);
 }
+
+/*
+ * Decode the immutable file credential or current thread credential. The
+ * caller holds both the native credential and the scope used for its root.
+ * Initial-namespace authority uses the existing native mappings needed for
+ * map files only. SETFCAP has no native mapping yet and remains absent.
+ */
+int
+lx_userns_map_actor(const cred_t *cred, lx_userns_t *scope,
+    lx_userns_cred_t *actor)
+{
+	const lx_userns_native_t *data = (void *)crgetbrand(cred);
+	lx_userns_t *root = scope, *other;
+	const priv_set_t *effective = &CR_OEPRIV(cred);
+
+	while (root->un_parent != NULL)
+		root = root->un_parent;
+	bzero(actor, sizeof (*actor));
+	actor->luc_uid = crgetuid(cred);
+	actor->luc_gid = crgetgid(cred);
+	if (data != NULL) {
+		if (data->un_cred.bc_brand != &lx_brand)
+			return (EACCES);
+		other = data->un_namespace;
+		while (other->un_parent != NULL)
+			other = other->un_parent;
+		if (other != root)
+			return (EACCES);
+		actor->luc_ns = data->un_namespace;
+		actor->luc_caps = data->un_caps;
+		return (0);
+	}
+	actor->luc_ns = root;
+	if (priv_ismember(effective, PRIV_PROC_SETID)) {
+		actor->luc_caps.lc_effective |= LX_CAP_BIT(LX_CAP_SETUID) |
+		    LX_CAP_BIT(LX_CAP_SETGID);
+	}
+	if (priv_ismember(effective, PRIV_SYS_ADMIN) &&
+	    priv_ismember(effective, PRIV_SYS_MOUNT))
+		actor->luc_caps.lc_effective |= LX_CAP_BIT(LX_CAP_SYS_ADMIN);
+	return (0);
+}
+
+int
+lx_userns_groups_allowed(lx_userns_t *ns)
+{
+	int allowed;
+
+	mutex_enter(&ns->un_lock);
+	allowed = ns->un_model.lum_setgroups;
+	mutex_exit(&ns->un_lock);
+	return (allowed);
+}

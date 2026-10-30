@@ -60,6 +60,7 @@ extern "C" {
 #include <sys/t_lock.h>
 #include <sys/sysmacros.h>
 #include <sys/cred.h>
+#include <sys/lx_userns.h>
 #include <sys/priv.h>
 #include <sys/vnode.h>
 #include <sys/vfs.h>
@@ -111,7 +112,7 @@ extern "C" {
  * https://github.com/torvalds/linux/blob/\
  * ba65a4e7120a616d9c592750d9147f6dcafedffa/\
  * Documentation/filesystems/proc.rst#\
- * 34-procpidcoredump_filter---core-dump-filtering-settings 
+ * 34-procpidcoredump_filter---core-dump-filtering-settings
  */
 #define	LXPR_COREDUMP_FILTER_DEFAULT	0x33
 
@@ -294,6 +295,7 @@ typedef enum lxpr_nodetype {
 	LXPR_UPTIME,		/* /proc/uptime		*/
 	LXPR_VERSION,		/* /proc/version	*/
 	LXPR_VMSTAT,		/* /proc/vmstat		*/
+	LXPR_PID_SETGROUPS,	/* /proc/<pid>/setgroups */
 	LXPR_NFILES		/* number of lx /proc file types */
 } lxpr_nodetype_t;
 
@@ -334,6 +336,7 @@ typedef struct lxpr_node {
 	pid_t		lxpr_pid;	/* pid of proc referred to	*/
 	uint_t		lxpr_desc;	/* addl. descriptor (fd or tid)	*/
 	ino_t		lxpr_ino;	/* node id			*/
+	lx_userns_t	*lxpr_userns;	/* target namespace captured by open */
 } lxpr_node_t;
 
 struct zone;    /* forward declaration */

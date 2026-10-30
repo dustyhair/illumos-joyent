@@ -1225,6 +1225,7 @@ lx_init_brand_data(zone_t *zone, kmutex_t *zsl)
 	(void) strlcpy(data->lxzd_kernel_version, "BrandZ virtual linux",
 	    LX_KERN_VERSION_MAX);
 	data->lxzd_pipe_max_sz = lx_pipe_max_default;
+	data->lxzd_userns = lx_userns_root_create();
 
 	zone->zone_brand_data = data;
 
@@ -1281,6 +1282,7 @@ lx_free_brand_data(zone_t *zone)
 	mutex_exit(&data->lxzd_lock);
 	zone->zone_brand_data = NULL;
 	mutex_destroy(&data->lxzd_lock);
+	lx_userns_rele(data->lxzd_userns);
 	kmem_free(data, sizeof (*data));
 }
 

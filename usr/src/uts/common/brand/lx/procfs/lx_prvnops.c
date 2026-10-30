@@ -105,6 +105,9 @@ static int lxpr_create(struct vnode *, char *, struct vattr *, enum vcexcl,
     int, struct vnode **, struct cred *, int, caller_context_t *, vsecattr_t *);
 static int lxpr_read(vnode_t *, uio_t *, int, cred_t *, caller_context_t *);
 static int lxpr_write(vnode_t *, uio_t *, int, cred_t *, caller_context_t *);
+static int lxpr_read_userns(lxpr_node_t *, uio_t *, cred_t *);
+static int lxpr_write_userns(lxpr_node_t *, uio_t *, cred_t *,
+    caller_context_t *);
 static int lxpr_space(vnode_t *, int, flock64_t *, int, offset_t, cred_t *,
     caller_context_t *);
 static int lxpr_setattr(vnode_t *, vattr_t *, int, cred_t *,
@@ -190,7 +193,6 @@ static void lxpr_read_pid_auxv(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_pid_cgroup(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_pid_cmdline(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_pid_env(lxpr_node_t *, lxpr_uiobuf_t *);
-static void lxpr_read_pid_id_map(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_pid_limits(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_pid_loginuid(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_pid_maps(lxpr_node_t *, lxpr_uiobuf_t *);
@@ -443,7 +445,8 @@ static lxpr_dirent_t piddir[] = {
 	{ LXPR_PID_TASKDIR,	"task" },
 	{ LXPR_PID_FDDIR,	"fd" },
 	{ LXPR_PID_FDINFODIR,	"fdinfo" },
-	{ LXPR_PID_UIDMAP,	"uid_map" }
+	{ LXPR_PID_UIDMAP,	"uid_map" },
+	{ LXPR_PID_SETGROUPS,	"setgroups" }
 };
 
 #define	PIDDIRFILES	(sizeof (piddir) / sizeof (piddir[0]))
@@ -474,7 +477,8 @@ static lxpr_dirent_t tiddir[] = {
 	{ LXPR_PID_TID_STATUS,	"status" },
 	{ LXPR_PID_FDDIR,	"fd" },
 	{ LXPR_PID_FDINFODIR,	"fdinfo" },
-	{ LXPR_PID_UIDMAP,	"uid_map" }
+	{ LXPR_PID_UIDMAP,	"uid_map" },
+	{ LXPR_PID_SETGROUPS,	"setgroups" }
 };
 
 #define	TIDDIRFILES	(sizeof (tiddir) / sizeof (tiddir[0]))
@@ -702,6 +706,11 @@ typedef struct wftab {
 } wftab_t;
 
 static wftab_t wr_tab[] = {
+	{LXPR_PID_UIDMAP, lxpr_write_userns},
+	{LXPR_PID_GIDMAP, lxpr_write_userns},
+	{LXPR_PID_SETGROUPS, lxpr_write_userns},
+	{LXPR_PID_TID_UIDMAP, lxpr_write_userns},
+	{LXPR_PID_TID_GIDMAP, lxpr_write_userns},
 	{LXPR_PID_COMM, lxpr_write_pid_tid_comm},
 	{LXPR_PID_COREDUMP_FILTER, lxpr_write_pid_coredump_filter},
 	{LXPR_PID_FD_FD, NULL},
@@ -766,6 +775,20 @@ lxpr_is_writable(lxpr_nodetype_t type)
 	return (B_FALSE);
 }
 
+static boolean_t
+lxpr_userns_file(lxpr_nodetype_t type)
+{
+	return (type == LXPR_PID_UIDMAP || type == LXPR_PID_GIDMAP ||
+	    type == LXPR_PID_SETGROUPS || type == LXPR_PID_TID_UIDMAP ||
+	    type == LXPR_PID_TID_GIDMAP);
+}
+
+static boolean_t
+lxpr_setgroups_file(lxpr_nodetype_t type)
+{
+	return (type == LXPR_PID_SETGROUPS);
+}
+
 /*
  * lxpr_open(): Vnode operation for VOP_OPEN()
  */
@@ -777,6 +800,59 @@ lxpr_open(vnode_t **vpp, int flag, cred_t *cr, caller_context_t *ct)
 	lxpr_nodetype_t	type = lxpnp->lxpr_type;
 	vnode_t		*rvp;
 	int		error = 0;
+
+	/*
+	 * VOP_OPEN may replace the vnode. Each identity-map open retains its
+	 * target namespace independently, including opens through proc/fd.
+	 * file_t already retains the opener credential for later VOPs.
+	 */
+	if (lxpr_userns_file(type)) {
+		proc_t *p;
+		lxpr_node_t *opened;
+		lx_userns_cred_t target, opener;
+		lx_userns_t *initial;
+		cred_t *target_cred;
+
+		if (VTOLXP(lxpnp->lxpr_parent)->lxpr_type ==
+		    LXPR_PID_TASK_IDDIR) {
+			p = lxpr_lock_pid(lxpnp, lxpnp->lxpr_desc,
+			    NO_ZOMB, NULL);
+		} else {
+			p = lxpr_lock(lxpnp, NO_ZOMB);
+		}
+		if (p == NULL)
+			return (ESRCH);
+		if (lxpnp->lxpr_time.tv_sec != PTOU(p)->u_start.tv_sec ||
+		    lxpnp->lxpr_time.tv_nsec != PTOU(p)->u_start.tv_nsec) {
+			lxpr_unlock(p);
+			return (ESRCH);
+		}
+		initial = ztolxzd(p->p_zone)->lxzd_userns;
+		mutex_enter(&p->p_crlock);
+		crhold(target_cred = p->p_cred);
+		mutex_exit(&p->p_crlock);
+		error = lx_userns_map_actor(target_cred, initial, &target);
+		if (error == 0)
+			error = lx_userns_map_actor(cr, initial, &opener);
+		if (error == 0 && (flag & FWRITE) &&
+		    lxpr_setgroups_file(type) && !lx_userns_has_cap(&opener,
+		    target.luc_ns, LX_CAP_SYS_ADMIN))
+			error = EACCES;
+		if (error != 0) {
+			crfree(target_cred);
+			lxpr_unlock(p);
+			return (error);
+		}
+		opened = lxpr_getnode(lxpnp->lxpr_parent, type, p,
+		    lxpnp->lxpr_desc);
+		opened->lxpr_userns = target.luc_ns;
+		lx_userns_hold(target.luc_ns);
+		crfree(target_cred);
+		lxpr_unlock(p);
+		*vpp = LXPTOV(opened);
+		VN_RELE(vp);
+		return (0);
+	}
 
 	/* Restrict writes to certain files */
 	if ((flag & FWRITE) && !lxpr_is_writable(type)) {
@@ -859,7 +935,7 @@ static void (*lxpr_read_function[])() = {
 	lxpr_read_invalid,		/* /proc/<pid>/cwd	*/
 	lxpr_read_pid_env,		/* /proc/<pid>/environ	*/
 	lxpr_read_invalid,		/* /proc/<pid>/exe	*/
-	lxpr_read_pid_id_map,		/* /proc/<pid>/gid_map	*/
+	lxpr_read_invalid,		/* /proc/<pid>/gid_map	*/
 	lxpr_read_pid_limits,		/* /proc/<pid>/limits	*/
 	lxpr_read_pid_loginuid,		/* /proc/<pid>/loginuid	*/
 	lxpr_read_pid_maps,		/* /proc/<pid>/maps	*/
@@ -878,7 +954,7 @@ static void (*lxpr_read_function[])() = {
 	lxpr_read_fd,			/* /proc/<pid>/fd/nn	*/
 	lxpr_read_isdir,		/* /proc/<pid>/fdinfo	*/
 	lxpr_read_fdinfo,		/* /proc/<pid>/fdinfo/nn	*/
-	lxpr_read_pid_id_map,		/* /proc/<pid>/uid_map	*/
+	lxpr_read_invalid,		/* /proc/<pid>/uid_map	*/
 	lxpr_read_pid_auxv,		/* /proc/<pid>/task/<tid>/auxv	*/
 	lxpr_read_pid_cgroup,		/* /proc/<pid>/task/<tid>/cgroup */
 	lxpr_read_pid_cmdline,		/* /proc/<pid>/task/<tid>/cmdline */
@@ -887,7 +963,7 @@ static void (*lxpr_read_function[])() = {
 	lxpr_read_invalid,		/* /proc/<pid>/task/<tid>/cwd	*/
 	lxpr_read_pid_env,		/* /proc/<pid>/task/<tid>/environ */
 	lxpr_read_invalid,		/* /proc/<pid>/task/<tid>/exe	*/
-	lxpr_read_pid_id_map,		/* /proc/<pid>/task/<tid>/gid_map */
+	lxpr_read_invalid,		/* /proc/<pid>/task/<tid>/gid_map */
 	lxpr_read_pid_limits,		/* /proc/<pid>/task/<tid>/limits */
 	lxpr_read_pid_loginuid,		/* /proc/<pid>/task/<tid>/loginuid */
 	lxpr_read_pid_maps,		/* /proc/<pid>/task/<tid>/maps	*/
@@ -903,7 +979,7 @@ static void (*lxpr_read_function[])() = {
 	lxpr_read_fd,			/* /proc/<pid>/task/<tid>/fd/nn	*/
 	lxpr_read_isdir,		/* /proc/<pid>/task/<tid>/fdinfo */
 	lxpr_read_fdinfo,		/* /proc/<pid>/task/<tid>/fdinfo/nn */
-	lxpr_read_pid_id_map,		/* /proc/<pid>/task/<tid>/uid_map */
+	lxpr_read_invalid,		/* /proc/<pid>/task/<tid>/uid_map */
 	lxpr_read_cgroups,		/* /proc/cgroups	*/
 	lxpr_read_cmdline,		/* /proc/cmdline	*/
 	lxpr_read_cpuinfo,		/* /proc/cpuinfo	*/
@@ -1021,6 +1097,8 @@ static void (*lxpr_read_function[])() = {
 	lxpr_read_uptime,		/* /proc/uptime		*/
 	lxpr_read_version,		/* /proc/version	*/
 	lxpr_read_vmstat,		/* /proc/vmstat		*/
+	lxpr_read_invalid,		/* /proc/<pid>/setgroups */
+
 };
 
 CTASSERT(ARRAY_SIZE(lxpr_read_function) == LXPR_NFILES);
@@ -1203,6 +1281,8 @@ static vnode_t *(*lxpr_lookup_function[])() = {
 	lxpr_lookup_not_a_dir,		/* /proc/uptime		*/
 	lxpr_lookup_not_a_dir,		/* /proc/version	*/
 	lxpr_lookup_not_a_dir,		/* /proc/vmstat		*/
+	lxpr_lookup_not_a_dir,		/* setgroups */
+
 };
 
 CTASSERT(ARRAY_SIZE(lxpr_lookup_function) == LXPR_NFILES);
@@ -1385,6 +1465,8 @@ static int (*lxpr_readdir_function[])() = {
 	lxpr_readdir_not_a_dir,		/* /proc/uptime		*/
 	lxpr_readdir_not_a_dir,		/* /proc/version	*/
 	lxpr_readdir_not_a_dir,		/* /proc/vmstat		*/
+	lxpr_readdir_not_a_dir,		/* setgroups */
+
 };
 
 CTASSERT(ARRAY_SIZE(lxpr_readdir_function) == LXPR_NFILES);
@@ -1404,8 +1486,12 @@ lxpr_read(vnode_t *vp, uio_t *uiop, int ioflag, cred_t *cr,
 {
 	lxpr_node_t *lxpnp = VTOLXP(vp);
 	lxpr_nodetype_t type = lxpnp->lxpr_type;
-	lxpr_uiobuf_t *uiobuf = lxpr_uiobuf_new(uiop);
+	lxpr_uiobuf_t *uiobuf;
 	int error;
+
+	if (lxpr_userns_file(type))
+		return (lxpr_read_userns(lxpnp, uiop, cr));
+	uiobuf = lxpr_uiobuf_new(uiop);
 
 	ASSERT(type < LXPR_NFILES);
 
@@ -1946,15 +2032,87 @@ lxpr_read_pid_limits(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	}
 }
 /*
- * lxpr_read_pid_id_map(): gid_map and uid_map file
+ * lxpr_read_userns(): per-open UID/GID maps and setgroups state
  */
-static void
-lxpr_read_pid_id_map(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
+static int
+lxpr_read_userns(lxpr_node_t *node, uio_t *uio, cred_t *cred)
 {
-	ASSERT(lxpnp->lxpr_type == LXPR_PID_GIDMAP ||
-	    lxpnp->lxpr_type == LXPR_PID_UIDMAP);
+	lx_userns_cred_t reader;
+	lxpr_uiobuf_t *buffer;
+	lx_idmap_t *map;
+	uint_t i;
+	int error;
 
-	lxpr_uiobuf_printf(uiobuf, "%10u %10u %10u\n", 0, 0, MAXUID);
+	if (node->lxpr_userns == NULL)
+		return (EINVAL);
+	if ((error = lx_userns_map_actor(cred, node->lxpr_userns,
+	    &reader)) != 0)
+		return (error);
+	buffer = lxpr_uiobuf_new(uio);
+	if (lxpr_setgroups_file(node->lxpr_type)) {
+		lxpr_uiobuf_printf(buffer, "%s\n",
+		    lx_userns_groups_allowed(node->lxpr_userns) ?
+		    "allow" : "deny");
+	} else {
+		map = kmem_alloc(sizeof (*map), KM_SLEEP);
+		lx_userns_map_read(node->lxpr_userns,
+		    node->lxpr_type == LXPR_PID_GIDMAP ||
+		    node->lxpr_type == LXPR_PID_TID_GIDMAP, reader.luc_ns, map);
+		for (i = 0; i < map->lim_count; i++) {
+			lx_id_extent_t *extent = &map->lim_extents[i];
+
+			lxpr_uiobuf_printf(buffer, "%10u %10u %10u\n",
+			    extent->lie_inside, extent->lie_outside,
+			    extent->lie_count);
+		}
+		kmem_free(map, sizeof (*map));
+	}
+	error = lxpr_uiobuf_flush(buffer);
+	lxpr_uiobuf_free(buffer);
+	return (error);
+}
+
+static int
+lxpr_write_userns(lxpr_node_t *node, uio_t *uio, cred_t *cred,
+    caller_context_t *ct)
+{
+	lx_userns_cred_t opener, current;
+	boolean_t groups = lxpr_setgroups_file(node->lxpr_type);
+	boolean_t gid = node->lxpr_type == LXPR_PID_GIDMAP ||
+	    node->lxpr_type == LXPR_PID_TID_GIDMAP;
+	size_t size = uio->uio_resid, copied;
+	char *text;
+	int error;
+
+	if (node->lxpr_userns == NULL)
+		return (EINVAL);
+	if ((error = lx_userns_map_actor(cred, node->lxpr_userns,
+	    &opener)) != 0 || (error = lx_userns_map_actor(CRED(),
+	    node->lxpr_userns, &current)) != 0)
+		return (error);
+	if (size >= (groups ? 8 : 4096) || uio->uio_loffset != 0) {
+		if (groups)
+			return (EINVAL);
+		return (lx_userns_map_write(node->lxpr_userns, gid, &opener,
+		    &current, "", size, uio->uio_loffset));
+	}
+	text = kmem_alloc(size + 1, KM_SLEEP);
+	error = uiocopy(text, size, UIO_WRITE, uio, &copied);
+	if (error == 0 && copied != size)
+		error = EFAULT;
+	if (error == 0) {
+		if (groups) {
+			error = lx_userns_groups_write(node->lxpr_userns,
+			    &opener, text, size, uio->uio_loffset);
+		} else {
+			error = lx_userns_map_write(node->lxpr_userns, gid,
+			    &opener, &current, text, size, uio->uio_loffset);
+		}
+	}
+	kmem_free(text, size + 1);
+	if (error == 0)
+		uioskip(uio, size);
+	return (error);
 }
 
 /*
@@ -6656,6 +6814,15 @@ lxpr_doaccess(lxpr_node_t *lxpnp, boolean_t shallow, int mode, int flags,
 	if (type == LXPR_PIDDIR) {
 		return (0);
 	}
+	if (lxpr_userns_file(type)) {
+		if ((mode & VEXEC) != 0)
+			return (EACCES);
+		if (!(mode & VWRITE) || crgetuid(cr) == lxpnp->lxpr_uid ||
+		    (crgetbrand(cr) == NULL && secpolicy_proc_access(cr) == 0))
+			return (0);
+		return (EACCES);
+	}
+
 	if (lxpnp->lxpr_pid != 0) {
 		if ((tp = lxpr_lock(lxpnp, ZOMB_OK)) == NULL) {
 			return (ENOENT);

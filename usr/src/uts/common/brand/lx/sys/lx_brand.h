@@ -668,6 +668,7 @@ typedef struct lx_zone_data {
 	boolean_t lxzd_swap_disabled;		/* no fake swap in zone? */
 	lx_audit_enbl_t	lxzd_audit_enabled;	/* auditing? */
 	struct lx_audit_state *lxzd_audit_state; /* zone's audit state */
+	struct lx_userns *lxzd_userns;		/* initial user namespace */
 } lx_zone_data_t;
 
 /* LWP br_lwp_flags values */

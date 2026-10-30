@@ -517,6 +517,7 @@ lxpr_getnode(vnode_t *dp, lxpr_nodetype_t type, proc_t *p, int desc)
 	gethrestime(&now);
 	lxpnp->lxpr_type = type;
 	lxpnp->lxpr_realvp = NULL;
+	lxpnp->lxpr_userns = NULL;
 	lxpnp->lxpr_parent = dp;
 	lxpnp->lxpr_desc = desc;
 	VN_HOLD(dp);
@@ -721,6 +722,8 @@ lxpr_freenode(lxpr_node_t *lxpnp)
 	 */
 	if (lxpnp->lxpr_parent != NULL)
 		VN_RELE(lxpnp->lxpr_parent);
+
+	lx_userns_rele(lxpnp->lxpr_userns);
 
 	/*
 	 * Release the lxprnode.
