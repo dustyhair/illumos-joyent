@@ -17,6 +17,8 @@
 #include <sys/prctl.h>
 #include <sys/ptrace.h>
 #include <sys/stat.h>
+#include <sys/sysinfo.h>
+#include <sys/utsname.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/syscall.h>
@@ -1215,6 +1217,72 @@ static int native_root_setid(void)
     CHECK(fchmod(fd,0644)==0 && mode_is(fd,0644));
     close(fd);return 0;
 }
+static int admin_denials(int scoped)
+{
+    struct sysinfo before,after;
+    struct utsname names,check;
+    const char path[]="/tmp/lx-admin-not-a-swap-device";
+    CHECK(syscall(SYS_sysinfo,&before)==0 && uname(&names)==0);
+    errno=0;CHECK(syscall(SYS_swapoff,path)==-1 && errno==EPERM);
+    errno=0;CHECK(syscall(SYS_swapoff,NULL)==-1 && errno==EPERM);
+    errno=0;CHECK(syscall(SYS_swapon,path,0)==-1 && errno==EPERM);
+    errno=0;CHECK(syscall(SYS_swapon,NULL,0)==-1 && errno==EPERM);
+    errno=0;CHECK(syscall(SYS_swapon,NULL,0x80000000U)==-1 && errno==EINVAL);
+    errno=0;CHECK(syscall(SYS_sethostname,names.nodename,strlen(names.nodename))==-1 && errno==EPERM);
+    errno=0;CHECK(syscall(SYS_setdomainname,names.domainname,strlen(names.domainname))==-1 && errno==EPERM);
+    errno=0;CHECK(syscall(SYS_sethostname,NULL,0)==-1 && errno==EPERM);
+    errno=0;CHECK(syscall(SYS_setdomainname,NULL,-1)==-1 && errno==EPERM);
+    if(scoped) {
+        /* CAD_ON is an lx no-op; never request restart, halt or poweroff. */
+        errno=0;CHECK(syscall(SYS_reboot,0xfee1deadU,672274793,0x89abcdefU,NULL)==-1 && errno==EPERM);
+        errno=0;CHECK(syscall(SYS_reboot,0,0,0x89abcdefU,NULL)==-1 && errno==EPERM);
+        errno=0;CHECK(syscall(SYS_syslog,0,NULL,0)==-1 && errno==EPERM);
+        errno=0;CHECK(syscall(SYS_syslog,5,NULL,0)==-1 && errno==EPERM);
+        errno=0;CHECK(syscall(SYS_vhangup)==-1 && errno==EPERM);
+    }
+    CHECK(syscall(SYS_sysinfo,&after)==0 && after.totalswap==before.totalswap);
+    CHECK(uname(&check)==0 && !strcmp(names.nodename,check.nodename) &&
+        !strcmp(names.domainname,check.domainname));
+    return 0;
+}
+static int scoped_admin(void)
+{
+    CHECK(root_ids()==0);
+    CHECK(prctl(PR_SET_SECUREBITS,SECBIT_NO_SETUID_FIXUP,0,0,0)==0);
+    CHECK(syscall(SYS_setresuid,42,42,42)==0);
+    CHECK(capbits(0)&(1ULL<<CAP_SYS_ADMIN));
+    CHECK(admin_denials(1)==0);
+    CHECK(cap_effective_off(CAP_SYS_ADMIN)==0);
+    CHECK(admin_denials(1)==0);
+    return 0;
+}
+static int initial_admin_control(void)
+{
+    /* This mode is only for lx inside the guarded disposable VM driver. */
+    CHECK(access("/native/usr/bin/uname",X_OK)==0 && getuid()==0);
+    CHECK(capbits(0)&(1ULL<<CAP_SYS_ADMIN));
+    const char path[]="/tmp/lx-admin-not-a-swap-device";
+    struct sysinfo before,after;
+    CHECK(syscall(SYS_sysinfo,&before)==0);
+    CHECK(syscall(SYS_swapoff,path)==0);
+    CHECK(syscall(SYS_sysinfo,&after)==0 && after.totalswap==0);
+    CHECK(syscall(SYS_swapon,path,0)==0);
+    CHECK(syscall(SYS_sysinfo,&after)==0 && after.totalswap==before.totalswap);
+    CHECK(syscall(SYS_reboot,0xfee1deadU,672274793,0x89abcdefU,NULL)==0);
+    CHECK(syscall(SYS_syslog,0,NULL,0)==0 && syscall(SYS_syslog,5,NULL,0)==0);
+    CHECK(syscall(SYS_vhangup)==0);
+    pid_t p=fork();int status;CHECK(p>=0);
+    if(p==0) {
+        if(cap_effective_off(CAP_SYS_ADMIN)!=0) _exit(1);
+        if((capbits(0)&(1ULL<<CAP_SYS_ADMIN))!=0 ||
+            (capbits(1)&(1ULL<<CAP_SYS_ADMIN))==0) _exit(1);
+        _exit(admin_denials(0));
+    }
+    CHECK(waitpid(p,&status,0)==p);
+    CHECK(syscall(SYS_swapon,path,0)==0);
+    CHECK(WIFEXITED(status) && WEXITSTATUS(status)==0);
+    puts("INITIAL_ADMIN_CONTROL_PASS");return 0;
+}
 static int chown_race_probe(void)
 {
     CHECK(root_ids()==0);
@@ -1318,6 +1386,7 @@ static int map_file(pid_t p, const char *name)
 }
 int main(int argc, char **argv)
 {
+    if(argc==2 && !strcmp(argv[1],"--initial-admin")) return initial_admin_control();
     if (argc == 2 && !strcmp(argv[1], "--unscoped-trace")) return trace_inherit();
     if (argc == 3 && !strcmp(argv[1], "--mixed-image")) return mixed_image(argv);
     if (argc == 3 && !strcmp(argv[1], "--reset-image")) {
@@ -1421,6 +1490,7 @@ int main(int argc, char **argv)
     run("FOWNER needs mapped UID while FSETID also needs mapped GID",cap_fowner_unmapped);
     run("FOWNER permission uses task rather than cached file authority",cap_fowner_task);
     run("native setuid-root policy remains required for owner and FOWNER",native_root_setid);
+    run("scoped native UID0 cannot administer initial-scope resources",scoped_admin);
     if (argc == 1) {
         unsigned group = 1;
         CHECK(root_ids() == 0);

@@ -166,6 +166,16 @@ lx_cap_from_priv(const priv_set_t *priv)
 	return (caps);
 }
 
+/* Native-backed authority in the zone's initial user namespace only. */
+boolean_t
+lx_cap_initial(const cred_t *cred, uint_t capability)
+{
+	if (capability > LX_CAP_LAST || crgetbrand(cred) != NULL)
+		return (B_FALSE);
+	return ((lx_cap_from_priv(&CR_OEPRIV(cred)) &
+	    LX_CAP_BIT(capability)) != 0);
+}
+
 void
 lx_cap_native_get(const cred_t *cred, lx_caps_t *caps)
 {

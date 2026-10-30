@@ -18,6 +18,7 @@
 #include <sys/resource.h>
 #include <sys/uadmin.h>
 #include <sys/lx_misc.h>
+#include <sys/lx_cap.h>
 #include <lx_syscall.h>
 
 #define	LINUX_REBOOT_MAGIC1		0xfee1dead
@@ -295,10 +296,23 @@ lx_pause(void)
 	return (pause());
 }
 
+/* Legacy root-only stubs must not grant authority in a descendant scope. */
+static boolean_t
+lx_initial_root(void)
+{
+	const cred_t *cred = CRED();
+
+	return (crgetbrand(cred) == NULL && crgetuid(cred) == 0);
+}
+
 /*ARGSUSED*/
 long
 lx_reboot(int magic1, int magic2, uint_t flag, uintptr_t p4)
 {
+	/* No private PID-namespace reboot target is implemented yet. */
+	if (!lx_initial_root())
+		return (set_errno(EPERM));
+
 	if (magic1 != LINUX_REBOOT_MAGIC1)
 		return (set_errno(EINVAL));
 
@@ -312,13 +326,7 @@ lx_reboot(int magic1, int magic2, uint_t flag, uintptr_t p4)
 		return (set_errno(EINVAL));
 	}
 
-	/*
-	 * Once we have better Linux capabilities(7) support we should check
-	 * CAP_SYS_BOOT instead.
-	 */
-	if (crgetuid(CRED()) != 0)
-		return (set_errno(EPERM));
-
+	/* Initial-namespace CAP_SYS_BOOT emulation remains a root-only stub. */
 	switch (flag) {
 	case LINUX_REBOOT_CMD_CAD_ON:
 	case LINUX_REBOOT_CMD_CAD_OFF:
@@ -342,6 +350,9 @@ lx_reboot(int magic1, int magic2, uint_t flag, uintptr_t p4)
 long
 lx_setdomainname(char *name, long len)
 {
+	/* The current UTS identity still belongs to the initial scope. */
+	if (!lx_cap_initial(CRED(), LX_CAP_SYS_ADMIN))
+		return (set_errno(EPERM));
 	if (len < 0 || len >= LX_SYS_UTS_LN)
 		return (set_errno(EINVAL));
 
@@ -355,6 +366,8 @@ lx_setdomainname(char *name, long len)
 long
 lx_sethostname(char *name, size_t len)
 {
+	if (!lx_cap_initial(CRED(), LX_CAP_SYS_ADMIN))
+		return (set_errno(EPERM));
 	ttolwp(curthread)->lwp_errno = 0;
 	(void) systeminfo(SI_SET_HOSTNAME, name, len);
 	if (ttolwp(curthread)->lwp_errno != 0)
@@ -392,7 +405,7 @@ lx_syslog(int type, char *bufp, int len)
 	if (type < 0 || type > 10)
 		return (set_errno(EINVAL));
 
-	if (type != 3 && type != 10 && crgetuid(CRED()) != 0)
+	if (type != 3 && type != 10 && !lx_initial_root())
 		return (set_errno(EPERM));
 
 	if (type >= 2 && type <= 4 && (bufp == NULL || len < 0))
@@ -407,7 +420,7 @@ lx_syslog(int type, char *bufp, int len)
 long
 lx_vhangup(void)
 {
-	if (crgetuid(CRED()) != 0)
+	if (!lx_initial_root())
 		return (set_errno(EPERM));
 
 	/*
@@ -449,8 +462,7 @@ lx_unshare(int flags)
  * controlled from within the zone iself. Note that the "swapon" CLI tends to
  * do a lot of additional validation which will fail within a zone.
  *
- * Once we have better Linux capabilities(7) support we should check
- * CAP_SYS_ADMIN instead of uid == 0.
+ * Changing this zone-wide visibility requires initial-scope CAP_SYS_ADMIN.
  */
 long
 lx_swapoff(char *path)
@@ -459,11 +471,12 @@ lx_swapoff(char *path)
 	size_t len;
 	lx_zone_data_t *lxzd;
 
-	/* Simple validaton of the argument */
+	if (!lx_cap_initial(CRED(), LX_CAP_SYS_ADMIN))
+		return (set_errno(EPERM));
+
+	/* Simple validation of the argument */
 	if (copyinstr(path, buf, sizeof (buf), &len) != 0)
 		return (set_errno(EFAULT));
-	if (crgetuid(CRED()) != 0)
-		return (set_errno(EPERM));
 
 	lxzd = ztolxzd(curzone);
 	ASSERT(lxzd != NULL);
@@ -479,13 +492,13 @@ lx_swapon(char *path, int flags)
 	size_t len;
 	lx_zone_data_t *lxzd;
 
-	/* Simple validaton of the arguments */
-	if (copyinstr(path, buf, sizeof (buf), &len) != 0)
-		return (set_errno(EFAULT));
+	/* Invalid flags precede the initial-scope authority check. */
 	if (flags & ~LX_SWAP_ALL)
 		return (set_errno(EINVAL));
-	if (crgetuid(CRED()) != 0)
+	if (!lx_cap_initial(CRED(), LX_CAP_SYS_ADMIN))
 		return (set_errno(EPERM));
+	if (copyinstr(path, buf, sizeof (buf), &len) != 0)
+		return (set_errno(EFAULT));
 
 	lxzd = ztolxzd(curzone);
 	ASSERT(lxzd != NULL);

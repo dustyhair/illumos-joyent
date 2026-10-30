@@ -58,11 +58,13 @@ zlogin -S lx-probe /test/cap_syscalls_probe32
 echo LX_CAPABILITIES32_EXIT=0
 zlogin -S lx-probe '/test/scope_ids --unscoped-trace'
 zlogin -S lx-probe '/test/dynamic/scope_ids --unscoped-trace'
+zlogin -S lx-probe '/test/scope_ids --initial-admin'
+zlogin -S lx-probe '/test/dynamic/scope_ids --initial-admin'
 for probe in /test/scope_caps /test/dynamic/scope_caps \
     /test/scope_ids /test/dynamic/scope_ids; do
     scope_log=/lab/$(echo "$probe" | tr / _).log
     if [[ "$probe" = */scope_ids ]]; then
-        expected='SCOPE_IDS cases=63 failures=0'
+        expected='SCOPE_IDS cases=64 failures=0'
     else
         expected='SCOPE_CAPS cases=19 failures=0'
     fi
