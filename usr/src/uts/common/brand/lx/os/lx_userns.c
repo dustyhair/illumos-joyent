@@ -19,6 +19,7 @@
 #include <sys/lx_misc.h>
 #include <sys/lx_brand.h>
 #include <sys/proc.h>
+#include <sys/machbrand.h>
 #include <sys/vnode.h>
 #include <sys/stat.h>
 #include <sys/vfs.h>

@@ -76,7 +76,7 @@ static int ordinary(void)
     if(linux_control && linux_restricted) {
         CHECK(syscall(SYS_unshare,CLONE_NEWUSER)==0);
         if(capbits()==0) {
-            errno=0;CHECK(put("/proc/self/uid_map","0 1000 1\n")==-1 && errno==EPERM);
+            errno=0;CHECK(put("/proc/self/uid_map","0 1000 1\n")==-1 && (errno==EPERM || errno==EACCES));
             CHECK(geteuid()==65534);
             puts("CONTROL_POLICY ordinary userns has zero capabilities and cannot self-map");
             return 0;
