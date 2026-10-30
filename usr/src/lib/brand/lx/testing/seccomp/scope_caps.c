@@ -316,7 +316,10 @@ static int exec_setid_nnp(void)
 static int privileged_exec(void)
 {
     caps_t c, got;
+    CHECK(prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0) == 0);
     CHECK(getcaps(0, &c) == 0);
+    c.e = 0; c.p = 1ULL << CAP_CHOWN; c.i = 0;
+    CHECK(setcaps(c) == 0);
     char *args[] = { (char *)setid_path, "--exec-check", NULL };
     errno = 0;
     CHECK(syscall(SYS_execve, args[0], args, NULL) == -1 && errno == EOPNOTSUPP);
@@ -325,6 +328,7 @@ static int privileged_exec(void)
     errno = 0;
     CHECK(syscall(SYS_execve, args[0], args, NULL) == -1 && errno == ENOEXEC);
     CHECK(getcaps(0, &got) == 0 && same(c, got));
+    CHECK(prctl(PR_GET_KEEPCAPS, 0, 0, 0, 0) == 1);
     return 0;
 }
 static int exec_native_guard(void)
