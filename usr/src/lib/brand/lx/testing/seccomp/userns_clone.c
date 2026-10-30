@@ -64,6 +64,19 @@ static int child_main(void *arg)
         CHECK(syscall(SYS_unshare,CLONE_NEWUSER)==0);
         CHECK(geteuid()==65534 && map_pid(getpid(),0,0)==0);
     }
+    if(c->mode==4) {
+        char path[96];snprintf(path,sizeof(path),"/proc/%d/maps",getpid());
+        for(int dumpable=1;dumpable>=0;dumpable--) {
+            CHECK(prctl(PR_SET_DUMPABLE,dumpable,0,0,0)==0);
+            pid_t peer=fork();int status;CHECK(peer>=0);
+            if(peer==0) {
+                errno=0;int fd=open(path,O_RDONLY|O_CLOEXEC),error=errno;
+                if(fd>=0)close(fd);
+                _exit(dumpable ? fd<0 : !(fd<0 && (error==EPERM || error==EACCES)));
+            }
+            CHECK(waitpid(peer,&status,0)==peer && WIFEXITED(status) && WEXITSTATUS(status)==0);
+        }
+    }
     if(c->mode==3) {
         char *const args[]={"/native/usr/bin/true",NULL};errno=0;
         CHECK(syscall(SYS_execve,args[0],args,NULL)==-1 && errno==ENOEXEC);
@@ -150,6 +163,7 @@ static int filtered(void)
     return create(1,0,0,0,0);
 }
 static int guard(void){return create(3,0,0,0,1);}
+static int memory_owner(void){return create(4,0,0,0,1);}
 static int rejected(int expected)
 {
     unsigned uid=geteuid();uint64_t before=caps();errno=0;
@@ -194,6 +208,7 @@ int main(int argc,char **argv)
     run("clone child can enter another namespace",nested_child);
     run("namespace child retains NNP across exec",exec_child);
     run("namespace clone retains seccomp across exec",filtered);
+    run("cloned address space retains its older owner namespace",memory_owner);
     if(!linux_control) {
         run("clone child rejects native exec and native syscall entry",guard);
         run("unsupported clone combinations preserve the parent",invalid);

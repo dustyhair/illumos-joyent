@@ -29,7 +29,7 @@ for probe in /test/userns_entry /test/dynamic/userns_entry \
         exit 1
     fi
     if [[ "$probe" = */userns_clone ]]; then
-        grep -qx 'USERNS_CLONE cases=11 failures=0' "$log"
+        grep -qx 'USERNS_CLONE cases=12 failures=0' "$log"
     else
         grep -qx 'USERNS_ENTRY cases=16 failures=0' "$log"
     fi
