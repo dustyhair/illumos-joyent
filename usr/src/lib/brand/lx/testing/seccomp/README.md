@@ -466,8 +466,8 @@ Snapshot capture currently discovers submounts from canonical global mount
 paths and traverses them with the caller's credentials. The separate copy
 backend described below handles stable detached views. Inherited inaccessible
 submounts, concurrent directory-rename handling, root overlays, recursive
-binds, remount policy changes and deferred teardown after process exit still
-need implementation before enabling a Linux mount namespace interface. No
+binds, remount policy changes and process namespace integration still need
+implementation before enabling a Linux mount namespace interface. No
 Linux namespace request succeeds merely because this backend exists.
 
 ## Internal user namespace backend
@@ -927,10 +927,10 @@ This also supports regular-file binds without reverse vnode path recovery.
 
 This is an internal backend prototype. Its recorded paths require a stable
 directory hierarchy for the source and copy lifetimes. Copies pin source
-vnodes, so a source view must be retained on EBUSY and copies destroyed
-before their sources. Process root/cwd ownership, concurrent rename handling
-and deferred teardown remain unfinished. No Linux mount-namespace syscall
-publishes these views yet.
+vnodes, so synchronous destruction returns EBUSY while copies retain them.
+Final reference release instead defers cleanup as described below. Process
+root/cwd ownership and concurrent rename handling remain unfinished. No Linux
+mount-namespace syscall publishes these views yet.
 
 The release VM78 passed the mount-copy test twice directly and twice through
 the canonical user-namespace driver. Checks cover imported/private/nested and
@@ -952,3 +952,46 @@ bubblewrap clone requests with flags `0x78020011`, both returning EINVAL.
 Mount/PID/IPC/network namespace integration and the remaining bubblewrap
 mount operations are still required. `lab/bubblewrap-trace.sh` records that
 request; its DTrace exit status is not the sandbox result.
+
+
+## Mount-view ownership and retirement
+
+Views now carry atomic references. `lx_mntns_view_hold` retains an existing
+reference, and `lx_mntns_view_rele` consumes one. The last release queues
+cleanup, allowing a source to be released before its surviving copies or
+before the last open vnode. `lx_mntns_view_destroy` remains a synchronous
+operation: it consumes a sole reference only on success and returns EBUSY
+when the view is shared or its mounts remain busy.
+
+Each graft holds its filesystem root so native unmount cannot dismantle a
+live view. Controlled cleanup releases that hold before normal unmount and
+reacquires it on failure. Native filesystem unmount policy is unchanged.
+A single lx task queue is created when the first view is created. Each view
+has a preallocated queue entry; a busy view schedules a one-second retry,
+allowing other queued views to proceed. The saved creation credential stays
+held through cleanup. The worker fences fired timeout callbacks with
+`untimeout` before reclaiming their argument. Active views prevent brand
+unload, and successful unload drains the task queue before removing code.
+
+This is backend ownership, not process namespace attachment. Process root/cwd
+publication, namespace budgets, stable handling of directory renames, mount
+syscall routing and the remaining bubblewrap namespaces are still required.
+Per-mount lazy detach also remains separate from retiring an entire view.
+
+
+VM81 passed the ownership/lifetime case eight times: twice directly, twice
+through the canonical user-namespace driver, and twice on each side of the
+idle unload/reload check. Native unmount rejected owned tmpfs and LOFS grafts.
+Held file/root vnodes remained usable after final owner release, and the
+active-view count returned to zero after the last vnode closed. SDT recorded
+only native EBUSY retries. After an idle unload, a two-second pause and reload,
+the queue/refcount/experimental switches were zero and the mount tests passed
+again. The two canonical enforcement/user-namespace drivers and BPF controls
+also passed. Uploaded scripts and kernel/test modules matched their manifests.
+
+The zone halted, the pool exported successfully, filesystem sync completed
+and QEMU exited. Brand and namespace-test modules were clean-built for
+release and debug; runtime used release on the retained mixed VM73 platform.
+The actual Codex 0.166.0 workspace sandbox still requests clone 0x78020011 and
+receives EINVAL. See lab/mount-lifetime-results.json for exact source and
+artifact hashes. No production host deployment occurred.

@@ -1,0 +1,61 @@
+{
+  "recorded_utc": "2026-10-30T20:53:52.765523+00:00",
+  "vm": 81,
+  "branch": "lx/codex-sandbox",
+  "kernel_source_commit": "e1ded41941445a9f139772e6ce619044694ddb2b",
+  "acceptance_driver_commit": "d9bea754314e012dfb812b162eb33680e46552ac",
+  "reload_driver_commit": "6a7f2e79bc8132518fc722b5922bfc18fb8c5d74",
+  "clean_builds": [
+    "lx_brand release/debug",
+    "lx_namespace_ktest release/debug"
+  ],
+  "runtime": "release on retained mixed VM73 common kernel, LOFS, ZFS, user libraries and platform",
+  "brand_sha256": "2dd36e5117c717aef7c0c33aca3c2cb92ff5786602480f6ea3835aa1404026a5",
+  "ktest_sha256": "0ab8e4afb2756f65d20b44e5c8ed444ec87cbc2c5575fe5fdf6ab595261e1d1e",
+  "uploaded_driver_sha256": "31380a9a7a766e3201cf1b02794aec9fde41e4e809dc4332910871e80e80b710",
+  "uploaded_trace_sha256": "49fd62364a0a053e7c017cebaeda5e2de79d833b712be79b1f19e8f0aceb325d",
+  "uploaded_reload_driver_sha256": "ab22aa217cd59b363f7a6ff1ba755cc68acae80c26e723bc76946fb8d3db562a",
+  "lifecycle_test_passes": 8,
+  "native_busy_retry_counts": {
+    "direct": 13,
+    "before-reload": 14,
+    "after-reload": 14
+  },
+  "canonical_acceptance": "LX_MOUNT_LIFETIME_PASS",
+  "canonical_enforcement_driver_exit": 0,
+  "canonical_userns_driver_exit": 0,
+  "bpf_driver_exit": 0,
+  "native_owned_tmpfs_and_lofs_unmounts": "rejected with EBUSY by each lifecycle test",
+  "idle_unload_reload": "PASS after removing dependent test/filesystem/provider modules; two-second interval while brand unloaded; fresh queue/refcount/tunables0, then mount tests pass again",
+  "queue_before_first_view": 0,
+  "queue_after_reload_before_first_view": 0,
+  "views_at_end": 0,
+  "experimental_switches_at_end": {
+    "seccomp": 0,
+    "userns": 0
+  },
+  "codex_version": "0.166.0",
+  "bubblewrap_clone_flags": "0x78020011",
+  "bubblewrap_clone_results": [
+    -22,
+    -22
+  ],
+  "linux_mount_namespace_published": false,
+  "codex_sandbox_accepted": false,
+  "pool_export_exit": 0,
+  "synced_poweroff": true,
+  "qemu_pid_exited": 1799329,
+  "evidence_file": "lx-sandbox/lab/evidence/boot-81-mount-lifetime-acceptance.log",
+  "evidence_sha256": "2683fcad2d5d91cd2aa9a6d2955f26215cb4a957147fe74c4e65308f428bd33d",
+  "launcher_commit": "670ad873f1036fe820680d5e07c21a0079ac5b44",
+  "launcher_path": "lx-sandbox/launch-lab",
+  "launcher_sha256": "ece2f8445e5745dd320cc1f837a51ca7dc206f9798292dfdb41f71ddffc16739",
+  "limitations": [
+    "process mount namespace root/cwd ownership is not attached yet",
+    "stable source hierarchy required",
+    "namespace budgets and directory rename handling incomplete",
+    "per-mount lazy detach and remaining bubblewrap mount/PID/IPC/network operations incomplete",
+    "not a full platform build or production Debian acceptance"
+  ],
+  "host_deployment": false
+}
