@@ -67,8 +67,9 @@ The existing unlinkat AT_REMOVEDIR path still retains native cwd restrictions.
 Changes to SO_RECVUCRED while data is queued, stream coalescing/PEEK/WAITALL,
 flow-controlled identity changes, Native ancillary layout validation and
 SCM-specific32-bit controls remain. Administrative PID targets/reference
-lifetime, filesystem capability permissions and initial UID0 map authority
-are unfinished. Public namespace entry and mount/PID/IPC/network isolation
+lifetime and resource-scoped filesystem capability permissions remain
+unfinished. Initial UID0 map authority is now validated in
+UID0-MAP-AUTHORITY.md. Public namespace entry and mount/PID/IPC/network isolation
 remain disabled or incomplete. A newest stable installation and actual
 normal sandboxed coding workflow, plus full platform validation, are required
 before host deployment. Production hosts and the unrelated GPU tree are

@@ -1,3 +1,6 @@
+Initial UID0 map authority is documented in
+[UID0-MAP-AUTHORITY.md](UID0-MAP-AUTHORITY.md).
+
 Kernel rmdir and accepted-stream credentials are documented in
 [RMDIR-ACCEPT.md](RMDIR-ACCEPT.md).
 
