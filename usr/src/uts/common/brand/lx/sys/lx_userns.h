@@ -7,8 +7,8 @@
 #include <sys/cred.h>
 #include <lx_userns_model.h>
 
-struct kthread;
-struct klwp;
+struct _kthread;
+struct _klwp;
 
 /* Internal objects only; no Linux namespace syscall is enabled here. */
 typedef struct lx_userns lx_userns_t;
@@ -37,9 +37,9 @@ extern void lx_userns_cred_free(struct brand_cred *);
 extern int lx_userns_cred_perm(const cred_t *, struct proc *,
     const cred_t *, int);
 extern int lx_userns_caps_get(const cred_t *, lx_caps_t *);
-extern void lx_userns_publish(struct kthread *, cred_t *);
-extern void lx_userns_forklwp(struct klwp *, struct klwp *);
-extern void lx_userns_exitlwp(struct klwp *);
+extern void lx_userns_publish(struct _kthread *, cred_t *);
+extern void lx_userns_forklwp(struct _klwp *, struct _klwp *);
+extern void lx_userns_exitlwp(struct _klwp *);
 extern int lx_userns_capset(uint64_t, uint64_t, uint64_t);
 extern boolean_t lx_userns_prctl(int, uintptr_t, uintptr_t, uintptr_t,
     uintptr_t, long *);
