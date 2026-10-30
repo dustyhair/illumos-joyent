@@ -968,7 +968,7 @@ ltos_cmsgs_copyin(void *addr, socklen_t inlen, void **outmsg,
     socklen_t *outlenp)
 {
 	void *inbuf, *obuf;
-	struct cmsghdr *inmsg, *omsg;
+	struct cmsghdr *inmsg, *omsg, *lastcred = NULL;
 	int slen = 0;
 
 	if (inlen < sizeof (struct cmsghdr) || inlen > SO_MAXARGSIZE) {
@@ -1054,6 +1054,14 @@ ltos_cmsgs_copyin(void *addr, socklen_t inlen, void **outmsg,
 			return (-sz);
 		}
 
+		if (inmsg->cmsg_level == LX_SOL_SOCKET &&
+		    inmsg->cmsg_type == LX_SCM_CRED) {
+			boolean_t previous = lastcred != NULL;
+
+			lastcred = inmsg;
+			if (previous)
+				continue;
+		}
 		slen += ROUNDUP_cmsglen(sz);
 	}
 
@@ -1064,8 +1072,12 @@ ltos_cmsgs_copyin(void *addr, socklen_t inlen, void **outmsg,
 	 */
 	for (inmsg = (struct cmsghdr *)inbuf, omsg = (struct cmsghdr *)obuf;
 	    CMSG_VALID(inmsg, inbuf, (uintptr_t)inbuf + inlen) != 0;
-	    inmsg = CMSG_NEXT(inmsg), omsg = CMSG_NEXT(omsg)) {
+	    inmsg = CMSG_NEXT(inmsg)) {
+		if (inmsg->cmsg_level == LX_SOL_SOCKET &&
+		    inmsg->cmsg_type == LX_SCM_CRED && inmsg != lastcred)
+			continue;
 		VERIFY(lx_xlate_cmsg(inmsg, omsg, LX_TO_SUNOS) >= 0);
+		omsg = CMSG_NEXT(omsg);
 	}
 
 	kmem_free(inbuf, inlen);
@@ -1079,9 +1091,9 @@ stol_cmsgs_copyout(void *input, socklen_t inlen, void *addr,
     void *outlenp, socklen_t orig_outlen)
 {
 	void *obuf;
-	struct cmsghdr *inmsg, *omsg;
+	struct cmsghdr *inmsg, *omsg, *firstcred = NULL;
 	int error = 0;
-	socklen_t lx_len = 0;
+	socklen_t lx_len = 0, native_len = 0;
 #if defined(_LP64)
 	model_t model = get_udatamodel();
 #endif
@@ -1103,11 +1115,19 @@ stol_cmsgs_copyout(void *input, socklen_t inlen, void *addr,
 	    inmsg = CMSG_NEXT(inmsg)) {
 		int sz;
 
+		/* tl appends native defaults after any explicit credentials. */
+		if (inmsg->cmsg_level == SOL_SOCKET &&
+		    inmsg->cmsg_type == SCM_UCRED) {
+			if (firstcred != NULL)
+				continue;
+			firstcred = inmsg;
+		}
 		if ((sz = lx_xlate_cmsg(inmsg, NULL, SUNOS_TO_LX)) < 0) {
 			/* unsupported msg */
 			return (-sz);
 		}
 
+		native_len += ROUNDUP_cmsglen(sz);
 #if defined(_LP64)
 		if (model == DATAMODEL_NATIVE) {
 			/*
@@ -1151,8 +1171,12 @@ stol_cmsgs_copyout(void *input, socklen_t inlen, void *addr,
 	 */
 	for (inmsg = (struct cmsghdr *)input, omsg = (struct cmsghdr *)obuf;
 	    CMSG_VALID(inmsg, input, (uintptr_t)input + inlen) != 0;
-	    inmsg = CMSG_NEXT(inmsg), omsg = CMSG_NEXT(omsg)) {
+	    inmsg = CMSG_NEXT(inmsg)) {
+		if (inmsg->cmsg_level == SOL_SOCKET &&
+		    inmsg->cmsg_type == SCM_UCRED && inmsg != firstcred)
+			continue;
 		VERIFY(lx_xlate_cmsg(inmsg, omsg, SUNOS_TO_LX) >= 0);
+		omsg = CMSG_NEXT(omsg);
 	}
 
 #if defined(_LP64)
@@ -1169,7 +1193,7 @@ stol_cmsgs_copyout(void *input, socklen_t inlen, void *addr,
 		newbuf = kmem_zalloc(lx_len, KM_SLEEP);
 		for (smsg = (struct cmsghdr *)obuf,
 		    lmsg = (lx_cmsghdr64_t *)newbuf;
-		    CMSG_VALID(smsg, obuf, (uintptr_t)obuf + inlen) != 0;
+		    CMSG_VALID(smsg, obuf, (uintptr_t)obuf + native_len) != 0;
 		    smsg = CMSG_NEXT(smsg), lmsg = LX_CMSG64_NEXT(lmsg)) {
 			lmsg->cmsg_level = smsg->cmsg_level;
 			lmsg->cmsg_type = smsg->cmsg_type;
