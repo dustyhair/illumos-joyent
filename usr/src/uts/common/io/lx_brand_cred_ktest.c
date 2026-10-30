@@ -417,3 +417,86 @@ out:
 	if (passed)
 		KT_PASS(ctx);
 }
+
+/* Trusted lab-only entry, never reachable through a Linux namespace syscall. */
+void
+lx_userns_test_scope_attach(ktest_ctx_hdl_t *ctx)
+{
+	uchar_t *input;
+	size_t size, i;
+	pid_t pid = 0;
+	zone_t *zone = NULL;
+	proc_t *p = NULL;
+	kthread_t *task;
+	cred_t *base = NULL, *scoped = NULL, *old_process, *old_task;
+	lx_userns_t *ns = NULL;
+	lx_userns_cred_t actor = { 0 };
+	boolean_t passed = B_FALSE;
+
+	ktest_get_input(ctx, &input, &size);
+	BC_CHECK(size >= 2 && size <= 10 && input[size - 1] == 0,
+	    "invalid target PID input");
+	for (i = 0; i + 1 < size; i++) {
+		BC_CHECK(input[i] >= '0' && input[i] <= '9' &&
+		    pid < 10000000, "invalid target PID");
+		pid = pid * 10 + input[i] - '0';
+	}
+	zone = zone_find_by_name("lx-probe");
+	BC_CHECK(zone != NULL && pid > 1 &&
+	    lx_lpid_lock(pid, zone, 0, &p, NULL) == 0,
+	    "cannot find stopped lab process");
+	BC_CHECK(p->p_lwpcnt == 1 && strcmp(p->p_user.u_comm,
+	    "scope_caps") == 0 && p->p_tlist != NULL &&
+	    p->p_tlist->t_state == TS_STOPPED &&
+	    ptolxproc(p)->l_flags == 0 && crgetbrand(p->p_cred) == NULL,
+	    "target is not the fresh stopped fixture");
+	mutex_enter(&p->p_crlock);
+	crhold(base = p->p_cred);
+	mutex_exit(&p->p_crlock);
+	mutex_exit(&p->p_lock);
+	p = NULL;
+	BC_CHECK(crgetuid(base) == 0 && crgetgid(base) == 0,
+	    "fixture requires backing root identities");
+	actor.luc_ns = ztolxzd(zone)->lxzd_userns;
+	lx_caps_new_namespace(&actor.luc_caps);
+	BC_CHECK(lx_userns_child_create(&actor, &ns) == 0 &&
+	    lx_userns_map_write(ns, 0, &actor, &actor, "0 0 1", 5, 0) == 0 &&
+	    lx_userns_map_write(ns, 1, &actor, &actor, "0 0 1", 5, 0) == 0,
+	    "cannot prepare private fixture namespace");
+	actor.luc_ns = ns;
+	scoped = lx_userns_native_for(base, &actor);
+	BC_CHECK(lx_lpid_lock(pid, zone, 0, &p, NULL) == 0,
+	    "fixture disappeared before attachment");
+	task = p->p_tlist;
+	BC_CHECK(p->p_lwpcnt == 1 && task != NULL &&
+	    task->t_state == TS_STOPPED && strcmp(p->p_user.u_comm,
+	    "scope_caps") == 0 && ptolxproc(p)->l_flags == 0 &&
+	    lwptolxlwp(ttolwp(task))->br_stack_mode == LX_STACK_MODE_BRAND,
+	    "fixture changed before attachment");
+	mutex_enter(&p->p_crlock);
+	old_process = p->p_cred;
+	old_task = task->t_cred;
+	crhold(scoped);
+	crhold(scoped);
+	p->p_cred = task->t_cred = scoped;
+	ptolxproc(p)->l_flags |= LX_PROC_USERNS;
+	mutex_exit(&p->p_crlock);
+	mutex_exit(&p->p_lock);
+	p = NULL;
+	crfree(old_process);
+	crfree(old_task);
+	passed = B_TRUE;
+out:
+	if (p != NULL)
+		mutex_exit(&p->p_lock);
+	if (scoped != NULL)
+		crfree(scoped);
+	if (base != NULL)
+		crfree(base);
+	if (ns != NULL)
+		lx_userns_rele(ns);
+	if (zone != NULL)
+		zone_rele(zone);
+	if (passed)
+		KT_PASS(ctx);
+}

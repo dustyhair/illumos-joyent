@@ -17,6 +17,7 @@ extern void lx_userns_test_lifetime(ktest_ctx_hdl_t *);
 extern void lx_brand_cred_test_copies(ktest_ctx_hdl_t *);
 extern void lx_brand_cred_test_access(ktest_ctx_hdl_t *);
 extern void lx_proc_maps_test(ktest_ctx_hdl_t *);
+extern void lx_userns_test_scope_attach(ktest_ctx_hdl_t *);
 extern void lx_cap_native_test(ktest_ctx_hdl_t *);
 
 /* Only the disposable lab driver prepares this private source tree. */
@@ -328,6 +329,8 @@ _init(void)
 	    0)) != 0 ||
 	    (error = ktest_add_test(ks, "cap_syscalls", lx_cap_native_test,
 	    0)) != 0 ||
+	    (error = ktest_add_test(ks, "scope_attach",
+	    lx_userns_test_scope_attach, KTEST_FLAG_INPUT)) != 0 ||
 	    (error = ktest_register_module(km)) != 0) {
 		ktest_free_module(km);
 		return (error);
