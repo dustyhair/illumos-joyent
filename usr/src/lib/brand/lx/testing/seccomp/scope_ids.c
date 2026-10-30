@@ -1432,14 +1432,20 @@ static int initial_sched_repeat(void)
     priority.sched_priority=2;
     CHECK(syscall(SYS_sched_setparam,0,&priority)==0);
     CHECK(syscall(SYS_sched_setparam,0,&priority)==0);
+    CHECK(syscall(SYS_sched_getscheduler,0)==SCHED_FIFO);
+    CHECK(syscall(SYS_sched_getparam,0,&priority)==0 && priority.sched_priority==2);
     printf("SCHED_FIFO_PID=%d\n",getpid());fflush(stdout);raise(SIGSTOP);
     struct test_sched_attr attr={.size=sizeof(attr),.policy=SCHED_RR,.priority=3};
     CHECK(syscall(SYS_sched_setattr,0,&attr,0)==0);
     CHECK(syscall(SYS_sched_setattr,0,&attr,0)==0);
+    CHECK(syscall(SYS_sched_getscheduler,0)==SCHED_RR);
+    CHECK(syscall(SYS_sched_getparam,0,&priority)==0 && priority.sched_priority==3);
     printf("SCHED_RR_PID=%d\n",getpid());fflush(stdout);raise(SIGSTOP);
     priority.sched_priority=0;
     CHECK(syscall(SYS_sched_setscheduler,0,SCHED_OTHER,&priority)==0);
     CHECK(syscall(SYS_sched_setscheduler,0,SCHED_OTHER,&priority)==0);
+    CHECK(syscall(SYS_sched_getscheduler,0)==SCHED_OTHER);
+    CHECK(syscall(SYS_sched_getparam,0,&priority)==0 && priority.sched_priority==0);
     printf("SCHED_OTHER_PID=%d\n",getpid());fflush(stdout);raise(SIGSTOP);
     CHECK(cap_effective_off(CAP_SYS_NICE)==0);
     struct rlimit zero={0,0};CHECK(syscall(SYS_setrlimit,RLIMIT_RTPRIO,&zero)==0);
@@ -1453,6 +1459,9 @@ static int initial_sched_repeat(void)
 static int sched_native_failure(void)
 {
     CHECK(!linux_control && root_ids()==0);
+    CHECK(prctl(PR_SET_SECUREBITS,SECBIT_NO_SETUID_FIXUP,0,0,0)==0);
+    CHECK(syscall(SYS_setresuid,42,42,42)==0);
+    struct rlimit bound;CHECK(syscall(SYS_prlimit64,0,RLIMIT_RTPRIO,NULL,&bound)==0 && bound.rlim_cur>=1);
     struct test_sched_attr before;CHECK(sched_snapshot(&before)==0);
     struct sched_param priority={.sched_priority=1};
     errno=0;CHECK(syscall(SYS_sched_setscheduler,0,SCHED_FIFO,&priority)==-1 && errno==EPERM);
