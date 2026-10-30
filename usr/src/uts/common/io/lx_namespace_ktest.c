@@ -511,7 +511,7 @@ ns_lifetime(ktest_ctx_hdl_t *ctx)
 	NS_CHECK(error == 0, "cannot hold retained file");
 	error = lx_mntns_view_clone(a, cr, &b);
 	NS_CHECK(error == 0, "cannot clone lifetime source");
-	/* Both views hold the creation credential independently of the caller. */
+	/* The views keep the creation credential after the caller drops it. */
 	crfree(cr);
 	cr = NULL;
 	lx_mntns_view_rele(a);
