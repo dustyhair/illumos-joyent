@@ -17,6 +17,7 @@
 #include <sys/fcntl.h>
 #include <sys/zone.h>
 #include <sys/lx_brand.h>
+#include <sys/lx_userns.h>
 #include <sys/lx_fcntl.h>
 #include <sys/lx_types.h>
 
@@ -26,6 +27,16 @@ lx_vn_chown(vnode_t *vp, uid_t uid, gid_t gid)
 	vattr_t vattr;
 	zone_t *zone = crgetzone(CRED());
 
+	if (uid != (uid_t)-1) {
+		uid = lx_userns_id_backing(CRED(), 0, uid);
+		if (uid == (uid_t)-1)
+			return (EINVAL);
+	}
+	if (gid != (gid_t)-1) {
+		gid = lx_userns_id_backing(CRED(), 1, gid);
+		if (gid == (gid_t)-1)
+			return (EINVAL);
+	}
 	if ((uid != (uid_t)-1 && !VALID_UID(uid, zone)) ||
 	    (gid != (gid_t)-1 && !VALID_GID(gid, zone))) {
 		return (EINVAL);

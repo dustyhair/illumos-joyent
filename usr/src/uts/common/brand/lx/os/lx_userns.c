@@ -857,6 +857,18 @@ lx_userns_cred_exec(const cred_t *source, cred_t *candidate, vnode_t *vp,
 	return (0);
 }
 
+/* An unmapped argument is an error, unlike an unmapped getter result. */
+uint32_t
+lx_userns_id_backing(const cred_t *cred, int gid, uint32_t visible)
+{
+	const lx_userns_native_t *data = (void *)crgetbrand(cred);
+
+	if (data == NULL)
+		return (visible);
+	VERIFY(data->un_cred.bc_brand == &lx_brand);
+	return (lx_userns_id(data->un_namespace, gid, visible, 1));
+}
+
 /* Visible IDs are translated before native backing-ID validation. */
 uint32_t
 lx_userns_id_visible(const cred_t *cred, int gid, uint32_t backing)

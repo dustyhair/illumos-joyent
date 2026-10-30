@@ -61,6 +61,7 @@
 #include <lx_errno.h>
 
 #include <sys/lx_brand.h>
+#include <sys/lx_userns.h>
 #include <sys/lx_socket.h>
 #include <sys/lx_types.h>
 #include <sys/lx_impl.h>
@@ -4157,6 +4158,14 @@ lx_getsockopt_socket(sonode_t *so, int optname, void *optval,
 				lcred->lxu_pid = so->so_cpid;
 			}
 			mutex_exit(&so->so_lock);
+			if (error == 0) {
+				/* Use the reader's namespace. */
+				lcred->lxu_uid = lx_userns_id_visible(CRED(), 0,
+				    lcred->lxu_uid);
+				lcred->lxu_gid = lx_userns_id_visible(CRED(), 1,
+				    lcred->lxu_gid);
+				lcred->lxu_pid = LX_PID_TO_INIT(lcred->lxu_pid);
+			}
 		}
 		*optlen = sizeof (struct lx_ucred);
 		return (error);

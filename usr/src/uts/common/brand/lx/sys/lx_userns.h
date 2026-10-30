@@ -45,6 +45,7 @@ extern int lx_userns_caps_get(const cred_t *, lx_caps_t *);
 extern void lx_userns_publish(struct _kthread *, cred_t *);
 extern void lx_userns_forklwp(struct _klwp *, struct _klwp *);
 extern void lx_userns_exitlwp(struct _klwp *);
+extern uint32_t lx_userns_id_backing(const cred_t *, int, uint32_t);
 extern uint32_t lx_userns_id_visible(const cred_t *, int, uint32_t);
 extern boolean_t lx_userns_id_syscall(int, uintptr_t *, long *);
 extern int lx_userns_capset(uint64_t, uint64_t, uint64_t);
