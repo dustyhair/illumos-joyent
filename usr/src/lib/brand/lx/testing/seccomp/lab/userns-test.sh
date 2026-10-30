@@ -18,6 +18,18 @@ trap cleanup EXIT
     tar xf /lab/lx-root.tar ./test/proc_maps_baseline \
         ./test/cap_syscalls_probe ./test/cap_syscalls_probe32 ./test/scope_caps \
         ./test/dynamic/scope_caps ./test/scope_ids ./test/dynamic/scope_ids)
+# The vendor bundle lives on read-only ISO media, outside the small archive.
+if test ! -x /zones/lx-probe-zfs/root/test/codex-current/bin/codex; then
+    mkdir -p /mnt/lx-media
+    if test ! -x /mnt/lx-media/lab-codex/x86_64-unknown-linux-musl/bin/codex; then
+        mount -F hsfs -o ro /dev/dsk/c2t0d0s2 /mnt/lx-media
+    fi
+    cp -Rp /mnt/lx-media/lab-codex/x86_64-unknown-linux-musl \
+        /zones/lx-probe-zfs/root/test/codex-current
+fi
+codex_hash=$(digest -a sha256 \
+    /zones/lx-probe-zfs/root/test/codex-current/bin/codex | awk '{print $NF}')
+test "$codex_hash" = b8a11fedf24b2dfb59a70c9e52b030f9a508dcd49cd2dd0d41956f4c785156b8
 mkdir -p /zones/lx-probe-zfs/root/test/scope-setid
 cp /zones/lx-probe-zfs/root/test/scope_caps /zones/lx-probe-zfs/root/test/scope-setid/scope_caps
 chmod 4755 /zones/lx-probe-zfs/root/test/scope-setid/scope_caps
