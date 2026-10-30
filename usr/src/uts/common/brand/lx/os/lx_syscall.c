@@ -416,8 +416,6 @@ lx_syscall_enter(int entry)
 
 	if ((ptolxproc(curproc)->l_flags & LX_PROC_USERNS) != 0) {
 		switch (syscall_num) {
-		/* Exec needs the caller's per-task capability transition. */
-		case 59:
 		case 105: case 106: case 113: case 114: case 116:
 		case 117: case 119: case 122: case 123:
 			(void) set_errno(EOPNOTSUPP);

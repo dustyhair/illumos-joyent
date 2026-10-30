@@ -17,6 +17,9 @@ trap cleanup EXIT
 (cd /zones/lx-probe-zfs/root &&
     tar xf /lab/lx-root.tar ./test/proc_maps_baseline \
         ./test/cap_syscalls_probe ./test/cap_syscalls_probe32 ./test/scope_caps)
+mkdir -p /zones/lx-probe-zfs/root/test/scope-setid
+cp /zones/lx-probe-zfs/root/test/scope_caps /zones/lx-probe-zfs/root/test/scope-setid/scope_caps
+chmod 4755 /zones/lx-probe-zfs/root/test/scope-setid/scope_caps
 zoneadm -z lx-probe boot
 /lab/ktest run lx_namespace:user:access
 /lab/ktest run lx_namespace:user:proc_maps
@@ -43,7 +46,7 @@ else
     cat /lab/scope-caps.log
     exit 1
 fi
-grep -q '^SCOPE_CAPS cases=7 failures=0$' /lab/scope-caps.log
+grep -q '^SCOPE_CAPS cases=18 failures=0$' /lab/scope-caps.log
 cleanup
 trap - EXIT
 /lab/ktest run lx_namespace:user:credentials

@@ -437,7 +437,7 @@ exec_common(const char *fname, const char **argp, const char **envp,
 	}
 
 	if ((error = gexec(&vp, &ua, &args, NULL, 0, &execsz,
-	    exec_file, p->p_cred, &brand_action)) != 0) {
+	    exec_file, CRED(), &brand_action)) != 0) {
 		if (brandme) {
 			BROP(p)->b_freelwp(lwp);
 			brand_clearbrand(p, B_TRUE);
@@ -697,7 +697,7 @@ gexec(
 	struct vattr vattr;
 	char magbuf[MAGIC_BYTES];
 	int setid;
-	cred_t *oldcred, *newcred = NULL;
+	cred_t *oldcred = NULL, *newcred = NULL;
 	int privflags = 0;
 	int setidfl;
 	priv_set_t fset;
@@ -804,6 +804,14 @@ gexec(
 		priv_intersect(&CR_LPRIV(cred), &CR_IPRIV(cred));
 		CR_EPRIV(cred) = CR_PPRIV(cred) = CR_IPRIV(cred);
 		priv_adjust_PA(cred);
+	}
+
+	if (crgetbrand(CRED()) != NULL) {
+		if (level == 0 && newcred == NULL)
+			newcred = cred = crdup(cred);
+		error = brand_cred_exec(CRED(), cred, vp, &vattr, level);
+		if (error != 0)
+			goto bad;
 	}
 
 	/* The new image gets the inheritable secflags as its secflags */
@@ -924,6 +932,8 @@ gexec(
 
 	if (level == 0) {
 		uid_t oruid;
+		cred_t *oldprocess = NULL;
+		boolean_t taskcred = crgetbrand(cred) != NULL;
 
 		if (execvp != NULL) {
 			/*
@@ -934,16 +944,18 @@ gexec(
 			    cred, NULL);
 		}
 
+		if (taskcred)
+			mutex_enter(&pp->p_lock);
 		mutex_enter(&pp->p_crlock);
 
 		oruid = pp->p_cred->cr_ruid;
 
 		if (newcred != NULL) {
 			/*
-			 * Free the old credentials, and set the new ones.
-			 * Do this for both the process and the (single) thread.
+			 * Publish for the process and its remaining thread.
+			 * Release the previous references after dropping locks.
 			 */
-			crfree(pp->p_cred);
+			oldprocess = pp->p_cred;
 			pp->p_cred = cred;	/* cred already held for proc */
 			crhold(cred);		/* hold new cred for thread */
 			/*
@@ -953,7 +965,6 @@ gexec(
 			 */
 			oldcred = curthread->t_cred;
 			curthread->t_cred = cred;
-			crfree(oldcred);
 
 			if (priv_basic_test >= 0 &&
 			    !PRIV_ISASSERT(&CR_IPRIV(newcred),
@@ -988,6 +999,12 @@ gexec(
 			suidflags = 0;
 
 		mutex_exit(&pp->p_crlock);
+		if (taskcred)
+			mutex_exit(&pp->p_lock);
+		if (newcred != NULL) {
+			crfree(oldprocess);
+			crfree(oldcred);
+		}
 		if (newcred != NULL && oruid != newcred->cr_ruid) {
 			/* Note that the process remains in the same zone. */
 			mutex_enter(&pidlock);
@@ -1268,13 +1285,13 @@ execpermissions(struct vnode *vp, struct vattr *vattrp, struct uarg *args)
 	proc_t *p = ttoproc(curthread);
 
 	vattrp->va_mask = AT_MODE | AT_UID | AT_GID | AT_SIZE;
-	if (error = VOP_GETATTR(vp, vattrp, ATTR_EXEC, p->p_cred, NULL))
+	if (error = VOP_GETATTR(vp, vattrp, ATTR_EXEC, CRED(), NULL))
 		return (error);
 	/*
 	 * Check the access mode.
 	 * If VPROC, ask /proc if the file is an object file.
 	 */
-	if ((error = VOP_ACCESS(vp, VEXEC, 0, p->p_cred, NULL)) != 0 ||
+	if ((error = VOP_ACCESS(vp, VEXEC, 0, CRED(), NULL)) != 0 ||
 	    !(vp->v_type == VREG || (vp->v_type == VPROC && pr_isobject(vp))) ||
 	    (vp->v_vfsp->vfs_flag & VFS_NOEXEC) != 0 ||
 	    (vattrp->va_mode & (VEXEC|(VEXEC>>3)|(VEXEC>>6))) == 0) {
@@ -1284,7 +1301,7 @@ execpermissions(struct vnode *vp, struct vattr *vattrp, struct uarg *args)
 	}
 
 	if ((p->p_plist || (p->p_proc_flag & (P_PR_PTRACE|P_PR_TRACE))) &&
-	    (error = VOP_ACCESS(vp, VREAD, 0, p->p_cred, NULL))) {
+	    (error = VOP_ACCESS(vp, VREAD, 0, CRED(), NULL))) {
 		/*
 		 * If process is under ptrace(3C) compatibility,
 		 * fail the exec(2).

@@ -382,6 +382,21 @@ brand_cred_proc_perm(const cred_t *source, proc_t *process,
 	    target, mode));
 }
 
+/* The caller owns the unpublished level-zero candidate. */
+int
+brand_cred_exec(const cred_t *source, cred_t *candidate, struct vnode *vp,
+    const struct vattr *attr, int level)
+{
+	brand_cred_t *data = crgetbrand(source);
+
+	if (data == NULL)
+		return (0);
+	if (data->bc_brand->b_ops->b_cred_exec == NULL)
+		return (ENOTSUP);
+	return (data->bc_brand->b_ops->b_cred_exec(source, candidate, vp,
+	    attr, level));
+}
+
 void
 brand_unregister_zone(struct brand *bp)
 {

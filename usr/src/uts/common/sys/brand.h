@@ -103,6 +103,7 @@ struct brand_mach_ops;
 struct intpdata;
 struct execa;
 struct brand_cred;
+struct vattr;
 
 /*
  * Common structure to define hooks for brand operation.
@@ -159,6 +160,8 @@ struct brand_cred;
  * b_cred_free - Release immutable brand-specific credential data
  * b_cred_proc_perm - Return BRAND_CRED_DEFER for native policy, zero to
  *                    authorize, or an errno to deny process access
+ * b_cred_exec - Validate each exec vnode and prepare a private credential
+ *               at level zero; return an errno without publishing on failure
  */
 struct brand_ops {
 	void	(*b_init_brand_data)(zone_t *, kmutex_t *);
@@ -214,6 +217,8 @@ struct brand_ops {
 	void	(*b_cred_free)(struct brand_cred *);
 	int	(*b_cred_proc_perm)(const struct cred *, struct proc *,
 	    const struct cred *, int);
+	int	(*b_cred_exec)(const struct cred *, struct cred *,
+	    struct vnode *, const struct vattr *, int);
 };
 
 /*
@@ -245,6 +250,8 @@ extern void brand_cred_hold(brand_cred_t *);
 extern void brand_cred_rele(brand_cred_t *);
 extern int brand_cred_proc_perm(const struct cred *, struct proc *,
     const struct cred *, int);
+extern int brand_cred_exec(const struct cred *, struct cred *,
+    struct vnode *, const struct vattr *, int);
 extern boolean_t brand_in_use(brand_t *);
 
 /*

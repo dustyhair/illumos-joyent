@@ -17,6 +17,8 @@
 #include <sys/lx_cap.h>
 #include <sys/lx_brand.h>
 #include <sys/proc.h>
+#include <sys/vnode.h>
+#include <sys/vfs.h>
 
 struct lx_userns {
 	uint_t un_refs;
@@ -218,19 +220,26 @@ lx_userns_has_cap(const lx_userns_cred_t *actor, lx_userns_t *target,
  * checks, native-entry confinement, and resource-specific capability checks
  * before publishing a namespace transition.
  */
+static void
+lx_userns_native_limit(cred_t *cred)
+{
+	uint_t i;
+
+	for (i = 0; i < PRIV_NSET; i++)
+		priv_intersect(priv_basic, &CR_PRIVSETS(cred)[i]);
+	CR_FLAGS(cred) |= PRIV_AWARE | PRIV_AWARE_INHERIT;
+	CR_FLAGS(cred) &= ~(PRIV_AWARE_RESET | PRIV_PFEXEC | PRIV_XPOLICY);
+	crsetcrklpd(cred, NULL);
+}
+
 cred_t *
 lx_userns_native_cred(cred_t *source)
 {
 	cred_t *reduced = crdup(source);
-	uint_t i;
 
 	CR_EPRIV(reduced) = CR_OEPRIV(source);
 	CR_PPRIV(reduced) = CR_OPPRIV(source);
-	for (i = 0; i < PRIV_NSET; i++)
-		priv_intersect(priv_basic, &CR_PRIVSETS(reduced)[i]);
-	CR_FLAGS(reduced) |= PRIV_AWARE | PRIV_AWARE_INHERIT;
-	CR_FLAGS(reduced) &= ~(PRIV_AWARE_RESET | PRIV_PFEXEC | PRIV_XPOLICY);
-	crsetcrklpd(reduced, NULL);
+	lx_userns_native_limit(reduced);
 	return (reduced);
 }
 
@@ -245,11 +254,10 @@ typedef struct lx_userns_native {
 
 extern brand_t lx_brand;
 
-cred_t *
-lx_userns_native_for(cred_t *source, const lx_userns_cred_t *actor)
+static void
+lx_userns_native_attach(cred_t *cred, const lx_userns_cred_t *actor)
 {
 	lx_userns_native_t *data = kmem_alloc(sizeof (*data), KM_SLEEP);
-	cred_t *cred = lx_userns_native_cred(source);
 
 	/* Entry to the initial namespace must never use this constructor. */
 	VERIFY(actor->luc_ns->un_parent != NULL);
@@ -259,6 +267,14 @@ lx_userns_native_for(cred_t *source, const lx_userns_cred_t *actor)
 	brand_cred_init(&data->un_cred, &lx_brand);
 	crsetbrand(cred, &data->un_cred);
 	brand_cred_rele(&data->un_cred);
+}
+
+cred_t *
+lx_userns_native_for(cred_t *source, const lx_userns_cred_t *actor)
+{
+	cred_t *cred = lx_userns_native_cred(source);
+
+	lx_userns_native_attach(cred, actor);
 	return (cred);
 }
 
@@ -611,4 +627,37 @@ lx_userns_prctl(int option, uintptr_t a2, uintptr_t a3, uintptr_t a4,
 	}
 	*result = error == 0 ? 0 : set_errno(error);
 	return (B_TRUE);
+}
+
+/* Ordinary exec; privileged file transitions remain explicitly unsupported. */
+int
+lx_userns_cred_exec(const cred_t *source, cred_t *candidate, vnode_t *vp,
+    const vattr_t *attr, int level)
+{
+	const lx_userns_native_t *data = (void *)crgetbrand(source);
+	lx_proc_data_t *pd = ptolxproc(curproc);
+	lx_userns_cred_t actor;
+	boolean_t nnp = ttolwp(curthread)->lwp_no_new_privs != 0;
+
+	if (data == NULL || data->un_cred.bc_brand != &lx_brand ||
+	    pd == NULL || (pd->l_flags & LX_PROC_USERNS) == 0)
+		return (EPERM);
+	if (((attr->va_mode & (VSUID | VSGID)) != 0 && !nnp &&
+	    (vp->v_vfsp->vfs_flag & VFS_NOSETUID) == 0) ||
+	    crgetuid(candidate) != crgetuid(source) ||
+	    crgetgid(candidate) != crgetgid(source))
+		return (EOPNOTSUPP);
+	if (level != 0)
+		return (0);
+	VERIFY3U(crgetref(candidate), ==, 1);
+	actor.luc_ns = data->un_namespace;
+	actor.luc_uid = crgetuid(candidate);
+	actor.luc_gid = crgetgid(candidate);
+	actor.luc_caps = data->un_caps;
+	lx_caps_exec_plain(&actor.luc_caps,
+	    lx_userns_id(actor.luc_ns, 0, crgetruid(source), 0) == 0,
+	    lx_userns_id(actor.luc_ns, 0, crgetuid(source), 0) == 0, nnp);
+	lx_userns_native_limit(candidate);
+	lx_userns_native_attach(candidate, &actor);
+	return (0);
 }
