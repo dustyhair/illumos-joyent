@@ -21,7 +21,7 @@ typedef struct lx_userns_cred {
 	lx_caps_t luc_caps;
 } lx_userns_cred_t;
 
-extern long lx_userns_unshare(uint_t);
+extern long lx_userns_unshare(uintptr_t);
 extern lx_userns_t *lx_userns_root_create(void);
 extern int lx_userns_child_create(const lx_userns_cred_t *, lx_userns_t **);
 extern int lx_userns_budget_set(lx_userns_t *, uint32_t);

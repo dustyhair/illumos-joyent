@@ -441,9 +441,9 @@ lx_acct(char *p)
 
 /* Preserve the historical EPERM fallback unless lab entry is enabled. */
 long
-lx_unshare(int flags)
+lx_unshare(uintptr_t flags)
 {
-	return (lx_userns_unshare((uint_t)flags));
+	return (lx_userns_unshare(flags));
 }
 
 /*

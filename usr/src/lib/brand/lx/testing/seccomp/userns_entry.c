@@ -200,6 +200,12 @@ static int native_guard(void)
     CHECK(waitpid(child,&status,0)==child && WIFSIGNALED(status) && WTERMSIG(status)==SIGSYS);
     return 0;
 }
+static int wide_flags(void)
+{
+    unsigned uid=geteuid();uint64_t caps=capbits();errno=0;
+    CHECK(syscall(SYS_unshare,(1ULL<<40)|CLONE_NEWUSER)==-1 && errno==EINVAL);
+    CHECK(geteuid()==uid && capbits()==caps);return 0;
+}
 static int unsupported_flags(void)
 {
     unsigned uid=geteuid();uint64_t caps=capbits();
@@ -273,6 +279,7 @@ int main(int argc,char **argv)
     run("multithreaded entry rejects without mutation",threads_case);
     run("nested multithreaded entry rejects without mutation",scoped_threads);
     run("chroot entry is denied",chroot_case);
+    run("reserved high flag bits are rejected without truncation",wide_flags);
     run("entry retains an existing seccomp filter",filtered);
     if(!linux_control) {
         run("namespace guard denies native entry without seccomp",native_guard);

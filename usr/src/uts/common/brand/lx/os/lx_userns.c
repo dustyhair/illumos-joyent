@@ -700,7 +700,7 @@ lx_userns_entry_check(proc_t *p)
  * The backing IDs and the address-space owner's namespace do not change.
  */
 long
-lx_userns_unshare(uint_t flags)
+lx_userns_unshare(uintptr_t flags)
 {
 	proc_t *p = curproc;
 	lx_proc_data_t *pd = ptolxproc(p);
