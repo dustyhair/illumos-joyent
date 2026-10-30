@@ -1,8 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 test "$(id -u)" = 0
-work=$(mktemp -d /home/jwagner/lx-codex-tests/mount-process/control.XXXXXX)
+work=$(mktemp -d /var/tmp/lx-mount-proc-control.XXXXXX)
 chmod 0755 "$work"
+mkdir -p "$work"/{static,dynamic}
+cp /home/jwagner/lx-codex-tests/mount-process/mount_proc "$work/static/"
+cp /home/jwagner/lx-codex-tests/mount-process/dynamic/mount_proc "$work/dynamic/"
 job=
 orphan=
 cleanup() {
@@ -28,10 +31,9 @@ wait_stopped() {
     return 1
 }
 for variant in static dynamic; do
-    binary=/home/jwagner/lx-codex-tests/mount-process/mount_proc
-    test "$variant" != dynamic || binary=${binary%/*}/dynamic/mount_proc
+    binary=$work/$variant/mount_proc
     for uid in 0 65534; do
-        fixture=$work/$variant-$uid
+        fixture=$work/fixture-$variant-$uid
         mkdir -p "$fixture"/{cwd,covered}
         chmod 0755 "$fixture" "$fixture/cwd" "$fixture/covered"
         printf 'original\n' > "$fixture/covered/original"
