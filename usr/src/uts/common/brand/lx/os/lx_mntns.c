@@ -4,6 +4,9 @@
  * A copy is available at http://www.illumos.org/license/CDDL.
  */
 #include <sys/types.h>
+#include <sys/atomic.h>
+#include <sys/disp.h>
+#include <sys/dtrace.h>
 #include <sys/errno.h>
 #include <sys/debug.h>
 #include <sys/kmem.h>
@@ -12,6 +15,7 @@
 #include <sys/mount.h>
 #include <sys/pathname.h>
 #include <sys/systm.h>
+#include <sys/taskq_impl.h>
 #include <sys/vfs.h>
 #include <sys/vnode.h>
 #include <sys/lx_mntns.h>
@@ -24,10 +28,81 @@ typedef struct lx_mntns_mount {
 
 struct lx_mntns_view {
 	kmutex_t lv_lock;
+	volatile uint_t lv_refs;
+	cred_t *lv_cred;
+	taskq_ent_t lv_reap_ent;
 	vnode_t *lv_root;
 	vfs_t *lv_vfs;
 	lx_mntns_mount_t *lv_mounts;
 };
+
+static kmutex_t lx_mntns_lock;
+static taskq_t *lx_mntns_taskq;
+static volatile uint_t lx_mntns_nviews;
+
+static int lx_mntns_destroy(lx_mntns_view_t *, cred_t *);
+static void lx_mntns_reap(void *);
+
+void
+lx_mntns_init(void)
+{
+	mutex_init(&lx_mntns_lock, NULL, MUTEX_DEFAULT, NULL);
+}
+
+boolean_t
+lx_mntns_busy(void)
+{
+	return (lx_mntns_nviews != 0);
+}
+
+void
+lx_mntns_fini(void)
+{
+	VERIFY(!lx_mntns_busy());
+	/* Wait for the last reaper to return before unloading module text. */
+	if (lx_mntns_taskq != NULL) {
+		taskq_destroy(lx_mntns_taskq);
+		lx_mntns_taskq = NULL;
+	}
+	mutex_destroy(&lx_mntns_lock);
+}
+
+static void
+lx_mntns_dispatch(void *arg)
+{
+	lx_mntns_view_t *view = arg;
+
+	/* A preallocated entry can be queued from a timeout without failing. */
+	taskq_dispatch_ent(lx_mntns_taskq, lx_mntns_reap, view, TQ_NOSLEEP,
+	    &view->lv_reap_ent);
+}
+
+static void
+lx_mntns_reap(void *arg)
+{
+	lx_mntns_view_t *view = arg;
+	int error;
+
+	VERIFY3U(view->lv_refs, ==, 0);
+	if ((error = lx_mntns_destroy(view, view->lv_cred)) == 0)
+		return;
+	/* Keep busy roots intact; no forced unmount or spinning taskq worker. */
+	DTRACE_PROBE1(lx__mntns__reap__retry, int, error);
+	(void) timeout(lx_mntns_dispatch, view, hz);
+}
+
+void
+lx_mntns_view_hold(lx_mntns_view_t *view)
+{
+	VERIFY3U(atomic_inc_uint_nv(&view->lv_refs), >, 1);
+}
+
+void
+lx_mntns_view_rele(lx_mntns_view_t *view)
+{
+	if (atomic_dec_uint_nv(&view->lv_refs) == 0)
+		lx_mntns_dispatch(view);
+}
 
 static int
 lx_mntns_mount(const char *source, const char *path, const char *type,
@@ -109,6 +184,16 @@ lx_mntns_create(vnode_t *source, cred_t *cr, lx_mntns_view_t **out)
 		return (ENOTDIR);
 	view = kmem_zalloc(sizeof (*view), KM_SLEEP);
 	mutex_init(&view->lv_lock, NULL, MUTEX_DEFAULT, NULL);
+	view->lv_refs = 1;
+	view->lv_cred = cr;
+	crhold(cr);
+	atomic_inc_uint(&lx_mntns_nviews);
+	mutex_enter(&lx_mntns_lock);
+	if (lx_mntns_taskq == NULL) {
+		lx_mntns_taskq = taskq_create("lx_mntns_reap", 1,
+		    minclsyspri, 1, 1, 0);
+	}
+	mutex_exit(&lx_mntns_lock);
 	/* Source is pinned; domount must not resolve its pathname again. */
 	error = lx_mntns_mount("lx-private-root", "/", "lofs",
 	    (source->v_vfsp->vfs_flag & VFS_NOEXEC) != 0 ?
@@ -124,8 +209,10 @@ lx_mntns_create(vnode_t *source, cred_t *cr, lx_mntns_view_t **out)
 	*out = view;
 	return (0);
 fail:
+	crfree(view->lv_cred);
 	mutex_destroy(&view->lv_lock);
 	kmem_free(view, sizeof (*view));
+	atomic_dec_uint(&lx_mntns_nviews);
 	return (error);
 }
 
@@ -349,9 +436,8 @@ typedef struct lx_mntns_clone_mount {
  * contents remain shared, while subsequent mount operations stay private.
  *
  * The recorded paths require a stable directory hierarchy for the lifetime
- * of the source and copy. This backend does not publish a process namespace
- * or provide deferred unmount. In particular,
- * the caller must retain a source view while a clone pins any of its vnodes.
+ * of the source and copy. This backend does not publish a process namespace.
+ * Released sources remain queued for cleanup while copies pin their vnodes.
  */
 int
 lx_mntns_view_clone(lx_mntns_view_t *source, cred_t *cr,
@@ -454,8 +540,8 @@ out:
 	return (error);
 }
 
-int
-lx_mntns_view_destroy(lx_mntns_view_t *view, cred_t *cr)
+static int
+lx_mntns_destroy(lx_mntns_view_t *view, cred_t *cr)
 {
 	lx_mntns_mount_t *mount;
 	vnode_t *covered;
@@ -483,10 +569,24 @@ lx_mntns_view_destroy(lx_mntns_view_t *view, cred_t *cr)
 	}
 	VFS_RELE(view->lv_vfs);
 	mutex_exit(&view->lv_lock);
+	crfree(view->lv_cred);
 	mutex_destroy(&view->lv_lock);
 	kmem_free(view, sizeof (*view));
+	atomic_dec_uint(&lx_mntns_nviews);
 	return (0);
 busy:
 	mutex_exit(&view->lv_lock);
+	return (error);
+}
+
+int
+lx_mntns_view_destroy(lx_mntns_view_t *view, cred_t *cr)
+{
+	int error;
+
+	if (atomic_cas_uint(&view->lv_refs, 1, 0) != 1)
+		return (EBUSY);
+	if ((error = lx_mntns_destroy(view, cr)) != 0)
+		VERIFY3U(atomic_swap_uint(&view->lv_refs, 1), ==, 0);
 	return (error);
 }

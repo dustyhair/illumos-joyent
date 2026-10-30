@@ -169,6 +169,7 @@
 #include <sys/zone.h>
 #include <sys/brand.h>
 #include <sys/lx_userns.h>
+#include <sys/lx_mntns.h>
 #include <sys/sdt.h>
 #include <sys/x86_archext.h>
 #include <sys/controlregs.h>
@@ -2707,6 +2708,7 @@ _init(void)
 	lx_ptrace_init();
 	lx_socket_init();
 	lx_audit_ld();
+	lx_mntns_init();
 
 	err = mod_install(&modlinkage);
 	if (err != 0) {
@@ -2721,6 +2723,7 @@ _init(void)
 		 */
 		lx_pid_fini();
 		lx_ioctl_fini();
+		lx_mntns_fini();
 		if (lx_futex_fini())
 			panic("lx brand module cannot be loaded or unloaded.");
 	}
@@ -2740,9 +2743,10 @@ _fini(void)
 	int futex_done = 0;
 
 	/*
-	 * Zones and immutable credential payloads both keep the brand loaded.
+	 * Zones, immutable credentials and live/retired mount views keep the
+	 * brand loaded. A reaper may still be using the module after zone exit.
 	 */
-	if (brand_in_use(&lx_brand))
+	if (brand_in_use(&lx_brand) || lx_mntns_busy())
 		return (EBUSY);
 
 	lx_ptrace_fini();
@@ -2772,6 +2776,8 @@ done:
 		if (futex_done) {
 			lx_futex_init();
 		}
+	} else {
+		lx_mntns_fini();
 	}
 
 	return (err);

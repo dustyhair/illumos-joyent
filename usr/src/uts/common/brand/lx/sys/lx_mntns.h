@@ -10,10 +10,17 @@
 
 /*
  * Private mount-tree backend. Linux namespace syscalls are not enabled by
- * these routines. Their caller owns the view and must retain it on EBUSY.
+ * these routines. Each caller owns a reference. destroy consumes a sole
+ * reference only on success; rele always consumes a reference and defers
+ * cleanup after the last release if mounted vnodes are still busy.
  * All path arguments are kernel strings. Returned vnodes must be released.
  */
 typedef struct lx_mntns_view lx_mntns_view_t;
+extern void lx_mntns_init(void);
+extern boolean_t lx_mntns_busy(void);
+extern void lx_mntns_fini(void);
+extern void lx_mntns_view_hold(lx_mntns_view_t *);
+extern void lx_mntns_view_rele(lx_mntns_view_t *);
 extern int lx_mntns_view_create(const char *, cred_t *, lx_mntns_view_t **);
 extern int lx_mntns_view_snapshot(const char *, cred_t *, lx_mntns_view_t **);
 extern int lx_mntns_view_clone(lx_mntns_view_t *, cred_t *, lx_mntns_view_t **);

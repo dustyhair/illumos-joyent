@@ -8,6 +8,7 @@
 #include <sys/vnode.h>
 #include <sys/vfs.h>
 #include <sys/mount.h>
+#include <sys/systm.h>
 #include <sys/lx_mntns.h>
 
 extern void lx_userns_test_maps(ktest_ctx_hdl_t *);
@@ -453,6 +454,118 @@ out:
 #undef NS_CHECK
 }
 
+static boolean_t
+ns_wait_idle(void)
+{
+	int i;
+
+	for (i = 0; i < 100; i++) {
+		if (!lx_mntns_busy())
+			return (B_TRUE);
+		delay(MAX(1, hz / 10));
+	}
+	return (!lx_mntns_busy());
+}
+
+static void
+ns_lifetime(ktest_ctx_hdl_t *ctx)
+{
+	uchar_t *input;
+	size_t size;
+	lx_mntns_view_t *a = NULL, *b = NULL;
+	vnode_t *held = NULL, *vp = NULL;
+	cred_t *cr = crdup(CRED());
+	vattr_t attr;
+	int error = 0;
+	boolean_t passed = B_FALSE;
+
+	ktest_get_input(ctx, &input, &size);
+	if (size < 2 || size > MAXPATHLEN || input[size - 1] != 0 ||
+	    strlen((char *)input) != size - 1 ||
+	    strncmp((char *)input, "/zones/lx-ns-kernel/", 20) != 0) {
+		KT_ERROR(ctx, "invalid private namespace fixture path");
+		crfree(cr);
+		return;
+	}
+#define	NS_CHECK(expr, why) do { \
+	if (!(expr)) { \
+		KT_FAIL(ctx, "%s, error=%d", why, error); \
+		goto out; \
+	} \
+} while (0)
+	NS_CHECK(!lx_mntns_busy(), "unrelated mount views are active");
+	error = lx_mntns_view_create((char *)input, cr, &a);
+	NS_CHECK(error == 0, "cannot create lifetime source view");
+	lx_mntns_view_hold(a);
+	error = lx_mntns_view_destroy(a, cr);
+	if (error == 0)
+		a = NULL;
+	NS_CHECK(error == EBUSY, "destroy consumed a shared view");
+	lx_mntns_view_rele(a);
+	error = lx_mntns_view_tmpfs(a, "/sub", cr);
+	NS_CHECK(error == 0, "shared view lost its remaining reference");
+	error = ns_make(a, "/sub", "retained", VREG, cr);
+	NS_CHECK(error == 0, "cannot create retained file");
+	error = lx_mntns_view_lookup(a, "/sub/retained", cr, &held);
+	NS_CHECK(error == 0, "cannot hold retained file");
+	error = lx_mntns_view_clone(a, cr, &b);
+	NS_CHECK(error == 0, "cannot clone lifetime source");
+	/* The views own the creation credential independently of this caller. */
+	crfree(cr);
+	cr = NULL;
+	lx_mntns_view_rele(a);
+	a = NULL;
+	delay(hz * 2);
+	NS_CHECK(lx_mntns_busy(), "pinned source was freed too early");
+	error = lx_mntns_view_lookup(b, "/sub/retained", CRED(), &vp);
+	NS_CHECK(error == 0, "source release broke its surviving clone");
+	VN_RELE(vp);
+	vp = NULL;
+	lx_mntns_view_rele(b);
+	b = NULL;
+	delay(hz * 2);
+	NS_CHECK(lx_mntns_busy(), "open vnode did not retain busy mount");
+	bzero(&attr, sizeof (attr));
+	attr.va_mask = AT_TYPE;
+	error = VOP_GETATTR(held, &attr, 0, CRED(), NULL);
+	NS_CHECK(error == 0 && attr.va_type == VREG,
+	    "held vnode became invalid after final view release");
+	VN_RELE(held);
+	held = NULL;
+	NS_CHECK(ns_wait_idle(), "mount views leaked after closing last vnode");
+	/* Exercise retirement with no grafts and a held detached-root vnode. */
+	error = lx_mntns_view_create((char *)input, CRED(), &a);
+	NS_CHECK(error == 0, "cannot create root-only lifetime view");
+	error = lx_mntns_view_lookup(a, "/", CRED(), &held);
+	NS_CHECK(error == 0, "cannot hold detached root");
+	lx_mntns_view_rele(a);
+	a = NULL;
+	delay(hz * 2);
+	NS_CHECK(lx_mntns_busy(), "busy detached root was freed too early");
+	VN_RELE(held);
+	held = NULL;
+	NS_CHECK(ns_wait_idle(), "detached root leaked after last vnode release");
+	passed = B_TRUE;
+out:
+	if (vp != NULL)
+		VN_RELE(vp);
+	if (held != NULL)
+		VN_RELE(held);
+	if (b != NULL)
+		lx_mntns_view_rele(b);
+	if (a != NULL)
+		lx_mntns_view_rele(a);
+	if (cr != NULL)
+		crfree(cr);
+	if (!ns_wait_idle()) {
+		KT_ERROR(ctx, "lifetime cleanup left active mount views");
+		passed = B_FALSE;
+	}
+	if (passed)
+		KT_PASS(ctx);
+#undef NS_CHECK
+}
+
 static struct modlmisc ns_modlmisc = {
 	.misc_modops = &mod_miscops,
 	.misc_linkinfo = "lx namespace tests"
@@ -477,6 +590,8 @@ _init(void)
 	    (error = ktest_add_test(ks, "snapshot", ns_snapshot,
 	    KTEST_FLAG_INPUT)) != 0 ||
 	    (error = ktest_add_test(ks, "clone", ns_clone,
+	    KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "lifetime", ns_lifetime,
 	    KTEST_FLAG_INPUT)) != 0 ||
 	    (error = ktest_add_suite(km, "user", &ks)) != 0 ||
 	    (error = ktest_add_test(ks, "maps", lx_userns_test_maps, 0)) != 0 ||
