@@ -15,9 +15,16 @@ static int
 one(unsigned index, int drain)
 {
     char marker[64], received[256], *slave;
-    int master=posix_openpt(O_RDWR|O_NOCTTY|O_NONBLOCK), status, available=-1;
-    if(master<0 || grantpt(master)!=0 || unlockpt(master)!=0 ||
-        (slave=ptsname(master))==NULL) {perror("open pty");return 2;}
+    int master=posix_openpt(O_RDWR|O_NOCTTY), status, available=-1;
+    if(master<0) {perror("posix_openpt");return 2;}
+    if(grantpt(master)!=0) {perror("grantpt");return 2;}
+    if(unlockpt(master)!=0) {perror("unlockpt");return 2;}
+    if((slave=ptsname(master))==NULL) {perror("ptsname");return 2;}
+    // Exercise the existing lx open path, which rejects NONBLOCK at open.
+    int flags=fcntl(master,F_GETFL);
+    if(flags<0 || fcntl(master,F_SETFL,flags|O_NONBLOCK)<0) {
+        perror("fcntl nonblocking");return 2;
+    }
     int length=snprintf(marker,sizeof(marker),"PTY_CLOSE_MARKER_%u",index);
     pid_t child=fork();
     if(child<0) return 2;
