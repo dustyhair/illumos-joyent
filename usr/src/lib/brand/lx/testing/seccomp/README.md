@@ -482,11 +482,68 @@ Native credential UID/GID retention, native configuration/mount denial,
 limit. The mount views/snapshots and all existing regressions also pass.
 This remains a release-runtime mixed-platform development result.
 
-Process/LWP credential attachment, fork/exec inheritance, procfs file-open
-credential capture, UID/GID translation at every ABI boundary, native-entry
-confinement, cross-namespace process access and resource-specific capability
-checks remain required before exposing namespace syscalls. Namespace quotas,
+Process/LWP credential publication, complete fork/exec transitions, procfs
+per-open authority capture, UID/GID translation at every ABI boundary,
+native-entry confinement and resource-specific capability checks remain
+required before exposing namespace syscalls. Namespace quotas,
 setns descriptors, filesystem capabilities, privileged exec and newer
 securebits also need implementation or explicit rejection. The current
 Linux namespace requests remain unsupported, and normal Codex sandbox
 acceptance has not been achieved.
+
+
+## Immutable brand credentials and process access
+
+Scoped Linux authority is an immutable lx-owned payload attached to a native
+credential. The common kernel carries one optional opaque pointer and delegates
+process-access policy through brand_ops. Existing crdup/crcopy/crfree paths
+hold and release the payload; its lifetime keeps the brand module registered,
+including when a copied credential outlives a zone or an open file captures it.
+Ordinary native credentials have no payload. No Linux capability mask or
+namespace hierarchy is stored in common kernel structures.
+
+The amd64 credential grows from 144 to 152 bytes. The two appended brand
+callbacks grow brand_ops from 336 to 352 bytes. CTF checks preserve every old
+member offset. lx_proc_data separately gains one eight-byte namespace reference
+for the address-space owner, inherited at fork, replaced in the existing exec
+hook, and released by clearbrand. This reference is distinct from the current
+credential's namespace: Linux unshare does not transfer ownership of older,
+non-dumpable memory into the new namespace.
+
+The lx policy enforces ancestor/sibling confinement, Linux permitted/effective
+capability dominance, parent namespace ownership and non-dumpable memory
+checks before native identity/root shortcuts. Native zone policy still runs
+first. Linux ptrace requests use real IDs and permitted capabilities; procfs
+reads use effective IDs and capabilities. A scoped capability never expands
+native privilege sets. These constructors and checks remain internal; no
+user namespace syscall publishes a scoped credential yet.
+
+Linux controls for process access can be built and run separately:
+
+    cd usr/src/lib/brand/lx/testing/seccomp
+    cc -std=gnu11 -O2 -Wall -Wextra -Werror -o proc_access_linux proc_access_linux.c
+    bwrap --unshare-user --unshare-pid --uid 0 --gid 0 --ro-bind / / \
+        --proc /proc --dev-bind /dev /dev --cap-add ALL -- ./proc_access_linux
+
+All 13 control scenarios pass on codex-testbox, without skips. They cover
+capability dominance, ancestor/sibling access and old/new address-space
+ownership across unshare and exec. The installed bwrap bootstrap gives each
+run private user/PID namespaces without changing host policy.
+
+The namespace ktest module adds credential-copy/lifetime tests and scoped
+process-access tests. It also opens real native procfs memory/root paths and
+lx procfs maps with a deliberately unclamped native-root credential carrying
+scoped Linux authority, to check that root shortcuts cannot bypass lx policy.
+Run /lab/userns-test.sh only in the disposable offline VM after the existing
+enforcement driver has prepared its lx-probe fixture.
+
+
+At checkpoint 328a2ddfbd, all six user suites pass in offline VM boot26,
+including credential copies and actual procfs access. The credential test
+passes again after the lx fixture halts, checking brand-reference cleanup.
+Mount views/snapshots and all previous enforcement/signal/fork/exec/thread
+regressions also pass. The first run found a missing persistent lock in the
+synthetic proc fixture, fixed by that test-only commit. Production kernel
+source is 1d087dfc71, with clean release/debug core and lx modules. The VM
+retains earlier LOFSa8b and May platform/userland, so this is a mixed-platform
+release-runtime result, not acceptance of the full Codex sandbox.
