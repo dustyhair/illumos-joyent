@@ -1,3 +1,6 @@
+Scoped CPU-affinity and scheduling authority are described in
+[Scheduling and affinity](#scheduling-and-affinity) below.
+
 Emulated resource-limit authority and inheritance are described in
 [Emulated resource limits](#emulated-resource-limits) below.
 
@@ -813,3 +816,93 @@ platform. This is not full-platform or actual Codex-workflow acceptance.
 No ZFS, common-kernel, pool format, physical host, boot tree or production
 Debian zone change is part of this checkpoint. Scheduling policy checks and
 public namespace creation remain incomplete.
+
+## Scheduling and affinity
+
+Linux affinity ownership compares the caller's effective backing UID with
+the target task's real or effective backing UID. It does not require group
+identity or treat the caller's real UID as authority. A different owner
+requires effective CAP_SYS_NICE in the target credential's user namespace.
+The shared lx target lookup now distinguishes affinity from scheduling
+policy writes, whose privileged override needs initial-namespace authority.
+Scoped target checks use the actual task credential under p_lock rather
+than the representative process credential. Native credentials continue to
+use p_crlock. Affinity rechecks ownership after acquiring cpu_lock/p_lock.
+
+Actual CPU binding has a second native permission check. A new affinity
+mode on the existing brand credential process-permission callback performs
+a pure credential check there under thread_lock. It does not allocate,
+block, consult ptrace/dumpability or add a brand_ops pointer. Native-only
+credentials defer to existing hasprocperm policy. System-class rejection,
+CPU partition checks and binding mechanics remain native. Cross-zone native
+administration also defers to existing native policy. Namespace capability
+checks follow the immutable namespace ancestry and the target credential;
+scoped authority cannot reach the initial namespace or a sibling namespace.
+
+FSS scheduling emulation replaces backing-UID0 shortcuts with initial
+CAP_SYS_NICE or the target's existing RTPRIO/NICE limits, as applicable.
+Deadline changes require initial authority. Ordinary callers cannot clear
+an existing reset-on-fork flag. Emulated parameter validation precedes
+capability checks: normal policies require zero priority, FIFO/RR require
+1..99, and deadline attributes must describe a valid runtime/deadline/period.
+Legacy setscheduler/setparam cannot describe deadline parameters. The
+supported old sched_attr ABI requires 48 bytes, treating size zero as 48.
+The change does not implement newer attribute extensions.
+
+Native class priority is read and adjusted to the existing policy hint's
+absolute value, instead of adding the hint on every request. Native return
+errors propagate to Linux. Linux policy/priority/flags/deadline metadata is
+published only after a successful native update. Repeating the same policy
+therefore neither accumulates priority nor falsely publishes failed changes.
+Native class ceilings still apply. setpriority's EPERM/EACCES selection now
+uses actual initial CAP_SYS_NICE rather than a backing-UID0 shortcut.
+
+The native ktest covers effective versus permitted capability authority,
+ancestor/descendant/sibling/initial boundaries, invalid capability indices,
+namespace ownership, ordinary native fallback, real-UID ownership without
+GID equality, and rejection despite ptrace authority or a same-process
+pointer. Private credential fixtures never publish privileged credentials.
+The Linux controls pass 70 identity/affinity cases and seven scheduling
+cases per static/dynamic executable. Actual affinity tests bind a stopped
+peer to one CPU, read back the mask and restore it, with effective
+CAP_SYS_PTRACE removed. Other cases check missing effective SYS_NICE,
+per-thread target credentials and caller real UID not granting authority.
+
+This remains scheduling emulation constrained by native class policy. It
+does not add a Linux deadline scheduler, complete nice/reset-on-fork
+semantics, the direct TS/RT ABI, or arbitrary multi-CPU mask enforcement.
+Public namespace entry and the actual newest-Codex sandboxed workflow are
+still incomplete. These tests use only the private ktest attachment in the
+offline VM. Linux reference:
+https://github.com/torvalds/linux/blob/master/kernel/sched/syscalls.c
+
+VM66 final canonical drivers pass without serial overrides: 70+70 identity/
+affinity cases in the ordinary class, 8+8 scoped scheduling/affinity cases
+under FSS, 19+19 capability cases, initial-limit/admin controls and all prior
+ABI/i386/NNP/BPF/filter/signal/fork/exec/thread/map/mount/budget/lifetime/
+filesystem ACL/race suites. Both initial-lx probes repeat setscheduler,
+setparam and setattr, with native priocntl observations requiring FSS user
+priority and its limit to be exactly 60 for FIFO, 59 for RR and 0 for OTHER.
+The public Linux getters agree. Removing effective initial SYS_NICE while
+retaining native UID0 and a zero RTPRIO limit denies RT entry; denied nice
+increases return EACCES. A scoped native-UID0 case with a positive RTPRIO
+limit reaches the native class denial and retains all reported metadata.
+
+The new native hierarchy test initially failed in VM65 because its nested
+creator's parent ID maps were absent. The corrected fixture maps the parent
+before creating the descendant. VM65 native credential lifetime checks and
+synced shutdown passed; VM66 is the final acceptance run. Runtime hashes of
+the rebuilt modules and probes match staging. The optional /kernel FSS hash
+lookup names no file; FSS is installed under /usr/kernel and remains part of
+the retained base. No FSS object hash is inferred from that failed lookup.
+The pool exported successfully and the VM completed synced poweroff.
+Evidence is lab/evidence/boot-66-scheduling-affinity-acceptance.log.
+
+Common/unix/genunix/brand/proc/elf source92390bf918 passes clean release/debug
+builds. Probe source is b159be75ea, driver1f7809be93 and native ktest50fd826793,
+whose clean release/debug builds pass. Runtime uses release objects; debug
+is compile-only. ZFS89c4ea1aa5, Native tl600d/LOFSa8b/VM30 emulation libraries/
+VM46 support and the native FSS class remain over the mixed May platform.
+No ZFS format/feature, physical host, production Debian zone or host boot
+installation changed. Full-platform and actual Codex sandboxed workflow
+validation remain required. Public namespace creation remains disabled.
