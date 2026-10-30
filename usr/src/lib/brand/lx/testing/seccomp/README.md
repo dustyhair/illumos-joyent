@@ -1,4 +1,8 @@
-Scoped filesystem ownership permission is documented in
+Initial-namespace administration guards are described in
+[Initial-namespace administration](#initial-namespace-administration) below.
+Public namespace entry remains disabled.
+
+Scoped filesystem attribute permission is documented in
 [FS-CHOWN.md](FS-CHOWN.md).
 
 Initial UID0 map authority is documented in
@@ -688,3 +692,68 @@ copies in the root image's shadowed /usr; boot29 verified the corrected nested
 image before the final PID-boundary change. The remaining platform/userland
 and SDK dependencies are not a full source rebuild, so this remains a mixed
 platform release-runtime checkpoint. No production host deployment occurred.
+
+## Initial-namespace administration
+
+Scoped credentials must not administer the surrounding native zone merely
+because their backing effective UID is 0. lx_cap_initial evaluates native
+Linux-capability projection only when the credential belongs to the initial
+user namespace. It checks actual effective native privilege sets and does
+not require UID0. Descendant credentials cannot acquire initial authority
+from their scoped capability bitmap or even from native privilege bits.
+The helper adds no credential or process fields.
+
+The zone-wide emulated swapon/swapoff visibility and current UTS hostname/
+domain require initial-scope CAP_SYS_ADMIN. Hostname/domain changes retain
+native systeminfo checks as well. Reboot, privileged empty-buffer syslog and
+vhangup remain legacy initial-root stubs; descendant credentials are rejected.
+No private PID-namespace reboot target is implemented. These stubs are not
+full Linux CAP_SYS_BOOT/SYSLOG/SYS_TTY_CONFIG emulation. Unprivileged empty-
+buffer syslog actions 3/10 retain their existing behavior.
+
+Swapoff checks authority before copying the path. Swapon rejects invalid
+flags before checking authority, then copies the path. Reboot checks initial
+root authority before validating magic. These denial precedences match the
+Linux controls for the supported scope. Linux references:
+https://github.com/torvalds/linux/blob/master/mm/swapfile.c
+https://github.com/torvalds/linux/blob/master/kernel/sys.c
+https://github.com/torvalds/linux/blob/master/kernel/reboot.c
+https://github.com/torvalds/linux/blob/master/kernel/printk/printk.c
+
+VM63 final canonical drivers PASS without console overrides: identity 64+64,
+capability 19+19 and prior ABI/i386/NNP/BPF/filter/signal/fork/exec/thread/
+map/mount/budget/lifetime/native-control and ownership/mode ACL/race suites.
+The new scoped case uses backing native UID0 with all scoped capabilities,
+then removes effective SYS_ADMIN and repeats the denials. Both times it
+checks swap visibility and UTS names remain unchanged. Static and dynamic
+initial-lx controls toggle and restore only the disposable zone's emulated
+swap display, check legacy no-op stubs, then fork a native initial-root child
+that removes effective SYS_ADMIN while keeping it permitted and verifies
+that swap/UTS calls are denied. Test reboot uses only ignored CAD_ON; it never
+requests restart, halt or poweroff. No real swap device is disabled or enabled.
+The explicit initial-control mode refuses to run outside lx.
+
+The native ktest verifies a non-root UID with genuine native authority,
+rejection after removing either required native mount or admin privilege,
+rejection of an invalid capability index, and a scoped credential's rejection
+independent of its native privilege bits. Private unpublished credential
+fixtures do not modify the source credential or run privileged operations.
+Native credential lifetime checks pass after the probes exit. Linux 64 static/
+dynamic controls pass with GCC -Wall -Wextra -Werror. Swap visibility is read
+from /proc/meminfo; the existing sysinfo implementation does not consult that
+emulation flag and is not used as evidence of its state.
+
+Kernel brand source 00e8179776 and native ktest b756a76b32 pass clean release/
+debug builds. Runtime uses release objects; debug is compile-only. Common/
+unix a2f98e1dd2, ZFS/proc/elf 89c4ea1aa5 and Native tl600d/LOFSa8b/VM30
+emulation libraries/VM46 support remain over the mixed May base. There is no
+new ZFS, common-kernel, pool format or feature change in this milestone.
+Evidence is lab/evidence/boot-63-initial-admin-acceptance.log; provenance is
+/build/RUNNING_TESTS.md. Runtime hashes and synced shutdown are recorded there.
+No physical host, boot tree or production Debian zone was changed.
+
+This closes one prerequisite for public namespace entry. Scheduling and
+other remaining privileged ABI checks, filesystem permissions, independent
+FSIDs and complete mount/PID/IPC/network isolation still need implementation
+or validation. An actual newest-Codex sandboxed coding workflow and complete
+platform validation remain required; no sandbox acceptance is claimed here.
