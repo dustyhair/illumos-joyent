@@ -1,6 +1,8 @@
 /* CDDL version 1.0, http://www.illumos.org/license/CDDL. */
 #define _GNU_SOURCE
 #include <errno.h>
+#include <fcntl.h>
+#include <sys/xattr.h>
 #include <linux/capability.h>
 #include <linux/filter.h>
 #include <linux/seccomp.h>
@@ -362,6 +364,17 @@ static int exec_codex(void)
     syscall(SYS_execve, self_path, args, NULL);
     return 1;
 }
+static int file_caps_unsupported(void)
+{
+    struct vfs_cap_data data = { .magic_etc = VFS_CAP_REVISION_2 | VFS_CAP_FLAGS_EFFECTIVE };
+    data.data[0].permitted = 1U << CAP_CHOWN;
+    int fd = open(setid_path, O_RDONLY);
+    CHECK(fd >= 0);
+    errno = 0;
+    CHECK(fsetxattr(fd, "security.capability", &data, sizeof(data), 0) == -1 && errno == EOPNOTSUPP);
+    CHECK(close(fd) == 0);
+    return 0;
+}
 static int interim_ids(void)
 {
     errno = 0;
@@ -413,6 +426,7 @@ int main(int argc, char **argv)
         run("privileged and native exec reject atomically", privileged_exec, 0);
         run("native entry denied after scoped exec", exec_native_guard, SIGSYS);
         run("Codex exec with scoped zero capabilities and a filter", exec_codex, 0);
+        run("unsupported file capabilities do not report success", file_caps_unsupported, 0);
     }
     printf("SCOPE_CAPS cases=%d failures=%d\n", cases, failures);
     return failures != 0;

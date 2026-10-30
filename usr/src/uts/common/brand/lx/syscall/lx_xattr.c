@@ -123,9 +123,10 @@ lx_setxattr_common(vnode_t *vp, char *name, void *value, size_t sz, int flags)
 		 * In order to keep package management software happy, despite
 		 * lacking support for file-based Linux capabilities via
 		 * xattrs, we fake success when root attempts a setxattr on
-		 * that attribute.
+		 * that attribute in the initial namespace. Scoped credentials
+		 * must not report a file capability which was never stored.
 		 */
-		if (crgetuid(CRED()) == 0 &&
+		if (crgetbrand(CRED()) == NULL && crgetuid(CRED()) == 0 &&
 		    strcmp(key, LX_XATTR_CAPABILITY) == 0) {
 			error = 0;
 		}
