@@ -1268,9 +1268,11 @@ static int scoped_admin(void)
 static const unsigned limit_resources[]={RLIMIT_LOCKS,RLIMIT_NICE,RLIMIT_RTPRIO,RLIMIT_RTTIME};
 static int limit_is(unsigned resource,rlim_t soft,rlim_t hard)
 {
-    struct rlimit got;
+    struct rlimit got,legacy;
     return syscall(SYS_prlimit64,0,resource,NULL,&got)==0 &&
-        got.rlim_cur==soft && got.rlim_max==hard;
+        syscall(SYS_getrlimit,resource,&legacy)==0 &&
+        got.rlim_cur==soft && got.rlim_max==hard &&
+        legacy.rlim_cur==soft && legacy.rlim_max==hard;
 }
 static int limits_image(void)
 {
