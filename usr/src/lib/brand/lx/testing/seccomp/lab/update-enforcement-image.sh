@@ -30,6 +30,7 @@ pfexec cp "$ws/usr/src/uts/intel/tl/obj64/tl" "$lab/mnt-root/kernel/drv/amd64/tl
 pfexec cp "$lab/stream-cred-native" "$lab/mnt-root/lab/stream-cred-native"
 pfexec chmod 0555 "$lab/mnt-root/lab/stream-cred-native"
 pfexec cp "$ws/usr/src/uts/intel/lx_proc/obj64/lx_proc" "$lab/mnt-root/kernel/fs/amd64/lx_proc"
+pfexec cp "$ws/usr/src/uts/intel/zfs/obj64/zfs" "$lab/mnt-root/kernel/fs/amd64/zfs"
 pfexec mkdir -p "$lab/mnt-root/kernel/exec/amd64"
 pfexec cp "$ws/usr/src/uts/intel/elfexec/obj64/elfexec" "$lab/mnt-root/kernel/exec/amd64/elfexec"
 if test "${LX_LAB_UPDATE_USERLIBS:-0}" = 1 ||
