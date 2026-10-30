@@ -63,14 +63,38 @@ controls. Its full userns regression run stopped earlier because the dynamic
 ownership-race trace did not observe a stale grant. The unchanged standalone
 race passed on retry and observed stale grants rejected with EPERM. The probe
 now pauses 1 ms between ownership calls to span native writer phases while
-retaining the required stale-grant/rejection assertion. Final canonical image
-acceptance with the paced probe is pending.
+retaining the required stale-grant/rejection assertion. VM70 does not provide
+complete canonical image acceptance.
 
 VM71 then exposed a separate syscall gap: libc usleep dispatched through
 the forbidden userspace emulation path and terminated the scoped process
 with SIGSYS. Kernel clock_nanosleep support and its validation are described
 in [CLOCK-SLEEP.md](CLOCK-SLEEP.md). VM72 runs the canonical suites with that
 implementation and the paced ownership probe.
+
+## VM73 acceptance
+
+Both canonical drivers pass without serial overrides on the fresh image.
+Clone passes 12+12 cases, unshare entry 16+16, and the actual zone-root budget
+returns to used 0 after all four probes. Default-off and zero-budget controls
+pass for clone and unshare in both executable variants. Kernel clock sleep
+passes 18+18 confined amd64 cases and its explicit unfiltered i386 ABI control.
+The i386 seccomp installation rejection remains expected and is not counted
+as working i386 filtering.
+
+Identity/affinity 70+70, scoped FSS 8+8, capability 19+19 and the prior ABI/i386,
+NNP/BPF/filter/signal/fork/exec/thread/map/mount/budget/lifetime/native-control
+suites pass. The filesystem race and ACL suites pass, including observed
+stale ownership/mode rejection and both SGID clear/restore outcomes. Chown,
+chmod and GID race probes now span native writer phases; polling logs are
+created by the parent before launching background probes.
+
+Runtime module and probe hashes match staging. Source 8a478f3e8b contains the
+accepted probes/drivers; brand 8271cbb3ef passes clean release/debug builds.
+Common/unix/genunix/proc/elf 5bcd036dac, native ktest 4ba3707890 and the retained
+mixed platform remain as above. Evidence is locally recorded in
+lx-sandbox/lab/evidence/boot-73-clone-clock-sleep-acceptance.log.
+The private pool exports successfully and the VM completes synced poweroff.
 
 Common/unix/genunix/brand/proc/elf source 5bcd036dac and native ktest source
 4ba3707890 pass clean release/debug builds. Runtime uses release objects over

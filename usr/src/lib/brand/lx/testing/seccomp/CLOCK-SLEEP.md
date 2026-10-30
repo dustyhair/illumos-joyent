@@ -55,7 +55,20 @@ VM72 passes 17+17 sleep cases and exposes the remaining native errno mapping
 error in validation: Native ENOTSUP maps to Linux ENOSYS, so unsupported clock
 backends must return native EOPNOTSUPP. It also confirms existing i386 filter
 rejection and exposes a driver log-creation race. These are corrected in
-source 8271cbb3ef; final VM acceptance is pending.
+source 8271cbb3ef before the VM73 acceptance below.
+
+VM73 now passes both canonical drivers on a fresh image without diagnostic
+overrides. Confined amd64 sleep controls pass 18+18, and the explicit i386
+unfiltered ABI control passes while confirming the existing filter rejection.
+Paced ownership/mode race probes use libc sleep inside scoped processes and
+pass all required stale-grant assertions. User namespace entry 16+16, clone
+12+12, budget-idle/default-off/zero-budget controls and the previous regression
+suites also pass. Runtime module and probe hashes match staging. Local
+evidence is lx-sandbox/lab/evidence/boot-73-clone-clock-sleep-acceptance.log.
+The private pool exports successfully and the VM completes synced poweroff.
+
+Final brand source 8271cbb3ef passes clean release/debug builds; accepted
+driver/probe source is 8a478f3e8b.
 
 Common/kernel source 5bcd036dac, native ktest 4ba3707890 and the
 retained platform components remain mixed. Runtime is release-only; debug
