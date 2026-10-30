@@ -340,17 +340,19 @@ static int codex_image(void)
     CHECK(getcaps(0, &c) == 0 && c.e == 0 && c.p == 0 && c.i == 0);
     CHECK(prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) == 1);
     CHECK(prctl(PR_GET_SECCOMP, 0, 0, 0, 0) == 2);
-    char *const args[] = { "/test/codex-current", "--version", NULL };
+    char *const args[] = { "/test/codex-current/bin/codex", "--version", NULL };
     syscall(SYS_execve, args[0], args, NULL);
+    fprintf(stderr, "Codex exec %s failed errno=%d\n", args[0], errno);
     return 1;
 }
 static int exec_codex(void)
 {
     struct sock_filter code[] = {
         BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_socket, 0, 3),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_socket, 0, 4),
         BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, args[0])),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AF_INET, 0, 1),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AF_INET, 1, 0),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AF_INET6, 0, 1),
         BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | EACCES),
         BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW)
     };
@@ -360,6 +362,8 @@ static int exec_codex(void)
     CHECK(prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &program) == 0);
     errno = 0;
     CHECK(socket(AF_INET, SOCK_STREAM, 0) == -1 && errno == EACCES);
+    errno = 0;
+    CHECK(socket(AF_INET6, SOCK_STREAM, 0) == -1 && errno == EACCES);
     char *const args[] = { (char *)self_path, "--exec-codex", NULL };
     syscall(SYS_execve, self_path, args, NULL);
     return 1;
@@ -383,13 +387,14 @@ static int interim_ids(void)
 }
 static void run(const char *name, int (*fn)(void), int sig)
 {
-    int status;
+    int status = 0;
     fflush(NULL);
     pid_t p = fork();
     if (p == 0) _exit(fn());
     int ok = p > 0 && waitpid(p, &status, 0) == p &&
         (sig ? WIFSIGNALED(status) && WTERMSIG(status) == sig :
         WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    if (!ok) fprintf(stderr, "case %s child=%d status=%#x errno=%d\n", name, p, status, errno);
     printf("%s %s\n", ok ? "PASS" : "FAIL", name);
     cases++; if (!ok) failures++;
 }
