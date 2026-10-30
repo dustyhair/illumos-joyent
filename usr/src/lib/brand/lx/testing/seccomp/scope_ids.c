@@ -764,6 +764,44 @@ static int stream_rights(void)
     }
     CHECK(rights==1 && creds==1);close(pair[0]);close(pair[1]);return 0;
 }
+static int stream_accept_case(int exited)
+{
+    CHECK(root_ids()==0);
+    char dir[]="/tmp/lx-accept-XXXXXX";CHECK(mkdtemp(dir)!=NULL);
+    struct sockaddr_un addr;memset(&addr,0,sizeof(addr));addr.sun_family=AF_UNIX;
+    CHECK(snprintf(addr.sun_path,sizeof(addr.sun_path),"%s/socket",dir)>0);
+    int listener=socket(AF_UNIX,SOCK_STREAM,0),one=1,ready_pipe[2],release_pipe[2],status;
+    CHECK(listener>=0 && setsockopt(listener,SOL_SOCKET,SO_PASSCRED,&one,sizeof(one))==0);
+    CHECK(bind(listener,(struct sockaddr *)&addr,sizeof(addr))==0 && listen(listener,4)==0);
+    CHECK(pipe(ready_pipe)==0 && pipe(release_pipe)==0);
+    pid_t child=fork();CHECK(child>=0);
+    if(child==0) {
+        close(ready_pipe[0]);close(release_pipe[1]);close(listener);
+        int sender=socket(AF_UNIX,SOCK_STREAM,0);CHECK(sender>=0);
+        CHECK(connect(sender,(struct sockaddr *)&addr,sizeof(addr))==0);
+        CHECK(write(sender,"a",1)==1);
+        CHECK(syscall(SYS_setresgid,1,1,1)==0 && syscall(SYS_setresuid,1,1,1)==0);
+        CHECK(write(sender,"b",1)==1 && write(ready_pipe[1],"r",1)==1);
+        if(!exited) { char byte;CHECK(read(release_pipe[0],&byte,1)==1); }
+        close(sender);_exit(0);
+    }
+    close(ready_pipe[1]);close(release_pipe[0]);char byte;
+    CHECK(read(ready_pipe[0],&byte,1)==1);
+    if(exited) CHECK(waitpid(child,&status,0)==child && WIFEXITED(status) && WEXITSTATUS(status)==0);
+    int accepted=accept(listener,NULL,NULL);CHECK(accepted>=0);
+    socklen_t len=sizeof(one);one=0;
+    CHECK(getsockopt(accepted,SOL_SOCKET,SO_PASSCRED,&one,&len)==0 && one==1);
+    CHECK(stream_receive(accepted,child,0)==0 && stream_receive(accepted,child,1)==0);
+    if(!exited) {
+        CHECK(write(release_pipe[1],"r",1)==1);
+        CHECK(waitpid(child,&status,0)==child && WIFEXITED(status) && WEXITSTATUS(status)==0);
+    }
+    CHECK(read(accepted,&byte,1)==0);
+    close(accepted);close(listener);close(ready_pipe[0]);close(release_pipe[1]);
+    CHECK(unlink(addr.sun_path)==0 && rmdir(dir)==0);return 0;
+}
+static int stream_accept_live(void) {return stream_accept_case(0);}
+static int stream_accept_exited(void) {return stream_accept_case(1);}
 /* Capture native identities before the trusted fixture attaches its map. */
 static int prepare_peer_fixtures(void)
 {
@@ -1064,6 +1102,8 @@ int main(int argc, char **argv)
     run("socket credential forgery and unmapped IDs are rejected", scm_denied);
     run("stream credentials follow fork, writev and sender ID changes", stream_sender);
     run("stream credentials preserve descriptor passing and CLOEXEC", stream_rights);
+    run("accept inherits credentials for a live queued sender", stream_accept_live);
+    run("accept preserves queued credentials after sender exit", stream_accept_exited);
     run("peer credentials use the reader namespace and overflow IDs", peer_inherited);
     run("peer credentials translate fresh mapped identities", peer_mapped);
     run("peer credentials retain the connection snapshot", peer_cached);

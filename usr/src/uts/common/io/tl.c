@@ -3765,6 +3765,10 @@ tl_conn_res(mblk_t *mp, tl_endpt_t *tep)
 	if (tep != acc_ep)
 		acc_ep->te_state = nextstate[TE_PASS_CONN][acc_ep->te_state];
 
+	/* Socket acceptors inherit the listener's credential option. */
+	if (IS_SOCKET(acc_ep))
+		acc_ep->te_flag |= tep->te_flag & TL_SOCKUCRED;
+
 	if (cl_ep == NULL) {
 		/*
 		 * The client has already closed. Send up any queued messages
@@ -4683,6 +4687,15 @@ tl_data(mblk_t *mp, tl_endpt_t *tep)
 			    "tl_data: ocon"));
 			TL_PUTBQ(tep, mp);
 			return;
+		}
+		/* Preserve credentials before a closing sender is unlinked. */
+		if (IS_SOCKET(tep) &&
+		    (tep->te_oconp->te_flag & TL_SOCKUCRED) != 0) {
+			mp = tl_stream_ucred(mp, tep, tep->te_oconp);
+			if (mp == NULL)
+				return;
+			prim = (void *)mp->b_rptr;
+			msz = MBLKL(mp);
 		}
 		if (DB_TYPE(mp) == M_PROTO) {
 			if (msz < sizeof (t_scalar_t)) {
