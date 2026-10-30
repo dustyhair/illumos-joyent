@@ -19,6 +19,8 @@
 #define	LX_CAP_ALL	((UINT64_C(1) << (LX_CAP_LAST + 1)) - 1)
 #define	LX_CAP_BIT(n)	(UINT64_C(1) << (n))
 #define	LX_CAP_CHOWN	0
+#define	LX_CAP_FOWNER	3
+#define	LX_CAP_FSETID	4
 #define	LX_CAP_SETGID	6
 #define	LX_CAP_SETUID	7
 #define	LX_CAP_SETPCAP	8

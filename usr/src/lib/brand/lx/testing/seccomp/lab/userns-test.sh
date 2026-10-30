@@ -62,7 +62,7 @@ for probe in /test/scope_caps /test/dynamic/scope_caps \
     /test/scope_ids /test/dynamic/scope_ids; do
     scope_log=/lab/$(echo "$probe" | tr / _).log
     if [[ "$probe" = */scope_ids ]]; then
-        expected='SCOPE_IDS cases=57 failures=0'
+        expected='SCOPE_IDS cases=62 failures=0'
     else
         expected='SCOPE_CAPS cases=19 failures=0'
     fi
@@ -113,6 +113,7 @@ for probe in /test/scope_caps /test/dynamic/scope_caps \
 done
 /lab/chown-race-test.sh
 /lab/chown-acl-test.sh
+/lab/chmod-race-test.sh
 cleanup
 trap - EXIT
 /lab/ktest run lx_namespace:user:credentials

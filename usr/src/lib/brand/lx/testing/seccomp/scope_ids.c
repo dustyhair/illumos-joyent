@@ -26,7 +26,7 @@
 static const char *self;
 static int cases, failures;
 static int pre_root_pair[2], pre_unmapped_pair[2], pre_unmapped_fd;
-static int pre_gid_unmapped_fd;
+static int pre_gid_unmapped_fd, pre_mode_gid_unmapped_fd;
 static pid_t pre_peer_pid;
 static atomic_int ready, release_worker, worker_error;
 static uint64_t capbits(int permitted)
@@ -858,6 +858,10 @@ static int prepare_peer_fixtures(void)
     pre_gid_unmapped_fd=open(path,O_CREAT|O_EXCL|O_RDWR|O_CLOEXEC,0600);
     CHECK(pre_gid_unmapped_fd>=0 && unlink(path)==0);
     CHECK(fchown(pre_gid_unmapped_fd,1000,2000)==0);
+    snprintf(path,sizeof(path),"/tmp/lx-mode-gid-unmapped-%d",getpid());
+    pre_mode_gid_unmapped_fd=open(path,O_CREAT|O_EXCL|O_RDWR|O_CLOEXEC,0600);
+    CHECK(pre_mode_gid_unmapped_fd>=0 && unlink(path)==0);
+    CHECK(fchown(pre_mode_gid_unmapped_fd,1000,2000)==0);
     return 0;
 }
 static int peer_is(int fd, pid_t pid, unsigned uid, unsigned gid)
@@ -1112,6 +1116,88 @@ static int cap_chown_task(void)
     CHECK(fchown(cap_chown_task_fd,1,2)==0 && owner_is(cap_chown_task_fd,1,2));
     close(cap_chown_task_fd);return 0;
 }
+static int mode_is(int fd, unsigned mode)
+{
+    struct stat st;
+    if(fstat(fd,&st)!=0) return 0;
+    if((st.st_mode&07777)!=mode) {
+        fprintf(stderr,"mode mismatch got=%#o expected=%#o uid=%u gid=%u\n",st.st_mode&07777,mode,st.st_uid,st.st_gid);
+        return 0;
+    }
+    return 1;
+}
+static int cap_effective_off(unsigned cap)
+{
+    struct __user_cap_header_struct h={_LINUX_CAPABILITY_VERSION_3,0};
+    struct __user_cap_data_struct data[2];
+    CHECK(cap<64 && syscall(SYS_capget,&h,data)==0);
+    data[cap/32].effective &= ~(1U<<(cap%32));
+    CHECK(syscall(SYS_capset,&h,data)==0);return 0;
+}
+static int cap_fowner_dir(const char *dir)
+{
+    CHECK(root_ids()==0);
+    char path[256];CHECK(snprintf(path,sizeof(path),"%s/lx-cap-fowner-XXXXXX",dir)>0);
+    int fd=mkstemp(path);CHECK(fd>=0 && unlink(path)==0);
+    CHECK(fchown(fd,1,2)==0 && owner_is(fd,1,2));
+    CHECK(fchmod(fd,06751)==0 && mode_is(fd,06751));
+    CHECK(fchmod(fd,01755)==0 && mode_is(fd,01755));
+    CHECK(cap_effective_off(CAP_FSETID)==0);
+    CHECK(fchmod(fd,02750)==0 && mode_is(fd,0750));
+    CHECK(fchmod(fd,04751)==0 && mode_is(fd,04751));
+    unsigned group=2;CHECK(syscall(SYS_setgroups,1,&group)==0);
+    CHECK(fchmod(fd,02750)==0 && mode_is(fd,02750));
+    close(fd);return 0;
+}
+static int cap_fowner_zfs(void) { return cap_fowner_dir("/tmp"); }
+static int cap_fowner_tmpfs(void)
+{
+    const char *dir=getenv("LX_CHOWN_TMPFS");
+    return cap_fowner_dir(dir?dir:"/dev/shm");
+}
+static int cap_fowner_effective(void)
+{
+    CHECK(root_ids()==0);int fd=owned_fd();CHECK(fd>=0);
+    CHECK(fchown(fd,1,1)==0 && mode_is(fd,0600));
+    CHECK(cap_effective_off(CAP_FOWNER)==0);errno=0;
+    CHECK(fchmod(fd,0644)==-1 && errno==EPERM && mode_is(fd,0600));
+    CHECK(fchown(fd,0,0)==0 && owner_is(fd,0,0));
+    CHECK(fchmod(fd,01755)==0 && mode_is(fd,01755));
+    close(fd);return 0;
+}
+static int cap_fowner_unmapped(void)
+{
+    CHECK(root_ids()==0);errno=0;
+    CHECK(fchmod(pre_unmapped_fd,0644)==-1 && errno==EPERM);
+    CHECK(mode_is(pre_unmapped_fd,0600));
+    CHECK(prctl(PR_SET_SECUREBITS,SECBIT_NO_SETUID_FIXUP,0,0,0)==0);
+    CHECK(syscall(SYS_setresuid,1,1,1)==0);
+    CHECK(fchmod(pre_mode_gid_unmapped_fd,06755)==0);
+    CHECK(mode_is(pre_mode_gid_unmapped_fd,04755));
+    CHECK(owner_is(pre_mode_gid_unmapped_fd,0,65534));
+    return 0;
+}
+static int fowner_task_fd, fowner_task_error;
+static void *cap_fowner_worker(void *unused)
+{
+    (void)unused;fowner_task_error=cap_effective_off(CAP_FOWNER);
+    if(!fowner_task_error) {
+        errno=0;
+        if(fchmod(fowner_task_fd,0644)!=-1 || errno!=EPERM)
+            fowner_task_error=1;
+    }
+    return NULL;
+}
+static int cap_fowner_task(void)
+{
+    CHECK(root_ids()==0);fowner_task_fd=owned_fd();CHECK(fowner_task_fd>=0);
+    CHECK(fchown(fowner_task_fd,1,1)==0);
+    pthread_t thread;CHECK(pthread_create(&thread,NULL,cap_fowner_worker,NULL)==0);
+    CHECK(pthread_join(thread,NULL)==0 && fowner_task_error==0);
+    CHECK(mode_is(fowner_task_fd,0600));
+    CHECK(fchmod(fowner_task_fd,0644)==0 && mode_is(fowner_task_fd,0644));
+    close(fowner_task_fd);return 0;
+}
 static int chown_race_probe(void)
 {
     CHECK(root_ids()==0);
@@ -1125,6 +1211,21 @@ static int chown_race_probe(void)
         else {CHECK(errno==EPERM);denied++;}
     }
     close(fd);printf("CHOWN_RACE_PROBE_PASS allowed=%u denied=%u\n",allowed,denied);
+    return 0;
+}
+static int chmod_race_probe(void)
+{
+    CHECK(root_ids()==0);
+    char path[128];snprintf(path,sizeof(path),"/tmp/lx-chmod-race-%d",getpid());
+    int fd=open(path,O_CREAT|O_EXCL|O_RDWR|O_CLOEXEC,0600);CHECK(fd>=0);
+    CHECK(fchown(fd,1,1)==0);
+    printf("CHMOD_RACE_ARM_PID=%d\n",getpid());fflush(stdout);raise(SIGSTOP);
+    unsigned allowed=0,denied=0;
+    for(unsigned i=0;i<1000;i++) {
+        if(fchmod(fd,0644)==0) allowed++;
+        else {CHECK(errno==EPERM);denied++;}
+    }
+    close(fd);printf("CHMOD_RACE_PROBE_PASS allowed=%u denied=%u\n",allowed,denied);
     return 0;
 }
 static int chown_acl_probe(void)
@@ -1193,7 +1294,8 @@ int main(int argc, char **argv)
     self = argv[0];
     int race_mode=argc==2 && !strcmp(argv[1],"--chown-race");
     int acl_mode=argc==2 && !strcmp(argv[1],"--chown-acl");
-    if(race_mode || acl_mode) argc=1;
+    int mode_race=argc==2 && !strcmp(argv[1],"--chmod-race");
+    if(race_mode || acl_mode || mode_race) argc=1;
     if (argc == 2 && !strcmp(argv[1], "--scm-length-only")) return scm_lengths();
     CHECK(prepare_peer_fixtures() == 0);
     if (argc == 2 && !strcmp(argv[1], "--linux")) {
@@ -1216,6 +1318,7 @@ int main(int argc, char **argv)
     setvbuf(stdout, NULL, _IOLBF, 0);
     if(race_mode) return chown_race_probe();
     if(acl_mode) return chown_acl_probe();
+    if(mode_race) return chmod_race_probe();
     run("mapped getters and privileged setters", mapped_ids);
     run("mapping validation and failed-update atomicity", validation);
     run("saved UID restoration and capability fixups", saved_ids);
@@ -1273,6 +1376,11 @@ int main(int argc, char **argv)
     run("CHOWN requires effective authority and preserves group rights", cap_chown_effective);
     run("CHOWN cannot override unmapped inode ownership", cap_chown_unmapped);
     run("CHOWN permission uses task authority rather than cached file credentials", cap_chown_task);
+    run("scoped FOWNER grants mapped file modes and Linux setid rules",cap_fowner_zfs);
+    run("scoped FOWNER grants tmpfs file modes and Linux setid rules",cap_fowner_tmpfs);
+    run("FOWNER requires effective authority and preserves owner rights",cap_fowner_effective);
+    run("FOWNER needs mapped UID while FSETID also needs mapped GID",cap_fowner_unmapped);
+    run("FOWNER permission uses task rather than cached file authority",cap_fowner_task);
     if (argc == 1) {
         unsigned group = 1;
         CHECK(root_ids() == 0);

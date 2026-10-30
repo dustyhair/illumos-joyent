@@ -3061,6 +3061,8 @@ zfs_setattr(vnode_t *vp, vattr_t *vap, int flags, cred_t *cr,
 	vattr_t		oldva;
 	xvattr_t	tmpxvattr;
 	uint_t		mask = vap->va_mask;
+	uint_t		brand_mask = mask & (AT_UID | AT_GID | AT_MODE);
+	mode_t		requested_mode = (mask & AT_MODE) ? vap->va_mode : 0;
 	uint_t		saved_mask = 0;
 	int		trim_mask = 0;
 	uint64_t	new_mode;
@@ -3386,8 +3388,11 @@ top:
 
 	if (mask & AT_MODE) {
 		if (zfs_zaccess(zp, ACE_WRITE_ACL, 0, skipaclchk, cr) == 0) {
-			err = secpolicy_setid_setsticky_clear(vp, vap,
-			    &oldva, cr);
+			err = brand_cred_vnode_setattr(cr, vp, vap, &oldva,
+			    AT_MODE);
+			if (err == BRAND_CRED_DEFER)
+				err = secpolicy_setid_setsticky_clear(vp, vap,
+				    &oldva, cr);
 			if (err) {
 				ZFS_EXIT(zfsvfs);
 				return (err);
@@ -3575,13 +3580,18 @@ top:
 	}
 	mutex_enter(&zp->z_lock);
 
-	/* Recheck scoped ownership at the actual locked update point. */
-	if ((mask & (AT_UID | AT_GID)) != 0 && crgetbrand(cr) != NULL) {
+	/* Recheck scoped authority at the actual locked update point. */
+	if (brand_mask != 0 && crgetbrand(cr) != NULL) {
+		vattr_t finalva = *vap;
 		int authority;
 
+		oldva.va_mode = zp->z_mode;
 		zfs_fuid_map_ids(zp, cr, &oldva.va_uid, &oldva.va_gid);
-		authority = brand_cred_vnode_setattr(cr, vp, vap, &oldva,
-		    mask & (AT_UID | AT_GID));
+		/* Reevaluate explicit chmod's setgid bit using the current GID. */
+		if (brand_mask == AT_MODE)
+			finalva.va_mode = requested_mode;
+		authority = brand_cred_vnode_setattr(cr, vp, &finalva, &oldva,
+		    brand_mask);
 		if (authority != BRAND_CRED_DEFER && authority != 0) {
 			err = authority;
 			brand_denied = B_TRUE;
@@ -3590,6 +3600,13 @@ top:
 			mutex_exit(&zp->z_lock);
 			rw_exit(&zp->z_acl_lock);
 			goto out;
+		}
+		if ((brand_mask & AT_MODE) != 0 && authority == 0) {
+			/* Special bits are not encoded in the prepared ACL. */
+			new_mode = (new_mode & ~S_ISGID) |
+			    (finalva.va_mode & S_ISGID);
+			vap->va_mode = (vap->va_mode & ~S_ISGID) |
+			    (finalva.va_mode & S_ISGID);
 		}
 	}
 

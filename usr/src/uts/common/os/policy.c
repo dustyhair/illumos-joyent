@@ -1486,21 +1486,23 @@ secpolicy_vnode_setattr(cred_t *cr, struct vnode *vp, struct vattr *vap,
 		}
 	}
 	if (mask & AT_MODE) {
-		/*
-		 * If not the owner of the file then check privilege
-		 * for two things: the privilege to set the mode at all
-		 * and, if we're setting setuid, we also need permissions
-		 * to add the set-uid bit, if we're not the owner.
-		 * In the specific case of creating a set-uid root
-		 * file, we need even more permissions.
-		 */
-		error = secpolicy_vnode_setdac3(cr, ovap->va_uid, implicit);
-		if (error != 0)
-			goto out;
+		int authority = brand_cred_vnode_setattr(cr, vp, vap, ovap,
+		    AT_MODE);
 
-		if ((error = secpolicy_setid_setsticky_clear(vp, vap,
-		    ovap, cr)) != 0)
+		if (authority != BRAND_CRED_DEFER && authority != 0) {
+			error = authority;
 			goto out;
+		}
+		if (authority == BRAND_CRED_DEFER) {
+			/* Native owner, setid and sticky-bit policy. */
+			error = secpolicy_vnode_setdac3(cr, ovap->va_uid,
+			    implicit);
+			if (error != 0)
+				goto out;
+			if ((error = secpolicy_setid_setsticky_clear(vp, vap,
+			    ovap, cr)) != 0)
+				goto out;
+		}
 	} else
 		vap->va_mode = ovap->va_mode;
 

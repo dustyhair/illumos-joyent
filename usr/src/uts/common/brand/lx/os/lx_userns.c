@@ -464,18 +464,42 @@ lx_userns_cred_perm(const cred_t *source, proc_t *process,
 	return (BRAND_CRED_DEFER);
 }
 
-/* Only grant against inode IDs covered by this immutable namespace map. */
+/* Scoped filesystem authority uses the calling task and mapped inode IDs. */
 int
 lx_userns_cred_setattr(const cred_t *cred, struct vnode *vp,
-    const struct vattr *want, const struct vattr *old, uint_t mask)
+    struct vattr *want, const struct vattr *old, uint_t mask)
 {
 	const lx_userns_native_t *data = (void *)crgetbrand(cred);
 	const char *fs;
-	boolean_t needs_cap = B_FALSE;
+	boolean_t needs_cap = B_FALSE, locked_fs;
+	int authority = BRAND_CRED_DEFER;
 
-	mask &= AT_UID | AT_GID;
+	mask &= AT_UID | AT_GID | AT_MODE;
 	if (data == NULL || data->un_cred.bc_brand != &lx_brand || mask == 0)
 		return (BRAND_CRED_DEFER);
+	/* Only these filesystems recheck authority at the locked update. */
+	fs = vfssw[vp->v_vfsp->vfs_fstype].vsw_name;
+	locked_fs = strcmp(fs, "zfs") == 0 || strcmp(fs, "tmpfs") == 0;
+	if ((mask & AT_MODE) != 0) {
+		if (crgetuid(cred) != old->va_uid &&
+		    (!locked_fs || (data->un_caps.lc_effective &
+		    LX_CAP_BIT(LX_CAP_FOWNER)) == 0 ||
+		    lx_userns_id(data->un_namespace, 0, old->va_uid, 0) ==
+		    LX_ID_INVALID))
+			return (EPERM);
+		if (locked_fs) {
+			authority = 0;
+			/* FOWNER needs the UID; FSETID needs both inode IDs. */
+			if (!groupmember(old->va_gid, cred) &&
+			    ((data->un_caps.lc_effective &
+			    LX_CAP_BIT(LX_CAP_FSETID)) == 0 ||
+			    lx_userns_id(data->un_namespace, 0, old->va_uid,
+			    0) == LX_ID_INVALID ||
+			    lx_userns_id(data->un_namespace, 1, old->va_gid,
+			    0) == LX_ID_INVALID))
+				want->va_mode &= ~S_ISGID;
+		}
+	}
 	if (((mask & AT_UID) != 0 && lx_userns_id(data->un_namespace, 0,
 	    want->va_uid, 0) == LX_ID_INVALID) ||
 	    ((mask & AT_GID) != 0 && lx_userns_id(data->un_namespace, 1,
@@ -488,16 +512,12 @@ lx_userns_cred_setattr(const cred_t *cred, struct vnode *vp,
 	    (want->va_gid != old->va_gid && !groupmember(want->va_gid, cred))))
 		needs_cap = B_TRUE;
 	if (!needs_cap)
-		return (BRAND_CRED_DEFER);
+		return (authority);
 	if ((data->un_caps.lc_effective & LX_CAP_BIT(LX_CAP_CHOWN)) == 0 ||
 	    lx_userns_id(data->un_namespace, 0, old->va_uid, 0) ==
 	    LX_ID_INVALID ||
 	    lx_userns_id(data->un_namespace, 1, old->va_gid, 0) ==
-	    LX_ID_INVALID)
-		return (EPERM);
-	/* These filesystems provide a locked ownership update check. */
-	fs = vfssw[vp->v_vfsp->vfs_fstype].vsw_name;
-	if (strcmp(fs, "zfs") != 0 && strcmp(fs, "tmpfs") != 0)
+	    LX_ID_INVALID || !locked_fs)
 		return (EPERM);
 	return (0);
 }

@@ -400,7 +400,7 @@ brand_cred_exec(const cred_t *source, cred_t *candidate, struct vnode *vp,
 /* Caller supplies the filesystem's ownership snapshot, not a path precheck. */
 int
 brand_cred_vnode_setattr(const cred_t *cred, struct vnode *vp,
-    const struct vattr *want, const struct vattr *old, uint_t mask)
+    struct vattr *want, const struct vattr *old, uint_t mask)
 {
 	brand_cred_t *data = crgetbrand(cred);
 
