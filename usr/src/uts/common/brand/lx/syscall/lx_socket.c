@@ -63,6 +63,7 @@
 
 #include <sys/lx_brand.h>
 #include <sys/lx_userns.h>
+#include <sys/lx_cap.h>
 #include <sys/lx_socket.h>
 #include <sys/lx_types.h>
 #include <sys/lx_impl.h>
@@ -814,11 +815,18 @@ stol_conv_ucred(struct cmsghdr *inmsg, struct cmsghdr *omsg)
 		/* LINTED: alignment */
 		cr = UCCRED(scred);
 		if (cr != NULL) {
-			lcred.lxu_uid = cr->pr_euid;
-			lcred.lxu_gid = cr->pr_egid;
+			lcred.lxu_uid = cr->pr_ruid;
+			lcred.lxu_gid = cr->pr_rgid;
 		} else {
 			lcred.lxu_uid = lcred.lxu_gid = 0;
 		}
+
+		lcred.lxu_uid = lx_userns_id_visible(CRED(), 0,
+		    lcred.lxu_uid);
+		lcred.lxu_gid = lx_userns_id_visible(CRED(), 1,
+		    lcred.lxu_gid);
+		if (lcred.lxu_pid == curzone->zone_proc_initpid)
+			lcred.lxu_pid = 1;
 
 		bcopy(&lcred, CMSG_CONTENT(omsg), sizeof (lx_ucred_t));
 	}
@@ -829,32 +837,56 @@ stol_conv_ucred(struct cmsghdr *inmsg, struct cmsghdr *omsg)
 static int
 ltos_conv_ucred(struct cmsghdr *inmsg, struct cmsghdr *omsg)
 {
+	lx_ucred_t *lcred;
+	cred_t *cred = CRED();
+	uint32_t uid, gid;
+	pid_t pid;
+
 	/* Validate in the sizing pass, before reading the payload. */
 	if (inmsg->cmsg_len != sizeof (struct cmsghdr) +
 	    sizeof (lx_ucred_t))
 		return (-EINVAL);
 
-	if (omsg != NULL) {
+	lcred = (lx_ucred_t *)CMSG_CONTENT(inmsg);
+	uid = lx_userns_id_backing(cred, 0, lcred->lxu_uid);
+	gid = lx_userns_id_backing(cred, 1, lcred->lxu_gid);
+	if (uid == UINT32_MAX || gid == UINT32_MAX)
+		return (-EINVAL);
+	pid = lcred->lxu_pid == 1 ? curzone->zone_proc_initpid :
+	    lcred->lxu_pid;
+
+	if (omsg == NULL) {
+		lx_caps_t caps, native;
+
+		lx_cap_native_get(cred, &native);
+		if (lx_userns_caps_get(cred, &caps) != 0)
+			caps = native;
+		/* The current PID namespace is owned by the native zone. */
+		if ((pid != curproc->p_pid && (native.lc_effective &
+		    LX_CAP_BIT(LX_CAP_SYS_ADMIN)) == 0) ||
+		    (uid != crgetruid(cred) && uid != crgetuid(cred) &&
+		    uid != crgetsuid(cred) && (caps.lc_effective &
+		    LX_CAP_BIT(LX_CAP_SETUID)) == 0) ||
+		    (gid != crgetrgid(cred) && gid != crgetgid(cred) &&
+		    gid != crgetsgid(cred) && (caps.lc_effective &
+		    LX_CAP_BIT(LX_CAP_SETGID)) == 0))
+			return (-EPERM);
+	} else {
 		struct ucred_s *uc;
 		prcred_t *pc;
-		lx_ucred_t *lcred;
 
 		uc = (struct ucred_s *)CMSG_CONTENT(omsg);
 		/* LINTED: alignment */
 		pc = (prcred_t *)((char *)uc + sizeof (struct ucred_s));
-
 		uc->uc_credoff = sizeof (struct ucred_s);
-
-		lcred = (lx_ucred_t *)CMSG_CONTENT(inmsg);
-
-		uc->uc_pid = lcred->lxu_pid;
-		pc->pr_euid = lcred->lxu_uid;
-		pc->pr_egid = lcred->lxu_gid;
+		uc->uc_pid = pid;
+		/* Explicit metadata uses the claimed IDs in either view. */
+		pc->pr_ruid = pc->pr_euid = pc->pr_suid = uid;
+		pc->pr_rgid = pc->pr_egid = pc->pr_sgid = gid;
 	}
 
 	return (sizeof (struct cmsghdr) + sizeof (struct ucred_s) +
 	    sizeof (prcred_t));
-
 }
 
 static int

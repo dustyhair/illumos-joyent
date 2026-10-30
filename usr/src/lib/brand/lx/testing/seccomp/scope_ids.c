@@ -604,6 +604,93 @@ static int scm_lengths(void)
     }
     return 0;
 }
+static ssize_t scm_send(int fd, const struct ucred *cred)
+{
+    char byte = 'x'; struct iovec iov = { &byte, 1 };
+    union { struct cmsghdr align; char data[CMSG_SPACE(sizeof(struct ucred))]; } buf;
+    memset(&buf, 0, sizeof(buf));
+    struct msghdr msg = { .msg_iov = &iov, .msg_iovlen = 1 };
+    if (cred) {
+        msg.msg_control = buf.data; msg.msg_controllen = sizeof(buf.data);
+        struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
+        cmsg->cmsg_level = SOL_SOCKET; cmsg->cmsg_type = SCM_CREDENTIALS;
+        cmsg->cmsg_len = CMSG_LEN(sizeof(*cred));
+        memcpy(CMSG_DATA(cmsg), cred, sizeof(*cred));
+    }
+    return sendmsg(fd, &msg, MSG_NOSIGNAL);
+}
+static int scm_roundtrip(int kind, const struct ucred *claim, unsigned uid, unsigned gid)
+{
+    int pair[2], one = 1;
+    CHECK(socketpair(AF_UNIX, kind, 0, pair) == 0);
+    CHECK(setsockopt(pair[1], SOL_SOCKET, SO_PASSCRED, &one, sizeof(one)) == 0);
+    CHECK(scm_send(pair[0], claim) == 1);
+    char byte; struct iovec iov = { &byte, 1 };
+    union { struct cmsghdr align; char data[256]; } buf;
+    struct msghdr msg = { .msg_iov = &iov, .msg_iovlen = 1,
+        .msg_control = buf.data, .msg_controllen = sizeof(buf.data) };
+    CHECK(recvmsg(pair[1], &msg, MSG_DONTWAIT) == 1 && !(msg.msg_flags & MSG_CTRUNC));
+    unsigned found = 0;
+    for (struct cmsghdr *c = CMSG_FIRSTHDR(&msg); c; c = CMSG_NXTHDR(&msg,c)) {
+        if (c->cmsg_level != SOL_SOCKET || c->cmsg_type != SCM_CREDENTIALS) continue;
+        struct ucred got; CHECK(c->cmsg_len == CMSG_LEN(sizeof(got)));
+        memcpy(&got, CMSG_DATA(c), sizeof(got));
+        if (got.pid != getpid() || got.uid != uid || got.gid != gid)
+            fprintf(stderr, "SCM kind=%d got=%d/%u/%u expected=%d/%u/%u\n", kind,got.pid,got.uid,got.gid,getpid(),uid,gid);
+        CHECK(got.pid == getpid() && got.uid == uid && got.gid == gid);
+        found++;
+    }
+    CHECK(found == 1); close(pair[0]); close(pair[1]); return 0;
+}
+static int scm_explicit(void)
+{
+    CHECK(drop_caps() == 0);
+    struct ucred claim = { getpid(), getuid(), getgid() };
+    CHECK(scm_roundtrip(SOCK_DGRAM, &claim, 42, 42) == 0);
+    CHECK(scm_roundtrip(SOCK_STREAM, &claim, 42, 42) == 0);
+    return 0;
+}
+static int scm_real(void)
+{
+    CHECK(root_ids() == 0);
+    CHECK(syscall(SYS_setresgid, 1, 2, 0) == 0);
+    CHECK(syscall(SYS_setresuid, 1, 2, 0) == 0);
+    CHECK(drop_caps() == 0);
+    CHECK(scm_roundtrip(SOCK_DGRAM, NULL, 1, 1) == 0);
+    CHECK(scm_roundtrip(SOCK_STREAM, NULL, 1, 1) == 0);
+    for (unsigned id = 0; id <= 2; id++) {
+        struct ucred claim = { getpid(), id, id };
+        CHECK(scm_roundtrip(SOCK_DGRAM, &claim, id, id) == 0);
+        CHECK(scm_roundtrip(SOCK_STREAM, &claim, id, id) == 0);
+    }
+    return 0;
+}
+static int scm_privileged(void)
+{
+    struct ucred claim = { getpid(), 2, 0 };
+    CHECK(scm_roundtrip(SOCK_DGRAM, &claim, 2, 0) == 0);
+    CHECK(scm_roundtrip(SOCK_STREAM, &claim, 2, 0) == 0);
+    return 0;
+}
+static int scm_denied(void)
+{
+    int pair[2]; CHECK(socketpair(AF_UNIX, SOCK_DGRAM, 0, pair) == 0);
+    /* A user-namespace CAP_SYS_ADMIN is not authority in its parent PID namespace. */
+    struct ucred claim = { getppid(), 42, 42 };
+    errno = 0; CHECK(scm_send(pair[0], &claim) == -1 && errno == EPERM);
+    CHECK(drop_caps() == 0); claim.pid = getpid();
+    claim.uid = 0; errno = 0;
+    CHECK(scm_send(pair[0], &claim) == -1 && errno == EPERM);
+    claim.uid = 42; claim.gid = 0; errno = 0;
+    CHECK(scm_send(pair[0], &claim) == -1 && errno == EPERM);
+    claim.uid = 999; claim.gid = 999; errno = 0;
+    CHECK(scm_send(pair[0], &claim) == -1 && errno == EINVAL);
+    claim.uid = (unsigned)-1; claim.gid = 42; errno = 0;
+    CHECK(scm_send(pair[0], &claim) == -1 && errno == EINVAL);
+    char byte; errno = 0;
+    CHECK(recv(pair[1], &byte, 1, MSG_DONTWAIT) == -1 && errno == EAGAIN);
+    close(pair[0]); close(pair[1]); return 0;
+}
 /* Capture native identities before the trusted fixture attaches its map. */
 static int prepare_peer_fixtures(void)
 {
@@ -898,6 +985,10 @@ int main(int argc, char **argv)
     run("NNP mixed-ID exec restricts gain and resets effective IDs", mixed_nnp_drop);
     run("NNP mixed-ID exec without gain preserves effective IDs", mixed_nnp_keep);
     run("malformed socket credentials reject short and oversized payloads", scm_lengths);
+    run("explicit socket credential namespace roundtrip", scm_explicit);
+    run("socket credentials use real IDs and accept owned saved IDs", scm_real);
+    run("socket credentials accept scoped SETUID and SETGID claims", scm_privileged);
+    run("socket credential forgery and unmapped IDs are rejected", scm_denied);
     run("peer credentials use the reader namespace and overflow IDs", peer_inherited);
     run("peer credentials translate fresh mapped identities", peer_mapped);
     run("peer credentials retain the connection snapshot", peer_cached);
