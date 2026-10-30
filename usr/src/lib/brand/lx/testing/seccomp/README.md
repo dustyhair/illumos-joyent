@@ -1,5 +1,8 @@
 # lx seccomp enforcement probe
 
+The latest scoped ordinary-exec checkpoint and its limits are recorded in
+[SCOPED-EXEC.md](SCOPED-EXEC.md). Public namespace entry remains disabled.
+
 Build and run this test inside a Linux environment or an lx zone:
 
 ```sh

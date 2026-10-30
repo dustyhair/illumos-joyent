@@ -14,8 +14,9 @@ The native privilege sets remain limited to the existing basic privilege floor.
 
 The kernel-entry guard also applies to scoped processes without a seccomp
 filter. Unsupported native and usermode-emulation transitions terminate the
-process. Scoped exec and UID/GID mutations currently return EOPNOTSUPP while
-their task-specific credential transitions are unfinished.
+process. At VM34, scoped exec and UID/GID mutations returned EOPNOTSUPP. Ordinary
+scoped exec is now implemented and validated in [SCOPED-EXEC.md](SCOPED-EXEC.md).
+Scoped UID/GID mutations remain explicitly unsupported.
 
 ## Evidence before the trap refresh fix
 
@@ -103,7 +104,7 @@ were compiled. They do not prove full Linux namespace or sandbox semantics.
 ## Remaining work
 
 Validate per-task procfs and concurrent update behavior and complete scoped
-task lifecycle before enabling namespace entry. Complete scoped exec,
+task lifecycle before enabling namespace entry. Complete traced/privileged exec,
 identity translation/transitions, capability enforcement and namespace lifetime
 limits. Connect safe user/mount namespaces and complete the mount, PID, IPC,
 and network isolation requested by Codex. Finally install the newest stable
