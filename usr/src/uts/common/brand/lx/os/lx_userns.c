@@ -489,6 +489,11 @@ lx_userns_cred_setattr(const cred_t *cred, struct vnode *vp,
 		    LX_ID_INVALID))
 			return (EPERM);
 		if (locked_fs) {
+			/* Preserve native setuid-root privilege policy. */
+			if (old->va_uid == 0 &&
+			    (want->va_mode & S_ISUID) != 0 &&
+			    secpolicy_vnode_setid_retain(cred, B_TRUE) != 0)
+				return (EPERM);
 			authority = 0;
 			/* FOWNER needs the UID; FSETID needs both inode IDs. */
 			if ((want->va_mode & S_ISGID) != 0 &&

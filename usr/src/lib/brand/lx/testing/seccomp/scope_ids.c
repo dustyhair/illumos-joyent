@@ -24,6 +24,7 @@
 #include <unistd.h>
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "line %d: %s errno=%d\n", __LINE__, #x, errno); return 1; } } while (0)
 static const char *self;
+static int linux_control;
 static int cases, failures;
 static int pre_root_pair[2], pre_unmapped_pair[2], pre_unmapped_fd;
 static int pre_gid_unmapped_fd, pre_mode_gid_unmapped_fd;
@@ -1198,6 +1199,22 @@ static int cap_fowner_task(void)
     CHECK(fchmod(fowner_task_fd,0644)==0 && mode_is(fowner_task_fd,0644));
     close(fowner_task_fd);return 0;
 }
+static int native_root_setid(void)
+{
+    CHECK(root_ids()==0);int fd=owned_fd();CHECK(fd>=0);
+    CHECK(fchown(fd,42,0)==0 && owner_is(fd,42,0));
+    errno=0;int result=fchmod(fd,04755);
+    if(linux_control) CHECK(result==0 && mode_is(fd,04755));
+    else CHECK(result==-1 && errno==EPERM && mode_is(fd,0600));
+    CHECK(fchmod(fd,0600)==0 && mode_is(fd,0600));
+    CHECK(prctl(PR_SET_SECUREBITS,SECBIT_NO_SETUID_FIXUP,0,0,0)==0);
+    CHECK(syscall(SYS_setresuid,42,42,42)==0);
+    errno=0;result=fchmod(fd,04755);
+    if(linux_control) CHECK(result==0 && mode_is(fd,04755));
+    else CHECK(result==-1 && errno==EPERM && mode_is(fd,0600));
+    CHECK(fchmod(fd,0644)==0 && mode_is(fd,0644));
+    close(fd);return 0;
+}
 static int chown_race_probe(void)
 {
     CHECK(root_ids()==0);
@@ -1310,6 +1327,7 @@ int main(int argc, char **argv)
     if (argc >= 3 && !strcmp(argv[1], "--trace-image")) return trace_image(argc, argv);
     if (argc == 2 && !strcmp(argv[1], "--image")) return image_check();
     self = argv[0];
+    linux_control=argc==2 && !strcmp(argv[1],"--linux");
     int race_mode=argc==2 && !strcmp(argv[1],"--chown-race");
     int acl_mode=argc==2 && !strcmp(argv[1],"--chown-acl");
     int mode_race=argc==2 && !strcmp(argv[1],"--chmod-race");
@@ -1402,6 +1420,7 @@ int main(int argc, char **argv)
     run("FOWNER requires effective authority and preserves owner rights",cap_fowner_effective);
     run("FOWNER needs mapped UID while FSETID also needs mapped GID",cap_fowner_unmapped);
     run("FOWNER permission uses task rather than cached file authority",cap_fowner_task);
+    run("native setuid-root policy remains required for owner and FOWNER",native_root_setid);
     if (argc == 1) {
         unsigned group = 1;
         CHECK(root_ids() == 0);
