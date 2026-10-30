@@ -1,3 +1,6 @@
+Native per-message stream credentials are documented in
+[STREAM-CREDENTIALS.md](STREAM-CREDENTIALS.md).
+
 # lx seccomp enforcement probe
 
 The native user-namespace allocation budget is documented in

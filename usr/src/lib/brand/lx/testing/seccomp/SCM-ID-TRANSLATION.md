@@ -55,9 +55,8 @@ ece2f8445e5745dd320cc1f837a51ca7dc206f9798292dfdb41f71ddffc16739.
 
 This is not complete Linux SCM or PID namespace emulation. In particular,
 native initial-realm administrative PID overrides still need Linux target
-existence, zone-boundary and PID-reference lifetime semantics. Automatic
-stream credentials still use the existing peer snapshot fallback, which does
-not provide full per-send identity-change semantics. Cross-namespace queued
+existence, zone-boundary and PID-reference lifetime semantics. The VM49 automatic stream snapshot fallback has since been replaced by
+the native per-message implementation in STREAM-CREDENTIALS.md. Cross-namespace queued
 credentials, sender task races, ancillary truncation and 32-bit SCM-specific
 controls need further coverage before enabling public namespaces. Native
 ancillary layouts remain subject to the existing receive-side assumptions.
