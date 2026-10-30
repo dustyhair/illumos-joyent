@@ -1938,7 +1938,7 @@ lx_ptrace_exit_tracer(proc_t *p, lx_lwp_data_t *lwpd,
 		cred = remote->br_ptrace_cred;
 		remote->br_ptrace_cred = NULL;
 		remote->br_ptrace_flags = 0;
-		/* A dying tracer must not turn its stop into a job-control stop. */
+		/* Drop the pending ptrace stop when its tracer disappears. */
 		if (remote->br_ptrace_stopsig == LX_SIGSTOP)
 			remote->br_ptrace_stopsig = 0;
 
