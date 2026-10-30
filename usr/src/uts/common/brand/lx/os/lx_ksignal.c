@@ -516,12 +516,12 @@ lx_sig_kernel_syscall(klwp_t *lwp, int nr, uintptr_t *args, long *result)
 	if (lwp_getdatamodel(lwp) != DATAMODEL_NATIVE ||
 	    (!lx_seccomp_experimental && pd->l_sigvalid == 0 &&
 	    lwptolxlwp(lwp)->br_sigframes == NULL &&
-	    !lx_seccomp_active(curproc)))
+	    !lx_kernel_restricted(curproc)))
 		return (B_FALSE);
 	switch (nr) {
 	case 13:
 		if (args[0] > 0 && args[0] <= LX_NSIG &&
-		    ltos_signo[args[0]] < 0 && !lx_seccomp_active(curproc))
+		    ltos_signo[args[0]] < 0 && !lx_kernel_restricted(curproc))
 			return (B_FALSE);
 		*result = lxk_sigaction(args[0], args[1], args[2], args[3]);
 		break;
@@ -530,7 +530,7 @@ lx_sig_kernel_syscall(klwp_t *lwp, int nr, uintptr_t *args, long *result)
 		break;
 	case 15:
 		if (lwptolxlwp(lwp)->br_sigframes == NULL &&
-		    !lx_seccomp_active(curproc))
+		    !lx_kernel_restricted(curproc))
 			return (B_FALSE);
 		*result = lxk_sigreturn(lwp);
 		break;

@@ -1376,7 +1376,7 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
 
 	/* Native brand commands must never remove an installed guard. */
-	if (lx_seccomp_active(p))
+	if (lx_kernel_restricted(p))
 		exit(CLD_KILLED, SIGSYS);
 
 	/*
@@ -2146,7 +2146,7 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 	ASSERT(p->p_brand == &lx_brand);
 	ASSERT(lxpd != NULL);
 
-	if (lx_seccomp_active(p) && args->to_model != DATAMODEL_NATIVE)
+	if (lx_kernel_restricted(p) && args->to_model != DATAMODEL_NATIVE)
 		return (ENOEXEC);
 
 	/*
@@ -2619,7 +2619,7 @@ lx_native_exec(uint8_t osabi, const char **interp)
 {
 	if (osabi != ELFOSABI_SOLARIS)
 		return (B_FALSE);
-	if (lx_seccomp_active(curproc))
+	if (lx_kernel_restricted(curproc))
 		return (-ENOEXEC);
 
 

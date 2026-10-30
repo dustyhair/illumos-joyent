@@ -67,11 +67,20 @@ lx_seccomp_active(proc_t *p)
 	return (pd != NULL && pd->l_seccomp != NULL);
 }
 
+boolean_t
+lx_kernel_restricted(proc_t *p)
+{
+	lx_proc_data_t *pd = ptolxproc(p);
+
+	return (pd != NULL && (pd->l_seccomp != NULL ||
+	    (pd->l_flags & LX_PROC_USERNS) != 0));
+}
+
 /* Called before any syscall entry can fall back to native dispatch. */
 void
 lx_seccomp_enter(klwp_t *lwp, int entry)
 {
-	if (lx_seccomp_active(lwptoproc(lwp)) &&
+	if (lx_kernel_restricted(lwptoproc(lwp)) &&
 	    (entry != BRAND_ENTRY_AMD64 ||
 	    lwptolxlwp(lwp)->br_stack_mode != LX_STACK_MODE_BRAND))
 		exit(CLD_KILLED, SIGSYS);

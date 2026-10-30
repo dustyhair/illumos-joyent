@@ -442,3 +442,172 @@ lx_userns_caps_get(const cred_t *cred, lx_caps_t *caps)
 	*caps = data->un_caps;
 	return (0);
 }
+
+/* Caller owns the returned immutable credential, with one reference. */
+static cred_t *
+lx_userns_with_caps(const cred_t *source, const lx_caps_t *caps)
+{
+	const lx_userns_native_t *data = (void *)crgetbrand(source);
+	lx_userns_cred_t actor;
+
+	VERIFY(data != NULL && data->un_cred.bc_brand == &lx_brand);
+	actor.luc_ns = data->un_namespace;
+	actor.luc_uid = crgetuid(source);
+	actor.luc_gid = crgetgid(source);
+	actor.luc_caps = *caps;
+	return (lx_userns_native_for((cred_t *)source, &actor));
+}
+
+/*
+ * Scoped t_cred changes are serialized by p_lock. Native entry cannot refresh
+ * them from p_cred. The latter is a conservative union for process-wide
+ * access checks, not an authority source for individual Linux tasks.
+ */
+void
+lx_userns_publish(kthread_t *task, cred_t *replacement)
+{
+	proc_t *p = task->t_procp;
+	cred_t *base, *summary, *old_process, *old_task;
+	lx_userns_native_t *data;
+	lx_caps_t zero = { 0 }, part;
+	kthread_t *t;
+
+	VERIFY(MUTEX_NOT_HELD(&p->p_lock));
+	VERIFY((ptolxproc(p)->l_flags & LX_PROC_USERNS) != 0);
+	mutex_enter(&p->p_crlock);
+	crhold(base = p->p_cred);
+	mutex_exit(&p->p_crlock);
+	summary = lx_userns_with_caps(base, &zero);
+	crfree(base);
+	data = (void *)crgetbrand(summary);
+
+	mutex_enter(&p->p_lock);
+	mutex_enter(&p->p_crlock);
+	old_task = task->t_cred;
+	crhold(replacement);
+	task->t_cred = replacement;
+	t = p->p_tlist;
+	if (t != NULL) {
+		do {
+			const lx_userns_native_t *member =
+			    (void *)crgetbrand(t->t_cred);
+
+			if ((t->t_proc_flag & TP_KTHREAD) != 0)
+				continue;
+			VERIFY(member != NULL &&
+			    member->un_cred.bc_brand == &lx_brand &&
+			    member->un_namespace == data->un_namespace);
+			VERIFY0(lx_userns_caps_get(t->t_cred, &part));
+			data->un_caps.lc_effective |= part.lc_effective;
+			data->un_caps.lc_permitted |= part.lc_permitted;
+			data->un_caps.lc_inheritable |= part.lc_inheritable;
+			data->un_caps.lc_bounding |= part.lc_bounding;
+			data->un_caps.lc_ambient |= part.lc_ambient;
+		} while ((t = t->t_forw) != p->p_tlist);
+	}
+	old_process = p->p_cred;
+	p->p_cred = summary;
+	mutex_exit(&p->p_crlock);
+	mutex_exit(&p->p_lock);
+	crfree(old_process);
+	crfree(old_task);
+}
+
+void
+lx_userns_forklwp(klwp_t *parent, klwp_t *child)
+{
+	proc_t *p = lwptoproc(parent);
+
+	if ((ptolxproc(p)->l_flags & LX_PROC_USERNS) != 0)
+		lx_userns_publish(lwptot(child), lwptot(parent)->t_cred);
+}
+
+void
+lx_userns_exitlwp(klwp_t *lwp)
+{
+	lx_caps_t zero = { 0 };
+	cred_t *empty;
+
+	if ((ptolxproc(lwptoproc(lwp))->l_flags & LX_PROC_USERNS) == 0)
+		return;
+	/* A departing task cannot retain authority in the process union. */
+	empty = lx_userns_with_caps(lwptot(lwp)->t_cred, &zero);
+	lx_userns_publish(lwptot(lwp), empty);
+	crfree(empty);
+}
+
+int
+lx_userns_capset(uint64_t effective, uint64_t permitted,
+    uint64_t inheritable)
+{
+	lx_caps_t caps;
+	cred_t *replacement;
+	int error;
+
+	if ((error = lx_userns_caps_get(CRED(), &caps)) != 0 ||
+	    (error = lx_caps_set(&caps, effective, permitted, inheritable)) != 0)
+		return (error);
+	replacement = lx_userns_with_caps(CRED(), &caps);
+	lx_userns_publish(curthread, replacement);
+	crfree(replacement);
+	return (0);
+}
+
+boolean_t
+lx_userns_prctl(int option, uintptr_t a2, uintptr_t a3, uintptr_t a4,
+    uintptr_t a5, long *result)
+{
+	lx_caps_t caps;
+	cred_t *replacement;
+	int error = 0;
+
+	if (ptolxproc(curproc) == NULL ||
+	    (ptolxproc(curproc)->l_flags & LX_PROC_USERNS) == 0)
+		return (B_FALSE);
+	VERIFY0(lx_userns_caps_get(CRED(), &caps));
+	switch (option) {
+	case 7: /* PR_GET_KEEPCAPS */
+		*result = (caps.lc_securebits & LX_SEC_KEEP_CAPS) != 0;
+		return (B_TRUE);
+	case 8: /* PR_SET_KEEPCAPS */
+		error = a2 > 1 ? EINVAL : lx_caps_keep(&caps, a2);
+		break;
+	case 23: /* PR_CAPBSET_READ */
+		if (a2 > LX_CAP_LAST) {
+			error = EINVAL;
+			break;
+		}
+		*result = (caps.lc_bounding & LX_CAP_BIT(a2)) != 0;
+		return (B_TRUE);
+	case 24: /* PR_CAPBSET_DROP: permission precedes range validation. */
+		error = lx_caps_drop(&caps, a2 > UINT32_MAX ? UINT32_MAX : a2);
+		break;
+	case 27: /* PR_GET_SECUREBITS */
+		*result = caps.lc_securebits;
+		return (B_TRUE);
+	case 28: /* PR_SET_SECUREBITS */
+		error = a2 > UINT32_MAX ? EPERM : lx_caps_securebits(&caps, a2);
+		break;
+	case 47: /* PR_CAP_AMBIENT */
+		if (a4 != 0 || a5 != 0 || a2 > 4 || a2 == 0 ||
+		    (a2 == 4 ? a3 != 0 : a3 > LX_CAP_LAST)) {
+			error = EINVAL;
+			break;
+		}
+		if (a2 == 1) {
+			*result = (caps.lc_ambient & LX_CAP_BIT(a3)) != 0;
+			return (B_TRUE);
+		}
+		error = lx_caps_ambient(&caps, a2, a3);
+		break;
+	default:
+		return (B_FALSE);
+	}
+	if (error == 0) {
+		replacement = lx_userns_with_caps(CRED(), &caps);
+		lx_userns_publish(curthread, replacement);
+		crfree(replacement);
+	}
+	*result = error == 0 ? 0 : set_errno(error);
+	return (B_TRUE);
+}

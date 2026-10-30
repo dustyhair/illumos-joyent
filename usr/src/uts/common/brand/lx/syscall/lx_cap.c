@@ -265,6 +265,7 @@ lx_capget(uintptr_t header, uintptr_t address)
 	lx_caps_t caps;
 	cred_t *cred;
 	proc_t *target;
+	kthread_t *task;
 	uint_t count, i;
 	int32_t pid;
 	int error = lx_cap_version(header, &count);
@@ -284,11 +285,17 @@ lx_capget(uintptr_t header, uintptr_t address)
 		crhold(cred = CRED());
 	} else {
 		if (lx_lpid_lock(pid, curproc->p_zone, LXP_ZOMBOK,
-		    &target, NULL) != 0)
+		    &target, &task) != 0)
 			return (set_errno(ESRCH));
-		mutex_enter(&target->p_crlock);
-		crhold(cred = target->p_cred);
-		mutex_exit(&target->p_crlock);
+		if ((ptolxproc(target) != NULL) &&
+		    (ptolxproc(target)->l_flags & LX_PROC_USERNS) != 0 &&
+		    task != NULL) {
+			crhold(cred = task->t_cred);
+		} else {
+			mutex_enter(&target->p_crlock);
+			crhold(cred = target->p_cred);
+			mutex_exit(&target->p_crlock);
+		}
 		mutex_exit(&target->p_lock);
 	}
 	if (crgetbrand(cred) != NULL) {
@@ -337,6 +344,12 @@ lx_capset(uintptr_t header, uintptr_t address)
 	    ((uint64_t)data[1].lcd_permitted << 32);
 	wanted.lc_inheritable = data[0].lcd_inheritable |
 	    ((uint64_t)data[1].lcd_inheritable << 32);
+
+	if ((ptolxproc(p)->l_flags & LX_PROC_USERNS) != 0) {
+		error = lx_userns_capset(wanted.lc_effective,
+		    wanted.lc_permitted, wanted.lc_inheritable);
+		return (error == 0 ? 0 : set_errno(error));
+	}
 
 	candidate = cralloc();
 	mutex_enter(&p->p_crlock);

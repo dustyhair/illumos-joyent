@@ -21,6 +21,7 @@
 #include <sys/klwp.h>
 #include <sys/cmn_err.h>
 #include <sys/lx_brand.h>
+#include <sys/lx_userns.h>
 #include <sys/lx_impl.h>
 #include <sys/lx_misc.h>
 #include <lx_signum.h>
@@ -74,6 +75,9 @@ lx_prctl(int opt, uintptr_t arg2, uintptr_t arg3, uintptr_t arg4,
 {
 	long err;
 	char ebuf[64];
+
+	if (lx_userns_prctl(opt, arg2, arg3, arg4, arg5, &err))
+		return (err);
 
 	switch (opt) {
 	case LX_PR_GET_DUMPABLE: {

@@ -227,7 +227,7 @@ lx_exec()
 	 */
 	rp->r_r0 = 0;
 	(void) lx_ptrace_stop(LX_PR_SYSEXIT);
-	if (lx_seccomp_active(p))
+	if (lx_kernel_restricted(p))
 		lx_kernel_exec_finish(lwp);
 }
 
@@ -304,6 +304,7 @@ lx_exitlwp(klwp_t *lwp)
 	}
 
 	lx_cleanlwp(lwp, p);
+	lx_userns_exitlwp(lwp);
 
 	if (lwpd->br_clear_ctidp != NULL) {
 		(void) suword32(lwpd->br_clear_ctidp, 0);
@@ -687,6 +688,7 @@ lx_forklwp(klwp_t *srclwp, klwp_t *dstlwp)
 	dst->br_lwp_flags = src->br_lwp_flags & BR_CPU_BOUND;
 	dst->br_scall_args = NULL;
 	lx_affinity_forklwp(srclwp, dstlwp);
+	lx_userns_forklwp(srclwp, dstlwp);
 	lx_kernel_fork_child(srclwp, dstlwp);
 
 	/*

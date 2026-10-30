@@ -414,7 +414,18 @@ lx_syscall_enter(int entry)
 		return (0);
 	}
 
-	if (lx_seccomp_active(curproc) && syscall_num == 59) {
+	if ((ptolxproc(curproc)->l_flags & LX_PROC_USERNS) != 0) {
+		switch (syscall_num) {
+		case 59: /* Exec needs the caller's per-task capability transition. */
+		case 105: case 106: case 113: case 114: case 116:
+		case 117: case 119: case 122: case 123:
+			(void) set_errno(EOPNOTSUPP);
+			lx_syscall_return(lwp, syscall_num, -1);
+			return (0);
+		}
+	}
+
+	if (lx_kernel_restricted(curproc) && syscall_num == 59) {
 		error = exec_common((const char *)args[0],
 		    (const char **)args[1], (const char **)args[2],
 		    NULL, EBA_NONE);
@@ -425,21 +436,21 @@ lx_syscall_enter(int entry)
 		return (0);
 	}
 
-	if (lx_seccomp_active(curproc) &&
+	if (lx_kernel_restricted(curproc) &&
 	    (syscall_num == 56 || syscall_num == 57)) {
 		ret = lx_kernel_fork(syscall_num, args);
 		lx_syscall_return(lwp, syscall_num, ret);
 		return (0);
 	}
 
-	if (lx_seccomp_active(curproc) && syscall_num == 60) {
+	if (lx_kernel_restricted(curproc) && syscall_num == 60) {
 		lwpd->br_exitwhy = CLD_EXITED;
 		lwpd->br_exitwhat = args[0] & 0xff;
 		mutex_enter(&curproc->p_lock);
 		lwp_exit_status(args[0]);
 		return (0);
 	}
-	if (lx_seccomp_active(curproc) && syscall_num == 231)
+	if (lx_kernel_restricted(curproc) && syscall_num == 231)
 		exit(CLD_EXITED, args[0] & 0xff);
 
 	if (s->sy_callc != NULL) {
@@ -460,6 +471,8 @@ lx_syscall_enter(int entry)
 	 */
 	switch (unsup_reason = (s->sy_flags & LX_SYS_NOSYS_REASON)) {
 	case NOSYS_USERMODE:
+		if (lx_kernel_restricted(curproc))
+			exit(CLD_KILLED, SIGSYS);
 		/*
 		 * Pass to the usermode emulation routine.
 		 */

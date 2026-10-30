@@ -135,6 +135,7 @@
 #include <sys/errno.h>
 #include <sys/brand.h>
 #include <sys/lx_brand.h>
+#include <sys/lx_userns.h>
 #include <sys/lx_ldt.h>
 #include <sys/lx_misc.h>
 #include <lx_signum.h>
@@ -565,6 +566,7 @@ lx_kernel_thread(uint_t flags, uintptr_t *args)
 	if (curthread->t_ctx != NULL)
 		lwp_createctx(curthread, t);
 	lwp_ctmpl_copy(child, parent);
+	lx_userns_forklwp(parent, child);
 	lx_affinity_forklwp(parent, child);
 	dst->br_stack_mode = LX_STACK_MODE_BRAND;
 	dst->br_tgid = p->p_pid;
@@ -615,7 +617,7 @@ lx_kernel_fork(int nr, uintptr_t *args)
 	pid_t pid;
 	boolean_t unsupported;
 
-	VERIFY(lx_seccomp_active(p));
+	VERIFY(lx_kernel_restricted(p));
 	if (nr == 56 && args[0] == flags &&
 	    (flags & LX_CLONE_THREAD) != 0)
 		return (lx_kernel_thread(flags, args));
@@ -627,7 +629,7 @@ lx_kernel_fork(int nr, uintptr_t *args)
 	if (nr == 56 && args[1] >= (uintptr_t)p->p_as->a_userlimit)
 		return (set_errno(EINVAL));
 	mutex_enter(&p->p_lock);
-	unsupported = p->p_lwpcnt != 1 || pd->l_ptrace != 0;
+	unsupported = pd->l_ptrace != 0;
 	mutex_exit(&p->p_lock);
 	if (unsupported)
 		return (set_errno(EOPNOTSUPP));
@@ -648,11 +650,11 @@ lx_kernel_fork_child(klwp_t *parent, klwp_t *child)
 	proc_t *cp = lwptoproc(child);
 	uint_t flags;
 
-	if (!lx_seccomp_active(lwptoproc(parent)) ||
+	if (!lx_kernel_restricted(lwptoproc(parent)) ||
 	    src->br_stack_mode != LX_STACK_MODE_BRAND ||
 	    (src->br_syscall_num != 56 && src->br_syscall_num != 57))
 		return;
-	VERIFY(lx_seccomp_active(cp));
+	VERIFY(lx_kernel_restricted(cp));
 	flags = src->br_syscall_num == 57 ? LX_SIGCHLD :
 	    src->br_syscall_args[0];
 	dst->br_lx_fsbase = src->br_lx_fsbase;

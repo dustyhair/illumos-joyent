@@ -2908,9 +2908,14 @@ lxpr_read_status_common(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf,
 
 	seccomp = lx_seccomp_active(p) ? 2 : 0;
 	up = PTOU(p);
-	mutex_enter(&p->p_crlock);
-	crhold(cr = p->p_cred);
-	mutex_exit(&p->p_crlock);
+	if ((ptolxproc(p) != NULL) &&
+	    (ptolxproc(p)->l_flags & LX_PROC_USERNS) != 0 && t != NULL) {
+		crhold(cr = t->t_cred);
+	} else {
+		mutex_enter(&p->p_crlock);
+		crhold(cr = p->p_cred);
+		mutex_exit(&p->p_crlock);
+	}
 
 	(void) strlcpy(buf_comm, up->u_comm, sizeof (buf_comm));
 	fdlim = p->p_fno_ctl;

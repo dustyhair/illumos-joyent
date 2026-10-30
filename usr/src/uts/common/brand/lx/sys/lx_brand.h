@@ -267,7 +267,8 @@ typedef enum lx_proc_flags {
 	LX_PROC_STRICT_MODE	= 0x02,
 	/* internal flags */
 	LX_PROC_CHILD_DEATHSIG	= 0x04,
-	LX_PROC_NO_DUMP		= 0x08	/* for lx_prctl LX_PR_[GS]ET_DUMPABLE */
+	LX_PROC_NO_DUMP		= 0x08,	/* for lx_prctl LX_PR_[GS]ET_DUMPABLE */
+	LX_PROC_USERNS		= 0x10	/* irreversible scoped execution guard */
 } lx_proc_flags_t;
 
 #define	LX_PROC_ALL	(LX_PROC_INSTALL_MODE | LX_PROC_STRICT_MODE)
@@ -735,6 +736,7 @@ extern void lx_sigframes_free(lx_lwp_data_t *);
 extern void lx_sigframes_clone(lx_lwp_data_t *, const lx_lwp_data_t *);
 extern long lx_seccomp_install(uintptr_t);
 extern boolean_t lx_seccomp_active(proc_t *);
+extern boolean_t lx_kernel_restricted(proc_t *);
 extern void lx_seccomp_enter(klwp_t *, int);
 extern boolean_t lx_seccomp_check(klwp_t *, int);
 extern void lx_seccomp_hold(struct lx_seccomp_filter *);
