@@ -1110,3 +1110,69 @@ release/debug and lx_support was rebuilt. Runtime used release on the
 retained mixed VM73 common kernel, LOFS, ZFS and user libraries. No production
 host deployment occurred. See lab/mount-budget-results.json for exact source,
 artifact and evidence hashes. Linux namespace creation remains unfinished.
+
+
+## Mount-view user-namespace ownership
+
+A private view holds a separate immutable owner credential in addition to
+its native mount/cleanup credential. Constructor callers supply both.
+Capability checks use the calling task's current effective CAP_SYS_ADMIN
+relative to the owner's user namespace through lx_userns_cred_capable.
+The owner's captured capability mask does not grant authority to callers.
+A clone takes an explicit new owner, allowing a newly created mount namespace
+to belong to the calling task's current user namespace.
+
+The current-process view accessor holds the view under p_lock and returns a
+reference. It lets mount syscall routing inspect the view without borrowing a
+process-owned reference across blocking work. Root/cwd publication now checks
+both the target zone's account and the owner's zone. A matching account alone
+cannot authorize installing a view owned by a different zone.
+
+Until tracked private mount operations are implemented, mount, umount and
+umount2 reject calls on a private view. A task lacking scoped authority gets
+EPERM; an authorized task gets EOPNOTSUPP. The check precedes legacy dispatch,
+including the NFS user-emulation path, so these operations cannot create
+untracked grafts or enter legacy NFS emulation. Calls without a private view
+retain their previous behavior.
+
+The owner test constructs initial, sibling and descendant user namespaces.
+It checks effective-capability drops, parent-owner authority, denial toward
+ancestors and siblings, explicit clone ownership and owner-credential lifetime.
+The owned snapshot deliberately captures an owner credential with SYS_ADMIN
+removed, proving that a different authorized task can still administer its
+user namespace. Native mount credentials remain separate throughout.
+
+The process fixture separately rejects a foreign account and a foreign owner
+without changing root/cwd. Its Linux probe attempts tmpfs, bind, remount, NFS,
+normal unmount, force unmount and lazy detach, then repeats the view/filter
+checks across fork/exec, signalled-child reaping and orphaned-child exit.
+The corresponding Linux controls skip the lx-specific unsupported-operation
+checks while exercising the same updated process, exec and lifetime code.
+
+No Linux namespace creation syscall is enabled by this checkpoint. Public
+creation checks and tracked mount operations, per-mount limits, namespace
+descriptors, rename handling and PID/IPC/network isolation remain incomplete.
+
+
+VM86 passed the owner case four times across the backend and canonical
+user-namespace drivers. The quota case passed four times and both native
+zone-quota cases passed. All eight static/dynamic UID0/65534 process cases
+passed, including four foreign-account and four foreign-owner rejections.
+Sixteen probe checkpoints exercised 112 blocked operations across parents,
+exec children and orphan lifetime checks. Authorized UID0 calls returned
+EOPNOTSUPP and UID65534 calls returned EPERM; each group reported zero
+failures, then repeated the private-view and filter checks. All four updated
+Linux process controls also passed.
+
+The full enforcement and user-namespace regression drivers passed. All views
+retired, process idle checks observed zero charges, both experimental switches
+were reset to zero and the zone halted. Pool export and filesystem sync
+completed before QEMU exited. Brand and namespace-test modules were
+clean-built for release/debug; runtime used release on the retained mixed
+VM73 platform with VM85 lx_proc/lx_support. No production host was changed.
+
+The actual Codex 0.166.0 sandbox still requested clone 0x78020011 twice and
+received EINVAL with both experiments enabled. Public namespace creation and
+tracked private mount operations remain unfinished. See
+lab/mount-owner-results.json and lab/mount-owner-linux-results.json for exact
+source, artifact, controls and evidence hashes.

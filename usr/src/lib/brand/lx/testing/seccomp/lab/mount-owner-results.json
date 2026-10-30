@@ -1,0 +1,270 @@
+{
+  "recorded_utc": "2026-10-30T23:13:38.157321+00:00",
+  "vm": 86,
+  "branch": "lx/codex-sandbox",
+  "source_checkpoint": "d222fa5771a6743d260beb5747e45f98ad532af4",
+  "brand_source_commit": "3e2db6b8a0ed322a74161d10b4ac62fe8824f1ac",
+  "ktest_probe_source_commit": "3c42c962f1d7dd95ea2e62e3d4ae217c891ae765",
+  "acceptance_driver_commit": "d222fa5771a6743d260beb5747e45f98ad532af4",
+  "clean_builds": [
+    "lx_brand release/debug",
+    "lx_namespace_ktest release/debug",
+    "Linux static/dynamic probe -std=c11 -Wall -Wextra -Werror -O2"
+  ],
+  "runtime": "release on retained mixed VM73 common kernel, LOFS, ZFS and user libraries; VM85 lx_proc and lx_support retained",
+  "brand_sha256": "a5bafb497f6ca64a3e898d6186072908ace4300eb7f366b1dfbec7e678fc020e",
+  "ktest_sha256": "7a96f7c9cace1bb2b83d3857318cce195ded48f55fb22acbfd3b827c8b5ef02b",
+  "proc_sha256": "136fe8174c49a5d939cfbb94f6adf9a8b2c8a3c64ca5867cfa404f55db0728c0",
+  "support_sha256": "7c666441270dfa51fda2abd9e0289fb12d180d259ad65ae21a1b71f3e9a95c6b",
+  "root_tar_sha256": "572a64c6e395cd7031f36b6dcc81287e220e20688e0284b85aa4af59e4572009",
+  "static_probe_sha256": "7afd38890b53ae415d1656a6ea01d8567e84fec47300570e1917506360c66cd2",
+  "dynamic_probe_sha256": "d461452996a8fb044316ee8de8c2c26e493cad3111dbd21e398972d808338c60",
+  "uploaded_driver_sha256": "b93019af7aae4b77f4b640ef57225567ace9d7c266ef3c20e56d128598220168",
+  "canonical_namespace_driver_sha256": "293a7676c833361134de78dd7272c82f9f72f962dea693cc9f6419334c3e74f1",
+  "uploaded_native_sha256": "55063407d5715e1fa4421c80cce337df2b5dd524d8bec4d083947e8702fb2384",
+  "linux_controls": "PASS all four static/dynamic UID0/65534; see mount-owner-linux-results.json",
+  "owner_case_passes": 4,
+  "quota_case_passes": 4,
+  "native_zone_quota_case_passes": 2,
+  "process_cases": [
+    {
+      "variant": "static",
+      "uid": 0,
+      "mode": "reject",
+      "result": "PASS"
+    },
+    {
+      "variant": "static",
+      "uid": 0,
+      "mode": "attach",
+      "result": "PASS"
+    },
+    {
+      "variant": "static",
+      "uid": 65534,
+      "mode": "reject",
+      "result": "PASS"
+    },
+    {
+      "variant": "static",
+      "uid": 65534,
+      "mode": "attach",
+      "result": "PASS"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 0,
+      "mode": "reject",
+      "result": "PASS"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 0,
+      "mode": "attach",
+      "result": "PASS"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 65534,
+      "mode": "reject",
+      "result": "PASS"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 65534,
+      "mode": "attach",
+      "result": "PASS"
+    }
+  ],
+  "foreign_account_rejections": 4,
+  "foreign_owner_rejections": 4,
+  "private_mount_gate_checks": [
+    {
+      "variant": "static",
+      "uid": 0,
+      "log": "attach",
+      "errno": 95,
+      "cases": 7,
+      "failures": 0
+    },
+    {
+      "variant": "static",
+      "uid": 0,
+      "log": "result",
+      "errno": 95,
+      "cases": 7,
+      "failures": 0
+    },
+    {
+      "variant": "static",
+      "uid": 0,
+      "log": "result",
+      "errno": 95,
+      "cases": 7,
+      "failures": 0
+    },
+    {
+      "variant": "static",
+      "uid": 0,
+      "log": "result",
+      "errno": 95,
+      "cases": 7,
+      "failures": 0
+    },
+    {
+      "variant": "static",
+      "uid": 65534,
+      "log": "attach",
+      "errno": 1,
+      "cases": 7,
+      "failures": 0
+    },
+    {
+      "variant": "static",
+      "uid": 65534,
+      "log": "result",
+      "errno": 1,
+      "cases": 7,
+      "failures": 0
+    },
+    {
+      "variant": "static",
+      "uid": 65534,
+      "log": "result",
+      "errno": 1,
+      "cases": 7,
+      "failures": 0
+    },
+    {
+      "variant": "static",
+      "uid": 65534,
+      "log": "result",
+      "errno": 1,
+      "cases": 7,
+      "failures": 0
+    },
+    {
+      "variant": "dynamic",
+      "uid": 0,
+      "log": "attach",
+      "errno": 95,
+      "cases": 7,
+      "failures": 0
+    },
+    {
+      "variant": "dynamic",
+      "uid": 0,
+      "log": "result",
+      "errno": 95,
+      "cases": 7,
+      "failures": 0
+    },
+    {
+      "variant": "dynamic",
+      "uid": 0,
+      "log": "result",
+      "errno": 95,
+      "cases": 7,
+      "failures": 0
+    },
+    {
+      "variant": "dynamic",
+      "uid": 0,
+      "log": "result",
+      "errno": 95,
+      "cases": 7,
+      "failures": 0
+    },
+    {
+      "variant": "dynamic",
+      "uid": 65534,
+      "log": "attach",
+      "errno": 1,
+      "cases": 7,
+      "failures": 0
+    },
+    {
+      "variant": "dynamic",
+      "uid": 65534,
+      "log": "result",
+      "errno": 1,
+      "cases": 7,
+      "failures": 0
+    },
+    {
+      "variant": "dynamic",
+      "uid": 65534,
+      "log": "result",
+      "errno": 1,
+      "cases": 7,
+      "failures": 0
+    },
+    {
+      "variant": "dynamic",
+      "uid": 65534,
+      "log": "result",
+      "errno": 1,
+      "cases": 7,
+      "failures": 0
+    }
+  ],
+  "private_mount_operations_denied": 112,
+  "private_mount_operations_implemented": false,
+  "canonical_acceptance": "LX_MOUNT_OWNER_PASS",
+  "enforcement_driver_exit": 0,
+  "mount_backend_driver_exit": 0,
+  "userns_driver_exit": 0,
+  "views_at_end": 0,
+  "zone_mount_charges_at_last_process_idle": 0,
+  "experimental_switches_at_end": {
+    "seccomp": 0,
+    "userns": 0
+  },
+  "codex_version": "0.166.0",
+  "bubblewrap_experimental_switches": {
+    "seccomp": 1,
+    "userns": 1
+  },
+  "bubblewrap_clone_flags": "0x78020011",
+  "bubblewrap_clone_results": [
+    -22,
+    -22
+  ],
+  "linux_mount_namespace_published": false,
+  "codex_sandbox_accepted": false,
+  "pool_export_exit": 0,
+  "synced_poweroff": true,
+  "qemu_pid_exited": 1973141,
+  "evidence_file": "lx-sandbox/lab/evidence/boot-86-mount-owner-acceptance.log",
+  "evidence_sha256": "ff5dc271e16c727e902a688d27fbb32d728ffa2aee7b2720ebeb29116dbe9fda",
+  "logs_sha256": {
+    "vm86-acceptance.log": "69b754fd4b22ed015f7f234b0e3873e6dd5f644cb161467ed2188fd51685a0b4",
+    "vm86-backend.log": "bf1671b871b668107221b6669263f327d98e27726f73678df28d596e26532167",
+    "vm86-bwrap.log": "b80888d453025bc6e5852c0484f41e5df09a0ca019dc9d7b933810878c5e92e7",
+    "vm86-dynamic-0-attach.log": "f866597f920f4ca938ca274e2db8999a9a4400470ef7f565e1dcd03519ba5a9a",
+    "vm86-dynamic-0-reject.log": "78049ede3b4367de9fe082a9dd99713d04d3736a331b5a4563cfe056d1314aa5",
+    "vm86-dynamic-0-result.log": "a128a1b53265760b4044ffe827ff833475f2703563c21d8d3b9bea1985d0b2a6",
+    "vm86-dynamic-65534-attach.log": "7685e46d3c1cfcc332a14b5ff50f9125467d8a704c05404689fb75a37196890a",
+    "vm86-dynamic-65534-reject.log": "45645809fabdc3a8eb70a7c7972c42749542c496237e8154da74e35ac5200332",
+    "vm86-dynamic-65534-result.log": "a09658c65d3de91cd4360bb14ec7030ecc0d052656ad6d64cef9146de2ef8b52",
+    "vm86-enforcement.log": "66c9f656e0d035628dd71aee825b98c5a9e3079eb14a12d6538565e8cd0509f3",
+    "vm86-static-0-attach.log": "dab920d28ac2a01222066b49fc3fde3a49cff167a1967f4bda9adba02049be54",
+    "vm86-static-0-reject.log": "dc9d9d2ec8c3e439218658a7b5ecb170ea2cc78958ff68a9da2c39ecbe3dff3c",
+    "vm86-static-0-result.log": "6af24894a027f506aa642e32b022b016b294ceec7e6b9bc376d329e265da901b",
+    "vm86-static-65534-attach.log": "3665cfd2a31c9063db1c568274b486648e843afe09817e0c33e6efae6ff21fc1",
+    "vm86-static-65534-reject.log": "3ae6bd1eb8b5e1234ab6a6713100ee7bbf0222103ee572d44a37d41fded9b30b",
+    "vm86-static-65534-result.log": "fb376c1d780fd7ec9ba4a1fbdbbd75d832817169ca84a1b02b38fab4956b1284",
+    "vm86-userns.log": "f3502937bd3cce4b741316649f1bbbd1f36e44470b1492df896189e3fb85b000"
+  },
+  "launcher_commit": "670ad873f1036fe820680d5e07c21a0079ac5b44",
+  "launcher_path": "lx-sandbox/launch-lab",
+  "launcher_sha256": "ece2f8445e5745dd320cc1f837a51ca7dc206f9798292dfdb41f71ddffc16739",
+  "limitations": [
+    "Public namespace creation checks and Linux syscall entry are still absent",
+    "Private mount operations currently return EPERM or EOPNOTSUPP; tracked operations and per-mount limits remain incomplete",
+    "Namespace descriptors, directory rename handling and PID/IPC/network isolation remain incomplete",
+    "Not a full platform build or production Debian acceptance",
+    "Codex immediate-exit PTY tail loss remains unresolved"
+  ],
+  "host_deployment": false
+}

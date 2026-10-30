@@ -1,0 +1,29 @@
+{
+  "source_commit": "3c42c962f1d7dd95ea2e62e3d4ae217c891ae765",
+  "controls": [
+    {
+      "variant": "static",
+      "uid": 0,
+      "result": "PASS"
+    },
+    {
+      "variant": "static",
+      "uid": 65534,
+      "result": "PASS"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 0,
+      "result": "PASS"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 65534,
+      "result": "PASS"
+    }
+  ],
+  "static_sha256": "7afd38890b53ae415d1656a6ea01d8567e84fec47300570e1917506360c66cd2",
+  "dynamic_sha256": "d461452996a8fb044316ee8de8c2c26e493cad3111dbd21e398972d808338c60",
+  "remote_evidence": "/var/tmp/lx-mount-proc-control.RYRXeJ",
+  "lx_specific_mount_gates": "skipped by --linux in parent and exec children; controls cover shared process/view/lifetime behavior"
+}
