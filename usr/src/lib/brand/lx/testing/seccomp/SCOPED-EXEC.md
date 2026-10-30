@@ -3,6 +3,8 @@
 AMD64 scoped tasks can now execute ordinary Linux programs through the existing
 illumos kernel ELF loader. Public namespace entry is still disabled. This is
 one prerequisite for Codex's normal sandbox, not full sandbox acceptance.
+Later ordinary traced-exec checks are recorded in
+[TRACED-EXEC.md](TRACED-EXEC.md); the VM36 results below are retained.
 
 The common exec path uses the calling task's credential for access checks and
 credential preparation. An appended brand callback validates each executable
@@ -100,7 +102,7 @@ provenance is /build/RUNNING_TESTS.md. Production hosts and zones are unchanged.
 ## Remaining work
 
 Public namespace entry, remaining ID-bearing interfaces and filesystem IDs,
-per-task procfs/concurrency checks, traced/privileged exec, file capabilities,
+remaining procfs/lifecycle checks, privileged exec, file capabilities,
 and complete mount/PID/IPC/network isolation remain unfinished. Acceptance
 here covers untraced, identity-mapped lab fixtures. The normal Codex sandbox
 still cannot create the namespaces it requests. A current stable install and

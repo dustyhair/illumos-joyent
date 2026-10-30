@@ -123,9 +123,11 @@ lx_kernel_exec_finish(klwp_t *lwp)
 			    native.a_type == AT_SUN_UID ||
 			    native.a_type == AT_SUN_RGID ||
 			    native.a_type == AT_SUN_GID)
-				linux_aux.a_un.a_val = lx_userns_id_visible(CRED(),
+				linux_aux.a_un.a_val =
+				    lx_userns_id_visible(CRED(),
 				    native.a_type == AT_SUN_RGID ||
-				    native.a_type == AT_SUN_GID, linux_aux.a_un.a_val);
+				    native.a_type == AT_SUN_GID,
+				    linux_aux.a_un.a_val);
 			if (copyout(&linux_aux, (void *)output,
 			    sizeof (linux_aux)) != 0)
 				goto badstack;

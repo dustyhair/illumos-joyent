@@ -1,7 +1,8 @@
 # lx seccomp enforcement probe
 
-The latest native-backed UID/GID/group checkpoint and its limits are recorded
-in [SCOPED-IDS.md](SCOPED-IDS.md). Ordinary exec is documented in
+The latest scoped tracer credential and exec checkpoint is documented in
+[TRACED-EXEC.md](TRACED-EXEC.md). Native-backed UID/GID/groups are documented in
+[SCOPED-IDS.md](SCOPED-IDS.md), and ordinary exec in
 [SCOPED-EXEC.md](SCOPED-EXEC.md). Public namespace entry remains disabled.
 
 Build and run this test inside a Linux environment or an lx zone:

@@ -1,5 +1,8 @@
 # Scoped native-backed identities
 
+Later scoped tracer credential and ordinary-exec checks are recorded in
+[TRACED-EXEC.md](TRACED-EXEC.md). The VM38/39 results below are retained.
+
 AMD64 scoped tasks now implement UID/GID getters, setuid/setgid,
 setreuid/setregid, setresuid/setresgid and supplementary groups. The numeric
 values in native credentials remain real backing identities. Namespace maps
@@ -132,9 +135,10 @@ mixed-image, ABI and deployment limits stated above apply.
 
 This checkpoint covers the listed AMD64 identity interfaces. Separate filesystem
 IDs, remaining ownership-changing and UID-bearing interfaces such as peer
-credentials and siginfo, dead-leader semantics, broader lifecycle and procfs checks, and traced/privileged exec remain
-unfinished. Native ephemeral SID
-lookup is reused but was not exercised against an idmap service.
+credentials and siginfo, dead-leader semantics, broader lifecycle and procfs
+checks, and privileged exec remain unfinished. Native ephemeral SID lookup is
+reused but was not exercised against an idmap service. Remaining ptrace limits
+are listed in TRACED-EXEC.md.
 
 User/mount namespace entry and complete mount, PID, IPC and network isolation
 remain disabled or incomplete. Resource limits and namespace lifetime controls
