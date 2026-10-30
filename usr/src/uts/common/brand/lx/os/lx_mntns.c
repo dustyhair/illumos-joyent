@@ -573,7 +573,7 @@ lx_mntns_snapshot(vnode_t *root, const char *path, cred_t *cr, cred_t *owner,
 	vnode_t *vp;
 	size_t len, count = 0;
 	timespec_t before, after;
-	int error;
+	int error = 0;
 
 	*out = NULL;
 	if (root->v_type != VDIR) {
