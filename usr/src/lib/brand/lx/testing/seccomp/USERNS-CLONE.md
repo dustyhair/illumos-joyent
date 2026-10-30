@@ -66,6 +66,12 @@ now pauses 1 ms between ownership calls to span native writer phases while
 retaining the required stale-grant/rejection assertion. Final canonical image
 acceptance with the paced probe is pending.
 
+VM71 then exposed a separate syscall gap: libc usleep dispatched through
+the forbidden userspace emulation path and terminated the scoped process
+with SIGSYS. Kernel clock_nanosleep support and its validation are described
+in [CLOCK-SLEEP.md](CLOCK-SLEEP.md). VM72 runs the canonical suites with that
+implementation and the paced ownership probe.
+
 Common/unix/genunix/brand/proc/elf source 5bcd036dac and native ktest source
 4ba3707890 pass clean release/debug builds. Runtime uses release objects over
 the retained mixed May platform; debug is compile-only. Evidence and build

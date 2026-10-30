@@ -3,6 +3,9 @@ are implemented and disabled by default. See [USERNS-ENTRY.md](USERNS-ENTRY.md)
 and [USERNS-CLONE.md](USERNS-CLONE.md). Mount/PID/IPC/network isolation and the
 complete Codex sandboxed workflow remain incomplete.
 
+Kernel libc sleep support and its controls are described in
+[CLOCK-SLEEP.md](CLOCK-SLEEP.md).
+
 Scoped CPU-affinity and scheduling authority are described in
 [Scheduling and affinity](#scheduling-and-affinity) below.
 
