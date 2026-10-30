@@ -1127,6 +1127,25 @@ static int chown_race_probe(void)
     close(fd);printf("CHOWN_RACE_PROBE_PASS allowed=%u denied=%u\n",allowed,denied);
     return 0;
 }
+static int chown_acl_probe(void)
+{
+    CHECK(root_ids()==0);
+    char path[128];snprintf(path,sizeof(path),"/tmp/lx-chown-acl-%d",getpid());
+    int fd=open(path,O_CREAT|O_EXCL|O_RDWR|O_CLOEXEC,0600);CHECK(fd>=0);
+    CHECK(fchown(fd,1,1)==0);
+    printf("CHOWN_ACL_ARM_PID=%d\n",getpid());fflush(stdout);raise(SIGSTOP);
+    CHECK(owner_is(fd,65534,65534));errno=0;
+    CHECK(fchown(fd,0,0)==-1 && errno==EPERM);
+    CHECK(owner_is(fd,65534,65534));
+    printf("CHOWN_ACL_MAPPED_PID=%d\n",getpid());fflush(stdout);raise(SIGSTOP);
+    CHECK(owner_is(fd,1,1));
+    CHECK(fchown(fd,0,0)==0 && owner_is(fd,0,0));
+    CHECK(fchown(fd,1,1)==0 && owner_is(fd,1,1));
+    CHECK(cap_chown_sets(0,1)==0);errno=0;
+    CHECK(fchown(fd,0,0)==-1 && errno==EPERM);
+    CHECK(owner_is(fd,1,1));
+    close(fd);puts("CHOWN_ACL_PROBE_PASS");return 0;
+}
 static int image_check(void)
 {
     CHECK(ids(0, 1, 1, 1) && ids(1, 1, 1, 1));
@@ -1173,7 +1192,8 @@ int main(int argc, char **argv)
     if (argc == 2 && !strcmp(argv[1], "--image")) return image_check();
     self = argv[0];
     int race_mode=argc==2 && !strcmp(argv[1],"--chown-race");
-    if(race_mode) argc=1;
+    int acl_mode=argc==2 && !strcmp(argv[1],"--chown-acl");
+    if(race_mode || acl_mode) argc=1;
     if (argc == 2 && !strcmp(argv[1], "--scm-length-only")) return scm_lengths();
     CHECK(prepare_peer_fixtures() == 0);
     if (argc == 2 && !strcmp(argv[1], "--linux")) {
@@ -1195,6 +1215,7 @@ int main(int argc, char **argv)
     } else return 2;
     setvbuf(stdout, NULL, _IOLBF, 0);
     if(race_mode) return chown_race_probe();
+    if(acl_mode) return chown_acl_probe();
     run("mapped getters and privileged setters", mapped_ids);
     run("mapping validation and failed-update atomicity", validation);
     run("saved UID restoration and capability fixups", saved_ids);

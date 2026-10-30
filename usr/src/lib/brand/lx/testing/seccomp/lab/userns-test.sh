@@ -112,6 +112,7 @@ for probe in /test/scope_caps /test/dynamic/scope_caps \
     fi
 done
 /lab/chown-race-test.sh
+/lab/chown-acl-test.sh
 cleanup
 trap - EXIT
 /lab/ktest run lx_namespace:user:credentials
