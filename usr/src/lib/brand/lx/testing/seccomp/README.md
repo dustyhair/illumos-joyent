@@ -440,8 +440,9 @@ state independently of native privileges. lx_userns.c adds reference-counted
 namespace objects, serialized one-time map publication, captured map-file
 opener credentials, parent/child capability scope, irreversible setgroups
 denial and a native-credential reduction helper. These objects are internal.
-No process enters one through unshare/clone yet, and Linux-visible capget,
-capset or PR_CAPBSET_DROP behavior has not been replaced by this backend.
+No process enters one through unshare/clone yet. Kernel capget can read the
+scoped payload, while scoped capset still awaits per-LWP publication. Real
+PR_CAPBSET_DROP behavior has not been connected to this backend.
 
 UID/GID maps flatten parent-relative ranges to backing IDs and preserve
 reader-relative map output. Checks cover overlapping ranges, unmapped parent
@@ -600,3 +601,71 @@ also pass. Runtime kernel source is eef956594c, tests c089cc3cd4, driver
 f6c5632cbe. Clean release/debug lx_brand/lx_proc and namespace ktest builds pass.
 Common kernel1d087dfc71 and LOFSa8b remain in a mixed May platform/userland VM.
 This is a release-runtime checkpoint; the full Codex sandbox remains pending.
+
+
+## Kernel capability syscalls
+
+capget/capset now have kernel handlers for amd64 and i386. The obsolete
+516-line userland implementation and its dispatch entries were removed.
+The existing capability-to-native-privilege mapping has one implementation,
+which also supplies the initial actor for procfs identity maps.
+
+Native-backed capset prepares all three sets on an unpublished credential,
+then replaces p_cred once under p_crlock and uses crset for the native thread
+notification. Validation failure leaves the original credential unchanged.
+This removes the old three-setppriv partial-commit window and fixes an
+inheritable-only change being skipped. Inheritable capabilities may remain
+after being removed from permitted. Basic native privileges already held by
+the caller remain available when Linux sets are zero. Requests that cannot be
+represented by coupled native privileges, such as separate SETUID/SETGID
+rights, fail instead of reporting a capability drop that did not occur.
+
+The native-backed path retains illumos process-wide credential semantics.
+It does not implement Linux per-task capability changes. Scoped payloads can
+be queried, but scoped capset returns EOPNOTSUPP until per-LWP publication and
+inheritance are implemented. Bounding/securebits/ambient prctl transitions
+also remain unfinished. The native procfs bounding value remains explicitly
+a legacy approximation. No namespace entry syscall was enabled by this work.
+
+ABI controls cover v1/v2/v3 widths, preferred-version negotiation, NULL data,
+a version field at a protected-page boundary, PID/error precedence, unknown
+high bits, E/P/I changes, and failure preservation. Remote capget observes
+256 snapshots across an E/P/I drop and must see a complete old or new state.
+A procfs test compares CapInh/CapPrm/CapEff with capget after a real change;
+those fields now use the held process credential rather than constant zeros.
+The shared Linux PID lookup also rejects a global-hash hit from another zone.
+Its negative test uses a live lx PID and a separate synthetic zone view.
+
+Build the controls on Linux:
+
+    cc -static -std=gnu11 -O2 -Wall -Wextra -Werror \
+        -o cap_syscalls_probe cap_syscalls_probe.c
+    as --32 -o cap_syscalls_probe32.o cap_syscalls_probe32.S
+    ld -m elf_i386 -o cap_syscalls_probe32 cap_syscalls_probe32.o
+
+Run the first program normally and with --filter inside the same installed
+bwrap bootstrap documented above. The i386 executable is freestanding and
+returns the failed stage number, or zero after all seven stages pass.
+Codex-testbox passes all 11 scenarios both normally and with filtering, and
+the i386 control returns zero, without skips.
+
+The private image updater can include rebuilt emulation libraries with
+LX_LAB_UPDATE_USERLIBS=1. SmartOS mounts /usr from compressed usr.lgz, so the
+updater follows tools/build_live: decompress the detached UFS image, update
+its libraries, unmount/detach, compress and replace it. The old UFS allocation
+must be released before writing the replacement. SHA256 readback checks cover
+the inner libraries and compressed image. No library update is inferred from
+copies under the root image's shadowed /usr directory.
+
+
+Final offline VM boot30 passes all eight user suites, the 11 capability ABI
+scenarios normally and under filtering, all seven i386 stages, three procfs
+map baseline scenarios and every existing regression. Both runtime emulation
+library hashes match the rebuilt objects. Kernel source is 7edbda5c50,
+procfs status source 488b9388e7, library source d768aa8856, and image staging
+source a095ee9c21. Release/debug kernel/test builds and both library builds
+pass, using seeded SDK dependencies. Earlier boot28 used old libraries despite
+copies in the root image's shadowed /usr; boot29 verified the corrected nested
+image before the final PID-boundary change. The remaining platform/userland
+and SDK dependencies are not a full source rebuild, so this remains a mixed
+platform release-runtime checkpoint. No production host deployment occurred.
