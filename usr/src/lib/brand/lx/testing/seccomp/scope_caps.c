@@ -117,7 +117,7 @@ static void *grandchild(void *unused)
 {
     caps_t c;
     (void)unused;
-    if (getcaps(0, &c) != 0 || c.e || c.p || c.i) atomic_store(&worker_error, 1);
+    if (getcaps(0, &c) != 0 || c.e || c.p || c.i) atomic_store(&worker_error, 128);
     return NULL;
 }
 static void *worker(void *unused)
@@ -131,8 +131,8 @@ static void *worker(void *unused)
     atomic_store(&stage, 1);
     while (atomic_load(&stage) == 1) sched_yield();
     pthread_t t;
-    if (pthread_create(&t, NULL, grandchild, NULL) != 0) error = 1;
-    else if (pthread_join(t, NULL) != 0) error = 1;
+    if (pthread_create(&t, NULL, grandchild, NULL) != 0) error |= 4;
+    else if (pthread_join(t, NULL) != 0) error |= 8;
     pid_t child = syscall(SYS_fork);
     if (child == 0) {
         caps_t got;
@@ -141,7 +141,13 @@ static void *worker(void *unused)
         __builtin_unreachable();
     }
     int status;
-    if (child < 0 || waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status)) error = 1;
+    if (child < 0) {
+        fprintf(stderr, "worker fork failed errno=%d\n", errno); error |= 16;
+    } else if (waitpid(child, &status, 0) != child) {
+        fprintf(stderr, "worker wait failed errno=%d\n", errno); error |= 32;
+    } else if (!WIFEXITED(status) || WEXITSTATUS(status)) {
+        fprintf(stderr, "worker child status=%#x\n", status); error |= 64;
+    }
     if (error) atomic_store(&worker_error, error);
     return NULL;
 }
@@ -156,7 +162,9 @@ static int threads(void)
     CHECK(getcaps(0, &got) == 0 && same(got, parent_caps));
     CHECK(getcaps(atomic_load(&worker_tid), &got) == 0 && got.e == 0 && got.p == 0 && got.i == 0);
     atomic_store(&stage, 2);
-    CHECK(pthread_join(t, NULL) == 0 && atomic_load(&worker_error) == 0);
+    CHECK(pthread_join(t, NULL) == 0);
+    if (atomic_load(&worker_error)) fprintf(stderr, "worker error bits=%d\n", atomic_load(&worker_error));
+    CHECK(atomic_load(&worker_error) == 0);
     CHECK(getcaps(0, &got) == 0 && same(got, parent_caps));
     return 0;
 }
