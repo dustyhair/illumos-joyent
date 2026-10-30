@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <stdlib.h>
+#include <errno.h>
 #define CHECK(x) do { if (!(x)) { perror(#x); exit(1); } } while (0)
 static void receive(int fd, pid_t pid, uid_t uid)
 {
@@ -45,5 +46,11 @@ int main(void)
     }
     close(pair[0]); receive(pair[1], child, getuid()); receive(pair[1], child, 1001);
     CHECK(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0);
-    close(pair[1]); puts("NATIVE_STREAM_CRED_PASS"); return (0);
+    close(pair[1]); puts("NATIVE_STREAM_CRED_PASS");
+    char cwd[4096], path[]="/tmp/native-rmdir-XXXXXX";
+    CHECK(getcwd(cwd,sizeof(cwd)) != NULL && mkdtemp(path) != NULL);
+    CHECK(chdir(path) == 0); errno=0;
+    CHECK(rmdir(path) == -1 && errno == EINVAL);
+    CHECK(chdir(cwd) == 0 && rmdir(path) == 0);
+    puts("NATIVE_RMDIR_CWD_PASS"); return (0);
 }
