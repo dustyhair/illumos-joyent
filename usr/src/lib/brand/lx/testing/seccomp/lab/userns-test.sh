@@ -11,8 +11,13 @@ for suite in maps capabilities native map_authority lifetime budget budget_race;
 done
 /lab/ktest run lx_namespace:user:cap_syscalls
 /lab/ktest run lx_namespace:user:credentials
+chown_tmpfs=0
 cleanup() {
     zoneadm -z lx-probe halt
+    if test "$chown_tmpfs" = 1; then
+        umount /zones/lx-probe-zfs/root/test/chown-tmpfs
+        chown_tmpfs=0
+    fi
 }
 trap cleanup EXIT
 (cd /zones/lx-probe-zfs/root &&
@@ -39,6 +44,9 @@ if zonecfg -z lx-probe info attr name=max-user-namespaces | grep -q 'name: max-u
 else
     zonecfg -z lx-probe 'add attr; set name=max-user-namespaces; set type=uint; set value=64; end;'
 fi
+mkdir -p /zones/lx-probe-zfs/root/test/chown-tmpfs
+mount -F tmpfs -o size=16m,mode=1777 swap /zones/lx-probe-zfs/root/test/chown-tmpfs
+chown_tmpfs=1
 zoneadm -z lx-probe ready
 /lab/userns-budget-native --ready lx-probe
 zoneadm -z lx-probe boot
@@ -56,11 +64,11 @@ for probe in /test/scope_caps /test/dynamic/scope_caps \
     /test/scope_ids /test/dynamic/scope_ids; do
     scope_log=/lab/$(echo "$probe" | tr / _).log
     if [[ "$probe" = */scope_ids ]]; then
-        expected='SCOPE_IDS cases=52 failures=0'
+        expected='SCOPE_IDS cases=57 failures=0'
     else
         expected='SCOPE_CAPS cases=19 failures=0'
     fi
-    zlogin -S lx-probe "$probe" > "$scope_log" 2>&1 &
+    zlogin -S lx-probe "LX_CHOWN_TMPFS=/test/chown-tmpfs $probe" > "$scope_log" 2>&1 &
     scope_job=$!
     scope_pid=
     for attempt in {1..10}; do

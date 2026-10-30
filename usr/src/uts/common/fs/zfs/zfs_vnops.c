@@ -32,6 +32,7 @@
 /* Portions Copyright 2010 Robert Milkowski */
 
 #include <sys/types.h>
+#include <sys/brand.h>
 #include <sys/param.h>
 #include <sys/time.h>
 #include <sys/systm.h>
@@ -3079,6 +3080,7 @@ zfs_setattr(vnode_t *vp, vattr_t *vap, int flags, cred_t *cr,
 	boolean_t	handle_eadir = B_FALSE;
 	boolean_t	zp_acl_entered = B_FALSE;
 	boolean_t	attr_acl_entered = B_FALSE;
+	boolean_t	brand_denied = B_FALSE;
 	sa_bulk_attr_t	bulk[8], xattr_bulk[8];
 	int		count = 0, xattr_count = 0;
 
@@ -3573,6 +3575,24 @@ top:
 	}
 	mutex_enter(&zp->z_lock);
 
+	/* Recheck scoped ownership at the actual locked update point. */
+	if ((mask & (AT_UID | AT_GID)) != 0 && crgetbrand(cr) != NULL) {
+		int authority;
+
+		zfs_fuid_map_ids(zp, cr, &oldva.va_uid, &oldva.va_gid);
+		authority = brand_cred_vnode_setattr(cr, vp, vap, &oldva,
+		    mask & (AT_UID | AT_GID));
+		if (authority != BRAND_CRED_DEFER && authority != 0) {
+			err = authority;
+			brand_denied = B_TRUE;
+			if (fuid_dirtied)
+				zfs_fuid_sync(zfsvfs, tx);
+			mutex_exit(&zp->z_lock);
+			rw_exit(&zp->z_acl_lock);
+			goto out;
+		}
+	}
+
 	SA_ADD_BULK_ATTR(bulk, count, SA_ZPL_FLAGS(zfsvfs), NULL,
 	    &zp->z_pflags, sizeof (zp->z_pflags));
 
@@ -3757,7 +3777,10 @@ out:
 	}
 
 	if (err) {
-		dmu_tx_abort(tx);
+		if (brand_denied)
+			dmu_tx_commit(tx);
+		else
+			dmu_tx_abort(tx);
 		if (attrzp)
 			VN_RELE(ZTOV(attrzp));
 		if (err == ERESTART)

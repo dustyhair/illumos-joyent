@@ -162,6 +162,9 @@ struct vattr;
  *                    authorize, or an errno to deny process access
  * b_cred_exec - Validate each exec vnode and prepare a private credential
  *               at level zero; return an errno without publishing on failure
+ * b_cred_vnode_setattr - Authorize the requested attribute mask against
+ *                       filesystem-supplied attributes; DEFER uses native
+ *                       policy. Filesystems must recheck at locked update.
  */
 struct brand_ops {
 	void	(*b_init_brand_data)(zone_t *, kmutex_t *);
@@ -219,6 +222,8 @@ struct brand_ops {
 	    const struct cred *, int);
 	int	(*b_cred_exec)(const struct cred *, struct cred *,
 	    struct vnode *, const struct vattr *, int);
+	int	(*b_cred_vnode_setattr)(const struct cred *, struct vnode *,
+	    const struct vattr *, const struct vattr *, uint_t);
 };
 
 /*
@@ -252,6 +257,8 @@ extern int brand_cred_proc_perm(const struct cred *, struct proc *,
     const struct cred *, int);
 extern int brand_cred_exec(const struct cred *, struct cred *,
     struct vnode *, const struct vattr *, int);
+extern int brand_cred_vnode_setattr(const struct cred *, struct vnode *,
+    const struct vattr *, const struct vattr *, uint_t);
 extern boolean_t brand_in_use(brand_t *);
 
 /*

@@ -1506,6 +1506,13 @@ secpolicy_vnode_setattr(cred_t *cr, struct vnode *vp, struct vattr *vap,
 
 	if (mask & (AT_UID|AT_GID)) {
 		boolean_t checkpriv = B_FALSE;
+		int authority = brand_cred_vnode_setattr(cr, vp, vap, ovap,
+		    mask & (AT_UID | AT_GID));
+
+		if (authority != BRAND_CRED_DEFER && authority != 0) {
+			error = authority;
+			goto out;
+		}
 
 		/*
 		 * Chowning files.
@@ -1537,7 +1544,7 @@ secpolicy_vnode_setattr(cred_t *cr, struct vnode *vp, struct vattr *vap,
 		/*
 		 * If necessary, check privilege to see if update can be done.
 		 */
-		if (checkpriv &&
+		if (checkpriv && authority != 0 &&
 		    (error = secpolicy_vnode_chown(cr, ovap->va_uid)) != 0) {
 			goto out;
 		}

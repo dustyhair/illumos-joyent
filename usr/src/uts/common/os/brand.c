@@ -397,6 +397,19 @@ brand_cred_exec(const cred_t *source, cred_t *candidate, struct vnode *vp,
 	    attr, level));
 }
 
+/* Caller supplies the filesystem's ownership snapshot, not a path precheck. */
+int
+brand_cred_vnode_setattr(const cred_t *cred, struct vnode *vp,
+    const struct vattr *want, const struct vattr *old, uint_t mask)
+{
+	brand_cred_t *data = crgetbrand(cred);
+
+	if (data == NULL || data->bc_brand->b_ops->b_cred_vnode_setattr == NULL)
+		return (BRAND_CRED_DEFER);
+	return (data->bc_brand->b_ops->b_cred_vnode_setattr(cred, vp,
+	    want, old, mask));
+}
+
 void
 brand_unregister_zone(struct brand *bp)
 {

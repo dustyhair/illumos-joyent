@@ -464,6 +464,44 @@ lx_userns_cred_perm(const cred_t *source, proc_t *process,
 	return (BRAND_CRED_DEFER);
 }
 
+/* Only grant against inode IDs covered by this immutable namespace map. */
+int
+lx_userns_cred_setattr(const cred_t *cred, struct vnode *vp,
+    const struct vattr *want, const struct vattr *old, uint_t mask)
+{
+	const lx_userns_native_t *data = (void *)crgetbrand(cred);
+	const char *fs;
+	boolean_t needs_cap = B_FALSE;
+
+	mask &= AT_UID | AT_GID;
+	if (data == NULL || data->un_cred.bc_brand != &lx_brand || mask == 0)
+		return (BRAND_CRED_DEFER);
+	if (((mask & AT_UID) != 0 && lx_userns_id(data->un_namespace, 0,
+	    want->va_uid, 0) == LX_ID_INVALID) ||
+	    ((mask & AT_GID) != 0 && lx_userns_id(data->un_namespace, 1,
+	    want->va_gid, 0) == LX_ID_INVALID))
+		return (EINVAL);
+	if ((mask & AT_UID) != 0 && (crgetuid(cred) != old->va_uid ||
+	    want->va_uid != old->va_uid))
+		needs_cap = B_TRUE;
+	if ((mask & AT_GID) != 0 && (crgetuid(cred) != old->va_uid ||
+	    (want->va_gid != old->va_gid && !groupmember(want->va_gid, cred))))
+		needs_cap = B_TRUE;
+	if (!needs_cap)
+		return (BRAND_CRED_DEFER);
+	if ((data->un_caps.lc_effective & LX_CAP_BIT(LX_CAP_CHOWN)) == 0 ||
+	    lx_userns_id(data->un_namespace, 0, old->va_uid, 0) ==
+	    LX_ID_INVALID ||
+	    lx_userns_id(data->un_namespace, 1, old->va_gid, 0) ==
+	    LX_ID_INVALID)
+		return (EPERM);
+	/* These filesystems provide a locked ownership update check. */
+	fs = vfssw[vp->v_vfsp->vfs_fstype].vsw_name;
+	if (strcmp(fs, "zfs") != 0 && strcmp(fs, "tmpfs") != 0)
+		return (EPERM);
+	return (0);
+}
+
 /*
  * Decode the immutable file credential or current thread credential. The
  * caller holds both the native credential and the scope used for its root.

@@ -318,7 +318,8 @@ struct brand_ops lx_brops = {
 	lx_acct_out,			/* b_acct_out */
 	lx_userns_cred_free,		/* b_cred_free */
 	lx_userns_cred_perm,		/* b_cred_proc_perm */
-	lx_userns_cred_exec		/* b_cred_exec */
+	lx_userns_cred_exec,		/* b_cred_exec */
+	lx_userns_cred_setattr		/* b_cred_vnode_setattr */
 };
 
 struct brand_mach_ops lx_mops = {

@@ -26,6 +26,7 @@
 static const char *self;
 static int cases, failures;
 static int pre_root_pair[2], pre_unmapped_pair[2], pre_unmapped_fd;
+static int pre_gid_unmapped_fd;
 static pid_t pre_peer_pid;
 static atomic_int ready, release_worker, worker_error;
 static uint64_t capbits(int permitted)
@@ -853,6 +854,10 @@ static int prepare_peer_fixtures(void)
     CHECK(syscall(SYS_setresuid, -1, 0, -1) == 0);
     CHECK(syscall(SYS_setresuid, 0, 0, 0) == 0);
     CHECK(syscall(SYS_setresgid, 0, 0, 0) == 0);
+    snprintf(path, sizeof(path), "/tmp/lx-gid-unmapped-%d", getpid());
+    pre_gid_unmapped_fd=open(path,O_CREAT|O_EXCL|O_RDWR|O_CLOEXEC,0600);
+    CHECK(pre_gid_unmapped_fd>=0 && unlink(path)==0);
+    CHECK(fchown(pre_gid_unmapped_fd,1000,2000)==0);
     return 0;
 }
 static int peer_is(int fd, pid_t pid, unsigned uid, unsigned gid)
@@ -1035,6 +1040,78 @@ static int owner_task(void)
     CHECK(owner_is(chown_worker_fd, 0, 0) && close(chown_worker_fd) == 0);
     return 0;
 }
+static int cap_chown_sets(int effective, int permitted)
+{
+    struct __user_cap_header_struct h={_LINUX_CAPABILITY_VERSION_3,0};
+    struct __user_cap_data_struct data[2];
+    CHECK(syscall(SYS_capget,&h,data)==0);
+    if(!effective) data[0].effective &= ~(1U<<CAP_CHOWN);
+    if(!permitted) data[0].permitted &= ~(1U<<CAP_CHOWN);
+    CHECK(syscall(SYS_capset,&h,data)==0);return 0;
+}
+static int cap_chown_dir(const char *dir)
+{
+    CHECK(root_ids()==0);
+    char path[256];CHECK(snprintf(path,sizeof(path),"%s/lx-cap-chown-XXXXXX",dir)>0);
+    int fd=mkstemp(path);CHECK(fd>=0 && unlink(path)==0);
+    CHECK(fchmod(fd,06755)==0);
+    CHECK(fchown(fd,1,2)==0 && owner_is(fd,1,2));
+    struct stat st;CHECK(fstat(fd,&st)==0 && (st.st_mode&06000)==0);
+    CHECK(fchown(fd,0,0)==0 && owner_is(fd,0,0));
+    errno=0;CHECK(fchown(fd,999,0)==-1 && errno==EINVAL && owner_is(fd,0,0));
+    close(fd);return 0;
+}
+static int cap_chown_zfs(void){return cap_chown_dir("/tmp");}
+static int cap_chown_tmpfs(void)
+{
+    const char *dir=getenv("LX_CHOWN_TMPFS");
+    return cap_chown_dir(dir ? dir : "/dev/shm");
+}
+static int cap_chown_effective(void)
+{
+    CHECK(root_ids()==0);int fd=owned_fd();CHECK(fd>=0);
+    CHECK(cap_chown_sets(0,1)==0);errno=0;
+    CHECK(fchown(fd,1,2)==-1 && errno==EPERM && owner_is(fd,0,0));
+    CHECK(fchown(fd,0,0)==0);
+    CHECK(cap_chown_sets(0,0)==0);errno=0;
+    CHECK(fchown(fd,1,2)==-1 && errno==EPERM && owner_is(fd,0,0));
+    unsigned group=2;CHECK(syscall(SYS_setgroups,1,&group)==0);
+    CHECK(fchown(fd,-1,2)==0 && owner_is(fd,0,2));
+    close(fd);return 0;
+}
+static int cap_chown_unmapped(void)
+{
+    CHECK(root_ids()==0);errno=0;
+    CHECK(fchown(pre_unmapped_fd,1,1)==-1 && errno==EPERM);
+    CHECK(owner_is(pre_unmapped_fd,65534,65534));errno=0;
+    CHECK(fchown(pre_gid_unmapped_fd,1,-1)==-1 && errno==EPERM);
+    CHECK(owner_is(pre_gid_unmapped_fd,0,65534));
+    /* An owner may set its current group without a capability override. */
+    CHECK(fchown(pre_gid_unmapped_fd,-1,0)==0 && owner_is(pre_gid_unmapped_fd,0,0));
+    CHECK(fchown(pre_gid_unmapped_fd,1,2)==0 && owner_is(pre_gid_unmapped_fd,1,2));
+    return 0;
+}
+static int cap_chown_task_fd, cap_chown_task_error;
+static void *cap_chown_worker(void *unused)
+{
+    (void)unused;
+    cap_chown_task_error=cap_chown_sets(0,0);
+    if(!cap_chown_task_error) {
+        errno=0;
+        if(fchown(cap_chown_task_fd,1,2)!=-1 || errno!=EPERM)
+            cap_chown_task_error=1;
+    }
+    return NULL;
+}
+static int cap_chown_task(void)
+{
+    CHECK(root_ids()==0);cap_chown_task_fd=owned_fd();CHECK(cap_chown_task_fd>=0);
+    pthread_t thread;CHECK(pthread_create(&thread,NULL,cap_chown_worker,NULL)==0);
+    CHECK(pthread_join(thread,NULL)==0 && cap_chown_task_error==0);
+    CHECK(owner_is(cap_chown_task_fd,0,0));
+    CHECK(fchown(cap_chown_task_fd,1,2)==0 && owner_is(cap_chown_task_fd,1,2));
+    close(cap_chown_task_fd);return 0;
+}
 static int image_check(void)
 {
     CHECK(ids(0, 1, 1, 1) && ids(1, 1, 1, 1));
@@ -1152,6 +1229,11 @@ int main(int argc, char **argv)
     run("ownership changes still require native authority", owner_denied);
     run("unmapped inode ownership remains protected", owner_unmapped);
     run("ownership permission uses the calling task credential", owner_task);
+    run("scoped CHOWN grants mapped ownership changes on regular files", cap_chown_zfs);
+    run("scoped CHOWN grants mapped ownership changes on tmpfs", cap_chown_tmpfs);
+    run("CHOWN requires effective authority and preserves group rights", cap_chown_effective);
+    run("CHOWN cannot override unmapped inode ownership", cap_chown_unmapped);
+    run("CHOWN permission uses task authority rather than cached file credentials", cap_chown_task);
     if (argc == 1) {
         unsigned group = 1;
         CHECK(root_ids() == 0);
