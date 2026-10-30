@@ -6,7 +6,7 @@ test "$(zonename)" = global
 probe_job= tracer_job= racer_job= target_pid= path= stop=
 cleanup() {
     test -z "$stop" || touch "$stop"
-    if test -n "$tracer_job"; then kill -INT "$tracer_job" 2>/dev/null || true; wait "$tracer_job" || true; fi
+    if test -n "$tracer_job"; then kill -TERM "$tracer_job" 2>/dev/null || true; wait "$tracer_job" || true; fi
     if test -n "$target_pid"; then kill -KILL "$target_pid" 2>/dev/null || true; fi
     if test -n "$probe_job"; then wait "$probe_job" || true; fi
     if test -n "$racer_job"; then wait "$racer_job" || true; fi
@@ -75,7 +75,7 @@ DSCRIPT
     wait "$probe_job"; probe_job=; target_pid=
     touch "$stop"
     wait "$racer_job"; racer_job=
-    kill -INT "$tracer_job"
+    kill -TERM "$tracer_job"
     wait "$tracer_job"; tracer_job=
     cat "$log" "$trace" /lab/racer$tag.log
     grep -q CHOWN_RACE_PROBE_PASS "$log"
