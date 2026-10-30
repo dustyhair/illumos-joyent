@@ -23,7 +23,7 @@ and setid-clearing behavior remain in place.
 
 ## Tests
 
-The57-case identity probes pass on Linux as static and dynamic binaries with
+The 57-case identity probes pass on Linux as static and dynamic binaries with
 -Wall -Wextra -Werror. Five added cases check ownership changes on regular
 files and tmpfs, clearing executable setid bits, mapped target validation,
 effective versus permitted capability, ordinary group rights, rejection of
@@ -31,14 +31,14 @@ unmapped inode owners/groups and thread-local versus cached-file authority.
 The initial new assertions incorrectly treated owner_is as an error-code
 return; those assertions were corrected before the successful controls.
 
-The native VM driver configures a private16MiB tmpfs through zonecfg,
+The native VM driver configures a private 16 MiB tmpfs through zonecfg,
 passes its path to probes and lets zone lifecycle manage mounting/unmounting.
 This zoneadm verifies special paths; /dev/null supplies a valid path, while
 tmpfs ignores it and reports its resource as swap. Option values are quoted
 for the native zonecfg lexer. It never
 mounts or changes production hosts. Native kernel, brand, procfs, ELF, ZFS and
 namespace tests compile cleanly in release/debug configurations. Common and
-module source is af19067878; final driver is10b6f7b3fb. VM55 failed before
+module source is af19067878; final driver is 10b6f7b3fb. VM55 failed before
 kernel entry because the external ISO unix319c differed from archive unix438b.
 The canonical updater now exports the matching unix plus SHA256; local helper
 lx-sandbox/refresh-lab-image downloads/verifies the pair and rebuilds the ISO.
@@ -64,15 +64,41 @@ namespace_ktest 90883253561790711000948d84ff5a639dae0f323ad08e5624b22f06b8614d17
 
 Native tl600d5200ad, LOFSa8b, VM30 emulation libraries and VM46 support remain
 retained over the mixed May base. Debug is compile-only, not runtime tested.
-Actual Codex0.166 version passes under the scoped filter; the normal sandbox
+Actual Codex 0.166 version passes under the scoped filter; the normal sandbox
 is still unavailable. Launcher lx-sandbox/launch-lab remains SHA256
 ece2f8445e5745dd320cc1f837a51ca7dc206f9798292dfdb41f71ddffc16739.
 The isolated launcher arguments and physical hosts remain unchanged.
 
+## Forced ownership races
+
+VM59 runs the final race driver from the rebuilt archive without console
+changes. A native global-zone helper alternates a private probe inode between
+mapped ownership 1001:1001 and unmapped ownership 2000:2000. DTrace delays a
+successful early native policy return, outside the ZFS update locks, and
+requires an observed locked check against the unmapped owner. It also verifies
+that zfs_setattr returns EPERM for that same operation. Either an unexpected
+return or any DTrace diagnostic fails the driver. The test uses existing FBT
+probes and adds no production kernel instrumentation.
+
+Both canonical drivers pass. The static probe observed nine stale denials and
+the dynamic probe observed eight. Each completed 1000 ownership attempts,
+accepting only success or EPERM. The regular 57+57 identity, 19+19 capability
+and earlier regression suites also pass. Credential lifetime checks pass after
+both probes exit. Runtime kernel hashes remain the VM57 values above. The
+native helper passes cstyle and GCC -Wall -Wextra -Werror. Test source is
+b08568fa5e; kernel source remains af19067878.
+
+During VM58 diagnostic development, the driver targeted genunix instead of
+unix for the brand helper, then inherited an ignored SIGINT in its background
+tracer. The final driver targets unix and stops DTrace using SIGTERM. The
+initial fixed delay also missed races on one run; the final delay uses the
+early policy return and varies its length. VM58 is diagnostic evidence only.
+Final evidence is lab/evidence/boot-59-chown-race-acceptance.log.
+
 ## Remaining work
 
-Forced ownership-change races, nontrivial native ACLs and additional
-filesystem behavior require more controls before public namespace entry.
+Nontrivial native ACLs and additional filesystem behavior require more
+controls before public namespace entry.
 CAP_FOWNER/DAC permissions, separate FSUID/FSGID, mount/PID/IPC/network
 isolation, remaining syscall behavior and public entry remain incomplete.
 On-disk file capabilities remain unsupported. A newest stable installation
