@@ -542,8 +542,8 @@ static int trace_inherit(void)
     CHECK(ptrace(PTRACE_SETOPTIONS, child, NULL, (void *)PTRACE_O_TRACEFORK) == 0);
     CHECK(ptrace(PTRACE_CONT, child, NULL, NULL) == 0);
     unsigned long grandchild = 0;
-    int child_done = 0, grandchild_done = 0;
-    for (int events = 0; events < 40 && (!child_done || !grandchild_done); events++) {
+    int child_done = 0, grandchild_detached = 0;
+    for (int events = 0; events < 40 && (!child_done || !grandchild_detached); events++) {
         pid_t got = inherit_wait(-1, &status, __WALL);
         CHECK(got > 0);
         if (WIFEXITED(status)) {
@@ -551,17 +551,22 @@ static int trace_inherit(void)
                 if (WEXITSTATUS(status) != 0) fprintf(stderr, "inherit parent status=%#x\n", status);
                 CHECK(WEXITSTATUS(status) == 0); child_done = 1;
             }
-            else { CHECK(got == (pid_t)grandchild && WEXITSTATUS(status) == 7); grandchild_done = 1; }
+            else { fprintf(stderr, "unexpected inherited tracee exit pid=%d status=%#x\n", got, status); return 1; }
             continue;
         }
         CHECK(WIFSTOPPED(status));
         if ((unsigned)status >> 16 == PTRACE_EVENT_FORK)
             CHECK(ptrace(PTRACE_GETEVENTMSG, got, NULL, &grandchild) == 0 && grandchild > 0);
-        int signal = WSTOPSIG(status) == SIGCHLD ? SIGCHLD : 0;
-        CHECK(ptrace(PTRACE_CONT, got, NULL, (void *)(uintptr_t)signal) == 0);
+        if (got == (pid_t)grandchild) {
+            CHECK(!grandchild_detached && ptrace(PTRACE_DETACH, got, NULL, NULL) == 0);
+            grandchild_detached = 1;
+        } else {
+            int signal = WSTOPSIG(status) == SIGCHLD ? SIGCHLD : 0;
+            CHECK(ptrace(PTRACE_CONT, got, NULL, (void *)(uintptr_t)signal) == 0);
+        }
     }
-    CHECK(child_done && grandchild_done && grandchild != 0);
-    printf("TRACE_INHERIT_PASS\n");
+    CHECK(child_done && grandchild_detached && grandchild != 0);
+    printf("TRACE_INHERIT_DETACH_PASS\n");
     return 0;
 }
 static int image_check(void)
