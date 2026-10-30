@@ -41,6 +41,7 @@
 #include <sys/un.h>
 #include <sys/sunddi.h>
 #include <sys/cred.h>
+#include <sys/zone.h>
 #include <sys/ucred.h>
 #include <sys/model.h>
 #include <sys/brand.h>
@@ -4164,7 +4165,8 @@ lx_getsockopt_socket(sonode_t *so, int optname, void *optval,
 				    lcred->lxu_uid);
 				lcred->lxu_gid = lx_userns_id_visible(CRED(), 1,
 				    lcred->lxu_gid);
-				lcred->lxu_pid = LX_PID_TO_INIT(lcred->lxu_pid);
+				if (lcred->lxu_pid == curzone->zone_proc_initpid)
+					lcred->lxu_pid = 1;
 			}
 		}
 		*optlen = sizeof (struct lx_ucred);

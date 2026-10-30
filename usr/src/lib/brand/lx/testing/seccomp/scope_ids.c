@@ -17,12 +17,16 @@
 #include <sys/prctl.h>
 #include <sys/ptrace.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "line %d: %s errno=%d\n", __LINE__, #x, errno); return 1; } } while (0)
 static const char *self;
 static int cases, failures;
+static int pre_root_pair[2], pre_unmapped_pair[2], pre_unmapped_fd;
+static pid_t pre_peer_pid;
 static atomic_int ready, release_worker, worker_error;
 static uint64_t capbits(int permitted)
 {
@@ -569,6 +573,203 @@ static int trace_inherit(void)
     printf("TRACE_INHERIT_DETACH_PASS\n");
     return 0;
 }
+/* Capture native identities before the trusted fixture attaches its map. */
+static int prepare_peer_fixtures(void)
+{
+    pre_peer_pid = getpid();
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, pre_root_pair) == 0);
+    CHECK(syscall(SYS_setresgid, -1, 2000, -1) == 0);
+    CHECK(syscall(SYS_setresuid, -1, 2000, -1) == 0);
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, pre_unmapped_pair) == 0);
+    char path[128];
+    snprintf(path, sizeof(path), "/tmp/lx-unmapped-%d", getpid());
+    pre_unmapped_fd = open(path, O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC, 0600);
+    CHECK(pre_unmapped_fd >= 0 && unlink(path) == 0);
+    CHECK(syscall(SYS_setresuid, -1, 0, -1) == 0);
+    CHECK(syscall(SYS_setresuid, 0, 0, 0) == 0);
+    CHECK(syscall(SYS_setresgid, 0, 0, 0) == 0);
+    return 0;
+}
+static int peer_is(int fd, pid_t pid, unsigned uid, unsigned gid)
+{
+    struct ucred peer = { 0 };
+    socklen_t size = sizeof(peer);
+    CHECK(getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &peer, &size) == 0);
+    CHECK(size == sizeof(peer) && peer.pid == pid && peer.uid == uid && peer.gid == gid);
+    return 0;
+}
+static int peer_inherited(void)
+{
+    CHECK(peer_is(pre_root_pair[0], pre_peer_pid, 42, 42) == 0);
+    CHECK(peer_is(pre_unmapped_pair[0], pre_peer_pid, 65534, 65534) == 0);
+    return 0;
+}
+static int peer_mapped(void)
+{
+    CHECK(root_ids() == 0);
+    CHECK(syscall(SYS_setresgid, 2, 2, 2) == 0);
+    CHECK(syscall(SYS_setresuid, 1, 1, 1) == 0);
+    int pair[2];
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, pair) == 0);
+    CHECK(peer_is(pair[0], getpid(), 1, 2) == 0);
+    CHECK(close(pair[0]) == 0 && close(pair[1]) == 0);
+    return 0;
+}
+static int peer_cached(void)
+{
+    CHECK(root_ids() == 0);
+    int pair[2];
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, pair) == 0);
+    CHECK(syscall(SYS_setresgid, 2, 2, 2) == 0);
+    CHECK(syscall(SYS_setresuid, 1, 1, 1) == 0);
+    CHECK(peer_is(pair[0], getpid(), 0, 0) == 0);
+    CHECK(close(pair[0]) == 0 && close(pair[1]) == 0);
+    return 0;
+}
+static int worker_pair[2], worker_pair_error;
+static void *peer_creator(void *unused)
+{
+    (void)unused;
+    worker_pair_error = syscall(SYS_setresgid, 2, 2, 2) ||
+        syscall(SYS_setresuid, 1, 1, 1) ||
+        socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, worker_pair);
+    return NULL;
+}
+static int peer_task(void)
+{
+    CHECK(root_ids() == 0);
+    pthread_t thread;
+    CHECK(pthread_create(&thread, NULL, peer_creator, NULL) == 0);
+    CHECK(pthread_join(thread, NULL) == 0 && worker_pair_error == 0);
+    CHECK(ids(0,0,0,0) && ids(1,0,0,0));
+    CHECK(peer_is(worker_pair[0], getpid(), 1, 2) == 0);
+    CHECK(close(worker_pair[0]) == 0 && close(worker_pair[1]) == 0);
+    return 0;
+}
+static int peer_connection(void)
+{
+    CHECK(root_ids() == 0);
+    struct sockaddr_un address = { .sun_family = AF_UNIX };
+    snprintf(address.sun_path, sizeof(address.sun_path), "/tmp/lx-peer-%d", getpid());
+    mode_t oldmask = umask(0);
+    int listener = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    CHECK(listener >= 0 && bind(listener, (void *)&address, sizeof(address)) == 0);
+    CHECK(listen(listener, 1) == 0);
+    pid_t server = getpid(), child = fork(); CHECK(child >= 0);
+    if (child == 0) {
+        if (syscall(SYS_setresgid, 2, 2, 2) || syscall(SYS_setresuid, 1, 1, 1)) _exit(104);
+        int client = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+        if (client < 0 || connect(client, (void *)&address, sizeof(address))) _exit(105);
+        if (peer_is(client, server, 0, 0)) _exit(106);
+        char byte;
+        _exit(read(client, &byte, 1) == 1 ? 0 : 107);
+    }
+    int accepted = accept4(listener, NULL, NULL, SOCK_CLOEXEC);
+    CHECK(accepted >= 0 && peer_is(accepted, child, 1, 2) == 0);
+    CHECK(write(accepted, "x", 1) == 1);
+    int status;
+    CHECK(inherit_wait(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    CHECK(close(accepted) == 0 && close(listener) == 0 && unlink(address.sun_path) == 0);
+    umask(oldmask);
+    return 0;
+}
+static int owned_fd(void)
+{
+    char path[128];
+    snprintf(path, sizeof(path), "/tmp/lx-owned-%d", getpid());
+    int fd = open(path, O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC, 0600);
+    if (fd >= 0 && unlink(path)) { close(fd); return -1; }
+    return fd;
+}
+static int owner_is(int fd, unsigned uid, unsigned gid)
+{
+    struct stat st;
+    return fstat(fd, &st) == 0 && st.st_uid == uid && st.st_gid == gid;
+}
+/* These exercise native owner/group permission, with CAP_CHOWN dropped. */
+static int owner_same(void)
+{
+    CHECK(root_ids() == 0);
+    unsigned group = 1;
+    CHECK(syscall(SYS_setgroups, 1, &group) == 0);
+    CHECK(drop_caps() == 0);
+    int fd = owned_fd(); CHECK(fd >= 0);
+    CHECK(fchown(fd, 0, 0) == 0 && owner_is(fd, 0, 0));
+    CHECK(fchown(fd, -1, 1) == 0 && owner_is(fd, 0, 1));
+    CHECK(close(fd) == 0);
+    return 0;
+}
+static int owner_paths(void)
+{
+    CHECK(root_ids() == 0 && drop_caps() == 0);
+    char path[128], link[128];
+    snprintf(path, sizeof(path), "/tmp/lx-owner-path-%d", getpid());
+    snprintf(link, sizeof(link), "/tmp/lx-owner-link-%d", getpid());
+    int fd = open(path, O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC, 0600);
+    CHECK(fd >= 0 && symlink(path, link) == 0);
+    CHECK(chown(path, 0, -1) == 0);
+    CHECK(lchown(link, 0, 0) == 0);
+    CHECK(fchownat(AT_FDCWD, link, 0, 0, AT_SYMLINK_NOFOLLOW) == 0);
+    CHECK(fchownat(fd, "", 0, 0, AT_EMPTY_PATH) == 0);
+    int pathfd = open(link, O_PATH | O_NOFOLLOW | O_CLOEXEC); CHECK(pathfd >= 0);
+    CHECK(fchownat(pathfd, "", 0, 0, AT_EMPTY_PATH) == 0);
+    errno = 0;
+    CHECK(fchown(pathfd, 0, 0) == -1 && errno == EBADF);
+    CHECK(owner_is(fd, 0, 0));
+    CHECK(close(pathfd) == 0 && close(fd) == 0 && unlink(link) == 0 && unlink(path) == 0);
+    return 0;
+}
+static int owner_invalid(void)
+{
+    CHECK(root_ids() == 0 && drop_caps() == 0);
+    int fd = owned_fd(); CHECK(fd >= 0);
+    errno = 0; CHECK(fchown(fd, 999, 0) == -1 && errno == EINVAL);
+    errno = 0; CHECK(fchown(fd, 0, 999) == -1 && errno == EINVAL);
+    errno = 0; CHECK(fchown(-1, 999, 999) == -1 && errno == EBADF);
+    errno = 0;
+    CHECK(fchownat(AT_FDCWD, "/no-such-owner-file", 999, 999, 0) == -1 && errno == ENOENT);
+    CHECK(owner_is(fd, 0, 0) && close(fd) == 0);
+    return 0;
+}
+static int owner_denied(void)
+{
+    CHECK(root_ids() == 0 && drop_caps() == 0);
+    int fd = owned_fd(); CHECK(fd >= 0);
+    errno = 0; CHECK(fchown(fd, 1, -1) == -1 && errno == EPERM);
+    errno = 0; CHECK(fchown(fd, -1, 1) == -1 && errno == EPERM);
+    CHECK(owner_is(fd, 0, 0) && close(fd) == 0);
+    return 0;
+}
+static int owner_unmapped(void)
+{
+    CHECK(root_ids() == 0);
+    CHECK(owner_is(pre_unmapped_fd, 65534, 65534));
+    errno = 0;
+    CHECK(fchown(pre_unmapped_fd, 0, 0) == -1 && errno == EPERM);
+    CHECK(owner_is(pre_unmapped_fd, 65534, 65534));
+    return 0;
+}
+static int chown_worker_fd, chown_worker_error;
+static void *chown_worker(void *unused)
+{
+    (void)unused;
+    chown_worker_error = syscall(SYS_setresgid, 1, 1, 1) ||
+        syscall(SYS_setresuid, 1, 1, 1);
+    errno = 0;
+    if (fchown(chown_worker_fd, 0, 0) != -1 || errno != EPERM) chown_worker_error = 1;
+    return NULL;
+}
+static int owner_task(void)
+{
+    CHECK(root_ids() == 0);
+    chown_worker_fd = owned_fd(); CHECK(chown_worker_fd >= 0);
+    pthread_t thread;
+    CHECK(pthread_create(&thread, NULL, chown_worker, NULL) == 0);
+    CHECK(pthread_join(thread, NULL) == 0 && chown_worker_error == 0);
+    CHECK(ids(0,0,0,0) && fchown(chown_worker_fd, 0, 0) == 0);
+    CHECK(owner_is(chown_worker_fd, 0, 0) && close(chown_worker_fd) == 0);
+    return 0;
+}
 static int image_check(void)
 {
     CHECK(ids(0, 1, 1, 1) && ids(1, 1, 1, 1));
@@ -614,6 +815,7 @@ int main(int argc, char **argv)
     if (argc >= 3 && !strcmp(argv[1], "--trace-image")) return trace_image(argc, argv);
     if (argc == 2 && !strcmp(argv[1], "--image")) return image_check();
     self = argv[0];
+    CHECK(prepare_peer_fixtures() == 0);
     if (argc == 2 && !strcmp(argv[1], "--linux")) {
         pid_t p = fork(); int status;
         CHECK(p >= 0);
@@ -663,6 +865,17 @@ int main(int argc, char **argv)
     run("TRACEME parent permission uses task credential", traceme_task_snapshot);
     run("NNP mixed-ID exec restricts gain and resets effective IDs", mixed_nnp_drop);
     run("NNP mixed-ID exec without gain preserves effective IDs", mixed_nnp_keep);
+    run("peer credentials use the reader namespace and overflow IDs", peer_inherited);
+    run("peer credentials translate fresh mapped identities", peer_mapped);
+    run("peer credentials retain the connection snapshot", peer_cached);
+    run("peer credentials retain a departed creator task", peer_task);
+    run("Unix connect and accept return mapped peer credentials", peer_connection);
+    run("mapped ownership and native supplementary group permission", owner_same);
+    run("ownership paths, symlinks, empty paths and O_PATH", owner_paths);
+    run("ownership mapping errors preserve native lookup precedence", owner_invalid);
+    run("ownership changes still require native authority", owner_denied);
+    run("unmapped inode ownership remains protected", owner_unmapped);
+    run("ownership permission uses the calling task credential", owner_task);
     if (argc == 1) {
         unsigned group = 1;
         CHECK(root_ids() == 0);
