@@ -483,7 +483,7 @@ limit. The mount views/snapshots and all existing regressions also pass.
 This remains a release-runtime mixed-platform development result.
 
 Process/LWP credential publication, complete fork/exec transitions, procfs
-per-open authority capture, UID/GID translation at every ABI boundary,
+memory-file snapshots, UID/GID translation at every ABI boundary,
 native-entry confinement and resource-specific capability checks remain
 required before exposing namespace syscalls. Namespace quotas,
 setns descriptors, filesystem capabilities, privileged exec and newer
@@ -547,3 +547,56 @@ synthetic proc fixture, fixed by that test-only commit. Production kernel
 source is 1d087dfc71, with clean release/debug core and lx modules. The VM
 retains earlier LOFSa8b and May platform/userland, so this is a mixed-platform
 release-runtime result, not acceptance of the full Codex sandbox.
+
+
+## Captured procfs identity maps
+
+UID/GID map and setgroups files now retain the target namespace at VOP_OPEN.
+Each open receives a private lx procfs vnode. The vnode holds only a namespace
+reference; file_t already holds the immutable opener credential and supplies
+it to VOP_READ/VOP_WRITE. Writes use that credential separately from CRED(),
+which identifies the current writer. The vnode releases its namespace at
+inactive. Each lx zone owns an initial namespace object through its existing
+brand-data lifetime. No common-kernel structure changed in this step.
+
+These files use the real namespace maps and irreversible setgroups state.
+Map reads use the opener's namespace for parent-relative IDs and continue
+working after target exit. Writes apply scope and one-shot publication rules,
+reject oversized/nonzero-offset requests, and advance the uio only on success.
+Scope rejection precedes copying map data. A setgroups writable open requires
+SYS_ADMIN authority; a later privilege drop does not erase the opener's rights.
+The map-file native actor projection uses the existing SYS_ADMIN/MOUNT and
+PROC_SETID mappings. It does not provide a full initial Linux capability set;
+SETFCAP remains absent pending that work. No namespace entry syscall is enabled.
+
+Linux controls can be compiled independently:
+
+    cc -std=gnu11 -O2 -Wall -Wextra -Werror -o proc_maps_linux proc_maps_linux.c
+    cc -static -std=gnu11 -O2 -Wall -Wextra -Werror \
+        -o proc_maps_baseline proc_maps_baseline.c
+    bwrap --unshare-user --unshare-pid --uid 0 --gid 0 --ro-bind / / \
+        --proc /proc --dev-bind /dev /dev --cap-add ALL -- ./proc_maps_linux
+    bwrap --unshare-user --unshare-pid --uid 0 --gid 0 --ro-bind / / \
+        --proc /proc --dev-bind /dev /dev --cap-add ALL -- ./proc_maps_baseline
+
+On codex-testbox all six map-file namespace scenarios and all three baseline
+scenarios pass without skips. The controls cover target/opener capture across
+namespace changes, privilege changes, target exit, write offsets and setgroups
+open authority. Baseline controls retain the bootstrap's actual allow/deny
+state, rather than assuming that installed bwrap left setgroups enabled.
+
+Offline VM boot27 passes the proc_maps kernel test and the same three-scenario
+static Linux baseline binary inside lx. The kernel test substitutes namespace
+objects only on private open vnodes, so it can exercise scoped UID/GID writes,
+reader-relative maps, opener/current authority and lifetime through real VOPs
+without publishing an incompletely confined process credential. The Linux ABI
+probe tests ordinary opens, task paths, file metadata, target exit and an
+already-open setgroups file after a real capset drops SYS_ADMIN. A new open is
+denied while the original file retains its captured authority.
+
+All seven user suites pass, with credentials repeated after zone halt. Mount
+views/snapshots and the existing NNP/BPF/filter/signal/fork/exec/thread probes
+also pass. Runtime kernel source is eef956594c, tests c089cc3cd4, driver
+f6c5632cbe. Clean release/debug lx_brand/lx_proc and namespace ktest builds pass.
+Common kernel1d087dfc71 and LOFSa8b remain in a mixed May platform/userland VM.
+This is a release-runtime checkpoint; the full Codex sandbox remains pending.
