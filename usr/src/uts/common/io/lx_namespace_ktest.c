@@ -726,6 +726,77 @@ out:
 #undef NS_CHECK
 }
 
+static void
+ns_zone_quota(ktest_ctx_hdl_t *ctx)
+{
+	zone_t *zone = zone_find_by_name("lx-probe");
+	lx_mntns_budget_t *budget;
+	lx_mntns_view_t *a = NULL, *b = NULL, *c = NULL;
+	uint32_t maximum, used;
+	int error = 0, i;
+	boolean_t passed = B_FALSE;
+
+	if (zone == NULL || ztolxzd(zone) == NULL) {
+		if (zone != NULL)
+			zone_rele(zone);
+		KT_ERROR(ctx, "mount quota fixture zone is not ready");
+		return;
+	}
+#define	NS_CHECK(expr, why) do { \
+	if (!(expr)) { \
+		KT_FAIL(ctx, "%s, error=%d", why, error); \
+		goto out; \
+	} \
+} while (0)
+	budget = ztolxzd(zone)->lxzd_mntns_budget;
+	lx_mntns_budget_get(budget, &maximum, &used);
+	NS_CHECK(used == 0 && (maximum == 0 || maximum == 2),
+	    "unexpected native mount quota fixture configuration");
+	error = lx_mntns_view_create("/zones/lx-ns-kernel/src", CRED(),
+	    budget, &a);
+	if (maximum == 0) {
+		NS_CHECK(error == ENOSPC && a == NULL,
+		    "zero zone mount quota admitted a view");
+	} else {
+		NS_CHECK(error == 0, "cannot create zone-charged view");
+		error = lx_mntns_view_clone(a, CRED(), &b);
+		NS_CHECK(error == 0, "cannot clone zone-charged view");
+		/* Native controller observes used=2, then lowers maximum to 1. */
+		for (i = 0; i < 100; i++) {
+			lx_mntns_budget_get(budget, &maximum, &used);
+			if (maximum == 1)
+				break;
+			delay(MAX(1, hz / 10));
+		}
+		NS_CHECK(maximum == 1 && used == 2,
+		    "native controller did not lower the live quota");
+		error = lx_mntns_view_clone(b, CRED(), &c);
+		NS_CHECK(error == ENOSPC && c == NULL,
+		    "lowered live zone quota admitted a view");
+	}
+	passed = B_TRUE;
+out:
+	if (c != NULL)
+		lx_mntns_view_rele(c);
+	if (b != NULL)
+		lx_mntns_view_rele(b);
+	if (a != NULL)
+		lx_mntns_view_rele(a);
+	if (!ns_wait_idle()) {
+		KT_ERROR(ctx, "native quota fixture views did not retire");
+		passed = B_FALSE;
+	}
+	lx_mntns_budget_get(budget, &maximum, &used);
+	if (used != 0) {
+		KT_FAIL(ctx, "native quota fixture leaked a charge");
+		passed = B_FALSE;
+	}
+	zone_rele(zone);
+	if (passed)
+		KT_PASS(ctx);
+#undef NS_CHECK
+}
+
 static boolean_t
 ns_process_pid(ktest_ctx_hdl_t *ctx, pid_t *pid)
 {
@@ -1058,6 +1129,8 @@ _init(void)
 	    KTEST_FLAG_INPUT)) != 0 ||
 	    (error = ktest_add_test(ks, "quota", ns_quota,
 	    KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "zone_quota", ns_zone_quota,
+	    0)) != 0 ||
 	    (error = ktest_add_test(ks, "process_attach", ns_process_attach,
 	    KTEST_FLAG_INPUT)) != 0 ||
 	    (error = ktest_add_test(ks, "process_reject", ns_process_reject,
