@@ -21,6 +21,7 @@
 #include <sys/cmn_err.h>
 #include <sys/lx_impl.h>
 #include <sys/lx_brand.h>
+#include <sys/lx_cap.h>
 #include <sys/sysmacros.h>
 #include <sys/var.h>
 
@@ -88,6 +89,50 @@ static int l_to_r[LX_RLIMIT_NLIMITS] = {
  */
 #define	LX_RLIM_INFINITY_N	ULONG_MAX
 
+/* The limits without a native rctl share the process's p_lock. */
+static int
+lx_fake_rlimit_index(int resource)
+{
+	switch (resource) {
+	case LX_RLIMIT_LOCKS:
+		return (LX_RLFAKE_LOCKS);
+	case LX_RLIMIT_NICE:
+		return (LX_RLFAKE_NICE);
+	case LX_RLIMIT_RTPRIO:
+		return (LX_RLFAKE_RTPRIO);
+	case LX_RLIMIT_RTTIME:
+		return (LX_RLFAKE_RTTIME);
+	default:
+		return (-1);
+	}
+}
+
+/*
+ * Keep the hard-limit check and both halves of prlimit under one lock.
+ * Namespace capabilities cannot raise limits on native resources.
+ */
+static int
+lx_fake_rlimit(int index, const lx_rlimit64_t *new, lx_rlimit64_t *old)
+{
+	proc_t *p = curproc;
+	lx_rlimit64_t *limit = &ptolxproc(p)->l_fake_limits[index];
+	int error = 0;
+
+	ASSERT(index >= 0 && index < LX_RLFAKE_NLIMITS);
+	mutex_enter(&p->p_lock);
+	if (new != NULL && new->rlim_max > limit->rlim_max &&
+	    !lx_cap_initial(CRED(), LX_CAP_SYS_RESOURCE)) {
+		error = EPERM;
+	} else {
+		if (old != NULL)
+			*old = *limit;
+		if (new != NULL)
+			*limit = *new;
+	}
+	mutex_exit(&p->p_lock);
+	return (error);
+}
+
 void
 lx_get_rctl(char *nm, struct rlimit64 *rlp64)
 {
@@ -127,8 +172,8 @@ lx_get_rctl(char *nm, struct rlimit64 *rlp64)
 static int
 lx_getrlimit_common(int lx_resource, uint64_t *rlim_curp, uint64_t *rlim_maxp)
 {
-	lx_proc_data_t *pd = ptolxproc(curproc);
 	int resource;
+	lx_rlimit64_t fake;
 	int64_t cur = -1;
 	boolean_t cur_inf = B_FALSE;
 	int64_t max = -1;
@@ -138,27 +183,15 @@ lx_getrlimit_common(int lx_resource, uint64_t *rlim_curp, uint64_t *rlim_maxp)
 	if (lx_resource < 0 || lx_resource >= LX_RLIMIT_NLIMITS)
 		return (EINVAL);
 
+	resource = lx_fake_rlimit_index(lx_resource);
+	if (resource >= 0) {
+		(void) lx_fake_rlimit(resource, NULL, &fake);
+		*rlim_curp = fake.rlim_cur;
+		*rlim_maxp = fake.rlim_max;
+		return (0);
+	}
+
 	switch (lx_resource) {
-	case LX_RLIMIT_LOCKS:
-		rlim64.rlim_cur = pd->l_fake_limits[LX_RLFAKE_LOCKS].rlim_cur;
-		rlim64.rlim_max = pd->l_fake_limits[LX_RLFAKE_LOCKS].rlim_max;
-		break;
-
-	case LX_RLIMIT_NICE:
-		rlim64.rlim_cur = pd->l_fake_limits[LX_RLFAKE_NICE].rlim_cur;
-		rlim64.rlim_max = pd->l_fake_limits[LX_RLFAKE_NICE].rlim_max;
-		break;
-
-	case LX_RLIMIT_RTPRIO:
-		rlim64.rlim_cur = pd->l_fake_limits[LX_RLFAKE_RTPRIO].rlim_cur;
-		rlim64.rlim_max = pd->l_fake_limits[LX_RLFAKE_RTPRIO].rlim_max;
-		break;
-
-	case LX_RLIMIT_RTTIME:
-		rlim64.rlim_cur = pd->l_fake_limits[LX_RLFAKE_RTTIME].rlim_cur;
-		rlim64.rlim_max = pd->l_fake_limits[LX_RLFAKE_RTTIME].rlim_max;
-		break;
-
 	case LX_RLIMIT_RSS:
 		/* zone.max-physical-memory */
 		zone_get_physmem_data(curzone->zone_id,
@@ -385,7 +418,7 @@ lx_set_rctl(char *nm, struct rlimit64 *rlp64)
 static int
 lx_setrlimit_common(int lx_resource, uint64_t rlim_cur, uint64_t rlim_max)
 {
-	lx_proc_data_t *pd = ptolxproc(curproc);
+	lx_rlimit64_t fake;
 	int err;
 	int resource;
 	rctl_alloc_gp_t *gp;
@@ -394,27 +427,14 @@ lx_setrlimit_common(int lx_resource, uint64_t rlim_cur, uint64_t rlim_max)
 	if (lx_resource < 0 || lx_resource >= LX_RLIMIT_NLIMITS)
 		return (EINVAL);
 
+	resource = lx_fake_rlimit_index(lx_resource);
+	if (resource >= 0) {
+		fake.rlim_cur = rlim_cur;
+		fake.rlim_max = rlim_max;
+		return (lx_fake_rlimit(resource, &fake, NULL));
+	}
+
 	switch (lx_resource) {
-	case LX_RLIMIT_LOCKS:
-		pd->l_fake_limits[LX_RLFAKE_LOCKS].rlim_cur = rlim_cur;
-		pd->l_fake_limits[LX_RLFAKE_LOCKS].rlim_max = rlim_max;
-		break;
-
-	case LX_RLIMIT_NICE:
-		pd->l_fake_limits[LX_RLFAKE_NICE].rlim_cur = rlim_cur;
-		pd->l_fake_limits[LX_RLFAKE_NICE].rlim_max = rlim_max;
-		break;
-
-	case LX_RLIMIT_RTPRIO:
-		pd->l_fake_limits[LX_RLFAKE_RTPRIO].rlim_cur = rlim_cur;
-		pd->l_fake_limits[LX_RLFAKE_RTPRIO].rlim_max = rlim_max;
-		break;
-
-	case LX_RLIMIT_RTTIME:
-		pd->l_fake_limits[LX_RLFAKE_RTTIME].rlim_cur = rlim_cur;
-		pd->l_fake_limits[LX_RLFAKE_RTTIME].rlim_max = rlim_max;
-		break;
-
 	case LX_RLIMIT_RSS:
 		/*
 		 * zone.max-physical-memory
@@ -552,7 +572,7 @@ lx_setrlimit(int resource, lx_rlimit_t *rlp)
 long
 lx_prlimit64(pid_t pid, int resource, lx_rlimit64_t *nrlp, lx_rlimit64_t *orlp)
 {
-	int rv;
+	int rv, index;
 	lx_rlimit64_t nrl, orl;
 
 	if (pid != 0) {
@@ -565,26 +585,35 @@ lx_prlimit64(pid_t pid, int resource, lx_rlimit64_t *nrlp, lx_rlimit64_t *orlp)
 		return (ENOTSUP);
 	}
 
-	if (orlp != NULL) {
-		/* we first get the current limits */
-		rv = lx_getrlimit_common(resource, &orl.rlim_cur,
-		    &orl.rlim_max);
-		if (rv != 0)
-			return (set_errno(rv));
-	}
-
 	if (nrlp != NULL) {
 		if (copyin(nrlp, &nrl, sizeof (nrl)) != 0)
 			return (set_errno(EFAULT));
-
-		if ((nrl.rlim_max != LX_RLIM64_INFINITY &&
-		    nrl.rlim_cur == LX_RLIM64_INFINITY) ||
-		    nrl.rlim_cur > nrl.rlim_max)
+		if (nrl.rlim_cur > nrl.rlim_max)
 			return (set_errno(EINVAL));
+	}
 
-		rv = lx_setrlimit_common(resource, nrl.rlim_cur, nrl.rlim_max);
+	if (resource < 0 || resource >= LX_RLIMIT_NLIMITS)
+		return (set_errno(EINVAL));
+
+	index = lx_fake_rlimit_index(resource);
+	if (index >= 0) {
+		rv = lx_fake_rlimit(index, nrlp != NULL ? &nrl : NULL,
+		    orlp != NULL ? &orl : NULL);
 		if (rv != 0)
 			return (set_errno(rv));
+	} else {
+		if (orlp != NULL) {
+			rv = lx_getrlimit_common(resource, &orl.rlim_cur,
+			    &orl.rlim_max);
+			if (rv != 0)
+				return (set_errno(rv));
+		}
+		if (nrlp != NULL) {
+			rv = lx_setrlimit_common(resource, nrl.rlim_cur,
+			    nrl.rlim_max);
+			if (rv != 0)
+				return (set_errno(rv));
+		}
 	}
 
 	if (orlp != NULL) {

@@ -386,6 +386,20 @@ lx_proc_exit(proc_t *p)
 void
 lx_setbrand(proc_t *p)
 {
+	lx_proc_data_t *pd = ptolxproc(p);
+
+	pd->l_fake_limits[LX_RLFAKE_LOCKS].rlim_cur = LX_RLIM64_INFINITY;
+	pd->l_fake_limits[LX_RLFAKE_LOCKS].rlim_max = LX_RLIM64_INFINITY;
+
+	pd->l_fake_limits[LX_RLFAKE_NICE].rlim_cur = 20;
+	pd->l_fake_limits[LX_RLFAKE_NICE].rlim_max = 20;
+
+	pd->l_fake_limits[LX_RLFAKE_RTPRIO].rlim_cur = LX_RLIM64_INFINITY;
+	pd->l_fake_limits[LX_RLFAKE_RTPRIO].rlim_max = LX_RLIM64_INFINITY;
+
+	pd->l_fake_limits[LX_RLFAKE_RTTIME].rlim_cur = LX_RLIM64_INFINITY;
+	pd->l_fake_limits[LX_RLFAKE_RTTIME].rlim_max = LX_RLIM64_INFINITY;
+
 	/* Send SIGCHLD to parent by default when child exits */
 	ptolxproc(p)->l_signal = stol_signo[SIGCHLD];
 	ptolxproc(p)->l_coredump_filter = LXPR_COREDUMP_FILTER_DEFAULT;
@@ -2034,18 +2048,6 @@ lx_copy_procdata(proc_t *cp, proc_t *pp)
 	 * out.  If it is to be inherited, the attach will occur later.
 	 */
 	cpd->l_ptrace = 0;
-
-	cpd->l_fake_limits[LX_RLFAKE_LOCKS].rlim_cur = LX_RLIM64_INFINITY;
-	cpd->l_fake_limits[LX_RLFAKE_LOCKS].rlim_max = LX_RLIM64_INFINITY;
-
-	cpd->l_fake_limits[LX_RLFAKE_NICE].rlim_cur = 20;
-	cpd->l_fake_limits[LX_RLFAKE_NICE].rlim_max = 20;
-
-	cpd->l_fake_limits[LX_RLFAKE_RTPRIO].rlim_cur = LX_RLIM64_INFINITY;
-	cpd->l_fake_limits[LX_RLFAKE_RTPRIO].rlim_max = LX_RLIM64_INFINITY;
-
-	cpd->l_fake_limits[LX_RLFAKE_RTTIME].rlim_cur = LX_RLIM64_INFINITY;
-	cpd->l_fake_limits[LX_RLFAKE_RTTIME].rlim_max = LX_RLIM64_INFINITY;
 
 	bzero(cpd->l_clone_grps, sizeof (cpd->l_clone_grps));
 }

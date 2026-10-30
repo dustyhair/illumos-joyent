@@ -25,6 +25,7 @@
 #define	LX_CAP_SETUID	7
 #define	LX_CAP_SETPCAP	8
 #define	LX_CAP_SYS_ADMIN	21
+#define	LX_CAP_SYS_RESOURCE	24
 #define	LX_CAP_SETFCAP	31
 
 #define	LX_SEC_NOROOT		0x01U

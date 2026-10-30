@@ -15,6 +15,7 @@
 #include <string.h>
 #include <sys/auxv.h>
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/ptrace.h>
 #include <sys/stat.h>
 #include <sys/utsname.h>
@@ -1264,6 +1265,134 @@ static int scoped_admin(void)
     CHECK(admin_denials(1)==0);
     return 0;
 }
+static const unsigned limit_resources[]={RLIMIT_LOCKS,RLIMIT_NICE,RLIMIT_RTPRIO,RLIMIT_RTTIME};
+static int limit_is(unsigned resource,rlim_t soft,rlim_t hard)
+{
+    struct rlimit got;
+    return syscall(SYS_prlimit64,0,resource,NULL,&got)==0 &&
+        got.rlim_cur==soft && got.rlim_max==hard;
+}
+static int limits_image(void)
+{
+    for(unsigned i=0;i<sizeof(limit_resources)/sizeof(limit_resources[0]);i++)
+        CHECK(limit_is(limit_resources[i],0,0));
+    return 0;
+}
+static int limit_denials(unsigned resource,rlim_t bound)
+{
+    struct rlimit denied={0,bound+1},old={123,456},bad={bound+1,bound};
+    errno=0;CHECK(syscall(SYS_setrlimit,resource,&denied)==-1 && errno==EPERM);
+    CHECK(limit_is(resource,0,bound));
+    errno=0;CHECK(syscall(SYS_prlimit64,0,resource,&denied,&old)==-1 && errno==EPERM);
+    CHECK(old.rlim_cur==123 && old.rlim_max==456 && limit_is(resource,0,bound));
+    denied.rlim_max=RLIM_INFINITY;
+    errno=0;CHECK(syscall(SYS_prlimit64,0,resource,&denied,NULL)==-1 && errno==EPERM);
+    errno=0;CHECK(syscall(SYS_setrlimit,resource,&bad)==-1 && errno==EINVAL);
+    errno=0;CHECK(syscall(SYS_prlimit64,0,resource,&bad,&old)==-1 && errno==EINVAL);
+    CHECK(old.rlim_cur==123 && old.rlim_max==456 && limit_is(resource,0,bound));
+    return 0;
+}
+static int scoped_limits(void)
+{
+    CHECK(root_ids()==0);
+    CHECK(prctl(PR_SET_SECUREBITS,SECBIT_NO_SETUID_FIXUP,0,0,0)==0);
+    CHECK(syscall(SYS_setresuid,42,42,42)==0);
+    CHECK(capbits(0)&(1ULL<<CAP_SYS_RESOURCE));
+    for(unsigned i=0;i<sizeof(limit_resources)/sizeof(limit_resources[0]);i++) {
+        unsigned resource=limit_resources[i];struct rlimit before,old;
+        CHECK(syscall(SYS_prlimit64,0,resource,NULL,&before)==0);
+        rlim_t bound=before.rlim_max<4?before.rlim_max:4;
+        struct rlimit low={0,bound},high={bound,bound};
+        CHECK(syscall(SYS_setrlimit,resource,&low)==0 && limit_is(resource,0,bound));
+        CHECK(syscall(SYS_prlimit64,0,resource,&high,&old)==0);
+        CHECK(old.rlim_cur==0 && old.rlim_max==bound && limit_is(resource,bound,bound));
+        /* Input and output may alias; the returned value precedes the update. */
+        CHECK(syscall(SYS_prlimit64,0,resource,&low,&low)==0);
+        CHECK(low.rlim_cur==bound && low.rlim_max==bound && limit_is(resource,0,bound));
+        CHECK(limit_denials(resource,bound)==0);
+        struct rlimit zero={0,0};CHECK(syscall(SYS_setrlimit,resource,&zero)==0);
+    }
+    CHECK(cap_effective_off(CAP_SYS_RESOURCE)==0);
+    for(unsigned i=0;i<sizeof(limit_resources)/sizeof(limit_resources[0]);i++)
+        CHECK(limit_denials(limit_resources[i],0)==0);
+    pid_t child=fork();int status;CHECK(child>=0);
+    if(child==0) {
+        if(limits_image()!=0) _exit(1);
+        char *const args[]={(char *)self,"--limit-image",NULL};
+        syscall(SYS_execve,self,args,NULL);_exit(1);
+    }
+    CHECK(waitpid(child,&status,0)==child && WIFEXITED(status) && WEXITSTATUS(status)==0);
+    return limits_image();
+}
+#define LIMIT_EXCHANGES 2000U
+static atomic_uint limit_seen[LIMIT_EXCHANGES+1];
+static atomic_int limit_ready,limit_start,limit_error;
+static void *limit_exchange_worker(void *arg)
+{
+    unsigned first=(unsigned)(uintptr_t)arg;
+    atomic_fetch_add(&limit_ready,1);
+    while(!atomic_load(&limit_start)) sched_yield();
+    for(unsigned value=first;value<=LIMIT_EXCHANGES;value+=2) {
+        struct rlimit next={value,LIMIT_EXCHANGES},old;
+        if(syscall(SYS_prlimit64,0,RLIMIT_RTTIME,&next,&old)!=0 ||
+            old.rlim_cur>LIMIT_EXCHANGES || old.rlim_max!=LIMIT_EXCHANGES) {
+            atomic_store(&limit_error,1);break;
+        }
+        atomic_fetch_add(&limit_seen[old.rlim_cur],1);
+    }
+    return NULL;
+}
+static int limits_exchange(void)
+{
+    CHECK(root_ids()==0);
+    struct rlimit before,initial={0,LIMIT_EXCHANGES};
+    CHECK(syscall(SYS_prlimit64,0,RLIMIT_RTTIME,NULL,&before)==0);
+    CHECK(before.rlim_max>=LIMIT_EXCHANGES);
+    CHECK(syscall(SYS_prlimit64,0,RLIMIT_RTTIME,&initial,NULL)==0);
+    pthread_t threads[2];
+    CHECK(pthread_create(&threads[0],NULL,limit_exchange_worker,(void *)(uintptr_t)1)==0);
+    CHECK(pthread_create(&threads[1],NULL,limit_exchange_worker,(void *)(uintptr_t)2)==0);
+    while(atomic_load(&limit_ready)!=2) sched_yield();
+    atomic_store(&limit_start,1);
+    CHECK(pthread_join(threads[0],NULL)==0 && pthread_join(threads[1],NULL)==0);
+    CHECK(!atomic_load(&limit_error));
+    CHECK(syscall(SYS_prlimit64,0,RLIMIT_RTTIME,NULL,&before)==0);
+    CHECK(before.rlim_cur<=LIMIT_EXCHANGES && before.rlim_max==LIMIT_EXCHANGES);
+    atomic_fetch_add(&limit_seen[before.rlim_cur],1);
+    for(unsigned value=0;value<=LIMIT_EXCHANGES;value++) CHECK(atomic_load(&limit_seen[value])==1);
+    return 0;
+}
+static int initial_limits_raise(void)
+{
+    CHECK(capbits(0)&(1ULL<<CAP_SYS_RESOURCE));
+    for(unsigned i=0;i<sizeof(limit_resources)/sizeof(limit_resources[0]);i++) {
+        struct rlimit zero={0,0},one={1,1},old;
+        CHECK(syscall(SYS_setrlimit,limit_resources[i],&zero)==0);
+        CHECK(syscall(SYS_prlimit64,0,limit_resources[i],&one,&old)==0);
+        CHECK(old.rlim_cur==0 && old.rlim_max==0 && limit_is(limit_resources[i],1,1));
+    }
+    return 0;
+}
+static int initial_limits_drop(void)
+{
+    CHECK(cap_effective_off(CAP_SYS_RESOURCE)==0);
+    CHECK(!(capbits(0)&(1ULL<<CAP_SYS_RESOURCE)) && (capbits(1)&(1ULL<<CAP_SYS_RESOURCE)));
+    for(unsigned i=0;i<sizeof(limit_resources)/sizeof(limit_resources[0]);i++) {
+        struct rlimit zero={0,0};CHECK(syscall(SYS_setrlimit,limit_resources[i],&zero)==0);
+        CHECK(limit_denials(limit_resources[i],0)==0);
+    }
+    return 0;
+}
+static int initial_limits_user(void)
+{
+    CHECK(syscall(SYS_setgroups,0,NULL)==0 && syscall(SYS_setresgid,1000,1000,1000)==0);
+    CHECK(syscall(SYS_setresuid,1000,1000,1000)==0 && capbits(0)==0);
+    for(unsigned i=0;i<sizeof(limit_resources)/sizeof(limit_resources[0]);i++) {
+        struct rlimit zero={0,0};CHECK(syscall(SYS_setrlimit,limit_resources[i],&zero)==0);
+        CHECK(limit_denials(limit_resources[i],0)==0);
+    }
+    return 0;
+}
 static int initial_admin_control(void)
 {
     /* This mode is only for lx inside the guarded disposable VM driver. */
@@ -1394,6 +1523,13 @@ static int map_file(pid_t p, const char *name)
 }
 int main(int argc, char **argv)
 {
+    if(argc==2 && !strcmp(argv[1],"--limit-image")) return limits_image();
+    if(argc==2 && !strcmp(argv[1],"--initial-rlimits")) {
+        run("initial effective RESOURCE can raise hard limits",initial_limits_raise);
+        run("initial permitted RESOURCE alone cannot raise limits",initial_limits_drop);
+        run("initial ordinary user cannot raise hard limits",initial_limits_user);
+        printf("INITIAL_RLIMITS cases=%d failures=%d\n",cases,failures);return failures!=0;
+    }
     if(argc==2 && !strcmp(argv[1],"--initial-admin")) return initial_admin_control();
     if (argc == 2 && !strcmp(argv[1], "--unscoped-trace")) return trace_inherit();
     if (argc == 3 && !strcmp(argv[1], "--mixed-image")) return mixed_image(argv);
@@ -1499,6 +1635,8 @@ int main(int argc, char **argv)
     run("FOWNER permission uses task rather than cached file authority",cap_fowner_task);
     run("native setuid-root policy remains required for owner and FOWNER",native_root_setid);
     run("scoped native UID0 cannot administer initial-scope resources",scoped_admin);
+    run("hard limits require initial authority and survive fork and exec",scoped_limits);
+    run("concurrent prlimit exchanges return each previous value once",limits_exchange);
     if (argc == 1) {
         unsigned group = 1;
         CHECK(root_ids() == 0);
