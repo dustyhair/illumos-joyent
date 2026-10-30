@@ -316,6 +316,78 @@ out:
 	return (error);
 }
 
+typedef struct lx_mntns_clone_mount {
+	vnode_t *lc_source;
+	char *lc_path;
+	struct lx_mntns_clone_mount *lc_next;
+} lx_mntns_clone_mount_t;
+
+/*
+ * Copy the private tree without rediscovering its mounts through the global
+ * mount list. Replay in creation order, including mounts hidden by a later
+ * overmount. The new LOFS instances pin the original backing vnodes: file
+ * contents remain shared, while subsequent mount operations stay private.
+ *
+ * This backend still requires a stable source directory hierarchy. It does
+ * not publish a process namespace or provide deferred unmount. In particular,
+ * the caller must retain a source view while a clone pins any of its vnodes.
+ */
+int
+lx_mntns_view_clone(lx_mntns_view_t *source, cred_t *cr,
+    lx_mntns_view_t **out)
+{
+	lx_mntns_clone_mount_t *list = NULL, *entry;
+	lx_mntns_mount_t *mount;
+	lx_mntns_view_t *view = NULL;
+	size_t count = 0;
+	int error = 0;
+
+	*out = NULL;
+	mutex_enter(&source->lv_lock);
+	for (mount = source->lv_mounts; mount != NULL;
+	    mount = mount->lm_next) {
+		if (++count > 4096) {
+			error = E2BIG;
+			goto out;
+		}
+		entry = kmem_zalloc(sizeof (*entry), KM_SLEEP);
+		entry->lc_path = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+		entry->lc_next = list;
+		list = entry;
+		/* Use the covered vnode for regular-file mountpoints too. */
+		error = vnodetopath(source->lv_root,
+		    mount->lm_vfs->vfs_vnodecovered, entry->lc_path,
+		    MAXPATHLEN, cr);
+		if (error != 0)
+			goto out;
+		error = VFS_ROOT(mount->lm_vfs, &entry->lc_source);
+		if (error != 0)
+			goto out;
+	}
+	if ((error = lx_mntns_create(source->lv_root, cr, &view)) != 0)
+		goto out;
+	for (entry = list; entry != NULL; entry = entry->lc_next) {
+		error = lx_mntns_view_bind(view, entry->lc_source,
+		    entry->lc_path, B_FALSE, cr);
+		if (error != 0)
+			goto out;
+	}
+	*out = view;
+	view = NULL;
+out:
+	while ((entry = list) != NULL) {
+		list = entry->lc_next;
+		if (entry->lc_source != NULL)
+			VN_RELE(entry->lc_source);
+		kmem_free(entry->lc_path, MAXPATHLEN);
+		kmem_free(entry, sizeof (*entry));
+	}
+	if (view != NULL)
+		VERIFY0(lx_mntns_view_destroy(view, cr));
+	mutex_exit(&source->lv_lock);
+	return (error);
+}
+
 int
 lx_mntns_view_lookup(lx_mntns_view_t *view, const char *path, cred_t *cr,
     vnode_t **out)

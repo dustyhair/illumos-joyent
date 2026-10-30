@@ -299,6 +299,156 @@ out:
 #undef NS_CHECK
 }
 
+static int
+ns_make(lx_mntns_view_t *view, const char *parent, const char *name,
+    vtype_t type, cred_t *cr)
+{
+	vnode_t *dir, *vp = NULL;
+	vattr_t attr;
+	int error;
+
+	if ((error = lx_mntns_view_lookup(view, parent, cr, &dir)) != 0)
+		return (error);
+	bzero(&attr, sizeof (attr));
+	attr.va_type = type;
+	attr.va_mode = type == VDIR ? 0700 : 0600;
+	attr.va_mask = AT_TYPE | AT_MODE;
+	if (type == VDIR) {
+		error = VOP_MKDIR(dir, (char *)name, &attr, &vp, cr, NULL, 0,
+		    NULL);
+	} else {
+		error = VOP_CREATE(dir, (char *)name, &attr, EXCL, VWRITE,
+		    &vp, cr, 0, NULL, NULL);
+	}
+	if (vp != NULL)
+		VN_RELE(vp);
+	VN_RELE(dir);
+	return (error);
+}
+
+static void
+ns_clone(ktest_ctx_hdl_t *ctx)
+{
+	uchar_t *input;
+	size_t size;
+	lx_mntns_view_t *a = NULL, *b = NULL, *c = NULL;
+	vnode_t *vp = NULL, *other = NULL;
+	cred_t *cr = CRED();
+	int error = 0;
+	boolean_t passed = B_FALSE;
+
+	ktest_get_input(ctx, &input, &size);
+	if (size < 2 || size > MAXPATHLEN || input[size - 1] != 0 ||
+	    strlen((char *)input) != size - 1 ||
+	    strncmp((char *)input, "/zones/lx-ns-kernel/", 20) != 0) {
+		KT_ERROR(ctx, "invalid private namespace fixture path");
+		return;
+	}
+#define	NS_CHECK(expr, why) do { \
+	if (!(expr)) { \
+		KT_FAIL(ctx, "%s, error=%d", why, error); \
+		goto out; \
+	} \
+} while (0)
+#define	NS_PRESENT(view, path, why) do { \
+	error = lx_mntns_view_lookup(view, path, cr, &vp); \
+	NS_CHECK(error == 0, why); \
+	VN_RELE(vp); \
+	vp = NULL; \
+} while (0)
+	error = lx_mntns_view_snapshot((char *)input, cr, &a);
+	NS_CHECK(error == 0, "cannot snapshot clone source");
+	error = lx_mntns_view_tmpfs(a, "/sub", cr);
+	NS_CHECK(error == 0, "cannot create private source mount");
+	error = ns_make(a, "/sub", "private", VREG, cr);
+	NS_CHECK(error == 0, "cannot create private source file");
+	error = ns_make(a, "/sub", "deep", VDIR, cr);
+	NS_CHECK(error == 0, "cannot create nested mountpoint");
+	error = lx_mntns_view_tmpfs(a, "/sub/deep", cr);
+	NS_CHECK(error == 0, "cannot create private nested mount");
+	error = ns_make(a, "/sub/deep", "nested", VREG, cr);
+	NS_CHECK(error == 0, "cannot create nested source file");
+	error = lx_mntns_view_lookup(a, "/readonly/file", cr, &other);
+	NS_CHECK(error == 0, "cannot find file bind source");
+	error = lx_mntns_view_bind(a, other, "/bind-target", B_TRUE, cr);
+	NS_CHECK(error == 0, "cannot create private read-only file bind");
+	VN_RELE(other);
+	other = NULL;
+	error = lx_mntns_view_clone(a, cr, &b);
+	NS_CHECK(error == 0, "cannot clone private source");
+	NS_PRESENT(b, "/sub/private", "private mount missing in clone");
+	NS_PRESENT(b, "/sub/deep/nested", "nested mount missing in clone");
+	NS_PRESENT(b, "/existing/deep/nested", "imported mount missing");
+	NS_PRESENT(b, "/stacked/visible", "stacked source mount missing");
+	error = lx_mntns_view_lookup(b, "/sub/original", cr, &vp);
+	NS_CHECK(error == ENOENT, "clone exposed covered physical file");
+	error = lx_mntns_view_lookup(a, "/sub/private", cr, &other);
+	NS_CHECK(error == 0, "private source file disappeared");
+	error = lx_mntns_view_lookup(b, "/sub/private", cr, &vp);
+	NS_CHECK(error == 0, "cloned file disappeared");
+	NS_CHECK(vp->v_vfsp != other->v_vfsp,
+	    "clone shares source mount instance");
+	VN_RELE(vp);
+	vp = NULL;
+	VN_RELE(other);
+	other = NULL;
+	error = ns_make(a, "/sub", "shared", VREG, cr);
+	NS_CHECK(error == 0, "cannot update shared filesystem");
+	NS_PRESENT(b, "/sub/shared", "clone does not share file contents");
+	error = lx_mntns_view_tmpfs(b, "/sub/deep", cr);
+	NS_CHECK(error == 0, "cannot overmount nested clone mount");
+	error = lx_mntns_view_lookup(b, "/sub/deep/nested", cr, &vp);
+	NS_CHECK(error == ENOENT, "private clone overmount failed");
+	NS_PRESENT(a, "/sub/deep/nested", "clone mount changed source");
+	error = lx_mntns_view_tmpfs(a, "/sub", cr);
+	NS_CHECK(error == 0, "cannot overmount source after clone");
+	NS_PRESENT(b, "/sub/private", "source mount propagated to clone");
+	error = lx_mntns_view_clone(b, cr, &c);
+	NS_CHECK(error == 0, "cannot clone a clone with a hidden mount");
+	NS_PRESENT(c, "/sub/private", "second clone lost private mount");
+	error = lx_mntns_view_lookup(c, "/sub/deep/nested", cr, &vp);
+	NS_CHECK(error == ENOENT, "second clone exposed hidden mount");
+	error = lx_mntns_view_lookup(c, "/bind-target", cr, &vp);
+	NS_CHECK(error == 0 && vp->v_type == VREG,
+	    "second clone lost regular file bind");
+	NS_CHECK(vn_is_readonly(vp), "clone lost read-only bind policy");
+	NS_CHECK((vp->v_vfsp->vfs_flag & VFS_NOEXEC) != 0,
+	    "clone lost noexec bind policy");
+	error = VOP_ACCESS(vp, VWRITE, 0, cr, NULL);
+	NS_CHECK(error == EROFS, "cloned read-only bind permits write");
+	VN_RELE(vp);
+	vp = NULL;
+	error = lx_mntns_view_lookup(c, "/../escape", cr, &vp);
+	NS_CHECK(error == ENOENT, "second clone escaped private root");
+	error = lx_mntns_view_destroy(a, cr);
+	if (error == 0)
+		a = NULL;
+	NS_CHECK(error == EBUSY, "source was destroyed despite pinned clone");
+	NS_PRESENT(b, "/sub/private", "failed source destroy broke clone");
+	passed = B_TRUE;
+out:
+	if (vp != NULL)
+		VN_RELE(vp);
+	if (other != NULL)
+		VN_RELE(other);
+	if (c != NULL && lx_mntns_view_destroy(c, cr) != 0) {
+		KT_ERROR(ctx, "second clone cleanup failed");
+		passed = B_FALSE;
+	}
+	if (b != NULL && lx_mntns_view_destroy(b, cr) != 0) {
+		KT_ERROR(ctx, "first clone cleanup failed");
+		passed = B_FALSE;
+	}
+	if (a != NULL && lx_mntns_view_destroy(a, cr) != 0) {
+		KT_ERROR(ctx, "clone source cleanup failed");
+		passed = B_FALSE;
+	}
+	if (passed)
+		KT_PASS(ctx);
+#undef NS_PRESENT
+#undef NS_CHECK
+}
+
 static struct modlmisc ns_modlmisc = {
 	.misc_modops = &mod_miscops,
 	.misc_linkinfo = "lx namespace tests"
@@ -321,6 +471,8 @@ _init(void)
 	    (error = ktest_add_test(ks, "views", ns_views,
 	    KTEST_FLAG_INPUT)) != 0 ||
 	    (error = ktest_add_test(ks, "snapshot", ns_snapshot,
+	    KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "clone", ns_clone,
 	    KTEST_FLAG_INPUT)) != 0 ||
 	    (error = ktest_add_suite(km, "user", &ks)) != 0 ||
 	    (error = ktest_add_test(ks, "maps", lx_userns_test_maps, 0)) != 0 ||
