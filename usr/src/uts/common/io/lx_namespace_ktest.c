@@ -3,6 +3,8 @@
  */
 #include <sys/ktest.h>
 #include <sys/kmem.h>
+#include <sys/cred_impl.h>
+#include <sys/priv_impl.h>
 #include <sys/errno.h>
 #include <sys/pathname.h>
 #include <sys/vnode.h>
@@ -937,6 +939,112 @@ ns_process_pid(ktest_ctx_hdl_t *ctx, pid_t *pid)
 }
 
 static void
+ns_entry_inspect(ktest_ctx_hdl_t *ctx, boolean_t user, boolean_t mount)
+{
+	zone_t *zone = NULL;
+	proc_t *p = NULL;
+	pid_t pid;
+	cred_t *cr = NULL;
+	lx_mntns_view_t *view = NULL;
+	vnode_t *root = NULL, *cwd = NULL, *vp = NULL;
+	lx_caps_t caps;
+	int error = 0;
+	boolean_t passed = B_FALSE;
+
+#define	NS_CHECK(expr, why) do { \
+	if (!(expr)) { \
+		KT_FAIL(ctx, "%s, error=%d", why, error); \
+		goto out; \
+	} \
+} while (0)
+	NS_CHECK(ns_process_pid(ctx, &pid), "invalid entry fixture PID");
+	zone = zone_find_by_name("lx-probe");
+	NS_CHECK(zone != NULL && lx_lpid_lock(pid, zone, 0, &p, NULL) == 0,
+	    "cannot find entry fixture process");
+	NS_CHECK(p->p_brand == &lx_brand && p->p_lwpcnt == 1 &&
+	    p->p_tlist != NULL &&
+	    p->p_tlist->t_state == TS_STOPPED &&
+	    strcmp(p->p_user.u_comm, "mntns_entry") == 0 &&
+	    ((ptolxproc(p)->l_flags & LX_PROC_USERNS) != 0) == user &&
+	    (ptolxproc(p)->l_mntns != NULL) == mount,
+	    "entry published unexpected namespace membership");
+	NS_CHECK(!(user || mount) || lx_kernel_restricted(p),
+	    "new namespace membership did not enforce native-entry guard");
+	mutex_enter(&p->p_crlock);
+	crhold(cr = p->p_cred);
+	mutex_exit(&p->p_crlock);
+	if ((root = PTOU(p)->u_rdir) != NULL)
+		VN_HOLD(root);
+	VN_HOLD(cwd = PTOU(p)->u_cdir);
+	if ((view = ptolxproc(p)->l_mntns) != NULL)
+		lx_mntns_view_hold(view);
+	mutex_exit(&p->p_lock);
+	p = NULL;
+	if (user) {
+		NS_CHECK(lx_userns_caps_get(cr, &caps) == 0 &&
+		    !priv_ismember(&CR_OEPRIV(cr), PRIV_SYS_MOUNT),
+		    "entry installed privileged native mount credentials");
+	} else {
+		NS_CHECK(crgetbrand(cr) == NULL,
+		    "failed or mount-only entry changed credential namespace");
+	}
+	if (mount) {
+		NS_CHECK(root != NULL && lx_mntns_view_capable(view, cr) &&
+		    !lx_mntns_view_capable(view, CRED()),
+		    "published view does not belong to the calling actor");
+		error = lx_mntns_view_lookup(view, "/", cr, &vp);
+		NS_CHECK(error == 0 && vp == root &&
+		    root->v_vfsp != zone->zone_rootvp->v_vfsp,
+		    "entry did not install a distinct private root mount");
+		VN_RELE(vp);
+		vp = NULL;
+		error = lx_mntns_view_lookup(view, "/test/mnt-entry/cwd",
+		    cr, &vp);
+		NS_CHECK(error == 0 && vp == cwd,
+		    "entry cwd does not refer to the private tree");
+	} else {
+		NS_CHECK(root == NULL || VN_CMP(root, zone->zone_rootvp),
+		    "failed entry changed root boundary");
+	}
+	passed = B_TRUE;
+out:
+	if (p != NULL)
+		mutex_exit(&p->p_lock);
+	if (vp != NULL)
+		VN_RELE(vp);
+	if (root != NULL)
+		VN_RELE(root);
+	if (cwd != NULL)
+		VN_RELE(cwd);
+	if (view != NULL)
+		lx_mntns_view_rele(view);
+	if (cr != NULL)
+		crfree(cr);
+	if (zone != NULL)
+		zone_rele(zone);
+	if (passed)
+		KT_PASS(ctx);
+#undef NS_CHECK
+}
+
+static void ns_entry_mount(ktest_ctx_hdl_t *ctx)
+{
+	ns_entry_inspect(ctx, B_FALSE, B_TRUE);
+}
+static void ns_entry_user_mount(ktest_ctx_hdl_t *ctx)
+{
+	ns_entry_inspect(ctx, B_TRUE, B_TRUE);
+}
+static void ns_entry_reject(ktest_ctx_hdl_t *ctx)
+{
+	ns_entry_inspect(ctx, B_FALSE, B_FALSE);
+}
+static void ns_entry_user_only(ktest_ctx_hdl_t *ctx)
+{
+	ns_entry_inspect(ctx, B_TRUE, B_FALSE);
+}
+
+static void
 ns_process_enter(ktest_ctx_hdl_t *ctx, boolean_t reject)
 {
 	zone_t *zone = NULL;
@@ -1272,6 +1380,14 @@ _init(void)
 	    KTEST_FLAG_INPUT)) != 0 ||
 	    (error = ktest_add_test(ks, "zone_quota", ns_zone_quota,
 	    0)) != 0 ||
+	    (error = ktest_add_test(ks, "entry_mount", ns_entry_mount,
+	    KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "entry_user_mount", ns_entry_user_mount,
+	    KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "entry_reject", ns_entry_reject,
+	    KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "entry_user_only", ns_entry_user_only,
+	    KTEST_FLAG_INPUT)) != 0 ||
 	    (error = ktest_add_test(ks, "process_attach", ns_process_attach,
 	    KTEST_FLAG_INPUT)) != 0 ||
 	    (error = ktest_add_test(ks, "process_reject", ns_process_reject,
