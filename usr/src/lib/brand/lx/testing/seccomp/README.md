@@ -1048,3 +1048,65 @@ all views retired. The zone halted, the pool exported, filesystem sync
 completed and QEMU exited. See lab/mount-process-results.json and
 lab/mount-process-linux-results.json for source/artifact hashes and results.
 This does not establish full-platform or production-host acceptance.
+
+
+## Mount-view resource accounting
+
+Each lx zone owns a reference-counted mount-view account. The optional
+`max-mount-namespaces` zonecfg attribute has type `uint` and defaults to 64.
+It bounds private views, including copies and views still waiting for busy
+mounts to retire. It does not charge the zone's original mount tree. This is
+a zone resource limit, rather than Linux's complete per-user ucounts policy.
+
+Creation, snapshot and clone reserve a charge before lookup, allocation or
+mount construction. A failed constructor returns its reservation. Clones
+inherit the source account, and additional references to the same view do
+not consume another charge. Final release retains the charge through busy
+cleanup; successful reclamation returns it. The account itself stays alive
+through outstanding reservations even after its zone/creator reference is
+released. Lowering the maximum preserves existing views and denies new
+reservations until usage falls below the limit. A maximum of zero disables
+new private views.
+
+`LX_ATTR_MNTNS_MAX` and `LX_ATTR_MNTNS_USED` expose uint32_t maximum and usage
+through the existing native zone attribute interface. USED is read-only.
+Configuration follows the native zone lifecycle and privilege checks.
+No new filesystem privilege is granted by accounting. Constructors still
+require native mount authority.
+
+The trusted backend permits NULL accounts only in the global zone, for
+fixtures that do not belong to an lx zone. Process root/cwd publication
+requires the view's account to match the target zone's account. This prevents
+attaching an unaccounted view or charging an attached view to another account.
+The process fixture now charges both its real-zone snapshot and its clone.
+
+The kernel quota case exercises all three constructor paths, sharing,
+exhaustion, failed native mount refunds, lowering below current usage, zero
+quota, a clone retaining its retired source, open-file retention, reuse after
+cleanup and account-owner release before cleanup. Native tests verify zone
+attribute validation, read-only usage, privilege and lifecycle checks, usage
+observation while lowering the maximum, and zonecfg boot configuration.
+
+This is resource accounting and process-zone binding. User-namespace creator
+and mount-mutation authority, namespace descriptors, public Linux syscall
+entry, per-mount limits, directory rename handling and the remaining
+bubblewrap mount/PID/IPC/network operations are still required.
+
+
+VM85 passed the quota lifecycle case four times across the mount-backend and
+canonical user-namespace drivers. Both native zone-quota cases passed, along
+with native attribute validation, privilege/lifecycle checks and booting with
+max-mount-namespaces=7. All eight static/dynamic UID0/65534 process-view cases
+passed with zone accounting; the four guarded attachment cases also rejected
+a foreign account without changing root/cwd. The full enforcement and
+user-namespace regression drivers passed. All views retired and each process
+idle check observed zero zone charges.
+
+The actual Codex 0.166.0 workspace sandbox still issued clone 0x78020011 twice
+and received EINVAL with both experiments enabled. Both switches were reset
+to zero, the zone halted, the pool exported, filesystem sync completed and
+QEMU exited. Brand, lx_proc and namespace-test modules were clean-built for
+release/debug and lx_support was rebuilt. Runtime used release on the
+retained mixed VM73 common kernel, LOFS, ZFS and user libraries. No production
+host deployment occurred. See lab/mount-budget-results.json for exact source,
+artifact and evidence hashes. Linux namespace creation remains unfinished.

@@ -1,0 +1,139 @@
+{
+  "recorded_utc": "2026-10-30T22:43:25.430998+00:00",
+  "vm": 85,
+  "branch": "lx/codex-sandbox",
+  "source_checkpoint": "b9cd65b9ec748af25eb32f9f7784b112ce1b2ed7",
+  "brand_proc_support_source_commit": "1b1d5a598f05e58bedf189ff60fe9e8d143c9d0c",
+  "ktest_source_commit": "b9cd65b9ec748af25eb32f9f7784b112ce1b2ed7",
+  "native_and_acceptance_driver_commit": "82cb6b4674e6e6daf03f405cec5dfee47b4765d6",
+  "clean_builds": [
+    "lx_brand release/debug",
+    "lx_proc release/debug",
+    "lx_namespace_ktest release/debug",
+    "lx_support",
+    "mntns-budget-native gcc -m64 -std=c11 -Wall -Wextra -Werror"
+  ],
+  "runtime": "release on retained mixed VM73 common kernel, LOFS, ZFS and user libraries; lx_support refreshed in compressed /usr image",
+  "brand_sha256": "ff084fadecc0eaffa0e520da7a8b6cf45744f4ceab4c6dfe18efc8ef44b29a67",
+  "proc_sha256": "136fe8174c49a5d939cfbb94f6adf9a8b2c8a3c64ca5867cfa404f55db0728c0",
+  "ktest_sha256": "48f6e9744ea1203328496c2d5c823b58ec97d14c48461829ebb83ffe249b996f",
+  "support_sha256": "7c666441270dfa51fda2abd9e0289fb12d180d259ad65ae21a1b71f3e9a95c6b",
+  "uploaded_native_sha256": "55063407d5715e1fa4421c80cce337df2b5dd524d8bec4d083947e8702fb2384",
+  "uploaded_driver_sha256": "e232d69e413db22ec92f5fb876d913238309e43c9bba4017302d7ca02b3fd2ae",
+  "canonical_namespace_driver_sha256": "8ed1efa85e6c40670813e7bbad239886f6138ba936e7482eab64f92b29c50298",
+  "root_tar_sha256": "3316979c3e86a63c9546cfab78d2f2a960284a7e3b6937c946f7106d698d2c1c",
+  "linux_probes": "unchanged source2461eccfc7, static1d8b35c2/dynamic6db9832b; matching four Linux controls retained from VM84 checkpoint",
+  "quota_case_passes": 4,
+  "native_zone_quota_case_passes": 2,
+  "native_attribute_ready_acceptance": "LX_MNTNS_BUDGET_READY_PASS restored=64",
+  "native_boot_attribute_acceptance": "LX_MNTNS_BUDGET_RUNNING_PASS max=7",
+  "process_cases": [
+    {
+      "variant": "static",
+      "uid": 0,
+      "mode": "reject",
+      "result": "PASS"
+    },
+    {
+      "variant": "static",
+      "uid": 0,
+      "mode": "attach",
+      "result": "PASS"
+    },
+    {
+      "variant": "static",
+      "uid": 65534,
+      "mode": "reject",
+      "result": "PASS"
+    },
+    {
+      "variant": "static",
+      "uid": 65534,
+      "mode": "attach",
+      "result": "PASS"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 0,
+      "mode": "reject",
+      "result": "PASS"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 0,
+      "mode": "attach",
+      "result": "PASS"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 65534,
+      "mode": "reject",
+      "result": "PASS"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 65534,
+      "mode": "attach",
+      "result": "PASS"
+    }
+  ],
+  "foreign_account_publication_rejections": 4,
+  "canonical_acceptance": "LX_MOUNT_BUDGET_PASS",
+  "enforcement_driver_exit": 0,
+  "mount_backend_driver_exit": 0,
+  "userns_driver_exit": 0,
+  "zone_mount_charges_at_last_process_idle": 0,
+  "views_at_end": 0,
+  "experimental_switches_at_end": {
+    "seccomp": 0,
+    "userns": 0
+  },
+  "codex_version": "0.166.0",
+  "bubblewrap_experimental_switches": {
+    "seccomp": 1,
+    "userns": 1
+  },
+  "bubblewrap_clone_flags": "0x78020011",
+  "bubblewrap_clone_results": [
+    -22,
+    -22
+  ],
+  "linux_mount_namespace_published": false,
+  "codex_sandbox_accepted": false,
+  "pool_export_exit": 0,
+  "synced_poweroff": true,
+  "qemu_pid_exited": 1942272,
+  "evidence_file": "lx-sandbox/lab/evidence/boot-85-mount-budget-acceptance.log",
+  "evidence_sha256": "c6b97c8e9e400c1eb4788b54b42e231957cb26436d6671641dcf5a98f45568f0",
+  "logs_sha256": {
+    "vm85-acceptance.log": "932f8dbe217251b295577f98c0e21e2df9cfe81120e45e958045a17770703acf",
+    "vm85-backend.log": "b5de8b5fa76879580254db3b4d5857f020fe7ba448aa5b9cf769f37387e92071",
+    "vm85-bwrap.log": "3a4243e839bc64ba7119f027395a54b9f3e01fb1fad563c91a076da0a9d75a40",
+    "vm85-dynamic-0-attach.log": "614e7f18ba030a61c3286a1c6506a4bce7ca4493603196d38ad7550e91616760",
+    "vm85-dynamic-0-reject.log": "220255a0dc79cd5019cf75771dcdb6a0e6dfc632000bb9ecd5b927a2da0ede3c",
+    "vm85-dynamic-0-result.log": "83ebfe676458a182ed18f2f049d3432c54e8d1410ff3dcd7b7e9f2c9a8a876ba",
+    "vm85-dynamic-65534-attach.log": "eaf8c717434bf832cef4042cde69f1dab9ba06a9159f1866ea274986be522fb6",
+    "vm85-dynamic-65534-reject.log": "fb02b47e4a3614c2e15447e9e22ff21ba9c483c0cf519c97990ecdee15301525",
+    "vm85-dynamic-65534-result.log": "354db40af5d4b256bbb00dee79458dd83751f3eb7f24c2b39be56787137e2c14",
+    "vm85-enforcement.log": "009d63fd875e630d4607a4cfc5665d746977f0754e4255c577b49f08cc983fb9",
+    "vm85-static-0-attach.log": "c752b3701a45363456af8c7114236d6e564881910224ba40740611f9f50ea0f9",
+    "vm85-static-0-reject.log": "0841893ff4e63db5ec460ae8562657059a0f34ba70fa5ae0a4156d1c03c41178",
+    "vm85-static-0-result.log": "3f61324f778ff93a7502449731749e6717f5f9ac9bf9ad4e6d08bcb615a3a888",
+    "vm85-static-65534-attach.log": "1c14c9ff9bcbf75e6dac68653b2755f778c89cfd85fe3885056b183448f935ab",
+    "vm85-static-65534-reject.log": "96eda8c0f870e15e52f052d9bb81a13e91561bd3207b01cdc3e722130f4bad32",
+    "vm85-static-65534-result.log": "fe083bd95b84bf3af28586b679d135f80c7f23d148f4349e25b9fadf13a5b4cc",
+    "vm85-userns.log": "eddc87487347e9ee37b2cecac77636fe4f9a71fbd7a03d905b5389a1fe46847d"
+  },
+  "launcher_commit": "670ad873f1036fe820680d5e07c21a0079ac5b44",
+  "launcher_path": "lx-sandbox/launch-lab",
+  "launcher_sha256": "ece2f8445e5745dd320cc1f837a51ca7dc206f9798292dfdb41f71ddffc16739",
+  "limitations": [
+    "User-namespace creation and mount-mutation authority remain incomplete",
+    "No Linux namespace syscall invokes the process handoff yet",
+    "Per-mount limits, namespace descriptors and stable rename handling remain incomplete",
+    "Mount routing, pivot/remount/proc/devpts, lazy detach and PID/IPC/network isolation remain incomplete",
+    "Not a full platform build or production Debian acceptance",
+    "Codex immediate-exit PTY tail loss remains unresolved"
+  ],
+  "host_deployment": false
+}
