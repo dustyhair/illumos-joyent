@@ -88,6 +88,7 @@ extern int prreadcmdline(proc_t *, char *, size_t, size_t *);
 extern int prreadenvv(proc_t *, char *, size_t, size_t *);
 extern int prreadbuf(proc_t *, uintptr_t, uint8_t *, size_t, size_t *);
 
+#include <sys/lx_cap.h>
 #include "lx_proc.h"
 
 extern pgcnt_t swapfs_minfree;
@@ -2855,6 +2856,8 @@ lxpr_read_status_common(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf,
 	uint_t		no_new_privs = 0, seccomp = 0;
 
 
+	lx_caps_t caps;
+
 	p = lxpr_lock_pid(lxpnp, tid, ZOMB_OK, &t);
 	if (p == NULL) {
 		lxpr_uiobuf_seterr(uiobuf, EINVAL);
@@ -2979,6 +2982,15 @@ lxpr_read_status_common(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf,
 		    "%u ",
 		    groups[i]);
 	}
+	if (crgetbrand(cr) == NULL) {
+		lx_cap_native_get(cr, &caps);
+		/* Bounding-set emulation remains a legacy approximation. */
+		caps.lc_bounding = 0x1fffffffffULL;
+	} else if (lx_userns_caps_get(cr, &caps) != 0) {
+		crfree(cr);
+		lxpr_uiobuf_seterr(uiobuf, EACCES);
+		return;
+	}
 	crfree(cr);
 	if (printsz) {
 		lxpr_uiobuf_printf(uiobuf,
@@ -3008,15 +3020,17 @@ lxpr_read_status_common(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf,
 	    0, 0, /* signals blocked on per thread basis */
 	    ignore.__sigbits[1], ignore.__sigbits[0],
 	    handle.__sigbits[1], handle.__sigbits[0]);
-	/* Report only the full bounding set for now */
 	lxpr_uiobuf_printf(uiobuf,
-	    "CapInh:\t%016x\n"
-	    "CapPrm:\t%016x\n"
-	    "CapEff:\t%016x\n"
+	    "CapInh:\t%016llx\n"
+	    "CapPrm:\t%016llx\n"
+	    "CapEff:\t%016llx\n"
 	    "CapBnd:\t%016llx\n"
 	    "NoNewPrivs:\t%u\n"
 	    "Seccomp:\t%u\n",
-	    0, 0, 0, 0x1fffffffffLL, no_new_privs, seccomp);
+	    (u_longlong_t)caps.lc_inheritable,
+	    (u_longlong_t)caps.lc_permitted,
+	    (u_longlong_t)caps.lc_effective,
+	    (u_longlong_t)caps.lc_bounding, no_new_privs, seccomp);
 }
 
 /*

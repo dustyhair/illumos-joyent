@@ -14,6 +14,7 @@
 #include <stdint.h>
 #include <errno.h>
 #include <limits.h>
+#include <fcntl.h>
 
 #define CHECK(x) do { if (!(x)) { \
     fprintf(stderr, "line %d: %s errno=%d\n", __LINE__, #x, errno); \
@@ -225,12 +226,41 @@ remote_atomic(void)
     return 0;
 }
 
+static int
+status_fields(void)
+{
+    caps_t desired, actual;
+    char text[4096];
+    CHECK(get(desired) == 0 && (desired[0].permitted & BIND) != 0);
+    desired[0].effective = desired[1].effective = 0;
+    desired[0].inheritable ^= BIND;
+    CHECK(set(desired) == 0 && get(actual) == 0);
+    int fd = open("/proc/self/status", O_RDONLY);
+    CHECK(fd >= 0);
+    ssize_t n = read(fd, text, sizeof text - 1);
+    CHECK(n > 0 && close(fd) == 0);
+    text[n] = 0;
+    const char *names[] = { "CapEff:", "CapPrm:", "CapInh:" };
+    uint64_t values[] = {
+        actual[0].effective | ((uint64_t)actual[1].effective << 32),
+        actual[0].permitted | ((uint64_t)actual[1].permitted << 32),
+        actual[0].inheritable | ((uint64_t)actual[1].inheritable << 32)
+    };
+    for (unsigned i = 0; i < 3; i++) {
+        const char *field = strstr(text, names[i]);
+        unsigned long long value;
+        CHECK(field != NULL && sscanf(field + strlen(names[i]), "%llx", &value) == 1 &&
+            value == values[i]);
+    }
+    return 0;
+}
+
 int
 main(int argc, char **argv)
 {
     int (*tests[])(void) = { versions, negotiation, version_boundary, pid_errors,
         inheritable_only, inheritable_outside_permitted, failed_atomic,
-        unknown_high_bits, effective_and_zero, remote_atomic };
+        unknown_high_bits, effective_and_zero, remote_atomic, status_fields };
     unsigned failed = 0;
     int filter = argc == 2 && strcmp(argv[1], "--filter") == 0;
     for (unsigned i = 0; i < sizeof tests / sizeof tests[0]; i++) {
