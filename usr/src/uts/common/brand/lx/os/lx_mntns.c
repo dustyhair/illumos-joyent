@@ -523,7 +523,7 @@ lx_mntns_view_snapshot(const char *source, cred_t *cr, lx_mntns_view_t **out)
 	for (entry = list; entry != NULL; entry = entry->ls_next) {
 		if (entry->ls_root == NULL)
 			continue;
-		/* Native mntfs and namefs roots need not match their cover type. */
+		/* Native roots need not have the type of their mountpoint. */
 		error = lx_mntns_bind(view, entry->ls_root,
 		    refstr_value(entry->ls_path) + len, B_FALSE, B_TRUE, cr);
 		if (error != 0)
