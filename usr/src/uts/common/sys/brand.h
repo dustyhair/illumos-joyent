@@ -251,6 +251,8 @@ typedef struct brand_cred {
 } brand_cred_t;
 
 #define	BRAND_CRED_DEFER	(-1)
+/* Pure credential CPU-binding check; callback must not block. */
+#define	BRAND_CRED_AFFINITY	0x10000
 extern void brand_cred_init(brand_cred_t *, brand_t *);
 extern void brand_cred_hold(brand_cred_t *);
 extern void brand_cred_rele(brand_cred_t *);

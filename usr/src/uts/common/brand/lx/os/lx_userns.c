@@ -419,6 +419,15 @@ lx_userns_cred_perm(const cred_t *source, proc_t *process,
 	if (to != NULL && to->un_cred.bc_brand != &lx_brand)
 		return (EACCES);
 	VERIFY(from != NULL || to != NULL);
+	/* CPU binding calls this pure credential check under thread_lock. */
+	if (mode == BRAND_CRED_AFFINITY) {
+		if (crgetzone(source) != crgetzone(target))
+			return (from == NULL ? BRAND_CRED_DEFER : EPERM);
+		return (crgetuid(source) == crgetruid(target) ||
+		    crgetuid(source) == crgetuid(target) ||
+		    lx_userns_cred_capable(source, target, LX_CAP_SYS_NICE) ?
+		    0 : EPERM);
+	}
 	if (process == curproc)
 		return (0);
 	samezone = crgetzone(source) == crgetzone(target);
@@ -566,6 +575,34 @@ lx_userns_map_actor(const cred_t *cred, lx_userns_t *scope,
 	    secpolicy_vnode_setid_retain(cred, B_TRUE) != 0)
 		actor->luc_caps.lc_effective &= ~LX_CAP_BIT(LX_CAP_SETFCAP);
 	return (0);
+}
+
+/* Capability authority relative to the target credential's user namespace. */
+boolean_t
+lx_userns_cred_capable(const cred_t *source, const cred_t *target, uint_t cap)
+{
+	const lx_userns_native_t *from = (void *)crgetbrand(source);
+	const lx_userns_native_t *to = (void *)crgetbrand(target);
+	lx_userns_cred_t actor;
+	lx_userns_t *scope;
+
+	if (crgetzone(source) != crgetzone(target))
+		return (B_FALSE);
+	if ((from != NULL && from->un_cred.bc_brand != &lx_brand) ||
+	    (to != NULL && to->un_cred.bc_brand != &lx_brand))
+		return (B_FALSE);
+	if (to == NULL)
+		return (lx_cap_initial(source, cap));
+	scope = to->un_namespace;
+	actor.luc_uid = crgetuid(source);
+	actor.luc_gid = crgetgid(source);
+	actor.luc_ns = from != NULL ? from->un_namespace :
+	    lx_userns_budget_root(scope);
+	if (from != NULL)
+		actor.luc_caps = from->un_caps;
+	else
+		lx_cap_native_get(source, &actor.luc_caps);
+	return (lx_userns_has_cap(&actor, scope, cap));
 }
 
 int

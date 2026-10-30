@@ -45,6 +45,7 @@ extern int lx_userns_cred_exec(const cred_t *, cred_t *, struct vnode *,
 extern int lx_userns_cred_setattr(const cred_t *, struct vnode *,
     struct vattr *, const struct vattr *, uint_t);
 extern boolean_t lx_userns_traceme(const cred_t *, const cred_t *);
+extern boolean_t lx_userns_cred_capable(const cred_t *, const cred_t *, uint_t);
 extern int lx_userns_caps_get(const cred_t *, lx_caps_t *);
 extern void lx_userns_publish(struct _kthread *, cred_t *);
 extern void lx_userns_forklwp(struct _klwp *, struct _klwp *);

@@ -49,6 +49,8 @@
 #include <sys/processor.h>
 #include <sys/brand.h>
 #include <sys/lx_brand.h>
+#include <sys/lx_cap.h>
+#include <sys/lx_userns.h>
 #include <sys/sysmacros.h>
 #include <sys/policy.h>
 #include <sys/procset.h>
@@ -163,17 +165,91 @@ stol_cpuset(cpuset_t *smask, lx_affmask_t *lmask)
 	}
 }
 
+typedef enum lx_sched_access {
+	LX_SCHED_READ,
+	LX_SCHED_WRITE,
+	LX_SCHED_AFFINITY
+} lx_sched_access_t;
+
+/* p_lock stabilizes scoped credentials; native ones use p_crlock. */
+static boolean_t
+lx_sched_owned(proc_t *p, kthread_t *t, lx_sched_access_t access)
+{
+	const cred_t *actor = CRED(), *target;
+	boolean_t allowed;
+
+	ASSERT(MUTEX_HELD(&p->p_lock));
+	mutex_enter(&p->p_crlock);
+	target = (ptolxproc(p)->l_flags & LX_PROC_USERNS) != 0 ?
+	    t->t_cred : p->p_cred;
+	allowed = crgetuid(actor) == crgetruid(target) ||
+	    crgetuid(actor) == crgetuid(target);
+	if (!allowed) {
+		allowed = access == LX_SCHED_AFFINITY ?
+		    lx_userns_cred_capable(actor, target, LX_CAP_SYS_NICE) :
+		    lx_cap_initial(actor, LX_CAP_SYS_NICE);
+	}
+	mutex_exit(&p->p_crlock);
+	return (allowed);
+}
+
+/* Adjust absolute native priority without accumulating policy hints. */
+static int
+lx_sched_emul_priority(kthread_t *t, int policy)
+{
+	int priority, result, error;
+
+	ASSERT(MUTEX_HELD(&ttoproc(t)->p_lock));
+	ASSERT(policy >= 0 && policy <= LX_SCHED_DEADLINE);
+	if ((error = CL_DOPRIO(t, CRED(), 0, &priority)) != 0)
+		return (error);
+	return (CL_DOPRIO(t, CRED(), lx_emul_pri_map[policy] - priority,
+	    &result));
+}
+
+/* Native class limits still apply after Linux capability/rlimit checks. */
+static int
+lx_sched_emul_permission(proc_t *p, kthread_t *t, int policy, int priority,
+    uint64_t flags)
+{
+	lx_proc_data_t *pd = ptolxproc(p);
+	lx_lwp_data_t *lwpd = ttolxlwp(t);
+	uint64_t limit;
+	int nice;
+
+	ASSERT(MUTEX_HELD(&p->p_lock));
+	if (lx_cap_initial(CRED(), LX_CAP_SYS_NICE))
+		return (0);
+	if (policy == LX_SCHED_DEADLINE)
+		return (EPERM);
+	if (policy == LX_SCHED_FIFO || policy == LX_SCHED_RR) {
+		limit = pd->l_fake_limits[LX_RLFAKE_RTPRIO].rlim_cur;
+		if ((policy != lwpd->br_schd_class && limit == 0) ||
+		    (priority > lwpd->br_schd_pri && priority > limit))
+			return (EPERM);
+	}
+	if (lwpd->br_schd_class == LX_SCHED_IDLE && policy != LX_SCHED_IDLE) {
+		if (CL_DONICE(t, CRED(), 0, &nice) != 0 ||
+		    pd->l_fake_limits[LX_RLFAKE_NICE].rlim_cur < 20 - nice)
+			return (EPERM);
+	}
+	if ((lwpd->br_schd_flags & LX_SCHED_FLAG_RESET_ON_FORK) != 0 &&
+	    (flags & LX_SCHED_FLAG_RESET_ON_FORK) == 0)
+		return (EPERM);
+	return (0);
+}
+
 /*
  * Find and lock a process for lx_sched_* operations.
  * Sets 'pp' and 'tp' on success, with P_PR_LOCK set and p_lock held.
  * The target process must be branded.
  */
 static int
-lx_sched_pidlock(l_pid_t pid, proc_t **pp, kthread_t **tp, boolean_t is_write)
+lx_sched_pidlock(l_pid_t pid, proc_t **pp, kthread_t **tp,
+    lx_sched_access_t access)
 {
 	proc_t		*p;
 	kthread_t	*t = NULL;
-	int		err = 0;
 
 	if (pid < 0) {
 		return (EINVAL);
@@ -199,32 +275,11 @@ lx_sched_pidlock(l_pid_t pid, proc_t **pp, kthread_t **tp, boolean_t is_write)
 		return (EPERM);
 	}
 
-	if (is_write) {
-		cred_t *cr = CRED();
-
-		/*
-		 * To perform a sched_* operation on a thread outside of the
-		 * current process, either the euid/egid of the target must
-		 * match, or the calling process must hold CAP_SYS_NICE.
-		 * (PRIV_PROC_PRIOUP maps to CAP_SYS_NICE)
-		 */
-		err = 0;
-		if (secpolicy_raisepriority(cr) != 0) {
-			err = 0;
-			mutex_exit(&p->p_lock);
-			mutex_enter(&p->p_crlock);
-			if (crgetuid(cr) != crgetuid(p->p_cred) ||
-			    crgetgid(cr) != crgetgid(p->p_cred)) {
-				err = EPERM;
-			}
-			mutex_exit(&p->p_crlock);
-			mutex_enter(&p->p_lock);
-			if (err != 0) {
-				sprunlock(p);
-				return (err);
-			}
-		}
+	if (access != LX_SCHED_READ && !lx_sched_owned(p, t, access)) {
+		sprunlock(p);
+		return (EPERM);
 	}
+
 	*pp = p;
 	*tp = t;
 	ASSERT(MUTEX_HELD(&p->p_lock));
@@ -258,7 +313,7 @@ lx_sched_getaffinity(l_pid_t pid, unsigned int len, void *maskp)
 	}
 
 	smask = cpuset_alloc(KM_SLEEP);
-	if ((err = lx_sched_pidlock(pid, &p, &tp, B_FALSE)) != 0) {
+	if ((err = lx_sched_pidlock(pid, &p, &tp, LX_SCHED_READ)) != 0) {
 		cpuset_free(smask);
 		return (set_errno(err));
 	}
@@ -321,7 +376,7 @@ lx_sched_setaffinity(l_pid_t pid, unsigned int len, void *maskp)
 	}
 	smask = cpuset_alloc(KM_SLEEP);
 	ltos_cpuset(&lmask, smask);
-	if ((err = lx_sched_pidlock(pid, &p, &tp, B_TRUE)) != 0) {
+	if ((err = lx_sched_pidlock(pid, &p, &tp, LX_SCHED_AFFINITY)) != 0) {
 		cpuset_free(smask);
 		return (set_errno(err));
 	}
@@ -423,21 +478,17 @@ lx_sched_setscheduler(l_pid_t pid, int policy, struct lx_sched_param *param)
 	if (EMUL_SCHED()) {
 		proc_t		*p;
 		kthread_t	*tp = NULL;
-		int		incr;
 		lx_lwp_data_t	*lwpd;
 
 		switch (policy) {
 		case LX_SCHED_OTHER:
 		case LX_SCHED_BATCH:
 		case LX_SCHED_IDLE:
-		case LX_SCHED_DEADLINE:
 			if (prio != LX_SCHED_PRIORITY_MIN_OTHER)
 				return (set_errno(EINVAL));
 			break;
 		case LX_SCHED_FIFO:
 		case LX_SCHED_RR:
-			if (crgetuid(CRED()) != 0)
-				return (set_errno(EPERM));
 			if (prio < LX_SCHED_PRIORITY_MIN_RRFIFO ||
 			    prio > LX_SCHED_PRIORITY_MAX_RRFIFO)
 				return (set_errno(EINVAL));
@@ -447,27 +498,21 @@ lx_sched_setscheduler(l_pid_t pid, int policy, struct lx_sched_param *param)
 		}
 
 		/* Find and operate on the target lwp. */
-		if ((rv = lx_sched_pidlock(pid, &p, &tp, B_TRUE)) != 0)
+		if ((rv = lx_sched_pidlock(pid, &p, &tp, LX_SCHED_WRITE)) != 0)
 			return (set_errno(rv));
 
 		lwpd = lwptolxlwp(ttolwp(tp));
-		if (lwpd->br_schd_class == LX_SCHED_IDLE &&
-		    policy != LX_SCHED_IDLE && crgetuid(CRED()) != 0) {
-
-			sprunlock(p);
-			return (set_errno(EPERM));
+		rv = lx_sched_emul_permission(p, tp, policy, prio, 0);
+		if (rv == 0)
+			rv = lx_sched_emul_priority(tp, policy);
+		if (rv == 0) {
+			lwpd->br_schd_class = policy;
+			lwpd->br_schd_pri = prio;
+			lwpd->br_schd_flags = 0;
 		}
 
-		lwpd->br_schd_class = policy;
-		lwpd->br_schd_pri = prio;
-
-		ASSERT(policy <= LX_SCHED_DEADLINE);
-		incr = lx_emul_pri_map[policy];
-
-		CL_DOPRIO(tp, CRED(), incr, &rv);
-
 		sprunlock(p);
-		return (0);
+		return (rv != 0 ? set_errno(rv) : 0);
 	}
 
 	if ((rv = lx_sched_setprocset(&procset, pid)))
@@ -563,7 +608,7 @@ lx_sched_getscheduler(l_pid_t pid)
 		kthread_t	*tp = NULL;
 
 		/* Find and operate on the target lwp. */
-		if ((rv = lx_sched_pidlock(pid, &p, &tp, B_FALSE)) != 0)
+		if ((rv = lx_sched_pidlock(pid, &p, &tp, LX_SCHED_READ)) != 0)
 			return (set_errno(rv));
 
 		policy = lwptolxlwp(ttolwp(tp))->br_schd_class;
@@ -629,10 +674,9 @@ lx_sched_setparam(l_pid_t pid, struct lx_sched_param *param)
 	if (EMUL_SCHED()) {
 		proc_t		*p;
 		kthread_t	*tp = NULL;
-		int		incr;
 
 		/* Find and operate on the target lwp. */
-		if ((rv = lx_sched_pidlock(pid, &p, &tp, B_TRUE)) != 0)
+		if ((rv = lx_sched_pidlock(pid, &p, &tp, LX_SCHED_WRITE)) != 0)
 			return (set_errno(rv));
 
 		policy = lwptolxlwp(ttolwp(tp))->br_schd_class;
@@ -640,7 +684,6 @@ lx_sched_setparam(l_pid_t pid, struct lx_sched_param *param)
 		case LX_SCHED_OTHER:
 		case LX_SCHED_BATCH:
 		case LX_SCHED_IDLE:
-		case LX_SCHED_DEADLINE:
 			if (prio != LX_SCHED_PRIORITY_MIN_OTHER) {
 				sprunlock(p);
 				return (set_errno(EINVAL));
@@ -648,10 +691,6 @@ lx_sched_setparam(l_pid_t pid, struct lx_sched_param *param)
 			break;
 		case LX_SCHED_FIFO:
 		case LX_SCHED_RR:
-			if (crgetuid(CRED()) != 0) {
-				sprunlock(p);
-				return (set_errno(EPERM));
-			}
 			if (prio < LX_SCHED_PRIORITY_MIN_RRFIFO ||
 			    prio > LX_SCHED_PRIORITY_MAX_RRFIFO) {
 				sprunlock(p);
@@ -659,20 +698,19 @@ lx_sched_setparam(l_pid_t pid, struct lx_sched_param *param)
 			}
 			break;
 		default:
-			/* this shouldn't happen */
-			ASSERT(0);
 			sprunlock(p);
 			return (set_errno(EINVAL));
 		}
 
-		lwptolxlwp(ttolwp(tp))->br_schd_pri = prio;
+		rv = lx_sched_emul_permission(p, tp, policy, prio,
+		    ttolxlwp(tp)->br_schd_flags);
+		if (rv == 0)
+			rv = lx_sched_emul_priority(tp, policy);
+		if (rv == 0)
+			ttolxlwp(tp)->br_schd_pri = prio;
 
-		ASSERT(policy <= LX_SCHED_DEADLINE);
-		incr = lx_emul_pri_map[policy];
-
-		CL_DOPRIO(tp, CRED(), incr, &rv);
 		sprunlock(p);
-		return (0);
+		return (rv != 0 ? set_errno(rv) : 0);
 	}
 
 	if ((rv = lx_sched_setprocset(&procset, pid)))
@@ -771,7 +809,7 @@ lx_sched_getparam(l_pid_t pid, struct lx_sched_param *param)
 		kthread_t	*tp = NULL;
 
 		/* Find and operate on the target lwp. */
-		if ((rv = lx_sched_pidlock(pid, &p, &tp, B_FALSE)) != 0)
+		if ((rv = lx_sched_pidlock(pid, &p, &tp, LX_SCHED_READ)) != 0)
 			return (set_errno(rv));
 
 		local_param.lx_sched_prio = lwptolxlwp(ttolwp(tp))->br_schd_pri;
@@ -848,7 +886,7 @@ lx_sched_rr_get_interval(l_pid_t pid, struct timespec *ival)
 		kthread_t	*tp = NULL;
 
 		/* Find and operate on the target lwp. */
-		if ((rv = lx_sched_pidlock(pid, &p, &tp, B_FALSE)) != 0)
+		if ((rv = lx_sched_pidlock(pid, &p, &tp, LX_SCHED_READ)) != 0)
 			return (set_errno(rv));
 
 		policy = lwptolxlwp(ttolwp(tp))->br_schd_class;
@@ -1011,7 +1049,9 @@ lx_sched_setattr(l_pid_t pid, lx_sched_attr_t *attr, uint32_t flags)
 	if (copyin(attr, &lx_size, sizeof (lx_size)))
 		return (set_errno(EFAULT));
 
-	if (lx_size > sizeof (local_attr))
+	if (lx_size == 0)
+		lx_size = sizeof (local_attr);
+	if (lx_size != sizeof (local_attr))
 		return (set_errno(E2BIG));
 
 	bzero(&local_attr, sizeof (local_attr));
@@ -1023,64 +1063,58 @@ lx_sched_setattr(l_pid_t pid, lx_sched_attr_t *attr, uint32_t flags)
 		return (set_errno(EINVAL));
 
 	if (EMUL_SCHED()) {
-		int		policy;
-		proc_t		*p;
-		kthread_t	*tp = NULL;
-		int		incr;
-		lx_lwp_data_t	*lwpd;
-
-		/* Find and operate on the target lwp. */
-		if ((rv = lx_sched_pidlock(pid, &p, &tp, B_TRUE)) != 0)
-			return (set_errno(rv));
-
-		policy = local_attr.lx_sched_policy;
+		int policy = local_attr.lx_sched_policy;
+		proc_t *p;
+		kthread_t *tp = NULL;
+		lx_lwp_data_t *lwpd;
 
 		switch (policy) {
 		case LX_SCHED_OTHER:
 		case LX_SCHED_BATCH:
 		case LX_SCHED_IDLE:
+		case LX_SCHED_DEADLINE:
+			if (local_attr.lx_sched_priority != 0)
+				return (set_errno(EINVAL));
 			break;
 		case LX_SCHED_FIFO:
 		case LX_SCHED_RR:
-			if (crgetuid(CRED()) != 0) {
-				sprunlock(p);
-				return (set_errno(EPERM));
-			}
 			if (local_attr.lx_sched_priority <
 			    LX_SCHED_PRIORITY_MIN_RRFIFO ||
 			    local_attr.lx_sched_priority >
-			    LX_SCHED_PRIORITY_MAX_RRFIFO) {
-				sprunlock(p);
+			    LX_SCHED_PRIORITY_MAX_RRFIFO)
 				return (set_errno(EINVAL));
-			}
-			break;
-
-		case LX_SCHED_DEADLINE:
-			if (crgetuid(CRED()) != 0) {
-				sprunlock(p);
-				return (set_errno(EPERM));
-			}
 			break;
 		default:
-			sprunlock(p);
 			return (set_errno(EINVAL));
 		}
+		if (policy == LX_SCHED_DEADLINE &&
+		    (local_attr.lx_sched_runtime < 1024 ||
+		    local_attr.lx_sched_runtime >
+		    local_attr.lx_sched_deadline ||
+		    (local_attr.lx_sched_period != 0 &&
+		    local_attr.lx_sched_deadline >
+		    local_attr.lx_sched_period) ||
+		    (local_attr.lx_sched_deadline >> 63) != 0 ||
+		    (local_attr.lx_sched_period >> 63) != 0))
+			return (set_errno(EINVAL));
 
-		lwpd = lwptolxlwp(ttolwp(tp));
-		lwpd->br_schd_class = policy;
-		lwpd->br_schd_flags = flg;
-		lwpd->br_schd_pri = local_attr.lx_sched_priority;
-
-		lwpd->br_schd_runtime = local_attr.lx_sched_runtime;
-		lwpd->br_schd_deadline = local_attr.lx_sched_deadline;
-		lwpd->br_schd_period = local_attr.lx_sched_period;
-
-		ASSERT(policy <= LX_SCHED_DEADLINE);
-		incr = lx_emul_pri_map[policy];
-
-		CL_DOPRIO(tp, CRED(), incr, &rv);
+		if ((rv = lx_sched_pidlock(pid, &p, &tp, LX_SCHED_WRITE)) != 0)
+			return (set_errno(rv));
+		lwpd = ttolxlwp(tp);
+		rv = lx_sched_emul_permission(p, tp, policy,
+		    local_attr.lx_sched_priority, flg);
+		if (rv == 0)
+			rv = lx_sched_emul_priority(tp, policy);
+		if (rv == 0) {
+			lwpd->br_schd_class = policy;
+			lwpd->br_schd_flags = flg;
+			lwpd->br_schd_pri = local_attr.lx_sched_priority;
+			lwpd->br_schd_runtime = local_attr.lx_sched_runtime;
+			lwpd->br_schd_deadline = local_attr.lx_sched_deadline;
+			lwpd->br_schd_period = local_attr.lx_sched_period;
+		}
 		sprunlock(p);
-		return (0);
+		return (rv != 0 ? set_errno(rv) : 0);
 	}
 
 	/* Currently not supported under other classes */
@@ -1104,7 +1138,7 @@ lx_sched_getattr(l_pid_t pid, lx_sched_attr_t *attr, uint32_t size,
 		lx_lwp_data_t	*lwpd;
 
 		/* Find and operate on the target lwp. */
-		if ((rv = lx_sched_pidlock(pid, &p, &tp, B_FALSE)) != 0)
+		if ((rv = lx_sched_pidlock(pid, &p, &tp, LX_SCHED_READ)) != 0)
 			return (set_errno(rv));
 
 		lwpd = lwptolxlwp(ttolwp(tp));

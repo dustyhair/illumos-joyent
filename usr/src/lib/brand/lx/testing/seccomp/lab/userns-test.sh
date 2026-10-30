@@ -6,7 +6,7 @@ bootparams | grep -q '^lx_lab=true$'
 test "$(zonename)" = global
 /lab/stream-cred-native
 /lab/namespace-test.sh
-for suite in maps capabilities native map_authority lifetime budget budget_race; do
+for suite in maps capabilities affinity native map_authority lifetime budget budget_race; do
     /lab/ktest run "lx_namespace:user:$suite"
 done
 /lab/ktest run lx_namespace:user:cap_syscalls
@@ -66,7 +66,7 @@ for probe in /test/scope_caps /test/dynamic/scope_caps \
     /test/scope_ids /test/dynamic/scope_ids; do
     scope_log=/lab/$(echo "$probe" | tr / _).log
     if [[ "$probe" = */scope_ids ]]; then
-        expected='SCOPE_IDS cases=66 failures=0'
+        expected='SCOPE_IDS cases=70 failures=0'
     else
         expected='SCOPE_CAPS cases=19 failures=0'
     fi
@@ -120,7 +120,79 @@ done
 /lab/chmod-race-test.sh
 /lab/chmod-acl-test.sh
 /lab/chmod-gid-race-test.sh
+# Exercise actual native FSS updates as well as the ordinary zone class.
 cleanup
+zonecfg -z lx-probe 'set scheduling-class=FSS'
+zoneadm -z lx-probe boot
+for probe in /test/scope_ids /test/dynamic/scope_ids; do
+    sched_log=/lab/$(echo "$probe" | tr / _)-initial-sched.log
+    zlogin -S lx-probe "$probe --initial-sched" > "$sched_log" 2>&1 &
+    sched_job=$!
+    for phase in FIFO RR OTHER; do
+        sched_pid=
+        for attempt in {1..10}; do
+            sched_pid=$(sed -n "s/^SCHED_${phase}_PID=//p" "$sched_log")
+            test -z "$sched_pid" || break
+            sleep 1
+        done
+        if ! [[ "$sched_pid" =~ ^[0-9]+$ ]]; then
+            cat "$sched_log"
+            exit 1
+        fi
+        case "$phase" in
+        FIFO) priority=60 ;;
+        RR) priority=59 ;;
+        OTHER) priority=0 ;;
+        esac
+        priocntl -d -i pid "$sched_pid" > /lab/sched-native-priority.log
+        cat /lab/sched-native-priority.log
+        grep -q 'FAIR SHARE' /lab/sched-native-priority.log
+        awk -v pid="$sched_pid" -v priority="$priority" '
+            $1 == pid && $NF == priority && $(NF-1) == priority { found=1 }
+            END { exit !found }
+        ' /lab/sched-native-priority.log
+        kill -CONT "$sched_pid"
+    done
+    wait "$sched_job"
+    cat "$sched_log"
+    grep -qx INITIAL_SCHED_REPEAT_PASS "$sched_log"
+
+    sched_log=/lab/$(echo "$probe" | tr / _)-scoped-sched.log
+    zlogin -S lx-probe "$probe --sched-scope" > "$sched_log" 2>&1 &
+    sched_job=$!
+    sched_pid=
+    for attempt in {1..10}; do
+        sched_pid=$(sed -n 's/^SCOPE_READY_PID=//p' "$sched_log")
+        test -z "$sched_pid" || break
+        sleep 1
+    done
+    [[ "$sched_pid" =~ ^[0-9]+$ ]]
+    printf '%s\0' "$sched_pid" > /lab/scope-target.bin
+    /lab/ktest run -i /lab/scope-target.bin lx_namespace:user:scope_attach
+    kill -CONT "$sched_pid"
+    sched_done=0
+    for attempt in {1..15}; do
+        if ! kill -0 "$sched_job" 2>/dev/null; then
+            sched_done=1
+            break
+        fi
+        sleep 1
+    done
+    if test "$sched_done" != 1; then
+        cat "$sched_log"
+        echo "LX_SCHED_TIMEOUT=$probe"
+        exit 1
+    fi
+    if wait "$sched_job"; then
+        cat "$sched_log"
+    else
+        cat "$sched_log"
+        exit 1
+    fi
+    grep -qx 'SCHED_SCOPE cases=8 failures=0' "$sched_log"
+done
+cleanup
+zonecfg -z lx-probe 'set scheduling-class=TS'
 trap - EXIT
 /lab/ktest run lx_namespace:user:credentials
 echo LX_USERNS_BACKEND_PASS

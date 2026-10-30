@@ -61,6 +61,7 @@
 #include <sys/archsystm.h>
 #include <sys/sdt.h>
 #include <sys/smt.h>
+#include <sys/brand.h>
 #if defined(__x86)
 #include <sys/x86_archext.h>
 #endif
@@ -2554,6 +2555,7 @@ cpu_bind_thread(kthread_id_t tp, processorid_t bind, processorid_t *obind,
 {
 	processorid_t	binding;
 	cpu_t		*cp = NULL;
+	int		permission;
 
 	ASSERT(MUTEX_HELD(&cpu_lock));
 	ASSERT(MUTEX_HELD(&ttoproc(tp)->p_lock));
@@ -2612,7 +2614,10 @@ cpu_bind_thread(kthread_id_t tp, processorid_t bind, processorid_t *obind,
 	 * Binding will get EPERM if the thread is of system class
 	 * or hasprocperm() fails.
 	 */
-	if (tp->t_cid == 0 || !hasprocperm(tp->t_cred, CRED())) {
+	permission = brand_cred_proc_perm(CRED(), ttoproc(tp), tp->t_cred,
+	    BRAND_CRED_AFFINITY);
+	if (tp->t_cid == 0 || (permission == BRAND_CRED_DEFER ?
+	    !hasprocperm(tp->t_cred, CRED()) : permission != 0)) {
 		*error = EPERM;
 		thread_unlock(tp);
 		return (0);

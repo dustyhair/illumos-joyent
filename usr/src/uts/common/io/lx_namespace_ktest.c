@@ -12,6 +12,7 @@
 
 extern void lx_userns_test_maps(ktest_ctx_hdl_t *);
 extern void lx_userns_test_caps(ktest_ctx_hdl_t *);
+extern void lx_userns_test_affinity(ktest_ctx_hdl_t *);
 extern void lx_userns_test_native(ktest_ctx_hdl_t *);
 extern void lx_userns_test_map_authority(ktest_ctx_hdl_t *);
 extern void lx_userns_test_lifetime(ktest_ctx_hdl_t *);
@@ -323,6 +324,8 @@ _init(void)
 	    (error = ktest_add_suite(km, "user", &ks)) != 0 ||
 	    (error = ktest_add_test(ks, "maps", lx_userns_test_maps, 0)) != 0 ||
 	    (error = ktest_add_test(ks, "capabilities", lx_userns_test_caps,
+	    0)) != 0 ||
+	    (error = ktest_add_test(ks, "affinity", lx_userns_test_affinity,
 	    0)) != 0 ||
 	    (error = ktest_add_test(ks, "native", lx_userns_test_native,
 	    0)) != 0 ||

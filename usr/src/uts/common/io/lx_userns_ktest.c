@@ -276,6 +276,83 @@ out:
 }
 
 void
+lx_userns_test_affinity(ktest_ctx_hdl_t *ctx)
+{
+	lx_userns_t *root = lx_userns_root_create(), *a = NULL, *b = NULL;
+	lx_userns_t *sibling = NULL;
+	lx_userns_cred_t actor = { 0 }, child;
+	cred_t *base = crdup(CRED()), *full = NULL, *weak = NULL;
+	cred_t *nested = NULL, *peer = NULL, *target = NULL;
+	boolean_t passed = B_FALSE;
+
+	VERIFY0(crsetresuid(base, 1000, 1000, 1000));
+	actor.luc_ns = root;
+	actor.luc_uid = actor.luc_gid = 1000;
+	NS_CHECK(lx_userns_child_create(&actor, &a) == 0 &&
+	    lx_userns_child_create(&actor, &sibling) == 0,
+	    "create sibling affinity namespaces failed");
+	actor.luc_ns = a;
+	lx_caps_new_namespace(&actor.luc_caps);
+	full = lx_userns_native_for(base, &actor);
+	actor.luc_caps.lc_effective &= ~LX_CAP_BIT(LX_CAP_SYS_NICE);
+	weak = lx_userns_native_for(base, &actor);
+	child = actor;
+	child.luc_uid = 1001;
+	NS_CHECK(lx_userns_child_create(&child, &b) == 0,
+	    "create descendant affinity namespace failed");
+	child.luc_ns = b;
+	nested = lx_userns_native_for(base, &child);
+	child.luc_ns = sibling;
+	peer = lx_userns_native_for(base, &child);
+	target = crdup(weak);
+	VERIFY0(crsetresuid(target, 2000, 2000, 2000));
+	NS_CHECK(lx_userns_cred_capable(full, target, LX_CAP_SYS_NICE) &&
+	    !lx_userns_cred_capable(weak, target, LX_CAP_SYS_NICE),
+	    "affinity capability ignored effective authority");
+	NS_CHECK(lx_userns_cred_capable(full, nested, LX_CAP_SYS_NICE) &&
+	    !lx_userns_cred_capable(weak, nested, LX_CAP_SYS_NICE) &&
+	    !lx_userns_cred_capable(full, peer, LX_CAP_SYS_NICE),
+	    "affinity namespace hierarchy escaped its authority");
+	NS_CHECK(!lx_userns_cred_capable(full, base, LX_CAP_SYS_NICE) &&
+	    !lx_userns_cred_capable(full, target, LX_CAP_LAST + 1),
+	    "affinity capability reached initial namespace or invalid index");
+	NS_CHECK(lx_userns_cred_capable(base, full, LX_CAP_SYS_NICE),
+	    "parent namespace owner lost child affinity authority");
+	NS_CHECK(brand_cred_proc_perm(base, curproc, base,
+	    BRAND_CRED_AFFINITY) == BRAND_CRED_DEFER,
+	    "native affinity policy did not defer");
+	NS_CHECK(brand_cred_proc_perm(full, curproc, target,
+	    BRAND_CRED_AFFINITY) == 0 &&
+	    brand_cred_proc_perm(weak, curproc, target,
+	    BRAND_CRED_AFFINITY) == EPERM,
+	    "affinity callback used ptrace or process identity authority");
+	VERIFY0(crsetresuid(target, 1000, 2000, 2000));
+	VERIFY0(crsetresgid(target, 2000, 2000, 2000));
+	NS_CHECK(brand_cred_proc_perm(weak, curproc, target,
+	    BRAND_CRED_AFFINITY) == 0,
+	    "affinity real UID ownership required group equality");
+	passed = B_TRUE;
+out:
+	if (target != NULL)
+		crfree(target);
+	if (peer != NULL)
+		crfree(peer);
+	if (nested != NULL)
+		crfree(nested);
+	if (weak != NULL)
+		crfree(weak);
+	if (full != NULL)
+		crfree(full);
+	crfree(base);
+	lx_userns_rele(b);
+	lx_userns_rele(sibling);
+	lx_userns_rele(a);
+	lx_userns_rele(root);
+	if (passed)
+		KT_PASS(ctx);
+}
+
+void
 lx_userns_test_map_authority(ktest_ctx_hdl_t *ctx)
 {
 	lx_userns_t *root = lx_userns_root_create(), *full = NULL, *weak = NULL;

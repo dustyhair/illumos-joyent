@@ -1265,6 +1265,200 @@ static int scoped_admin(void)
     CHECK(admin_denials(1)==0);
     return 0;
 }
+static int affinity_same(pid_t target)
+{
+    cpu_set_t mask;CPU_ZERO(&mask);
+    CHECK(syscall(SYS_sched_getaffinity,target,sizeof(mask),&mask)>0);
+    return syscall(SYS_sched_setaffinity,target,sizeof(mask),&mask);
+}
+static int affinity_change(pid_t target)
+{
+    cpu_set_t original,one,got;CPU_ZERO(&original);CPU_ZERO(&one);CPU_ZERO(&got);
+    CHECK(syscall(SYS_sched_getaffinity,target,sizeof(original),&original)>0);
+    int cpu;for(cpu=0;cpu<CPU_SETSIZE;cpu++) if(CPU_ISSET(cpu,&original)) break;
+    CHECK(cpu<CPU_SETSIZE);CPU_SET(cpu,&one);
+    CHECK(syscall(SYS_sched_setaffinity,target,sizeof(one),&one)==0);
+    CHECK(syscall(SYS_sched_getaffinity,target,sizeof(got),&got)>0 && CPU_EQUAL(&one,&got));
+    CHECK(syscall(SYS_sched_setaffinity,target,sizeof(original),&original)==0);
+    CPU_ZERO(&got);
+    CHECK(syscall(SYS_sched_getaffinity,target,sizeof(got),&got)>0 && CPU_EQUAL(&original,&got));
+    return 0;
+}
+static pid_t affinity_peer(unsigned real,unsigned effective,unsigned group)
+{
+    pid_t child=fork();
+    if(child==0) {
+        if(syscall(SYS_setresgid,group,group,group)!=0 ||
+            syscall(SYS_setresuid,real,effective,effective)!=0) _exit(1);
+        raise(SIGSTOP);_exit(0);
+    }
+    return child;
+}
+static int affinity_owners(void)
+{
+    CHECK(root_ids()==0);
+    pid_t child=affinity_peer(0,1,2);int status;CHECK(child>0);
+    CHECK(waitpid(child,&status,WUNTRACED)==child && WIFSTOPPED(status));
+    CHECK(cap_effective_off(CAP_SYS_NICE)==0);
+    CHECK(cap_effective_off(CAP_SYS_PTRACE)==0);
+    CHECK(affinity_change(child)==0);
+    CHECK(kill(child,SIGCONT)==0 && waitpid(child,&status,0)==child);
+    CHECK(WIFEXITED(status) && WEXITSTATUS(status)==0);
+    return 0;
+}
+static int affinity_capability(void)
+{
+    CHECK(root_ids()==0);
+    pid_t child=affinity_peer(1,1,2);int status;CHECK(child>0);
+    CHECK(waitpid(child,&status,WUNTRACED)==child && WIFSTOPPED(status));
+    CHECK(capbits(0)&(1ULL<<CAP_SYS_NICE));
+    CHECK(cap_effective_off(CAP_SYS_PTRACE)==0);
+    CHECK(affinity_change(child)==0);
+    CHECK(cap_effective_off(CAP_SYS_NICE)==0);
+    errno=0;CHECK(affinity_same(child)==-1 && errno==EPERM);
+    CHECK(kill(child,SIGCONT)==0 && waitpid(child,&status,0)==child);
+    CHECK(WIFEXITED(status) && WEXITSTATUS(status)==0);
+    return 0;
+}
+static int affinity_actor_real(void)
+{
+    CHECK(root_ids()==0);
+    pid_t child=affinity_peer(0,1,2);int status;CHECK(child>0);
+    CHECK(waitpid(child,&status,WUNTRACED)==child && WIFSTOPPED(status));
+    CHECK(syscall(SYS_setresuid,0,2,2)==0 && !(capbits(0)&(1ULL<<CAP_SYS_NICE)));
+    errno=0;CHECK(affinity_same(child)==-1 && errno==EPERM);
+    CHECK(kill(child,SIGCONT)==0 && waitpid(child,&status,0)==child);
+    CHECK(WIFEXITED(status) && WEXITSTATUS(status)==0);return 0;
+}
+static atomic_int affinity_tid,affinity_done,affinity_worker_error;
+static void *affinity_worker(void *unused)
+{
+    (void)unused;
+    if(syscall(SYS_setresuid,1,1,1)!=0) atomic_store(&affinity_worker_error,1);
+    atomic_store(&affinity_tid,(int)syscall(SYS_gettid));
+    while(!atomic_load(&affinity_done)) sched_yield();
+    return NULL;
+}
+static int affinity_task(void)
+{
+    CHECK(root_ids()==0);pthread_t worker;
+    CHECK(pthread_create(&worker,NULL,affinity_worker,NULL)==0);
+    while(!atomic_load(&affinity_tid)) sched_yield();
+    CHECK(!atomic_load(&affinity_worker_error));
+    CHECK(cap_effective_off(CAP_SYS_NICE)==0);
+    errno=0;int result=affinity_same(atomic_load(&affinity_tid)),error=errno;
+    atomic_store(&affinity_done,1);CHECK(pthread_join(worker,NULL)==0);
+    CHECK(result==-1 && error==EPERM);
+    return 0;
+}
+struct test_sched_attr {
+    uint32_t size,policy;uint64_t flags;int32_t nice;uint32_t priority;
+    uint64_t runtime,deadline,period;
+};
+static int sched_snapshot(struct test_sched_attr *attr)
+{
+    memset(attr,0,sizeof(*attr));
+    return syscall(SYS_sched_getattr,0,attr,sizeof(*attr),0);
+}
+static int sched_unchanged(const struct test_sched_attr *before)
+{
+    struct test_sched_attr after;
+    return sched_snapshot(&after)==0 && !memcmp(before,&after,sizeof(after));
+}
+static int sched_denials(void)
+{
+    CHECK(root_ids()==0);
+    CHECK(prctl(PR_SET_SECUREBITS,SECBIT_NO_SETUID_FIXUP,0,0,0)==0);
+    CHECK(syscall(SYS_setresuid,42,42,42)==0);
+    struct rlimit zero={0,0};CHECK(syscall(SYS_setrlimit,RLIMIT_RTPRIO,&zero)==0);
+    struct test_sched_attr before;CHECK(sched_snapshot(&before)==0);
+    struct sched_param priority={.sched_priority=1};
+    CHECK(capbits(0)&(1ULL<<CAP_SYS_NICE));
+    errno=0;CHECK(syscall(SYS_sched_setscheduler,0,SCHED_FIFO,&priority)==-1 && errno==EPERM);
+    CHECK(sched_unchanged(&before));
+    struct test_sched_attr attr={.size=sizeof(attr),.policy=SCHED_RR,.priority=1};
+    errno=0;CHECK(syscall(SYS_sched_setattr,0,&attr,0)==-1 && errno==EPERM);
+    CHECK(sched_unchanged(&before));
+    attr.policy=SCHED_DEADLINE;attr.priority=0;attr.runtime=1000000;
+    attr.deadline=attr.period=100000000;
+    errno=0;CHECK(syscall(SYS_sched_setattr,0,&attr,0)==-1 && errno==EPERM);
+    CHECK(sched_unchanged(&before));
+    CHECK(cap_effective_off(CAP_SYS_NICE)==0);
+    errno=0;CHECK(syscall(SYS_sched_setscheduler,0,SCHED_RR,&priority)==-1 && errno==EPERM);
+    CHECK(sched_unchanged(&before));return 0;
+}
+static int sched_validation(void)
+{
+    CHECK(root_ids()==0);
+    struct rlimit zero={0,0};CHECK(syscall(SYS_setrlimit,RLIMIT_RTPRIO,&zero)==0);
+    struct test_sched_attr before;CHECK(sched_snapshot(&before)==0);
+    struct sched_param invalid={.sched_priority=100};
+    errno=0;CHECK(syscall(SYS_sched_setscheduler,0,SCHED_FIFO,&invalid)==-1 && errno==EINVAL);
+    invalid.sched_priority=1;
+    errno=0;CHECK(syscall(SYS_sched_setscheduler,0,SCHED_OTHER,&invalid)==-1 && errno==EINVAL);
+    invalid.sched_priority=0;
+    errno=0;CHECK(syscall(SYS_sched_setscheduler,0,SCHED_DEADLINE,&invalid)==-1 && errno==EINVAL);
+    struct test_sched_attr attr={.size=sizeof(attr),.policy=SCHED_OTHER,.priority=1};
+    errno=0;CHECK(syscall(SYS_sched_setattr,0,&attr,0)==-1 && errno==EINVAL);
+    attr.policy=SCHED_FIFO;attr.priority=0;
+    errno=0;CHECK(syscall(SYS_sched_setattr,0,&attr,0)==-1 && errno==EINVAL);
+    attr.policy=SCHED_DEADLINE;attr.runtime=1023;attr.deadline=attr.period=100000000;
+    errno=0;CHECK(syscall(SYS_sched_setattr,0,&attr,0)==-1 && errno==EINVAL);
+    attr.runtime=100000001;
+    errno=0;CHECK(syscall(SYS_sched_setattr,0,&attr,0)==-1 && errno==EINVAL);
+    attr.runtime=1000000;attr.period=99999999;
+    errno=0;CHECK(syscall(SYS_sched_setattr,0,&attr,0)==-1 && errno==EINVAL);
+    CHECK(sched_unchanged(&before));return 0;
+}
+static int sched_foreign(void)
+{
+    CHECK(root_ids()==0);
+    pid_t child=affinity_peer(1,1,2);int status;CHECK(child>0);
+    CHECK(waitpid(child,&status,WUNTRACED)==child && WIFSTOPPED(status));
+    CHECK(affinity_same(child)==0);
+    struct sched_param priority={.sched_priority=0};
+    errno=0;CHECK(syscall(SYS_sched_setscheduler,child,SCHED_OTHER,&priority)==-1 && errno==EPERM);
+    CHECK(kill(child,SIGCONT)==0 && waitpid(child,&status,0)==child);
+    CHECK(WIFEXITED(status) && WEXITSTATUS(status)==0);return 0;
+}
+static int initial_sched_repeat(void)
+{
+    CHECK(access("/native/usr/bin/uname",X_OK)==0 && getuid()==0);
+    CHECK(capbits(0)&(1ULL<<CAP_SYS_NICE));
+    struct sched_param priority={.sched_priority=1};
+    CHECK(syscall(SYS_sched_setscheduler,0,SCHED_FIFO,&priority)==0);
+    CHECK(syscall(SYS_sched_setscheduler,0,SCHED_FIFO,&priority)==0);
+    priority.sched_priority=2;
+    CHECK(syscall(SYS_sched_setparam,0,&priority)==0);
+    CHECK(syscall(SYS_sched_setparam,0,&priority)==0);
+    printf("SCHED_FIFO_PID=%d\n",getpid());fflush(stdout);raise(SIGSTOP);
+    struct test_sched_attr attr={.size=sizeof(attr),.policy=SCHED_RR,.priority=3};
+    CHECK(syscall(SYS_sched_setattr,0,&attr,0)==0);
+    CHECK(syscall(SYS_sched_setattr,0,&attr,0)==0);
+    printf("SCHED_RR_PID=%d\n",getpid());fflush(stdout);raise(SIGSTOP);
+    priority.sched_priority=0;
+    CHECK(syscall(SYS_sched_setscheduler,0,SCHED_OTHER,&priority)==0);
+    CHECK(syscall(SYS_sched_setscheduler,0,SCHED_OTHER,&priority)==0);
+    printf("SCHED_OTHER_PID=%d\n",getpid());fflush(stdout);raise(SIGSTOP);
+    CHECK(cap_effective_off(CAP_SYS_NICE)==0);
+    struct rlimit zero={0,0};CHECK(syscall(SYS_setrlimit,RLIMIT_RTPRIO,&zero)==0);
+    struct test_sched_attr before;CHECK(sched_snapshot(&before)==0);
+    priority.sched_priority=1;errno=0;
+    CHECK(syscall(SYS_sched_setscheduler,0,SCHED_FIFO,&priority)==-1 && errno==EPERM);
+    CHECK(sched_unchanged(&before));
+    puts("INITIAL_SCHED_REPEAT_PASS");return 0;
+}
+static int sched_native_failure(void)
+{
+    CHECK(!linux_control && root_ids()==0);
+    struct test_sched_attr before;CHECK(sched_snapshot(&before)==0);
+    struct sched_param priority={.sched_priority=1};
+    errno=0;CHECK(syscall(SYS_sched_setscheduler,0,SCHED_FIFO,&priority)==-1 && errno==EPERM);
+    CHECK(sched_unchanged(&before));
+    struct test_sched_attr attr={.size=sizeof(attr),.policy=SCHED_RR,.priority=1};
+    errno=0;CHECK(syscall(SYS_sched_setattr,0,&attr,0)==-1 && errno==EPERM);
+    CHECK(sched_unchanged(&before));return 0;
+}
 static const unsigned limit_resources[]={RLIMIT_LOCKS,RLIMIT_NICE,RLIMIT_RTPRIO,RLIMIT_RTTIME};
 static int limit_is(unsigned resource,rlim_t soft,rlim_t hard)
 {
@@ -1525,6 +1719,7 @@ static int map_file(pid_t p, const char *name)
 }
 int main(int argc, char **argv)
 {
+    if(argc==2 && !strcmp(argv[1],"--initial-sched")) return initial_sched_repeat();
     if(argc==2 && !strcmp(argv[1],"--limit-image")) return limits_image();
     if(argc==2 && !strcmp(argv[1],"--initial-rlimits")) {
         run("initial effective RESOURCE can raise hard limits",initial_limits_raise);
@@ -1542,16 +1737,17 @@ int main(int argc, char **argv)
     if (argc >= 3 && !strcmp(argv[1], "--trace-image")) return trace_image(argc, argv);
     if (argc == 2 && !strcmp(argv[1], "--image")) return image_check();
     self = argv[0];
-    linux_control=argc==2 && !strcmp(argv[1],"--linux");
+    linux_control=argc==2 && (!strcmp(argv[1],"--linux") || !strcmp(argv[1],"--linux-sched"));
+    int sched_mode=argc==2 && (!strcmp(argv[1],"--sched-scope") || !strcmp(argv[1],"--linux-sched"));
     int race_mode=argc==2 && !strcmp(argv[1],"--chown-race");
     int acl_mode=argc==2 && !strcmp(argv[1],"--chown-acl");
     int mode_race=argc==2 && !strcmp(argv[1],"--chmod-race");
     int gid_race=argc==2 && !strcmp(argv[1],"--chmod-gid-race");
     int mode_acl=argc==2 && !strcmp(argv[1],"--chmod-acl");
-    if(race_mode || acl_mode || mode_race || gid_race || mode_acl) argc=1;
+    if(race_mode || acl_mode || mode_race || gid_race || mode_acl || (sched_mode && !linux_control)) argc=1;
     if (argc == 2 && !strcmp(argv[1], "--scm-length-only")) return scm_lengths();
     CHECK(prepare_peer_fixtures() == 0);
-    if (argc == 2 && !strcmp(argv[1], "--linux")) {
+    if (linux_control) {
         pid_t p = fork(); int status;
         CHECK(p >= 0);
         if (p == 0) {
@@ -1573,6 +1769,17 @@ int main(int argc, char **argv)
     if(acl_mode) return chown_acl_probe();
     if(mode_race || gid_race) return chmod_race_probe(gid_race);
     if(mode_acl) return chmod_acl_probe();
+    if(sched_mode) {
+        run("scoped SYS_NICE is not initial scheduling authority",sched_denials);
+        run("scheduling validation precedes capability checks",sched_validation);
+        run("affinity capability does not grant foreign policy changes",sched_foreign);
+        run("affinity ownership accepts target real UID and ignores GID",affinity_owners);
+        run("affinity uses effective target-namespace SYS_NICE",affinity_capability);
+        run("affinity ownership uses the target task credential",affinity_task);
+        run("affinity does not grant authority from caller real UID",affinity_actor_real);
+        if(!linux_control) run("native priority failures preserve reported scheduling",sched_native_failure);
+        printf("SCHED_SCOPE cases=%d failures=%d\n",cases,failures);return failures!=0;
+    }
     run("mapped getters and privileged setters", mapped_ids);
     run("mapping validation and failed-update atomicity", validation);
     run("saved UID restoration and capability fixups", saved_ids);
@@ -1639,6 +1846,10 @@ int main(int argc, char **argv)
     run("scoped native UID0 cannot administer initial-scope resources",scoped_admin);
     run("hard limits require initial authority and survive fork and exec",scoped_limits);
     run("concurrent prlimit exchanges return each previous value once",limits_exchange);
+    run("affinity ownership accepts target real UID and ignores GID",affinity_owners);
+    run("affinity uses effective target-namespace SYS_NICE",affinity_capability);
+    run("affinity ownership uses the target task credential",affinity_task);
+    run("affinity does not grant authority from caller real UID",affinity_actor_real);
     if (argc == 1) {
         unsigned group = 1;
         CHECK(root_ids() == 0);
