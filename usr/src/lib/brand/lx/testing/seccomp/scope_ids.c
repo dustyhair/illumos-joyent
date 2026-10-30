@@ -260,6 +260,80 @@ static int libc_broadcast(void)
     CHECK(atomic_load(&broadcast_error) == 0 && ids(0,1,1,1) && ids(1,1,1,1));
     return 0;
 }
+static atomic_int snapshot_tid[2], snapshot_go, snapshot_done;
+static atomic_int snapshot_stop, snapshot_error;
+static void *snapshot_writer(void *arg)
+{
+    unsigned index = (unsigned)(uintptr_t)arg;
+    atomic_store(&snapshot_tid[index], (int)syscall(SYS_gettid));
+    while (!atomic_load(&snapshot_go)) sched_yield();
+    for (unsigned i = 0; i < 128; i++) {
+        unsigned id = (i + index) & 1;
+        if (syscall(SYS_setgroups, 1, &id) ||
+            syscall(SYS_setresgid, id, id, id) ||
+            syscall(SYS_setresuid, id, id, id) ||
+            !ids(0, id, id, id) || !ids(1, id, id, id)) {
+            atomic_store(&snapshot_error, 1);
+            break;
+        }
+        sched_yield();
+    }
+    atomic_fetch_add(&snapshot_done, 1);
+    while (!atomic_load(&snapshot_stop)) sched_yield();
+    return NULL;
+}
+static int snapshot_status(int tid, int leader)
+{
+    char path[128], line[256];
+    snprintf(path, sizeof(path), "/proc/self/task/%d/status", tid);
+    FILE *f = fopen(path, "r");
+    CHECK(f != NULL);
+    int seen = 0, invalid = 0;
+    while (fgets(line, sizeof(line), f)) {
+        unsigned a,b,c,d;
+        if (sscanf(line, "Uid: %u %u %u %u", &a,&b,&c,&d) == 4 ||
+            sscanf(line, "Gid: %u %u %u %u", &a,&b,&c,&d) == 4) {
+            if (a > (leader ? 0U : 1U) || a != b || a != c || a != d)
+                invalid = 1;
+            seen++;
+        } else if (!strncmp(line, "Groups:", 7)) {
+            if (sscanf(line + 7, "%u %u", &a,&b) != 1 ||
+                a > (leader ? 0U : 1U)) invalid = 1;
+            seen++;
+        }
+    }
+    CHECK(fclose(f) == 0 && seen == 3 && !invalid);
+    return 0;
+}
+static int concurrent_snapshots(void)
+{
+    CHECK(root_ids() == 0);
+    CHECK(prctl(PR_SET_SECUREBITS, SECBIT_NO_SETUID_FIXUP, 0, 0, 0) == 0);
+    unsigned group = 0;
+    CHECK(syscall(SYS_setgroups, 1, &group) == 0);
+    pthread_t threads[2];
+    for (unsigned i = 0; i < 2; i++)
+        CHECK(pthread_create(&threads[i], NULL, snapshot_writer,
+            (void *)(uintptr_t)i) == 0);
+    while (!atomic_load(&snapshot_tid[0]) || !atomic_load(&snapshot_tid[1]))
+        sched_yield();
+    atomic_store(&snapshot_go, 1);
+    unsigned samples = 0;
+    int error = 0, leader = (int)syscall(SYS_gettid);
+    do {
+        for (unsigned i = 0; i < 2; i++)
+            error |= snapshot_status(atomic_load(&snapshot_tid[i]), 0);
+        error |= snapshot_status(leader, 1);
+        samples++;
+        if (error || samples == 20000) break;
+    } while (atomic_load(&snapshot_done) != 2 || samples < 128);
+    atomic_store(&snapshot_stop, 1);
+    for (unsigned i = 0; i < 2; i++) CHECK(pthread_join(threads[i], NULL) == 0);
+    CHECK(!error && atomic_load(&snapshot_done) == 2 &&
+        atomic_load(&snapshot_error) == 0 && samples >= 128);
+    CHECK(ids(0, 0, 0, 0) && ids(1, 0, 0, 0));
+    return 0;
+}
 static int image_check(void)
 {
     CHECK(ids(0, 1, 1, 1) && ids(1, 1, 1, 1));
@@ -329,6 +403,7 @@ int main(int argc, char **argv)
     run("mapped identities and auxv across exec", exec_ids);
     run("mapped file ownership and native access", file_access);
     run("glibc broadcasts identity changes from a worker", libc_broadcast);
+    run("concurrent task identity and procfs snapshots", concurrent_snapshots);
     if (argc == 1) {
         unsigned group = 1;
         CHECK(root_ids() == 0);
