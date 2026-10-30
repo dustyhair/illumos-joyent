@@ -38,8 +38,10 @@ if zonecfg -z lx-probe info attr name=max-user-namespaces | grep -q 'name: max-u
 else
     zonecfg -z lx-probe 'add attr; set name=max-user-namespaces; set type=uint; set value=64; end;'
 fi
+zoneadm -z lx-probe ready
+/lab/userns-budget-native --ready lx-probe
 zoneadm -z lx-probe boot
-/lab/userns-budget-native lx-probe
+/lab/userns-budget-native --running lx-probe
 /lab/ktest run lx_namespace:user:access
 /lab/ktest run lx_namespace:user:proc_maps
 zlogin -S lx-probe /test/proc_maps_baseline

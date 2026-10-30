@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 #define CHECK(x) do { if (!(x)) { \
@@ -52,12 +53,22 @@ int main(int argc, char **argv)
     uint32_t original = 0, maximum, used, value = 9;
     int restore = 0, result = 1, status;
     pid_t child = -1;
-    CHECK(argc == 2 && getzoneid() == GLOBAL_ZONEID);
-    zone = getzoneidbyname(argv[1]);
+    CHECK(argc == 3 && getzoneid() == GLOBAL_ZONEID);
+    CHECK(!strcmp(argv[1], "--ready") || !strcmp(argv[1], "--running"));
+    zone = getzoneidbyname(argv[2]);
     CHECK(zone > GLOBAL_ZONEID);
     CHECK(get(zone, LX_ATTR_USERNS_MAX, &original) == 0);
+    CHECK(get(zone, LX_ATTR_USERNS_USED, &used) == 0 && used == 0);
+    if (!strcmp(argv[1], "--running")) {
+        CHECK(original == 64);
+        errno = 0;
+        CHECK(set(zone, 999) == -1 && errno == EINVAL);
+        CHECK(get(zone, LX_ATTR_USERNS_MAX, &maximum) == 0 && maximum == original);
+        printf("LX_USERNS_BUDGET_RUNNING_PASS max=%u\n", original);
+        return 0;
+    }
     restore = 1;
-    CHECK(original == 64 && get(zone, LX_ATTR_USERNS_USED, &used) == 0 && used == 0);
+    CHECK(original > 0);
     errno = 0;
     CHECK(zone_getattr(zone, LX_ATTR_USERNS_MAX, &value, 1) == -1 && errno == ERANGE);
     errno = 0;
@@ -102,7 +113,7 @@ int main(int argc, char **argv)
     CHECK(get(zone, LX_ATTR_USERNS_MAX, &maximum) == 0 && maximum == 1);
     CHECK(set(zone, original) == 0);
     result = 0;
-    printf("LX_USERNS_BUDGET_NATIVE_PASS max=%u\n", original);
+    printf("LX_USERNS_BUDGET_READY_PASS restored=%u\n", original);
 out:
     if (restore) (void)set(zone, original);
     if (child > 0) {
