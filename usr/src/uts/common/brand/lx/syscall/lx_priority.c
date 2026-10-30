@@ -21,6 +21,7 @@
 #include <sys/policy.h>
 #include <sys/brand.h>
 #include <sys/lx_brand.h>
+#include <sys/lx_cap.h>
 
 /* From uts/common/disp/priocntl.c */
 extern int donice(procset_t *, pcnice_t *);
@@ -161,11 +162,7 @@ lx_setpriority(int which, id_t who, int prio)
 
 	rval = donice(&procset, &pcnice);
 	if (rval != 0) {
-		/*
-		 * Once we fully support Linux capabilities, we should update
-		 * the following check to look at the CAP_SYS_NICE capability.
-		 */
-		if (rval == EPERM && crgetuid(CRED()) != 0) {
+		if (rval == EPERM && !lx_cap_initial(CRED(), LX_CAP_SYS_NICE)) {
 			/*
 			 * donice() returns EPERM under two conditions:
 			 * 1) if either the real or eff. uid don't match

@@ -1374,6 +1374,7 @@ static int sched_denials(void)
     struct test_sched_attr before;CHECK(sched_snapshot(&before)==0);
     struct sched_param priority={.sched_priority=1};
     CHECK(capbits(0)&(1ULL<<CAP_SYS_NICE));
+    errno=0;CHECK(syscall(SYS_setpriority,PRIO_PROCESS,0,-1)==-1 && errno==EACCES);
     errno=0;CHECK(syscall(SYS_sched_setscheduler,0,SCHED_FIFO,&priority)==-1 && errno==EPERM);
     CHECK(sched_unchanged(&before));
     struct test_sched_attr attr={.size=sizeof(attr),.policy=SCHED_RR,.priority=1};
@@ -1446,6 +1447,7 @@ static int initial_sched_repeat(void)
     priority.sched_priority=1;errno=0;
     CHECK(syscall(SYS_sched_setscheduler,0,SCHED_FIFO,&priority)==-1 && errno==EPERM);
     CHECK(sched_unchanged(&before));
+    errno=0;CHECK(syscall(SYS_setpriority,PRIO_PROCESS,0,-1)==-1 && errno==EACCES);
     puts("INITIAL_SCHED_REPEAT_PASS");return 0;
 }
 static int sched_native_failure(void)

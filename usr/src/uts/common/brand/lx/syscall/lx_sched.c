@@ -387,6 +387,10 @@ lx_sched_setaffinity(l_pid_t pid, unsigned int len, void *maskp)
 	mutex_exit(&p->p_lock);
 	mutex_enter(&cpu_lock);
 	mutex_enter(&p->p_lock);
+	if (!lx_sched_owned(p, tp, LX_SCHED_AFFINITY)) {
+		err = EPERM;
+		goto out;
+	}
 	lwpd = ttolxlwp(tp);
 
 	cpuset_and(smask, &cpu_active_set);

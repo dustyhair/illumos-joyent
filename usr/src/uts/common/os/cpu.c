@@ -2614,8 +2614,11 @@ cpu_bind_thread(kthread_id_t tp, processorid_t bind, processorid_t *obind,
 	 * Binding will get EPERM if the thread is of system class
 	 * or hasprocperm() fails.
 	 */
-	permission = brand_cred_proc_perm(CRED(), ttoproc(tp), tp->t_cred,
-	    BRAND_CRED_AFFINITY);
+	permission = BRAND_CRED_DEFER;
+	if (tp->t_cid != 0) {
+		permission = brand_cred_proc_perm(CRED(), ttoproc(tp),
+		    tp->t_cred, BRAND_CRED_AFFINITY);
+	}
 	if (tp->t_cid == 0 || (permission == BRAND_CRED_DEFER ?
 	    !hasprocperm(tp->t_cred, CRED()) : permission != 0)) {
 		*error = EPERM;
