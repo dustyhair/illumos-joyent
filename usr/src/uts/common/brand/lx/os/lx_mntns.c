@@ -22,7 +22,9 @@
 #include <sys/vnode.h>
 #include <sys/user.h>
 #include <sys/lx_brand.h>
+#include <sys/lx_misc.h>
 #include <sys/lx_mntns.h>
+#include <lx_syscall.h>
 
 extern brand_t lx_brand;
 
