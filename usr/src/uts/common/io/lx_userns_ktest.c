@@ -12,6 +12,7 @@
 #include <sys/disp.h>
 #include <sys/lx_userns.h>
 #include <sys/lx_mntns.h>
+#include <sys/brand.h>
 #include <sys/lx_brand.h>
 #include <sys/zone.h>
 #include <sys/ddi.h>
