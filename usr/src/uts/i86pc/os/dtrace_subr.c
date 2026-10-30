@@ -168,7 +168,9 @@ dtrace_user_probe(struct regs *rp, caddr_t addr, processorid_t cpuid)
 	extern void trap(struct regs *, caddr_t, processorid_t);
 
 	if (USERMODE(rp->r_cs) || (rp->r_ps & PS_VM)) {
-		if (curthread->t_cred != p->p_cred) {
+		/* A brand payload makes credential publication task-local. */
+		if (curthread->t_cred != p->p_cred &&
+		    crgetbrand(curthread->t_cred) == NULL) {
 			cred_t *oldcred = curthread->t_cred;
 			/*
 			 * DTrace accesses t_cred in probe context.  t_cred

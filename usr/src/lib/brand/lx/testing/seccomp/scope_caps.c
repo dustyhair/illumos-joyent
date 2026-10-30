@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/prctl.h>
+#include <sys/mman.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -126,6 +127,15 @@ static void *worker(void *unused)
     (void)unused;
     int error = getcaps(0, &c) != 0 || !same(c, parent_caps);
     if (setcaps((caps_t){0}) != 0) error = 1;
+    /* A private first write takes a user page fault after the drop. */
+    volatile char *page = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (page == MAP_FAILED) error |= 2;
+    else {
+        *page = 1;
+        if (getcaps(0, &c) != 0 || c.e || c.p || c.i) error |= 256;
+        munmap((void *)page, 4096);
+    }
     atomic_store(&worker_tid, syscall(SYS_gettid));
     atomic_store(&worker_error, error);
     atomic_store(&stage, 1);

@@ -229,7 +229,11 @@ typedef struct brand {
 
 extern brand_t native_brand;
 
-/* Immutable payload shared by credential copies; its brand remains loaded. */
+/*
+ * Immutable payload shared by credential copies; its brand remains loaded.
+ * A tagged credential is published by the brand per task. Common syscall,
+ * trap and DTrace entry must not replace it with the process credential.
+ */
 typedef struct brand_cred {
 	uint_t bc_refs;
 	brand_t *bc_brand;

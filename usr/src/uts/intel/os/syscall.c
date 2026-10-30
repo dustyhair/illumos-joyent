@@ -281,7 +281,9 @@ pre_syscall()
 	 * process.  The credentials in the process right now apply to this
 	 * thread for the entire system call.
 	 */
-	if (t->t_cred != p->p_cred) {
+	/* A brand payload makes credential publication task-local. */
+	if (t->t_cred != p->p_cred &&
+	    crgetbrand(t->t_cred) == NULL) {
 		cred_t *oldcred = t->t_cred;
 		/*
 		 * DTrace accesses t_cred in probe context.  t_cred must

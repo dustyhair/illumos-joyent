@@ -185,7 +185,9 @@ trap(struct regs *rp, caddr_t addr, uint32_t type, uint32_t mmu_fsr)
 		 * the entire trap.  If trapping from the kernel, this
 		 * should already be set up.
 		 */
-		if (curthread->t_cred != p->p_cred) {
+		/* A brand payload makes credential publication task-local. */
+		if (curthread->t_cred != p->p_cred &&
+		    crgetbrand(curthread->t_cred) == NULL) {
 			cred_t *oldcred = curthread->t_cred;
 			/*
 			 * DTrace accesses t_cred in probe context.  t_cred
@@ -1378,7 +1380,9 @@ fpu_trap(struct regs *rp, caddr_t addr, uint32_t type, uint32_t code)
 		 * the entire trap.  If trapping from the kernel, this
 		 * should already be set up.
 		 */
-		if (curthread->t_cred != p->p_cred) {
+		/* A brand payload makes credential publication task-local. */
+		if (curthread->t_cred != p->p_cred &&
+		    crgetbrand(curthread->t_cred) == NULL) {
 			cred_t *oldcred = curthread->t_cred;
 			/*
 			 * DTrace accesses t_cred in probe context.  t_cred

@@ -516,7 +516,9 @@ trap(struct regs *rp, caddr_t addr, processorid_t cpuid)
 		 * the entire trap.  If trapping from the kernel, this
 		 * should already be set up.
 		 */
-		if (ct->t_cred != p->p_cred) {
+		/* A brand payload makes credential publication task-local. */
+		if (ct->t_cred != p->p_cred &&
+		    crgetbrand(ct->t_cred) == NULL) {
 			cred_t *oldcred = ct->t_cred;
 			/*
 			 * DTrace accesses t_cred in probe context.  t_cred

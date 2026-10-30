@@ -545,7 +545,8 @@ lx_userns_capset(uint64_t effective, uint64_t permitted,
 	int error;
 
 	if ((error = lx_userns_caps_get(CRED(), &caps)) != 0 ||
-	    (error = lx_caps_set(&caps, effective, permitted, inheritable)) != 0)
+	    (error = lx_caps_set(&caps, effective, permitted,
+	    inheritable)) != 0)
 		return (error);
 	replacement = lx_userns_with_caps(CRED(), &caps);
 	lx_userns_publish(curthread, replacement);
