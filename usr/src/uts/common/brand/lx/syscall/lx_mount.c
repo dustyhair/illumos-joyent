@@ -21,6 +21,7 @@
 #include <sys/types.h>
 #include <sys/brand.h>
 #include <sys/lx_brand.h>
+#include <sys/lx_mntns.h>
 #include <sys/lx_syscalls.h>
 #include <sys/lx_autofs.h>
 
@@ -412,6 +413,20 @@ lx_mnt_copyin_arg(const char *from, char *to, size_t len)
 	return (0);
 }
 
+/* Private views must use tracked operations with scoped Linux authority. */
+static int
+lx_mnt_legacy_check(void)
+{
+	lx_mntns_view_t *view = lx_mntns_current();
+	int error;
+
+	if (view == NULL)
+		return (0);
+	error = lx_mntns_view_capable(view, CRED()) ? EOPNOTSUPP : EPERM;
+	lx_mntns_view_rele(view);
+	return (error);
+}
+
 long
 lx_mount(const char *sourcep, const char *targetp, const char *fstypep,
     uint_t flags, const void *datap)
@@ -425,6 +440,9 @@ lx_mount(const char *sourcep, const char *targetp, const char *fstypep,
 	vnode_t			*vp = NULL;
 	int			uid = -1;
 	int			gid = -1;
+
+	if ((rv = lx_mnt_legacy_check()) != 0)
+		return (set_errno(rv));
 
 	if ((rv = lx_mnt_copyin_arg(fstypep, fstype, sizeof (fstype))) != 0) {
 		if (rv == ENAMETOOLONG)
@@ -720,6 +738,10 @@ out:
 long
 lx_umount(char *path)
 {
+	int error;
+
+	if ((error = lx_mnt_legacy_check()) != 0)
+		return (set_errno(error));
 	return (umount2(path, 0));
 }
 
@@ -732,8 +754,10 @@ lx_umount(char *path)
 long
 lx_umount2(char *path, int flg)
 {
-	int flags = 0;
+	int flags = 0, error;
 
+	if ((error = lx_mnt_legacy_check()) != 0)
+		return (set_errno(error));
 	if (flg & ~LX_MNT_FORCE)
 		return (set_errno(EINVAL));
 

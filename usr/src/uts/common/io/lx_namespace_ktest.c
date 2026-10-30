@@ -16,6 +16,7 @@
 #include <sys/lx_brand.h>
 #include <sys/lx_mntns.h>
 #include <sys/lx_userns.h>
+#include <sys/lx_cap.h>
 
 extern brand_t lx_brand;
 
@@ -64,9 +65,9 @@ ns_views(ktest_ctx_hdl_t *ctx)
 		goto out; \
 	} \
 } while (0)
-	error = lx_mntns_view_create((char *)input, cr, NULL, &a);
+	error = lx_mntns_view_create((char *)input, cr, cr, NULL, &a);
 	NS_CHECK(error == 0, "cannot create detached view A");
-	error = lx_mntns_view_create((char *)input, cr, NULL, &b);
+	error = lx_mntns_view_create((char *)input, cr, cr, NULL, &b);
 	NS_CHECK(error == 0, "cannot create detached view B");
 	error = lx_mntns_view_lookup(a, "/sub/original", cr, &vp);
 	NS_CHECK(error == 0, "initial file missing from A");
@@ -201,9 +202,9 @@ ns_snapshot(ktest_ctx_hdl_t *ctx)
 		goto out; \
 	} \
 } while (0)
-	error = lx_mntns_view_snapshot((char *)input, cr, NULL, &a);
+	error = lx_mntns_view_snapshot((char *)input, cr, cr, NULL, &a);
 	NS_CHECK(error == 0, "cannot snapshot source into A");
-	error = lx_mntns_view_snapshot((char *)input, cr, NULL, &b);
+	error = lx_mntns_view_snapshot((char *)input, cr, cr, NULL, &b);
 	NS_CHECK(error == 0, "cannot snapshot source into B");
 	error = lx_mntns_view_lookup(a, "/existing/mounted", cr, &vp);
 	NS_CHECK(error == 0, "pre-existing tmpfs missing in snapshot");
@@ -365,7 +366,7 @@ ns_clone(ktest_ctx_hdl_t *ctx)
 	VN_RELE(vp); \
 	vp = NULL; \
 } while (0)
-	error = lx_mntns_view_snapshot((char *)input, cr, NULL, &a);
+	error = lx_mntns_view_snapshot((char *)input, cr, cr, NULL, &a);
 	NS_CHECK(error == 0, "cannot snapshot clone source");
 	error = lx_mntns_view_tmpfs(a, "/sub", cr);
 	NS_CHECK(error == 0, "cannot create private source mount");
@@ -383,7 +384,7 @@ ns_clone(ktest_ctx_hdl_t *ctx)
 	NS_CHECK(error == 0, "cannot create private read-only file bind");
 	VN_RELE(other);
 	other = NULL;
-	error = lx_mntns_view_clone(a, cr, &b);
+	error = lx_mntns_view_clone(a, cr, cr, &b);
 	NS_CHECK(error == 0, "cannot clone private source");
 	NS_PRESENT(b, "/sub/private", "private mount missing in clone");
 	NS_PRESENT(b, "/sub/deep/nested", "nested mount missing in clone");
@@ -412,7 +413,7 @@ ns_clone(ktest_ctx_hdl_t *ctx)
 	error = lx_mntns_view_tmpfs(a, "/sub", cr);
 	NS_CHECK(error == 0, "cannot overmount source after clone");
 	NS_PRESENT(b, "/sub/private", "source mount propagated to clone");
-	error = lx_mntns_view_clone(b, cr, &c);
+	error = lx_mntns_view_clone(b, cr, cr, &c);
 	NS_CHECK(error == 0, "cannot clone a clone with a hidden mount");
 	NS_PRESENT(c, "/sub/private", "second clone lost private mount");
 	error = lx_mntns_view_lookup(c, "/sub/deep/nested", cr, &vp);
@@ -521,7 +522,7 @@ ns_lifetime(ktest_ctx_hdl_t *ctx)
 	} \
 } while (0)
 	NS_CHECK(!lx_mntns_busy(), "unrelated mount views are active");
-	error = lx_mntns_view_create((char *)input, cr, NULL, &a);
+	error = lx_mntns_view_create((char *)input, cr, cr, NULL, &a);
 	NS_CHECK(error == 0, "cannot create lifetime source view");
 	lx_mntns_view_hold(a);
 	error = lx_mntns_view_destroy(a, cr);
@@ -540,7 +541,7 @@ ns_lifetime(ktest_ctx_hdl_t *ctx)
 	NS_CHECK(error == 0, "cannot create retained file");
 	error = lx_mntns_view_lookup(a, "/sub/retained", cr, &held);
 	NS_CHECK(error == 0, "cannot hold retained file");
-	error = lx_mntns_view_clone(a, cr, &b);
+	error = lx_mntns_view_clone(a, cr, cr, &b);
 	NS_CHECK(error == 0, "cannot clone lifetime source");
 	error = ns_native_unmount(b, "/sub", cr);
 	if (error == 0)
@@ -570,7 +571,7 @@ ns_lifetime(ktest_ctx_hdl_t *ctx)
 	held = NULL;
 	NS_CHECK(ns_wait_idle(), "mount views leaked after closing last vnode");
 	/* Exercise retirement with no grafts and a held detached-root vnode. */
-	error = lx_mntns_view_create((char *)input, CRED(), NULL, &a);
+	error = lx_mntns_view_create((char *)input, CRED(), CRED(), NULL, &a);
 	NS_CHECK(error == 0, "cannot create root-only lifetime view");
 	error = lx_mntns_view_lookup(a, "/", CRED(), &held);
 	NS_CHECK(error == 0, "cannot hold detached root");
@@ -630,15 +631,16 @@ ns_quota(ktest_ctx_hdl_t *ctx)
 } while (0)
 	NS_CHECK(!lx_mntns_busy(), "unrelated mount views are active");
 	budget = lx_mntns_budget_create(1);
-	error = lx_mntns_view_create((char *)input, CRED(), budget, &a);
+	error = lx_mntns_view_create((char *)input, CRED(), CRED(), budget, &a);
 	NS_CHECK(error == 0, "cannot create charged view");
 	lx_mntns_budget_get(budget, &maximum, &used);
 	NS_CHECK(maximum == 1 && used == 1, "new view was not charged");
-	error = lx_mntns_view_create((char *)input, CRED(), budget, &c);
+	error = lx_mntns_view_create((char *)input, CRED(), CRED(), budget, &c);
 	NS_CHECK(error == ENOSPC && c == NULL, "create bypassed quota");
-	error = lx_mntns_view_snapshot((char *)input, CRED(), budget, &c);
+	error = lx_mntns_view_snapshot((char *)input, CRED(), CRED(),
+	    budget, &c);
 	NS_CHECK(error == ENOSPC && c == NULL, "snapshot bypassed quota");
-	error = lx_mntns_view_clone(a, CRED(), &c);
+	error = lx_mntns_view_clone(a, CRED(), CRED(), &c);
 	NS_CHECK(error == ENOSPC && c == NULL, "clone bypassed source quota");
 	lx_mntns_view_hold(a);
 	lx_mntns_view_rele(a);
@@ -646,12 +648,14 @@ ns_quota(ktest_ctx_hdl_t *ctx)
 	NS_CHECK(used == 1, "sharing a view changed its charge");
 	lx_mntns_budget_set(budget, 3);
 	reduced = lx_userns_native_cred(CRED());
-	error = lx_mntns_view_create((char *)input, reduced, budget, &c);
+	error = lx_mntns_view_create((char *)input, reduced, reduced,
+	    budget, &c);
 	NS_CHECK(error == EPERM && c == NULL, "native mount denial changed");
-	error = lx_mntns_view_snapshot((char *)input, reduced, budget, &c);
+	error = lx_mntns_view_snapshot((char *)input, reduced, reduced,
+	    budget, &c);
 	NS_CHECK(error == EPERM && c == NULL,
 	    "snapshot gained native authority");
-	error = lx_mntns_view_clone(a, reduced, &c);
+	error = lx_mntns_view_clone(a, reduced, reduced, &c);
 	NS_CHECK(error == EPERM && c == NULL, "clone gained native authority");
 	lx_mntns_budget_get(budget, &maximum, &used);
 	NS_CHECK(used == 1, "failed construction leaked reservations");
@@ -662,7 +666,7 @@ ns_quota(ktest_ctx_hdl_t *ctx)
 	error = lx_mntns_view_lookup(a, "/sub/quota-retained", CRED(), &held);
 	NS_CHECK(error == 0, "cannot hold retained quota file");
 	lx_mntns_budget_set(budget, 2);
-	error = lx_mntns_view_clone(a, CRED(), &b);
+	error = lx_mntns_view_clone(a, CRED(), CRED(), &b);
 	NS_CHECK(error == 0, "cannot create charged clone");
 	lx_mntns_view_rele(a);
 	a = NULL;
@@ -670,7 +674,7 @@ ns_quota(ktest_ctx_hdl_t *ctx)
 	lx_mntns_budget_get(budget, &maximum, &used);
 	NS_CHECK(used == 2, "retired pinned source returned quota early");
 	lx_mntns_budget_set(budget, 1);
-	error = lx_mntns_view_clone(b, CRED(), &c);
+	error = lx_mntns_view_clone(b, CRED(), CRED(), &c);
 	NS_CHECK(error == ENOSPC && c == NULL,
 	    "lowered quota admitted a clone");
 	error = lx_mntns_view_destroy(b, CRED());
@@ -681,7 +685,7 @@ ns_quota(ktest_ctx_hdl_t *ctx)
 	NS_CHECK(maximum == 1 && used == 1,
 	    "destroy did not return one charge");
 	lx_mntns_budget_set(budget, 0);
-	error = lx_mntns_view_create((char *)input, CRED(), budget, &c);
+	error = lx_mntns_view_create((char *)input, CRED(), CRED(), budget, &c);
 	NS_CHECK(error == ENOSPC && c == NULL, "zero quota admitted a view");
 	VN_RELE(held);
 	held = NULL;
@@ -689,7 +693,8 @@ ns_quota(ktest_ctx_hdl_t *ctx)
 	lx_mntns_budget_get(budget, &maximum, &used);
 	NS_CHECK(maximum == 0 && used == 0, "retirement leaked a charge");
 	lx_mntns_budget_set(budget, 1);
-	error = lx_mntns_view_snapshot((char *)input, CRED(), budget, &a);
+	error = lx_mntns_view_snapshot((char *)input, CRED(), CRED(),
+	    budget, &a);
 	NS_CHECK(error == 0, "returned quota cannot be reused");
 	error = lx_mntns_view_lookup(a, "/", CRED(), &held);
 	NS_CHECK(error == 0, "cannot retain charged snapshot root");
@@ -727,6 +732,122 @@ out:
 }
 
 static void
+ns_owner(ktest_ctx_hdl_t *ctx)
+{
+	uchar_t *input;
+	size_t size;
+	lx_userns_t *root = lx_userns_root_create(), *a = NULL, *b = NULL;
+	lx_userns_t *sibling = NULL;
+	lx_userns_cred_t actor = { 0 }, child, admin;
+	cred_t *base = crdup(CRED()), *parent = NULL, *full = NULL;
+	cred_t *weak = NULL, *nested = NULL, *peer = NULL, *saved = NULL;
+	lx_mntns_view_t *initial = NULL, *owned = NULL, *copy = NULL;
+	boolean_t passed = B_FALSE;
+	int error = 0;
+
+	ktest_get_input(ctx, &input, &size);
+	if (size < 2 || size > MAXPATHLEN || input[size - 1] != 0 ||
+	    strlen((char *)input) != size - 1 ||
+	    strncmp((char *)input, "/zones/lx-ns-kernel/", 20) != 0) {
+		KT_ERROR(ctx, "invalid private namespace fixture path");
+		goto out;
+	}
+#define	NS_CHECK(expr, why) do { \
+	if (!(expr)) { \
+		KT_FAIL(ctx, "%s, error=%d", why, error); \
+		goto out; \
+	} \
+} while (0)
+	VERIFY0(crsetresuid(base, 1000, 1000, 1000));
+	parent = lx_userns_native_cred(base);
+	actor.luc_ns = root;
+	actor.luc_uid = actor.luc_gid = 1000;
+	error = lx_userns_child_create(&actor, &a);
+	NS_CHECK(error == 0, "cannot create owner user namespace");
+	error = lx_userns_child_create(&actor, &sibling);
+	NS_CHECK(error == 0, "cannot create sibling user namespace");
+	NS_CHECK(lx_userns_map_actor(CRED(), root, &admin) == 0 &&
+	    lx_userns_map_write(a, 0, &admin, &admin, "0 1000 2", 8, 0) == 0 &&
+	    lx_userns_map_write(a, 1, &admin, &admin, "0 1000 1", 8, 0) == 0,
+	    "cannot map mount-owner namespace IDs");
+	actor.luc_ns = a;
+	lx_caps_new_namespace(&actor.luc_caps);
+	full = lx_userns_native_for(base, &actor);
+	actor.luc_caps.lc_effective &= ~LX_CAP_BIT(LX_CAP_SYS_ADMIN);
+	weak = lx_userns_native_for(base, &actor);
+	child = actor;
+	child.luc_uid = 1001;
+	error = lx_userns_child_create(&child, &b);
+	NS_CHECK(error == 0, "cannot create descendant user namespace");
+	child.luc_ns = b;
+	lx_caps_new_namespace(&child.luc_caps);
+	nested = lx_userns_native_for(base, &child);
+	child.luc_ns = sibling;
+	peer = lx_userns_native_for(base, &child);
+	error = lx_mntns_view_create((char *)input, CRED(), parent, NULL,
+	    &initial);
+	NS_CHECK(error == 0, "cannot create initial-scope view");
+	error = lx_mntns_view_snapshot((char *)input, CRED(), full, NULL,
+	    &owned);
+	NS_CHECK(error == 0, "cannot create owned snapshot");
+	error = lx_mntns_view_clone(owned, CRED(), nested, &copy);
+	NS_CHECK(error == 0, "cannot clone into new owner namespace");
+	NS_CHECK(lx_mntns_view_capable(owned, full) &&
+	    !lx_mntns_view_capable(owned, weak),
+	    "owner authority ignored current effective capability");
+	NS_CHECK(!lx_mntns_view_capable(owned, nested) &&
+	    !lx_mntns_view_capable(owned, peer),
+	    "descendant or sibling acquired ancestor mount authority");
+	NS_CHECK(lx_mntns_view_capable(copy, nested) &&
+	    lx_mntns_view_capable(copy, full) &&
+	    !lx_mntns_view_capable(copy, weak) &&
+	    !lx_mntns_view_capable(copy, peer),
+	    "clone did not use its explicit owner user namespace");
+	NS_CHECK(lx_mntns_view_capable(owned, parent) &&
+	    !lx_mntns_view_capable(initial, parent) &&
+	    !lx_mntns_view_capable(initial, full) &&
+	    lx_mntns_view_capable(initial, CRED()),
+	    "scoped authority escaped or lost parent owner authority");
+	saved = crdup(full);
+	crfree(full);
+	full = NULL;
+	NS_CHECK(lx_mntns_view_capable(owned, saved),
+	    "view did not retain its immutable owner credential");
+	passed = B_TRUE;
+out:
+	if (copy != NULL)
+		lx_mntns_view_rele(copy);
+	if (owned != NULL)
+		lx_mntns_view_rele(owned);
+	if (initial != NULL)
+		lx_mntns_view_rele(initial);
+	if (saved != NULL)
+		crfree(saved);
+	if (peer != NULL)
+		crfree(peer);
+	if (nested != NULL)
+		crfree(nested);
+	if (weak != NULL)
+		crfree(weak);
+	if (full != NULL)
+		crfree(full);
+	if (parent != NULL)
+		crfree(parent);
+	crfree(base);
+	lx_userns_rele(b);
+	lx_userns_rele(sibling);
+	lx_userns_rele(a);
+	lx_userns_rele(root);
+	if (!ns_wait_idle()) {
+		KT_ERROR(ctx, "owner cleanup left active mount views");
+		passed = B_FALSE;
+	}
+	if (passed)
+		KT_PASS(ctx);
+#undef NS_CHECK
+}
+
+static void
 ns_zone_quota(ktest_ctx_hdl_t *ctx)
 {
 	zone_t *zone = zone_find_by_name("lx-probe");
@@ -752,14 +873,14 @@ ns_zone_quota(ktest_ctx_hdl_t *ctx)
 	lx_mntns_budget_get(budget, &maximum, &used);
 	NS_CHECK(used == 0 && (maximum == 0 || maximum == 2),
 	    "unexpected native mount quota fixture configuration");
-	error = lx_mntns_view_create("/zones/lx-ns-kernel/src", CRED(),
+	error = lx_mntns_view_create("/zones/lx-ns-kernel/src", CRED(), CRED(),
 	    budget, &a);
 	if (maximum == 0) {
 		NS_CHECK(error == ENOSPC && a == NULL,
 		    "zero zone mount quota admitted a view");
 	} else {
 		NS_CHECK(error == 0, "cannot create zone-charged view");
-		error = lx_mntns_view_clone(a, CRED(), &b);
+		error = lx_mntns_view_clone(a, CRED(), CRED(), &b);
 		NS_CHECK(error == 0, "cannot clone zone-charged view");
 		/* Native controller observes used=2 and lowers the limit. */
 		for (i = 0; i < 100; i++) {
@@ -770,7 +891,7 @@ ns_zone_quota(ktest_ctx_hdl_t *ctx)
 		}
 		NS_CHECK(maximum == 1 && used == 2,
 		    "native controller did not lower the live quota");
-		error = lx_mntns_view_clone(b, CRED(), &c);
+		error = lx_mntns_view_clone(b, CRED(), CRED(), &c);
 		NS_CHECK(error == ENOSPC && c == NULL,
 		    "lowered live zone quota admitted a view");
 	}
@@ -825,7 +946,8 @@ ns_process_enter(ktest_ctx_hdl_t *ctx, boolean_t reject)
 	struct lx_seccomp_filter *filter = NULL;
 	vnode_t *root = NULL, *cwd = NULL, *vp = NULL;
 	lx_mntns_view_t *view = NULL, *copy = NULL, *foreign = NULL;
-	lx_mntns_state_t state = { 0 }, wrong = { 0 };
+	lx_mntns_view_t *foreign_owner = NULL;
+	lx_mntns_state_t state = { 0 }, wrong = { 0 }, wrong_owner = { 0 };
 	uint32_t maximum, used;
 	vattr_t attr;
 	char *path = kmem_alloc(MAXPATHLEN, KM_SLEEP);
@@ -867,7 +989,7 @@ ns_process_enter(ktest_ctx_hdl_t *ctx, boolean_t reject)
 	lx_mntns_budget_get(ztolxzd(zone)->lxzd_mntns_budget,
 	    &maximum, &used);
 	MP_CHECK(maximum >= 2 && used == 0, "fixture quota is not idle");
-	error = lx_mntns_view_snapshot(zone->zone_rootpath, CRED(),
+	error = lx_mntns_view_snapshot(zone->zone_rootpath, CRED(), base,
 	    ztolxzd(zone)->lxzd_mntns_budget, &view);
 	MP_CHECK(error == 0, "cannot snapshot process root");
 	error = lx_mntns_view_tmpfs(view, "/test/mnt-proc/covered", CRED());
@@ -892,8 +1014,12 @@ ns_process_enter(ktest_ctx_hdl_t *ctx, boolean_t reject)
 	MP_CHECK(error == 0, "cannot create process read-only bind");
 	VN_RELE(vp);
 	vp = NULL;
-	error = lx_mntns_view_clone(view, CRED(), &copy);
+	error = lx_mntns_view_clone(view, CRED(), base, &copy);
 	MP_CHECK(error == 0, "cannot clone real process mount topology");
+	MP_CHECK(lx_mntns_view_capable(copy, base) ==
+	    lx_cap_initial(base, LX_CAP_SYS_ADMIN) &&
+	    !lx_mntns_view_capable(copy, CRED()),
+	    "mount authority used native cleanup credential or another zone");
 	lx_mntns_budget_get(ztolxzd(zone)->lxzd_mntns_budget,
 	    &maximum, &used);
 	MP_CHECK(used == 2, "process snapshot and clone lost their charges");
@@ -909,12 +1035,18 @@ ns_process_enter(ktest_ctx_hdl_t *ctx, boolean_t reject)
 	    &state);
 	MP_CHECK(error == 0, "cannot prepare process root/cwd references");
 	if (!reject) {
-		error = lx_mntns_view_create(zone->zone_rootpath, CRED(), NULL,
-		    &foreign);
+		error = lx_mntns_view_create(zone->zone_rootpath, CRED(), base,
+		    NULL, &foreign);
 		MP_CHECK(error == 0, "cannot create foreign-account view");
 		error = lx_mntns_state_prepare(foreign, "/test/mnt-proc/cwd",
 		    base, &wrong);
 		MP_CHECK(error == 0, "cannot prepare foreign-account state");
+		error = lx_mntns_view_create(zone->zone_rootpath, CRED(),
+		    CRED(), ztolxzd(zone)->lxzd_mntns_budget, &foreign_owner);
+		MP_CHECK(error == 0, "cannot create foreign-owner view");
+		error = lx_mntns_state_prepare(foreign_owner,
+		    "/test/mnt-proc/cwd", base, &wrong_owner);
+		MP_CHECK(error == 0, "cannot prepare foreign-owner state");
 	}
 	MP_CHECK(lx_lpid_lock(pid, zone, 0, &p, NULL) == 0,
 	    "process fixture disappeared during preparation");
@@ -927,6 +1059,10 @@ ns_process_enter(ktest_ctx_hdl_t *ctx, boolean_t reject)
 		MP_CHECK(error == EXDEV && ptolxproc(p)->l_mntns == NULL &&
 		    p->p_user.u_rdir == root && p->p_user.u_cdir == cwd,
 		    "foreign mount account changed process state");
+		error = lx_mntns_proc_swap(p, root, cwd, &wrong_owner);
+		MP_CHECK(error == EXDEV && ptolxproc(p)->l_mntns == NULL &&
+		    p->p_user.u_rdir == root && p->p_user.u_cdir == cwd,
+		    "foreign mount owner changed process state");
 		error = lx_mntns_proc_swap(p, root, NULL, &state);
 		MP_CHECK(error == EAGAIN && ptolxproc(p)->l_mntns == NULL &&
 		    p->p_user.u_rdir == root && p->p_user.u_cdir == cwd,
@@ -949,6 +1085,9 @@ out:
 		mutex_exit(&p->p_lock);
 	lx_mntns_state_fini(&state);
 	lx_mntns_state_fini(&wrong);
+	lx_mntns_state_fini(&wrong_owner);
+	if (foreign_owner != NULL)
+		lx_mntns_view_rele(foreign_owner);
 	if (foreign != NULL)
 		lx_mntns_view_rele(foreign);
 	if (vp != NULL)
@@ -1128,6 +1267,8 @@ _init(void)
 	    (error = ktest_add_test(ks, "lifetime", ns_lifetime,
 	    KTEST_FLAG_INPUT)) != 0 ||
 	    (error = ktest_add_test(ks, "quota", ns_quota,
+	    KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "owner", ns_owner,
 	    KTEST_FLAG_INPUT)) != 0 ||
 	    (error = ktest_add_test(ks, "zone_quota", ns_zone_quota,
 	    0)) != 0 ||

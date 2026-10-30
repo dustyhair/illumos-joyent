@@ -24,6 +24,8 @@
 #include <sys/zone.h>
 #include <sys/lx_brand.h>
 #include <sys/lx_misc.h>
+#include <sys/lx_cap.h>
+#include <sys/lx_userns.h>
 #include <sys/lx_mntns.h>
 #include <lx_syscall.h>
 
@@ -48,6 +50,7 @@ struct lx_mntns_view {
 	kmutex_t lv_lock;
 	volatile uint_t lv_refs;
 	cred_t *lv_cred;
+	cred_t *lv_owner;
 	lx_mntns_budget_t *lv_budget;
 	taskq_ent_t lv_reap_ent;
 	timeout_id_t lv_timeout;
@@ -189,6 +192,30 @@ lx_mntns_reap(void *arg)
 	mutex_exit(&view->lv_lock);
 }
 
+/* The caller owns the returned reference, independent of process lifetime. */
+lx_mntns_view_t *
+lx_mntns_current(void)
+{
+	lx_proc_data_t *pd;
+	lx_mntns_view_t *view = NULL;
+
+	mutex_enter(&curproc->p_lock);
+	if ((pd = ptolxproc(curproc)) != NULL && pd->l_mntns != NULL) {
+		view = pd->l_mntns;
+		lx_mntns_view_hold(view);
+	}
+	mutex_exit(&curproc->p_lock);
+	return (view);
+}
+
+/* Ownership is immutable; holding the view also holds its owner credential. */
+boolean_t
+lx_mntns_view_capable(lx_mntns_view_t *view, const cred_t *actor)
+{
+	return (lx_userns_cred_capable(actor, view->lv_owner,
+	    LX_CAP_SYS_ADMIN));
+}
+
 void
 lx_mntns_view_hold(lx_mntns_view_t *view)
 {
@@ -273,8 +300,8 @@ lx_mntns_lookup_at(vnode_t *root, const char *path, cred_t *cr,
 
 /* Consumes one reserved charge on both success and failure. */
 static int
-lx_mntns_create(vnode_t *source, cred_t *cr, lx_mntns_budget_t *budget,
-    lx_mntns_view_t **out)
+lx_mntns_create(vnode_t *source, cred_t *cr, cred_t *owner,
+    lx_mntns_budget_t *budget, lx_mntns_view_t **out)
 {
 	lx_mntns_view_t *view;
 	int error;
@@ -289,6 +316,7 @@ lx_mntns_create(vnode_t *source, cred_t *cr, lx_mntns_budget_t *budget,
 	view->lv_refs = 1;
 	view->lv_cred = cr;
 	view->lv_budget = budget;
+	crhold(view->lv_owner = owner);
 	crhold(cr);
 	atomic_inc_uint(&lx_mntns_nviews);
 	mutex_enter(&lx_mntns_lock);
@@ -313,6 +341,7 @@ lx_mntns_create(vnode_t *source, cred_t *cr, lx_mntns_budget_t *budget,
 	return (0);
 fail:
 	crfree(view->lv_cred);
+	crfree(view->lv_owner);
 	mutex_destroy(&view->lv_lock);
 	lx_mntns_uncharge(view->lv_budget);
 	kmem_free(view, sizeof (*view));
@@ -321,14 +350,14 @@ fail:
 }
 
 int
-lx_mntns_view_create(const char *source, cred_t *cr,
+lx_mntns_view_create(const char *source, cred_t *cr, cred_t *owner,
     lx_mntns_budget_t *budget, lx_mntns_view_t **out)
 {
 	vnode_t *vp;
 	int error;
 
 	*out = NULL;
-	if (source == NULL || source[0] != '/')
+	if (source == NULL || source[0] != '/' || owner == NULL)
 		return (EINVAL);
 	if ((error = lx_mntns_charge(budget)) != 0)
 		return (error);
@@ -337,7 +366,7 @@ lx_mntns_view_create(const char *source, cred_t *cr,
 		lx_mntns_uncharge(budget);
 		return (error);
 	}
-	error = lx_mntns_create(vp, cr, budget, out);
+	error = lx_mntns_create(vp, cr, owner, budget, out);
 	VN_RELE(vp);
 	return (error);
 }
@@ -414,8 +443,10 @@ lx_mntns_proc_swap(proc_t *p, vnode_t *expected_root, vnode_t *expected_cwd,
 	ASSERT(MUTEX_HELD(&p->p_lock));
 	if (p->p_brand != &lx_brand || pd == NULL || !lx_kernel_restricted(p))
 		return (EPERM);
-	if (state->lms_view != NULL && state->lms_view->lv_budget !=
-	    ztolxzd(p->p_zone)->lxzd_mntns_budget)
+	if (state->lms_view != NULL && (ztolxzd(p->p_zone) == NULL ||
+	    state->lms_view->lv_budget !=
+	    ztolxzd(p->p_zone)->lxzd_mntns_budget ||
+	    crgetzone(state->lms_view->lv_owner) != p->p_zone))
 		return (EXDEV);
 	if (state->lms_view == NULL || state->lms_root == NULL ||
 	    state->lms_cwd == NULL || p->p_lwpcnt != 1 || task == NULL ||
@@ -521,7 +552,7 @@ typedef struct lx_mntns_snapshot {
 } lx_mntns_snapshot_t;
 
 int
-lx_mntns_view_snapshot(const char *source, cred_t *cr,
+lx_mntns_view_snapshot(const char *source, cred_t *cr, cred_t *owner,
     lx_mntns_budget_t *budget, lx_mntns_view_t **out)
 {
 	lx_mntns_snapshot_t *list = NULL, *entry, **link;
@@ -534,7 +565,7 @@ lx_mntns_view_snapshot(const char *source, cred_t *cr,
 	int error;
 
 	*out = NULL;
-	if (source == NULL || source[0] != '/')
+	if (source == NULL || source[0] != '/' || owner == NULL)
 		return (EINVAL);
 	if ((error = lx_mntns_charge(budget)) != 0)
 		return (error);
@@ -613,7 +644,7 @@ lx_mntns_view_snapshot(const char *source, cred_t *cr,
 		error = EAGAIN;
 		goto out;
 	}
-	error = lx_mntns_create(root, cr, budget, &view);
+	error = lx_mntns_create(root, cr, owner, budget, &view);
 	budget = NULL;
 	if (error != 0)
 		goto out;
@@ -666,7 +697,7 @@ typedef struct lx_mntns_clone_mount {
  * Released sources remain queued for cleanup while copies pin their vnodes.
  */
 int
-lx_mntns_view_clone(lx_mntns_view_t *source, cred_t *cr,
+lx_mntns_view_clone(lx_mntns_view_t *source, cred_t *cr, cred_t *owner,
     lx_mntns_view_t **out)
 {
 	lx_mntns_clone_mount_t *list = NULL, *entry;
@@ -677,6 +708,8 @@ lx_mntns_view_clone(lx_mntns_view_t *source, cred_t *cr,
 	int error = 0;
 
 	*out = NULL;
+	if (owner == NULL)
+		return (EINVAL);
 	if ((error = lx_mntns_charge(budget)) != 0)
 		return (error);
 	mutex_enter(&source->lv_lock);
@@ -695,7 +728,7 @@ lx_mntns_view_clone(lx_mntns_view_t *source, cred_t *cr,
 		if (error != 0)
 			goto out;
 	}
-	error = lx_mntns_create(source->lv_root, cr, budget, &view);
+	error = lx_mntns_create(source->lv_root, cr, owner, budget, &view);
 	budget = NULL;
 	if (error != 0)
 		goto out;
@@ -808,6 +841,7 @@ lx_mntns_destroy(lx_mntns_view_t *view, cred_t *cr)
 	VFS_RELE(view->lv_vfs);
 	mutex_exit(&view->lv_lock);
 	crfree(view->lv_cred);
+	crfree(view->lv_owner);
 	mutex_destroy(&view->lv_lock);
 	lx_mntns_uncharge(view->lv_budget);
 	kmem_free(view, sizeof (*view));
