@@ -41,8 +41,10 @@ else
 fi
 mkdir -p /zones/lx-probe-zfs/root/test/chown-tmpfs
 if ! zonecfg -z lx-probe info fs dir=/test/chown-tmpfs | grep -q 'dir: /test/chown-tmpfs'; then
-    zonecfg -z lx-probe 'add fs; set dir=/test/chown-tmpfs; set special=swap; set type=tmpfs; add options ["size=16m","mode=1777"]; end;'
+    zonecfg -z lx-probe 'add fs; set dir=/test/chown-tmpfs; set special=/dev/null; set type=tmpfs; add options ["size=16m","mode=1777"]; end;'
 fi
+# This zoneadm verifies special paths; tmpfs ignores it and reports swap.
+zonecfg -z lx-probe 'select fs dir=/test/chown-tmpfs; set special=/dev/null; end;'
 zoneadm -z lx-probe ready
 /lab/userns-budget-native --ready lx-probe
 zoneadm -z lx-probe boot
