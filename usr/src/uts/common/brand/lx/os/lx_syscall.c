@@ -415,9 +415,12 @@ lx_syscall_enter(int entry)
 	}
 
 	if ((ptolxproc(curproc)->l_flags & LX_PROC_USERNS) != 0) {
+		if (lx_userns_id_syscall(syscall_num, args, &ret)) {
+			lx_syscall_return(lwp, syscall_num, ret);
+			return (0);
+		}
 		switch (syscall_num) {
-		case 105: case 106: case 113: case 114: case 116:
-		case 117: case 119: case 122: case 123:
+		case 122: case 123:
 			(void) set_errno(EOPNOTSUPP);
 			lx_syscall_return(lwp, syscall_num, -1);
 			return (0);

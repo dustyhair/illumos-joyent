@@ -386,7 +386,7 @@ static int file_caps_unsupported(void)
 static int interim_ids(void)
 {
     errno = 0;
-    CHECK(syscall(SYS_setresuid, 0, 0, 0) == -1 && errno == EOPNOTSUPP);
+    CHECK(syscall(SYS_setfsuid, 0) == -1 && errno == EOPNOTSUPP);
     return 0;
 }
 static void run(const char *name, int (*fn)(void), int sig)
@@ -431,7 +431,7 @@ int main(int argc, char **argv)
     run("NNP ignores setid and preserves ambient caps", exec_setid_nnp, 0);
     if (lx) {
         run("native entry denied without a seccomp filter", native_entry, SIGSYS);
-        run("unfinished ID transitions reject", interim_ids, 0);
+        run("separate filesystem-ID changes remain unsupported", interim_ids, 0);
         run("privileged and native exec reject atomically", privileged_exec, 0);
         run("native entry denied after scoped exec", exec_native_guard, SIGSYS);
         run("Codex exec with scoped zero capabilities and a filter", exec_codex, 0);

@@ -349,6 +349,8 @@ lx_userns_cred_perm(const cred_t *source, proc_t *process,
 	if (to != NULL && to->un_cred.bc_brand != &lx_brand)
 		return (EACCES);
 	VERIFY(from != NULL || to != NULL);
+	if (process == curproc)
+		return (0);
 	samezone = crgetzone(source) == crgetzone(target);
 	if (!samezone && from != NULL)
 		return (EACCES);
@@ -474,42 +476,103 @@ lx_userns_with_caps(const cred_t *source, const lx_caps_t *caps)
 	return (lx_userns_native_for((cred_t *)source, &actor));
 }
 
+/* p_lock protects the list; do not inspect LWP brand data during exit. */
+static kthread_t *
+lx_userns_leader(proc_t *p)
+{
+	kthread_t *t = p->p_tlist, *first = NULL;
+
+	ASSERT(MUTEX_HELD(&p->p_lock));
+	if (t == NULL)
+		return (NULL);
+	do {
+		if ((t->t_proc_flag & TP_KTHREAD) == 0) {
+			if (t->t_tid == 1)
+				return (t);
+			if (first == NULL)
+				first = t;
+		}
+	} while ((t = t->t_forw) != p->p_tlist);
+	return (first);
+}
+
 /*
- * Scoped t_cred changes are serialized by p_lock. Native entry cannot refresh
- * them from p_cred. The latter is a conservative union for process-wide
- * access checks, not an authority source for individual Linux tasks.
+ * Each task owns its immutable credential. The native process identity follows
+ * a live representative, while Linux capabilities conservatively cover every
+ * task. Reserve a changed real UID's process count before publication, exactly
+ * as native setreuid does. Allocation and credential release occur unlocked.
  */
 void
 lx_userns_publish(kthread_t *task, cred_t *replacement)
 {
 	proc_t *p = task->t_procp;
-	cred_t *base, *summary, *old_process, *old_task;
+	cred_t *base, *identity, *summary, *old_process, *old_task;
+	kthread_t *leader, *t;
 	lx_userns_native_t *data;
 	lx_caps_t zero = { 0 }, part;
-	kthread_t *t;
+	uid_t oldruid, newruid;
+	boolean_t counted;
 
 	VERIFY(MUTEX_NOT_HELD(&p->p_lock));
 	VERIFY((ptolxproc(p)->l_flags & LX_PROC_USERNS) != 0);
+retry:
+	mutex_enter(&p->p_lock);
+	leader = lx_userns_leader(p);
 	mutex_enter(&p->p_crlock);
 	crhold(base = p->p_cred);
+	crhold(identity = leader == task ? replacement :
+	    leader != NULL ? leader->t_cred : base);
 	mutex_exit(&p->p_crlock);
+	mutex_exit(&p->p_lock);
 	summary = lx_userns_with_caps(base, &zero);
-	crfree(base);
+	VERIFY0(crsetresuid(summary, crgetruid(identity),
+	    crgetuid(identity), crgetsuid(identity)));
+	VERIFY0(crsetresgid(summary, crgetrgid(identity),
+	    crgetgid(identity), crgetsgid(identity)));
+	if (summary->cr_grps != identity->cr_grps)
+		VERIFY0(crsetgroups(summary, crgetngroups(identity),
+		    (gid_t *)crgetgroups(identity)));
+	oldruid = crgetruid(base);
+	newruid = crgetruid(summary);
+	counted = oldruid != newruid;
+	if (counted) {
+		mutex_enter(&pidlock);
+		upcount_inc(newruid, crgetzoneid(base));
+		mutex_exit(&pidlock);
+	}
 	data = (void *)crgetbrand(summary);
-
 	mutex_enter(&p->p_lock);
 	mutex_enter(&p->p_crlock);
+	if (p->p_cred != base || lx_userns_leader(p) != leader ||
+	    (leader != NULL && leader != task && leader->t_cred != identity)) {
+		mutex_exit(&p->p_crlock);
+		mutex_exit(&p->p_lock);
+		if (counted) {
+			mutex_enter(&pidlock);
+			upcount_dec(newruid, crgetzoneid(base));
+			mutex_exit(&pidlock);
+		}
+		crfree(summary);
+		crfree(identity);
+		crfree(base);
+		goto retry;
+	}
 	old_task = task->t_cred;
+	if (crgetuid(old_task) != crgetuid(replacement) ||
+	    crgetgid(old_task) != crgetgid(replacement)) {
+		p->p_flag |= SNOCD;
+		ptolxproc(p)->l_flags |= LX_PROC_NO_DUMP;
+	}
 	crhold(replacement);
 	task->t_cred = replacement;
 	t = p->p_tlist;
 	if (t != NULL) {
 		do {
-			const lx_userns_native_t *member =
-			    (void *)crgetbrand(t->t_cred);
+			const lx_userns_native_t *member;
 
 			if ((t->t_proc_flag & TP_KTHREAD) != 0)
 				continue;
+			member = (void *)crgetbrand(t->t_cred);
 			VERIFY(member != NULL &&
 			    member->un_cred.bc_brand == &lx_brand &&
 			    member->un_namespace == data->un_namespace);
@@ -525,8 +588,15 @@ lx_userns_publish(kthread_t *task, cred_t *replacement)
 	p->p_cred = summary;
 	mutex_exit(&p->p_crlock);
 	mutex_exit(&p->p_lock);
+	if (counted) {
+		mutex_enter(&pidlock);
+		upcount_dec(oldruid, crgetzoneid(base));
+		mutex_exit(&pidlock);
+	}
 	crfree(old_process);
 	crfree(old_task);
+	crfree(identity);
+	crfree(base);
 }
 
 void
@@ -583,6 +653,28 @@ lx_userns_prctl(int option, uintptr_t a2, uintptr_t a3, uintptr_t a4,
 		return (B_FALSE);
 	VERIFY0(lx_userns_caps_get(CRED(), &caps));
 	switch (option) {
+	case 3: /* PR_GET_DUMPABLE */
+		mutex_enter(&curproc->p_lock);
+		*result = (curproc->p_flag & SNOCD) == 0 &&
+		    (ptolxproc(curproc)->l_flags & LX_PROC_NO_DUMP) == 0;
+		mutex_exit(&curproc->p_lock);
+		return (B_TRUE);
+	case 4: /* PR_SET_DUMPABLE */
+		if (a2 > 1) {
+			*result = set_errno(EINVAL);
+			return (B_TRUE);
+		}
+		mutex_enter(&curproc->p_lock);
+		if (a2 == 0) {
+			curproc->p_flag |= SNOCD;
+			ptolxproc(curproc)->l_flags |= LX_PROC_NO_DUMP;
+		} else {
+			curproc->p_flag &= ~SNOCD;
+			ptolxproc(curproc)->l_flags &= ~LX_PROC_NO_DUMP;
+		}
+		mutex_exit(&curproc->p_lock);
+		*result = 0;
+		return (B_TRUE);
 	case 7: /* PR_GET_KEEPCAPS */
 		*result = (caps.lc_securebits & LX_SEC_KEEP_CAPS) != 0;
 		return (B_TRUE);
@@ -660,4 +752,189 @@ lx_userns_cred_exec(const cred_t *source, cred_t *candidate, vnode_t *vp,
 	lx_userns_native_limit(candidate);
 	lx_userns_native_attach(candidate, &actor);
 	return (0);
+}
+
+/* Visible IDs are translated before native backing-ID validation. */
+uint32_t
+lx_userns_id_visible(const cred_t *cred, int gid, uint32_t backing)
+{
+	const lx_userns_native_t *data = (void *)crgetbrand(cred);
+	uint32_t id;
+
+	if (data == NULL)
+		return (backing);
+	VERIFY(data->un_cred.bc_brand == &lx_brand);
+	id = lx_userns_id(data->un_namespace, gid, backing, 0);
+	return (id == UINT32_MAX ? 65534 : id);
+}
+
+static uint_t
+lx_userns_root_ids(lx_userns_t *ns, const uint32_t ids[3])
+{
+	uint_t mask = 0, i;
+
+	for (i = 0; i < 3; i++) {
+		if (lx_userns_id(ns, 0, ids[i], 0) == 0)
+			mask |= 1U << i;
+	}
+	return (mask);
+}
+
+static int
+lx_userns_setids(int nr, uintptr_t *args)
+{
+	const lx_userns_native_t *data = (void *)crgetbrand(CRED());
+	uint32_t old[3], next[3], input[3] = { UINT32_MAX,
+	    UINT32_MAX, UINT32_MAX }, i;
+	boolean_t gid = nr == 106 || nr == 114 || nr == 119;
+	boolean_t one = nr == 105 || nr == 106;
+	boolean_t two = nr == 113 || nr == 114;
+	boolean_t capable;
+	cred_t *candidate;
+	lx_caps_t caps = data->un_caps;
+
+	old[0] = gid ? crgetrgid(CRED()) : crgetruid(CRED());
+	old[1] = gid ? crgetgid(CRED()) : crgetuid(CRED());
+	old[2] = gid ? crgetsgid(CRED()) : crgetsuid(CRED());
+	bcopy(old, next, sizeof (old));
+	for (i = 0; i < (one ? 1 : two ? 2 : 3); i++) {
+		uint32_t visible = (uint32_t)args[i];
+
+		if (!one && visible == UINT32_MAX)
+			continue;
+		input[i] = lx_userns_id(data->un_namespace, gid, visible, 1);
+		if (input[i] == UINT32_MAX)
+			return (EINVAL);
+	}
+	capable = (caps.lc_effective & LX_CAP_BIT(gid ? 6 : 7)) != 0;
+	if (one) {
+		if (capable) {
+			next[0] = next[1] = next[2] = input[0];
+		} else {
+			if (input[0] != old[0] && input[0] != old[2])
+				return (EPERM);
+			next[1] = input[0];
+		}
+	} else {
+		for (i = 0; i < (two ? 2 : 3); i++) {
+			if (input[i] == UINT32_MAX)
+				continue;
+			if (!capable && input[i] != old[0] &&
+			    input[i] != old[1] &&
+			    ((!two || i != 0) ? input[i] != old[2] : B_TRUE))
+				return (EPERM);
+			next[i] = input[i];
+		}
+		if (two && (input[0] != UINT32_MAX ||
+		    (input[1] != UINT32_MAX && input[1] != old[0])))
+			next[2] = next[1];
+	}
+	if (bcmp(next, old, sizeof (next)) == 0)
+		return (0);
+	if (!gid)
+		lx_caps_uid_change(&caps, lx_userns_root_ids(data->un_namespace,
+		    old), lx_userns_root_ids(data->un_namespace, next));
+	candidate = lx_userns_with_caps(CRED(), &caps);
+	if ((gid ? crsetresgid(candidate, next[0], next[1], next[2]) :
+	    crsetresuid(candidate, next[0], next[1], next[2])) != 0) {
+		crfree(candidate);
+		return (EINVAL);
+	}
+	lx_userns_publish(curthread, candidate);
+	crfree(candidate);
+	return (0);
+}
+
+static long
+lx_userns_groups(int nr, int count, uintptr_t address)
+{
+	const lx_userns_native_t *data = (void *)crgetbrand(CRED());
+	gid_t *groups;
+	cred_t *candidate;
+	int n = crgetngroups(CRED()), error = 0, i;
+
+	if (nr == 115) {
+		if (count < 0 || (count != 0 && count < n))
+			return (set_errno(EINVAL));
+		if (count == 0 || n == 0)
+			return (n);
+		groups = kmem_alloc(n * sizeof (*groups), KM_SLEEP);
+		for (i = 0; i < n; i++)
+			groups[i] = lx_userns_id_visible(CRED(), 1,
+			    crgetgroups(CRED())[i]);
+		if (copyout(groups, (void *)address, n * sizeof (*groups)) != 0)
+			error = EFAULT;
+		kmem_free(groups, n * sizeof (*groups));
+		return (error == 0 ? n : set_errno(error));
+	}
+	if ((data->un_caps.lc_effective & LX_CAP_BIT(6)) == 0 ||
+	    !lx_userns_may_setgroups(data->un_namespace))
+		return (set_errno(EPERM));
+	/* Use native group storage; do not silently truncate larger sets. */
+	if ((uint_t)count > ngroups_max)
+		return (set_errno(EINVAL));
+	groups = count == 0 ? NULL :
+	    kmem_alloc(count * sizeof (*groups), KM_SLEEP);
+	if (count != 0 && copyin((void *)address, groups,
+	    count * sizeof (*groups)) != 0) {
+		error = EFAULT;
+		goto out;
+	}
+	for (i = 0; i < count; i++) {
+		groups[i] = lx_userns_id(data->un_namespace, 1, groups[i], 1);
+		if (groups[i] == UINT32_MAX) {
+			error = EINVAL;
+			goto out;
+		}
+	}
+	candidate = lx_userns_with_caps(CRED(), &data->un_caps);
+	if (crsetgroups(candidate, count, groups) != 0)
+		error = EINVAL;
+	else
+		lx_userns_publish(curthread, candidate);
+	crfree(candidate);
+out:
+	if (groups != NULL)
+		kmem_free(groups, count * sizeof (*groups));
+	return (error == 0 ? 0 : set_errno(error));
+}
+
+boolean_t
+lx_userns_id_syscall(int nr, uintptr_t *args, long *result)
+{
+	uint32_t ids[3], i;
+	int error;
+
+	if (nr == 102 || nr == 107 || nr == 104 || nr == 108) {
+		uint32_t id = nr == 102 ? crgetruid(CRED()) :
+		    nr == 107 ? crgetuid(CRED()) :
+		    nr == 104 ? crgetrgid(CRED()) : crgetgid(CRED());
+
+		*result = lx_userns_id_visible(CRED(), nr == 104 || nr == 108,
+		    id);
+	} else if (nr == 118 || nr == 120) {
+		boolean_t gid = nr == 120;
+
+		ids[0] = gid ? crgetrgid(CRED()) : crgetruid(CRED());
+		ids[1] = gid ? crgetgid(CRED()) : crgetuid(CRED());
+		ids[2] = gid ? crgetsgid(CRED()) : crgetsuid(CRED());
+		for (i = 0; i < 3; i++) {
+			ids[i] = lx_userns_id_visible(CRED(), gid, ids[i]);
+			if (copyout(&ids[i], (void *)args[i],
+			    sizeof (ids[i])) != 0) {
+				*result = set_errno(EFAULT);
+				return (B_TRUE);
+			}
+		}
+		*result = 0;
+	} else if (nr == 115 || nr == 116) {
+		*result = lx_userns_groups(nr, (int)args[0], args[1]);
+	} else if (nr == 105 || nr == 106 || nr == 113 || nr == 114 ||
+	    nr == 117 || nr == 119) {
+		error = lx_userns_setids(nr, args);
+		*result = error == 0 ? 0 : set_errno(error);
+	} else {
+		return (B_FALSE);
+	}
+	return (B_TRUE);
 }

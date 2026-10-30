@@ -2977,15 +2977,21 @@ lxpr_read_status_common(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf,
 	    (lookup_id == 0) ? pid : lxpnp->lxpr_desc,
 	    ppid,
 	    0,
-	    crgetruid(cr), crgetuid(cr), crgetsuid(cr), crgetuid(cr),
-	    crgetrgid(cr), crgetgid(cr), crgetsgid(cr), crgetgid(cr),
+	    lx_userns_id_visible(cr, 0, crgetruid(cr)),
+	    lx_userns_id_visible(cr, 0, crgetuid(cr)),
+	    lx_userns_id_visible(cr, 0, crgetsuid(cr)),
+	    lx_userns_id_visible(cr, 0, crgetuid(cr)),
+	    lx_userns_id_visible(cr, 1, crgetrgid(cr)),
+	    lx_userns_id_visible(cr, 1, crgetgid(cr)),
+	    lx_userns_id_visible(cr, 1, crgetsgid(cr)),
+	    lx_userns_id_visible(cr, 1, crgetgid(cr)),
 	    fdlim);
 	ngroups = crgetngroups(cr);
 	groups  = crgetgroups(cr);
 	for (i = 0; i < ngroups; i++) {
 		lxpr_uiobuf_printf(uiobuf,
 		    "%u ",
-		    groups[i]);
+		    lx_userns_id_visible(cr, 1, groups[i]));
 	}
 	if (crgetbrand(cr) == NULL) {
 		lx_cap_native_get(cr, &caps);
