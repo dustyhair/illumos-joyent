@@ -85,6 +85,7 @@ lx_brand_cred_test_copies(ktest_ctx_hdl_t *ctx)
 			crfree(copy);
 		copy = NULL;
 	}
+	two_refs = B_FALSE;
 	bzero(&actor.luc_caps, sizeof (actor.luc_caps));
 	copy = lx_userns_native_for(CRED(), &actor);
 	BC_CHECK(!lx_userns_traceme(copy, original) &&
