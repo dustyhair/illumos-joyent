@@ -468,7 +468,8 @@ lx_userns_cred_perm(const cred_t *source, proc_t *process,
  * Decode the immutable file credential or current thread credential. The
  * caller holds both the native credential and the scope used for its root.
  * Initial-namespace authority uses the existing native mappings needed for
- * map files only. SETFCAP has no native mapping yet and remains absent.
+ * map files only. Mapping initial UID0 additionally requires native
+ * authority to retain a setuid-root file.
  */
 int
 lx_userns_map_actor(const cred_t *cred, lx_userns_t *scope,
@@ -496,6 +497,9 @@ lx_userns_map_actor(const cred_t *cred, lx_userns_t *scope,
 	}
 	actor->luc_ns = root;
 	lx_cap_native_get(cred, &actor->luc_caps);
+	if ((actor->luc_caps.lc_effective & LX_CAP_BIT(LX_CAP_SETFCAP)) != 0 &&
+	    secpolicy_vnode_setid_retain(cred, B_TRUE) != 0)
+		actor->luc_caps.lc_effective &= ~LX_CAP_BIT(LX_CAP_SETFCAP);
 	return (0);
 }
 

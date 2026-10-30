@@ -52,6 +52,7 @@ static const priv_t lx_cap_map_dac_read_search[] = {
 	-1
 };
 static const priv_t lx_cap_map_fowner[] = { PRIV_FILE_OWNER, -1 };
+/* Native file-execution metadata authority backs both capabilities. */
 static const priv_t lx_cap_map_fsetid[] = { PRIV_FILE_SETID, -1 };
 static const priv_t lx_cap_map_kill[] = { PRIV_PROC_OWNER, -1 };
 /*
@@ -137,7 +138,7 @@ static const priv_t *lx_cap_mapping[LX_CAP_LAST + 1] = {
 	NULL,				/* CAP_LEASE */
 	lx_cap_map_audit_write,		/* CAP_AUDIT_WRITE */
 	lx_cap_map_audit_control,	/* CAP_AUDIT_CONTROL */
-	NULL,				/* CAP_SETFCAP */
+	lx_cap_map_fsetid,		/* CAP_SETFCAP */
 	NULL,				/* CAP_MAC_OVERRIDE */
 	NULL,				/* CAP_MAC_ADMIN */
 	NULL,				/* CAP_SYSLOG */

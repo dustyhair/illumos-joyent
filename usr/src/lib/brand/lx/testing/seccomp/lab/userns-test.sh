@@ -6,7 +6,7 @@ bootparams | grep -q '^lx_lab=true$'
 test "$(zonename)" = global
 /lab/stream-cred-native
 /lab/namespace-test.sh
-for suite in maps capabilities native lifetime budget budget_race; do
+for suite in maps capabilities native map_authority lifetime budget budget_race; do
     /lab/ktest run "lx_namespace:user:$suite"
 done
 /lab/ktest run lx_namespace:user:cap_syscalls

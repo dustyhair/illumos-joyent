@@ -11,6 +11,7 @@
 #include <sys/taskq.h>
 #include <sys/disp.h>
 #include <sys/lx_userns.h>
+#include <sys/lx_cap.h>
 #include <sys/lx_mntns.h>
 #include <sys/brand.h>
 #include <sys/lx_brand.h>
@@ -270,6 +271,54 @@ out:
 	if (view != NULL && lx_mntns_view_destroy(view, source) != 0)
 		passed = B_FALSE;
 	crfree(reduced);
+	if (passed)
+		KT_PASS(ctx);
+}
+
+void
+lx_userns_test_map_authority(ktest_ctx_hdl_t *ctx)
+{
+	lx_userns_t *root = lx_userns_root_create(), *full = NULL, *weak = NULL;
+	cred_t *partial = lx_userns_native_cred(CRED());
+	lx_userns_cred_t admin, limited;
+	lx_caps_t caps;
+	uint_t i;
+	boolean_t passed = B_FALSE;
+
+	NS_CHECK(secpolicy_vnode_setid_retain(CRED(), B_TRUE) == 0 &&
+	    lx_userns_map_actor(CRED(), root, &admin) == 0 &&
+	    (admin.luc_caps.lc_effective & LX_CAP_BIT(LX_CAP_SETFCAP)) != 0,
+	    "native fixture lacks privileged-file map authority");
+	NS_CHECK(lx_userns_child_create(&admin, &full) == 0 &&
+	    lx_userns_map_write(full, 0, &admin, &admin, "0 0 1", 5, 0) == 0,
+	    "native privileged-file authority cannot map initial UID0");
+	NS_CHECK(lx_userns_id(full, 0, 0, 1) == 0,
+	    "initial UID0 map changed its backing identity");
+	for (i = 0; i < PRIV_NSET; i++) {
+		priv_addset(&CR_PRIVSETS(partial)[i], PRIV_FILE_SETID);
+		priv_addset(&CR_PRIVSETS(partial)[i], PRIV_PROC_SETID);
+	}
+	lx_cap_native_get(partial, &caps);
+	NS_CHECK((caps.lc_effective & LX_CAP_BIT(LX_CAP_SETFCAP)) != 0 &&
+	    secpolicy_vnode_setid_retain(partial, B_TRUE) == EPERM,
+	    "limited metadata privilege bypassed native setuid-root policy");
+	NS_CHECK(lx_userns_map_actor(partial, root, &limited) == 0 &&
+	    (limited.luc_caps.lc_effective & LX_CAP_BIT(LX_CAP_SETFCAP)) == 0,
+	    "initial map authority bypassed privileged-file policy");
+	NS_CHECK(lx_userns_child_create(&limited, &weak) == 0 &&
+	    lx_userns_map_write(weak, 0, &limited, &limited,
+	    "0 0 1", 5, 0) == EPERM,
+	    "limited native credential mapped initial UID0");
+	NS_CHECK(lx_userns_map_write(weak, 0, &limited, &limited,
+	    "0 1000 1", 8, 0) == 0 &&
+	    lx_userns_id(weak, 0, 0, 1) == 1000,
+	    "root-map denial blocked an authorized non-root mapping");
+	passed = B_TRUE;
+out:
+	crfree(partial);
+	lx_userns_rele(weak);
+	lx_userns_rele(full);
+	lx_userns_rele(root);
 	if (passed)
 		KT_PASS(ctx);
 }

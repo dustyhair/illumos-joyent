@@ -392,6 +392,11 @@ lx_cap_native_test(ktest_ctx_hdl_t *ctx)
 	BC_CHECK(lx_cap_native_update(candidate, &wanted) == EPERM &&
 	    bcmp(&saved, CR_PRIVS(candidate), sizeof (saved)) == 0,
 	    "coupled native SETUID/SETGID privileges pretended to separate");
+	wanted = actual;
+	wanted.lc_effective &= ~LX_CAP_BIT(LX_CAP_SETFCAP);
+	BC_CHECK(lx_cap_native_update(candidate, &wanted) == EPERM &&
+	    bcmp(&saved, CR_PRIVS(candidate), sizeof (saved)) == 0,
+	    "coupled native file metadata privileges pretended to separate");
 	bzero(&wanted, sizeof (wanted));
 	BC_CHECK(lx_cap_native_update(candidate, &wanted) == 0,
 	    "native zero capability sets failed");
@@ -571,8 +576,8 @@ lx_userns_test_scope_attach(ktest_ctx_hdl_t *ctx)
 	p = NULL;
 	BC_CHECK(crgetuid(base) == 0 && crgetgid(base) == 0,
 	    "fixture requires backing root identities");
-	actor.luc_ns = ztolxzd(zone)->lxzd_userns;
-	lx_caps_new_namespace(&actor.luc_caps);
+	BC_CHECK(lx_userns_map_actor(base, ztolxzd(zone)->lxzd_userns,
+	    &actor) == 0, "cannot decode native fixture map authority");
 	BC_CHECK(lx_userns_child_create(&actor, &ns) == 0 &&
 	    lx_userns_map_write(ns, 0, &actor, &actor, map,
 	    strlen(map), 0) == 0 &&
@@ -580,6 +585,7 @@ lx_userns_test_scope_attach(ktest_ctx_hdl_t *ctx)
 	    strlen(map), 0) == 0,
 	    "cannot prepare private fixture namespace");
 	actor.luc_ns = ns;
+	lx_caps_new_namespace(&actor.luc_caps);
 	scoped = lx_userns_native_for(base, &actor);
 	if (identities)
 		lx_scope_seed_sids(scoped);
