@@ -19,6 +19,7 @@ for probe in /test/scope_ids /test/dynamic/scope_ids; do
     trace=/lab/mode-gid-race$tag.trace
     stop=/lab/mode-gid-race$tag.stop
     rm -f "$stop"
+    : > "$log"
     zlogin -S lx-probe "$probe --chmod-gid-race" > "$log" 2>&1 &
     probe_job=$!
     target_pid=

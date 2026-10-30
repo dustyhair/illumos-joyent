@@ -36,19 +36,28 @@ unused remainder pointers, minimum elapsed time, past/absolute deadlines,
 signal interruption, SA_RESTART, bad remainder pointers, very large intervals,
 aliased arguments and libc usleep/clock_nanosleep. Linux controls pass 18+18.
 
-clock_sleep32.S is a standalone i386 executable with an allow-all filter.
+clock_sleep32.S is a standalone i386 executable. On Linux it installs an
+allow-all filter. Its --lx mode requires the existing i386 filter installation
+to return EINVAL, then tests the unfiltered time32 ABI. It does not claim
+i386 seccomp support.
 It checks all three relative clocks against monotonic elapsed time, all
 three past absolute deadlines, the time32 remainder with an adjacent canary,
 validation, bad pointers, unsupported clocks and ignored flags. It passes
 on Linux. It needs no multilib libc or development packages.
 
-The canonical offline enforcement driver runs all three executables. The
+The canonical offline enforcement driver runs both confined amd64 executables
+and the explicit unfiltered i386 control. The
 userns driver additionally exercises libc sleep inside a scoped process in
 the ownership-race probe. That probe retains its required observed stale
 grant and late rejection checks; a run without the observation still fails.
 
-Clean release/debug brand builds pass at source 7f97b706ec. VM72 acceptance
-is pending. Common/kernel source 5bcd036dac, native ktest 4ba3707890 and the
+VM72 passes 17+17 sleep cases and exposes the remaining native errno mapping
+error in validation: Native ENOTSUP maps to Linux ENOSYS, so unsupported clock
+backends must return native EOPNOTSUPP. It also confirms existing i386 filter
+rejection and exposes a driver log-creation race. These are corrected in
+source 8271cbb3ef; final VM acceptance is pending.
+
+Common/kernel source 5bcd036dac, native ktest 4ba3707890 and the
 retained platform components remain mixed. Runtime is release-only; debug
 is compile-only. No host clock, physical host image or production zone is
 changed. Controlled wall-clock adjustment and suspend/resume are not runtime

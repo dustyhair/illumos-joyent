@@ -26,6 +26,7 @@ for probe in /test/scope_ids /test/dynamic/scope_ids; do
     tag=$(echo "$probe" | tr / _)
     log=/lab/mode-acl$tag.log
     trace=/lab/mode-acl$tag.trace
+    : > "$log"
     zlogin -S lx-probe "$probe --chmod-acl" > "$log" 2>&1 &
     probe_job=$!
     target_pid=
