@@ -2,6 +2,7 @@
  * CDDL version 1.0, http://www.illumos.org/license/CDDL.
  */
 #include <sys/types.h>
+#include <sys/cred_impl.h>
 #include <sys/param.h>
 #include <sys/ktest.h>
 #include <sys/kmem.h>
@@ -14,7 +15,6 @@
 #include <sys/vnode.h>
 #include <sys/lx_userns.h>
 #include <sys/lx_cap.h>
-#include <sys/priv_impl.h>
 #include <sys/lx_brand.h>
 
 extern brand_t lx_brand;
