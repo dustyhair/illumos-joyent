@@ -736,33 +736,42 @@ static int stream_sender(void)
     CHECK(write(pair[0],"c",1)==1 && stream_receive(pair[1],getpid(),2)==0);
     close(pair[0]);close(pair[1]);return 0;
 }
+static int stream_receive_fd(int fd, pid_t pid, unsigned id)
+{
+    char byte; struct iovec iov={&byte,1};
+    union {struct cmsghdr align;char data[256];} control;
+    struct msghdr msg={.msg_iov=&iov,.msg_iovlen=1,.msg_control=control.data,.msg_controllen=sizeof(control.data)};
+    CHECK(recvmsg(fd,&msg,MSG_CMSG_CLOEXEC)==1 && !(msg.msg_flags&MSG_CTRUNC));
+    unsigned rights=0,creds=0;
+    for(struct cmsghdr *c=CMSG_FIRSTHDR(&msg);c;c=CMSG_NXTHDR(&msg,c)) {
+        CHECK(c->cmsg_level==SOL_SOCKET);
+        if(c->cmsg_type==SCM_RIGHTS) {
+            int received;CHECK(c->cmsg_len==CMSG_LEN(sizeof(received)));memcpy(&received,CMSG_DATA(c),sizeof(received));
+            CHECK((fcntl(received,F_GETFD)&FD_CLOEXEC)!=0 && read(received,&byte,1)==1 && byte=='Z');close(received);rights++;
+        } else if(c->cmsg_type==SCM_CREDENTIALS) {
+            struct ucred cr;CHECK(c->cmsg_len==CMSG_LEN(sizeof(cr)));memcpy(&cr,CMSG_DATA(c),sizeof(cr));
+            CHECK(cr.pid==pid && cr.uid==id && cr.gid==id);creds++;
+        } else CHECK(0);
+    }
+    CHECK(rights==1 && creds==1);return 0;
+}
+static int stream_send_fd(int fd)
+{
+    char path[]="/tmp/lx-stream-fd-XXXXXX";int file=mkstemp(path);
+    CHECK(file>=0 && unlink(path)==0 && write(file,"Z",1)==1 && lseek(file,0,SEEK_SET)==0);
+    union {struct cmsghdr align;char data[CMSG_SPACE(sizeof(file))];} control;
+    memset(&control,0,sizeof(control));char byte='x';struct iovec iov={&byte,1};
+    struct msghdr msg={.msg_iov=&iov,.msg_iovlen=1,.msg_control=control.data,.msg_controllen=sizeof(control.data)};
+    struct cmsghdr *c=CMSG_FIRSTHDR(&msg);c->cmsg_level=SOL_SOCKET;c->cmsg_type=SCM_RIGHTS;c->cmsg_len=CMSG_LEN(sizeof(file));memcpy(CMSG_DATA(c),&file,sizeof(file));
+    CHECK(sendmsg(fd,&msg,0)==1);close(file);return 0;
+}
 static int stream_rights(void)
 {
     CHECK(root_ids()==0);
-    int pair[2],one=1; CHECK(socketpair(AF_UNIX,SOCK_STREAM,0,pair)==0);
+    int pair[2],one=1;CHECK(socketpair(AF_UNIX,SOCK_STREAM,0,pair)==0);
     CHECK(setsockopt(pair[1],SOL_SOCKET,SO_PASSCRED,&one,sizeof(one))==0);
-    char path[]="/tmp/lx-stream-fd-XXXXXX"; int file=mkstemp(path);
-    CHECK(file>=0 && unlink(path)==0 && write(file,"Z",1)==1 && lseek(file,0,SEEK_SET)==0);
-    union {struct cmsghdr align; char data[CMSG_SPACE(sizeof(int))];} control;
-    memset(&control,0,sizeof(control)); char byte='x'; struct iovec iov={&byte,1};
-    struct msghdr msg={.msg_iov=&iov,.msg_iovlen=1,.msg_control=control.data,.msg_controllen=sizeof(control.data)};
-    struct cmsghdr *c=CMSG_FIRSTHDR(&msg);c->cmsg_level=SOL_SOCKET;c->cmsg_type=SCM_RIGHTS;c->cmsg_len=CMSG_LEN(sizeof(file));memcpy(CMSG_DATA(c),&file,sizeof(file));
-    CHECK(sendmsg(pair[0],&msg,0)==1);close(file);
-    union {struct cmsghdr align;char data[256];} recvcontrol;
-    msg.msg_control=recvcontrol.data;msg.msg_controllen=sizeof(recvcontrol.data);
-    CHECK(recvmsg(pair[1],&msg,MSG_CMSG_CLOEXEC)==1 && !(msg.msg_flags&MSG_CTRUNC));
-    unsigned rights=0,creds=0;
-    for(c=CMSG_FIRSTHDR(&msg);c;c=CMSG_NXTHDR(&msg,c)) {
-        CHECK(c->cmsg_level==SOL_SOCKET);
-        if(c->cmsg_type==SCM_RIGHTS) {
-            int fd;CHECK(c->cmsg_len==CMSG_LEN(sizeof(fd)));memcpy(&fd,CMSG_DATA(c),sizeof(fd));
-            CHECK((fcntl(fd,F_GETFD)&FD_CLOEXEC)!=0 && read(fd,&byte,1)==1 && byte=='Z');close(fd);rights++;
-        } else if(c->cmsg_type==SCM_CREDENTIALS) {
-            struct ucred cr;CHECK(c->cmsg_len==CMSG_LEN(sizeof(cr)));memcpy(&cr,CMSG_DATA(c),sizeof(cr));
-            CHECK(cr.pid==getpid() && cr.uid==0 && cr.gid==0);creds++;
-        } else CHECK(0);
-    }
-    CHECK(rights==1 && creds==1);close(pair[0]);close(pair[1]);return 0;
+    CHECK(stream_send_fd(pair[0])==0 && stream_receive_fd(pair[1],getpid(),0)==0);
+    close(pair[0]);close(pair[1]);return 0;
 }
 static int stream_accept_case(int exited)
 {
@@ -781,7 +790,9 @@ static int stream_accept_case(int exited)
         CHECK(connect(sender,(struct sockaddr *)&addr,sizeof(addr))==0);
         CHECK(write(sender,"a",1)==1);
         CHECK(syscall(SYS_setresgid,1,1,1)==0 && syscall(SYS_setresuid,1,1,1)==0);
-        CHECK(write(sender,"b",1)==1 && write(ready_pipe[1],"r",1)==1);
+        CHECK(write(sender,"b",1)==1);
+        if(exited) CHECK(stream_send_fd(sender)==0);
+        CHECK(write(ready_pipe[1],"r",1)==1);
         if(!exited) { char byte;CHECK(read(release_pipe[0],&byte,1)==1); }
         close(sender);_exit(0);
     }
@@ -792,6 +803,7 @@ static int stream_accept_case(int exited)
     socklen_t len=sizeof(one);one=0;
     CHECK(getsockopt(accepted,SOL_SOCKET,SO_PASSCRED,&one,&len)==0 && one==1);
     CHECK(stream_receive(accepted,child,0)==0 && stream_receive(accepted,child,1)==0);
+    if(exited) CHECK(stream_receive_fd(accepted,child,1)==0);
     if(!exited) {
         CHECK(write(release_pipe[1],"r",1)==1);
         CHECK(waitpid(child,&status,0)==child && WIFEXITED(status) && WEXITSTATUS(status)==0);
