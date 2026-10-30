@@ -330,7 +330,8 @@ retry:
 		}
 	}
 
-	if (p == NULL) {
+	/* The Linux PID hash is global; its entries must still match zone. */
+	if (p == NULL || p->p_zone != zone) {
 		mutex_exit(&pidlock);
 		return (-1);
 	}

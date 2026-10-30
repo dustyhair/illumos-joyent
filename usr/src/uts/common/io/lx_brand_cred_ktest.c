@@ -3,6 +3,7 @@
  */
 #include <sys/types.h>
 #include <sys/cred_impl.h>
+#include <sys/zone.h>
 #include <sys/param.h>
 #include <sys/ktest.h>
 #include <sys/kmem.h>
@@ -133,6 +134,39 @@ bc_open(cred_t *cred, char *path)
 	curthread->t_cred = saved;
 	crfree(cred);
 	return (error);
+}
+
+/* A global hash hit must not bypass the requested zone's PID view. */
+static boolean_t
+bc_zone_lookup(void)
+{
+	zone_t *zone = zone_find_by_name("lx-probe");
+	zone_t *other;
+	proc_t *p;
+	pid_t pid;
+	int error;
+	boolean_t passed = B_FALSE;
+
+	if (zone == NULL)
+		return (B_FALSE);
+	pid = zone->zone_proc_initpid;
+	if (pid <= 1 || lx_lpid_lock(pid, zone, 0, &p, NULL) != 0)
+		goto out;
+	passed = p->p_zone == zone;
+	mutex_exit(&p->p_lock);
+	if (!passed)
+		goto out;
+	other = kmem_zalloc(sizeof (*other), KM_SLEEP);
+	other->zone_brand = &lx_brand;
+	other->zone_id = zone->zone_id == 1 ? 2 : 1;
+	error = lx_lpid_lock(pid, other, 0, &p, NULL);
+	if (error == 0)
+		mutex_exit(&p->p_lock);
+	passed = error != 0;
+	kmem_free(other, sizeof (*other));
+out:
+	zone_rele(zone);
+	return (passed);
 }
 
 void
@@ -267,6 +301,8 @@ lx_brand_cred_test_access(ktest_ctx_hdl_t *ctx)
 	BC_CHECK(bc_open(CRED(), path) == 0, "lx procfs fixture not running");
 	BC_CHECK(bc_open(unclamped, path) == EACCES,
 	    "lx procfs root shortcut bypassed namespace boundary");
+	BC_CHECK(bc_zone_lookup(),
+	    "Linux PID lookup crossed the requested zone");
 	passed = B_TRUE;
 out:
 	if (captured != NULL)
