@@ -14,6 +14,10 @@ extern void lx_userns_test_maps(ktest_ctx_hdl_t *);
 extern void lx_userns_test_caps(ktest_ctx_hdl_t *);
 extern void lx_userns_test_native(ktest_ctx_hdl_t *);
 extern void lx_userns_test_lifetime(ktest_ctx_hdl_t *);
+extern void lx_userns_test_budget(ktest_ctx_hdl_t *);
+extern void lx_userns_test_budget_race(ktest_ctx_hdl_t *);
+extern void lx_userns_test_zone_budget_disabled(ktest_ctx_hdl_t *);
+extern void lx_userns_test_zone_budget_hold(ktest_ctx_hdl_t *);
 extern void lx_brand_cred_test_copies(ktest_ctx_hdl_t *);
 extern void lx_brand_cred_test_access(ktest_ctx_hdl_t *);
 extern void lx_proc_maps_test(ktest_ctx_hdl_t *);
@@ -323,6 +327,14 @@ _init(void)
 	    0)) != 0 ||
 	    (error = ktest_add_test(ks, "lifetime", lx_userns_test_lifetime,
 	    0)) != 0 ||
+	    (error = ktest_add_test(ks, "budget", lx_userns_test_budget,
+	    0)) != 0 ||
+	    (error = ktest_add_test(ks, "budget_race",
+	    lx_userns_test_budget_race, 0)) != 0 ||
+	    (error = ktest_add_test(ks, "zone_budget_disabled",
+	    lx_userns_test_zone_budget_disabled, 0)) != 0 ||
+	    (error = ktest_add_test(ks, "zone_budget_hold",
+	    lx_userns_test_zone_budget_hold, 0)) != 0 ||
 	    (error = ktest_add_test(ks, "credentials",
 	    lx_brand_cred_test_copies, 0)) != 0 ||
 	    (error = ktest_add_test(ks, "access", lx_brand_cred_test_access,

@@ -27,6 +27,9 @@ struct lx_userns {
 	kmutex_t un_lock;
 	struct lx_userns *un_parent;
 	lx_userns_model_t un_model;
+	/* Only the initial namespace owns this zone-wide budget. */
+	uint32_t un_max;
+	uint32_t un_used;
 };
 
 static lx_userns_actor_t
@@ -48,8 +51,49 @@ lx_userns_root_create(void)
 
 	mutex_init(&ns->un_lock, NULL, MUTEX_DEFAULT, NULL);
 	ns->un_refs = 1;
+	ns->un_max = LX_USERNS_DEFAULT_MAX;
 	lx_userns_model_root(&ns->un_model);
 	return (ns);
+}
+
+/* Parent links are immutable and each child owns a parent reference. */
+static lx_userns_t *
+lx_userns_budget_root(lx_userns_t *ns)
+{
+	while (ns->un_parent != NULL)
+		ns = ns->un_parent;
+	return (ns);
+}
+
+int
+lx_userns_budget_set(lx_userns_t *ns, uint32_t maximum)
+{
+	if (ns->un_parent != NULL)
+		return (EINVAL);
+	mutex_enter(&ns->un_lock);
+	ns->un_max = maximum;
+	mutex_exit(&ns->un_lock);
+	return (0);
+}
+
+void
+lx_userns_budget_get(lx_userns_t *ns, uint32_t *maximum, uint32_t *used)
+{
+	lx_userns_t *root = lx_userns_budget_root(ns);
+
+	mutex_enter(&root->un_lock);
+	*maximum = root->un_max;
+	*used = root->un_used;
+	mutex_exit(&root->un_lock);
+}
+
+static void
+lx_userns_uncharge(lx_userns_t *root)
+{
+	mutex_enter(&root->un_lock);
+	VERIFY3U(root->un_used, !=, 0);
+	root->un_used--;
+	mutex_exit(&root->un_lock);
 }
 
 void
@@ -64,9 +108,15 @@ lx_userns_rele(lx_userns_t *ns)
 {
 	while (ns != NULL && atomic_dec_uint_nv(&ns->un_refs) == 0) {
 		lx_userns_t *parent = ns->un_parent;
+		lx_userns_t *root = parent != NULL ?
+		    lx_userns_budget_root(parent) : NULL;
 
+		if (parent == NULL)
+			VERIFY0(ns->un_used);
 		mutex_destroy(&ns->un_lock);
 		kmem_free(ns, sizeof (*ns));
+		if (root != NULL)
+			lx_userns_uncharge(root);
 		ns = parent;
 	}
 }
@@ -74,17 +124,28 @@ lx_userns_rele(lx_userns_t *ns)
 int
 lx_userns_child_create(const lx_userns_cred_t *creator, lx_userns_t **out)
 {
-	lx_userns_t *ns = kmem_zalloc(sizeof (*ns), KM_SLEEP);
+	lx_userns_t *ns;
 	lx_userns_t *parent = creator->luc_ns;
+	lx_userns_t *root = lx_userns_budget_root(parent);
 	lx_userns_actor_t actor = lx_userns_actor(creator);
 	int error;
 
 	*out = NULL;
+	/* Reserve before allocating; failed construction returns the charge. */
+	mutex_enter(&root->un_lock);
+	if (root->un_used >= root->un_max) {
+		mutex_exit(&root->un_lock);
+		return (ENOSPC);
+	}
+	root->un_used++;
+	mutex_exit(&root->un_lock);
+	ns = kmem_zalloc(sizeof (*ns), KM_SLEEP);
 	mutex_enter(&parent->un_lock);
 	error = lx_userns_model_child(&ns->un_model, &actor);
 	mutex_exit(&parent->un_lock);
 	if (error != 0) {
 		kmem_free(ns, sizeof (*ns));
+		lx_userns_uncharge(root);
 		return (error);
 	}
 	mutex_init(&ns->un_lock, NULL, MUTEX_DEFAULT, NULL);

@@ -29,7 +29,8 @@ pfexec cp "$ws/usr/src/uts/intel/lx_brand/obj64/lx_brand" "$lab/mnt-root/kernel/
 pfexec cp "$ws/usr/src/uts/intel/lx_proc/obj64/lx_proc" "$lab/mnt-root/kernel/fs/amd64/lx_proc"
 pfexec mkdir -p "$lab/mnt-root/kernel/exec/amd64"
 pfexec cp "$ws/usr/src/uts/intel/elfexec/obj64/elfexec" "$lab/mnt-root/kernel/exec/amd64/elfexec"
-if test "${LX_LAB_UPDATE_USERLIBS:-0}" = 1; then
+if test "${LX_LAB_UPDATE_USERLIBS:-0}" = 1 ||
+    test "${LX_LAB_UPDATE_SUPPORT:-0}" = 1; then
     # SmartOS mounts /usr from this compressed UFS image during boot.
     # Follow tools/build_live: update the detached image, then compress it.
     usr_image="$lab/usr-lx.work"
@@ -39,15 +40,22 @@ if test "${LX_LAB_UPDATE_USERLIBS:-0}" = 1; then
     mkdir -p "$lab/mnt-usr"
     pfexec mount -F ufs "$usr_lo" "$lab/mnt-usr"
     usr_mounted=1
-    test -f "$lab/mnt-usr/lib/lx_brand.so.1"
-    test ! -L "$lab/mnt-usr/lib/lx_brand.so.1"
-    test ! -L "$lab/mnt-usr/lib/amd64/lx_brand.so.1"
-    pfexec cp "$ws/usr/src/lib/brand/lx/lx_brand/i386/lx_brand.so.1" \
-        "$lab/mnt-usr/lib/lx_brand.so.1"
-    pfexec cp "$ws/usr/src/lib/brand/lx/lx_brand/amd64/lx_brand.so.1" \
-        "$lab/mnt-usr/lib/amd64/lx_brand.so.1"
-    digest -a sha256 "$lab/mnt-usr/lib/lx_brand.so.1" \
-        "$lab/mnt-usr/lib/amd64/lx_brand.so.1"
+    if test "${LX_LAB_UPDATE_USERLIBS:-0}" = 1; then
+        test -f "$lab/mnt-usr/lib/lx_brand.so.1"
+        test ! -L "$lab/mnt-usr/lib/lx_brand.so.1"
+        test ! -L "$lab/mnt-usr/lib/amd64/lx_brand.so.1"
+        pfexec cp "$ws/usr/src/lib/brand/lx/lx_brand/i386/lx_brand.so.1" \
+            "$lab/mnt-usr/lib/lx_brand.so.1"
+        pfexec cp "$ws/usr/src/lib/brand/lx/lx_brand/amd64/lx_brand.so.1" \
+            "$lab/mnt-usr/lib/amd64/lx_brand.so.1"
+        digest -a sha256 "$lab/mnt-usr/lib/lx_brand.so.1" \
+            "$lab/mnt-usr/lib/amd64/lx_brand.so.1"
+    fi
+    if test "${LX_LAB_UPDATE_SUPPORT:-0}" = 1; then
+        pfexec cp "$ws/usr/src/lib/brand/lx/lx_support/lx_support" \
+            "$lab/mnt-usr/lib/brand/lx/lx_support"
+        digest -a sha256 "$lab/mnt-usr/lib/brand/lx/lx_support"
+    fi
     pfexec umount "$lab/mnt-usr"
     usr_mounted=0
     pfexec lofiadm -d "$usr_lo"
@@ -58,6 +66,10 @@ if test "${LX_LAB_UPDATE_USERLIBS:-0}" = 1; then
     sync
     pfexec cp "$usr_image" "$lab/mnt-root/usr.lgz"
     pfexec digest -a sha256 "$usr_image" "$lab/mnt-root/usr.lgz"
+fi
+if test -f "$lab/userns-budget-native"; then
+    pfexec cp "$lab/userns-budget-native" "$lab/mnt-root/lab/userns-budget-native"
+    pfexec chmod 0555 "$lab/mnt-root/lab/userns-budget-native"
 fi
 pfexec cp "$lab/lx-root.tar" "$lab/mnt-root/lab/lx-root.tar"
 pfexec cp "$lab/enforcement-test.sh" "$lab/mnt-root/lab/enforcement-test.sh"

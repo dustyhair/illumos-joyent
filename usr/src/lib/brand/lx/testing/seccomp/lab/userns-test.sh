@@ -5,7 +5,7 @@ test -f /lab/offline-lx-guest
 bootparams | grep -q '^lx_lab=true$'
 test "$(zonename)" = global
 /lab/namespace-test.sh
-for suite in maps capabilities native lifetime; do
+for suite in maps capabilities native lifetime budget budget_race; do
     /lab/ktest run "lx_namespace:user:$suite"
 done
 /lab/ktest run lx_namespace:user:cap_syscalls
@@ -33,7 +33,13 @@ test "$codex_hash" = b8a11fedf24b2dfb59a70c9e52b030f9a508dcd49cd2dd0d41956f4c785
 mkdir -p /zones/lx-probe-zfs/root/test/scope-setid
 cp /zones/lx-probe-zfs/root/test/scope_caps /zones/lx-probe-zfs/root/test/scope-setid/scope_caps
 chmod 4755 /zones/lx-probe-zfs/root/test/scope-setid/scope_caps
+if zonecfg -z lx-probe info attr name=max-user-namespaces | grep -q 'name: max-user-namespaces'; then
+    zonecfg -z lx-probe 'select attr name=max-user-namespaces; set type=uint; set value=64; end;'
+else
+    zonecfg -z lx-probe 'add attr; set name=max-user-namespaces; set type=uint; set value=64; end;'
+fi
 zoneadm -z lx-probe boot
+/lab/userns-budget-native lx-probe
 /lab/ktest run lx_namespace:user:access
 /lab/ktest run lx_namespace:user:proc_maps
 zlogin -S lx-probe /test/proc_maps_baseline

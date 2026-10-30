@@ -23,6 +23,8 @@ typedef struct lx_userns_cred {
 
 extern lx_userns_t *lx_userns_root_create(void);
 extern int lx_userns_child_create(const lx_userns_cred_t *, lx_userns_t **);
+extern int lx_userns_budget_set(lx_userns_t *, uint32_t);
+extern void lx_userns_budget_get(lx_userns_t *, uint32_t *, uint32_t *);
 extern void lx_userns_hold(lx_userns_t *);
 extern void lx_userns_rele(lx_userns_t *);
 extern int lx_userns_map_write(lx_userns_t *, int, const lx_userns_cred_t *,

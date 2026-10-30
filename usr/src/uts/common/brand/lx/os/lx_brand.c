@@ -397,6 +397,15 @@ lx_setattr(zone_t *zone, int attr, void *ubuf, size_t ubufsz)
 	lx_zone_data_t *lxzd = (lx_zone_data_t *)zone->zone_brand_data;
 
 	switch (attr) {
+	case LX_ATTR_USERNS_MAX: {
+		uint32_t maximum;
+
+		if (ubufsz != sizeof (maximum))
+			return (ERANGE);
+		if (copyin(ubuf, &maximum, sizeof (maximum)) != 0)
+			return (EFAULT);
+		return (lx_userns_budget_set(lxzd->lxzd_userns, maximum));
+	}
 	case LX_ATTR_KERN_RELEASE: {
 		char buf[LX_KERN_RELEASE_MAX];
 		bzero(buf, LX_KERN_RELEASE_MAX);
@@ -453,6 +462,19 @@ lx_getattr(zone_t *zone, int attr, void *ubuf, size_t *ubufsz)
 	int len;
 
 	switch (attr) {
+	case LX_ATTR_USERNS_MAX:
+	case LX_ATTR_USERNS_USED: {
+		uint32_t maximum, used, value;
+
+		if (*ubufsz < sizeof (value))
+			return (ERANGE);
+		lx_userns_budget_get(lxzd->lxzd_userns, &maximum, &used);
+		value = attr == LX_ATTR_USERNS_MAX ? maximum : used;
+		if (copyout(&value, ubuf, sizeof (value)) != 0)
+			return (EFAULT);
+		*ubufsz = sizeof (value);
+		return (0);
+	}
 	case LX_ATTR_KERN_RELEASE: {
 		char buf[LX_KERN_RELEASE_MAX];
 

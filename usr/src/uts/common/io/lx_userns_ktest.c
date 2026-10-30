@@ -12,6 +12,11 @@
 #include <sys/disp.h>
 #include <sys/lx_userns.h>
 #include <sys/lx_mntns.h>
+#include <sys/lx_brand.h>
+#include <sys/zone.h>
+#include <sys/ddi.h>
+
+extern brand_t lx_brand;
 
 #define	NS_CHECK(expr, why) do { \
 	if (!(expr)) { \
@@ -369,4 +374,201 @@ out:
 	mutex_destroy(&race.nr_lock);
 	if (passed)
 		KT_PASS(ctx);
+}
+
+/* Native aggregate budget tests; this is not Linux per-user ucounts. */
+static boolean_t
+lx_budget_is(lx_userns_t *ns, uint32_t maximum, uint32_t used)
+{
+	uint32_t actual_max, actual_used;
+
+	lx_userns_budget_get(ns, &actual_max, &actual_used);
+	return (actual_max == maximum && actual_used == used);
+}
+
+void
+lx_userns_test_budget(ktest_ctx_hdl_t *ctx)
+{
+	lx_userns_t *root = lx_userns_root_create(), *a = NULL, *b = NULL;
+	lx_userns_cred_t creator = { 0 }, nested;
+	boolean_t passed = B_FALSE;
+
+	creator.luc_ns = root;
+	creator.luc_uid = creator.luc_gid = 1000;
+	lx_caps_new_namespace(&creator.luc_caps);
+	NS_CHECK(lx_budget_is(root, LX_USERNS_DEFAULT_MAX, 0),
+	    "incorrect initial namespace budget");
+	NS_CHECK(lx_userns_budget_set(root, 0) == 0 &&
+	    lx_userns_child_create(&creator, &a) == ENOSPC && a == NULL &&
+	    lx_budget_is(root, 0, 0), "disabled budget allowed allocation");
+	NS_CHECK(lx_userns_budget_set(root, 2) == 0 &&
+	    lx_userns_child_create(&creator, &a) == 0,
+	    "cannot allocate first budgeted namespace");
+	NS_CHECK(lx_userns_budget_set(a, 9) == EINVAL &&
+	    lx_budget_is(a, 2, 1), "child changed or escaped the root budget");
+	nested = creator;
+	nested.luc_ns = a;
+	NS_CHECK(lx_userns_child_create(&nested, &b) == EPERM && b == NULL &&
+	    lx_budget_is(root, 2, 1), "failed construction leaked a charge");
+	NS_CHECK(lx_userns_map_write(a, 0, &creator, &creator,
+	    "0 1000 1", 8, 0) == 0 &&
+	    lx_userns_map_write(a, 1, &creator, &creator,
+	    "0 1000 1", 8, 0) == 0 &&
+	    lx_userns_child_create(&nested, &b) == 0 &&
+	    lx_budget_is(b, 2, 2), "nested namespace escaped root accounting");
+	NS_CHECK(lx_userns_budget_set(root, 1) == 0 &&
+	    lx_budget_is(root, 1, 2), "lowering a limit revoked live objects");
+	lx_userns_rele(a);
+	a = NULL;
+	NS_CHECK(lx_budget_is(root, 1, 2),
+	    "parent reference was released while its child remained alive");
+	lx_userns_rele(b);
+	b = NULL;
+	NS_CHECK(lx_budget_is(root, 1, 0), "cascade release leaked charges");
+	NS_CHECK(lx_userns_child_create(&creator, &a) == 0 &&
+	    lx_userns_child_create(&creator, &b) == ENOSPC && b == NULL,
+	    "limit did not apply after reuse");
+	lx_userns_hold(a);
+	lx_userns_rele(a);
+	NS_CHECK(lx_budget_is(root, 1, 1), "extra reference lost its charge");
+	lx_userns_rele(a);
+	a = NULL;
+	NS_CHECK(lx_budget_is(root, 1, 0),
+	    "last reference retained its charge");
+	passed = B_TRUE;
+out:
+	lx_userns_rele(b);
+	lx_userns_rele(a);
+	lx_userns_rele(root);
+	if (passed)
+		KT_PASS(ctx);
+}
+
+typedef struct lx_budget_job {
+	const lx_userns_cred_t *bj_creator;
+	lx_userns_t *bj_ns;
+	int bj_error;
+} lx_budget_job_t;
+
+static void
+lx_budget_worker(void *arg)
+{
+	lx_budget_job_t *job = arg;
+
+	job->bj_error = lx_userns_child_create(job->bj_creator, &job->bj_ns);
+}
+
+void
+lx_userns_test_budget_race(ktest_ctx_hdl_t *ctx)
+{
+	lx_userns_t *root = lx_userns_root_create();
+	lx_userns_cred_t creator = { 0 };
+	lx_budget_job_t jobs[16] = { 0 };
+	taskq_t *queue = taskq_create("lx_ns_budget", 4, minclsyspri,
+	    16, 16, TASKQ_PREPOPULATE);
+	uint_t i, round, successes;
+	boolean_t passed = B_FALSE;
+
+	creator.luc_ns = root;
+	creator.luc_uid = creator.luc_gid = 1000;
+	NS_CHECK(queue != NULL && lx_userns_budget_set(root, 4) == 0,
+	    "cannot prepare concurrent namespace allocation");
+	for (round = 0; round < 32; round++) {
+		for (i = 0; i < 16; i++) {
+			jobs[i].bj_creator = &creator;
+			(void) taskq_dispatch(queue, lx_budget_worker, &jobs[i],
+			    TQ_SLEEP);
+		}
+		taskq_wait(queue);
+		successes = 0;
+		for (i = 0; i < 16; i++) {
+			if (jobs[i].bj_error == 0) {
+				NS_CHECK(jobs[i].bj_ns != NULL,
+				    "successful creation returned no object");
+				successes++;
+			} else {
+				NS_CHECK(jobs[i].bj_error == ENOSPC &&
+				    jobs[i].bj_ns == NULL,
+				    "failed reservation returned an object");
+			}
+		}
+		NS_CHECK(successes == 4 && lx_budget_is(root, 4, 4),
+		    "concurrent allocation oversubscribed or lost the budget");
+		for (i = 0; i < 16; i++) {
+			lx_userns_rele(jobs[i].bj_ns);
+			jobs[i].bj_ns = NULL;
+		}
+		NS_CHECK(lx_budget_is(root, 4, 0),
+		    "concurrent allocation/release leaked a charge");
+	}
+	passed = B_TRUE;
+out:
+	if (queue != NULL)
+		taskq_destroy(queue);
+	for (i = 0; i < 16; i++)
+		lx_userns_rele(jobs[i].bj_ns);
+	lx_userns_rele(root);
+	if (passed)
+		KT_PASS(ctx);
+}
+
+static void
+lx_userns_zone_budget(ktest_ctx_hdl_t *ctx, boolean_t disabled)
+{
+	zone_t *zone = zone_find_by_name("lx-probe");
+	lx_userns_t *root, *a = NULL, *b = NULL, *extra = NULL;
+	lx_userns_cred_t creator = { 0 };
+	uint32_t maximum, used;
+	uint_t attempt;
+	boolean_t passed = B_FALSE;
+
+	NS_CHECK(zone != NULL && zone->zone_brand == &lx_brand,
+	    "private lx-probe zone missing");
+	root = ztolxzd(zone)->lxzd_userns;
+	creator.luc_ns = root;
+	creator.luc_uid = creator.luc_gid = 1000;
+	NS_CHECK(lx_budget_is(root, disabled ? 0 : 2, 0),
+	    "native zone attribute did not set the expected budget");
+	if (disabled) {
+		NS_CHECK(lx_userns_child_create(&creator, &a) == ENOSPC &&
+		    a == NULL && lx_budget_is(root, 0, 0),
+		    "native zero budget did not prevent allocation");
+	} else {
+		NS_CHECK(lx_userns_child_create(&creator, &a) == 0 &&
+		    lx_userns_child_create(&creator, &b) == 0 &&
+		    lx_userns_child_create(&creator, &extra) == ENOSPC &&
+		    extra == NULL, "native budget did not enforce two objects");
+		/* Wait for the native controller to lower the limit. */
+		for (attempt = 0; attempt < 200; attempt++) {
+			lx_userns_budget_get(root, &maximum, &used);
+			if (maximum == 1)
+				break;
+			delay(drv_usectohz(50000));
+		}
+		NS_CHECK(lx_budget_is(root, 1, 2),
+		    "native controller failed to observe/lower a live budget");
+		NS_CHECK(lx_userns_child_create(&creator, &extra) == ENOSPC &&
+		    extra == NULL, "lowering the budget allowed more objects");
+	}
+	passed = B_TRUE;
+out:
+	lx_userns_rele(extra);
+	lx_userns_rele(b);
+	lx_userns_rele(a);
+	if (zone != NULL)
+		zone_rele(zone);
+	if (passed)
+		KT_PASS(ctx);
+}
+
+void
+lx_userns_test_zone_budget_disabled(ktest_ctx_hdl_t *ctx)
+{
+	lx_userns_zone_budget(ctx, B_TRUE);
+}
+
+void
+lx_userns_test_zone_budget_hold(ktest_ctx_hdl_t *ctx)
+{
+	lx_userns_zone_budget(ctx, B_FALSE);
 }

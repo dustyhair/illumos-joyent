@@ -168,6 +168,10 @@ typedef enum lx_ptrace_options {
 #define	LX_ATTR_KERN_RELEASE	ZONE_ATTR_BRAND_ATTRS
 #define	LX_ATTR_KERN_VERSION	(ZONE_ATTR_BRAND_ATTRS + 1)
 #define	LX_ATTR_TTY_GID		(ZONE_ATTR_BRAND_ATTRS + 2)
+#define	LX_ATTR_USERNS_MAX	(ZONE_ATTR_BRAND_ATTRS + 3)
+#define	LX_ATTR_USERNS_USED	(ZONE_ATTR_BRAND_ATTRS + 4)
+
+#define	LX_USERNS_DEFAULT_MAX	1024U
 
 /*
  * Aux vector containing phdr of Linux executable and ehdr of interpreter
