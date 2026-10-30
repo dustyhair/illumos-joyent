@@ -447,13 +447,12 @@ lx_userns_test_scope_attach(ktest_ctx_hdl_t *ctx)
 	BC_CHECK(zone != NULL && pid > 1 &&
 	    lx_lpid_lock(pid, zone, 0, &p, NULL) == 0,
 	    "cannot find stopped lab process");
-	BC_CHECK(p->p_lwpcnt == 1 && (strcmp(p->p_user.u_comm,
-	    identities ? "scope_ids" : "scope_caps") == 0 ||
-	    strcmp(p->p_user.u_comm, "scope_ids") == 0) && p->p_tlist != NULL &&
-	    p->p_tlist->t_state == TS_STOPPED &&
+	identities = strcmp(p->p_user.u_comm, "scope_ids") == 0;
+	BC_CHECK(p->p_lwpcnt == 1 && (identities ||
+	    strcmp(p->p_user.u_comm, "scope_caps") == 0) &&
+	    p->p_tlist != NULL && p->p_tlist->t_state == TS_STOPPED &&
 	    ptolxproc(p)->l_flags == 0 && crgetbrand(p->p_cred) == NULL,
 	    "target is not the fresh stopped fixture");
-	identities = strcmp(p->p_user.u_comm, "scope_ids") == 0;
 	map = identities ? "0 1000 3\n42 0 1" : "0 0 1";
 	mutex_enter(&p->p_crlock);
 	crhold(base = p->p_cred);
@@ -477,7 +476,8 @@ lx_userns_test_scope_attach(ktest_ctx_hdl_t *ctx)
 	task = p->p_tlist;
 	BC_CHECK(p->p_lwpcnt == 1 && task != NULL &&
 	    task->t_state == TS_STOPPED && strcmp(p->p_user.u_comm,
-	    "scope_caps") == 0 && ptolxproc(p)->l_flags == 0 &&
+	    identities ? "scope_ids" : "scope_caps") == 0 &&
+	    ptolxproc(p)->l_flags == 0 &&
 	    lwptolxlwp(ttolwp(task))->br_stack_mode == LX_STACK_MODE_BRAND,
 	    "fixture changed before attachment");
 	mutex_enter(&p->p_crlock);
