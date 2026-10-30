@@ -1,0 +1,28 @@
+{
+  "source_commit": "2461eccfc7f7de405203938e2c8dc5f6568bee38",
+  "controls": [
+    {
+      "variant": "static",
+      "uid": 0,
+      "result": "PASS"
+    },
+    {
+      "variant": "static",
+      "uid": 65534,
+      "result": "PASS"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 0,
+      "result": "PASS"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 65534,
+      "result": "PASS"
+    }
+  ],
+  "static_sha256": "1d8b35c2ceedda1bdacbabab66705308b82f27edcce4ebdeb6726756504a053c",
+  "dynamic_sha256": "6db9832b6f7652a1bbf6ad0fcdf05cd93ab080b711a0c51d15205d9ec0bbdc53",
+  "remote_evidence": "/var/tmp/lx-mount-proc-control.Tmm6z4"
+}

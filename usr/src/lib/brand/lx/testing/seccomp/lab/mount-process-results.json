@@ -1,0 +1,136 @@
+{
+  "recorded_utc": "2026-10-30T22:23:33.177374+00:00",
+  "vm": 84,
+  "branch": "lx/codex-sandbox",
+  "source_checkpoint": "ecebe856c56933a7d5e667c43611505107bcc4e1",
+  "brand_source_commit": "12989bd8fe7780cfc2b8754b86b2d89940125c33",
+  "proc_source_commit": "a7d7b14942c303d0611c145a97917e2b23a80cde",
+  "ktest_source_commit": "9f8eb886a861062371f69ac1240eaf04da088c9a",
+  "probe_source_commit": "2461eccfc7f7de405203938e2c8dc5f6568bee38",
+  "acceptance_driver_commit": "9393fb783e7516713ad09c42d6dcd09ce58ec264",
+  "clean_builds": [
+    "lx_brand release/debug",
+    "lx_proc release/debug",
+    "lx_namespace_ktest release/debug"
+  ],
+  "runtime": "release on retained mixed VM73 common kernel, LOFS, ZFS, user libraries and platform",
+  "brand_path": "/kernel/brand/amd64/lx_brand",
+  "brand_sha256": "5ed19c29620f5c9f82eb9b9d37d40ded83374391730afa81dd4ab56fe724d40b",
+  "proc_path": "/kernel/fs/amd64/lx_proc",
+  "proc_sha256": "bec331e4a9c75f995f422ac1e9c6cc311374032e6652bd2f3db6004ca5106488",
+  "ktest_sha256": "18c9f4fd4af4d9f4fa0a4c1e4ad364135a59cafa37cda322756f38b832a0edf3",
+  "root_tar_sha256": "3316979c3e86a63c9546cfab78d2f2a960284a7e3b6937c946f7106d698d2c1c",
+  "uploaded_driver_sha256": "7084dcc177e6d3db6a2c561d95312b9bef180109b34b9d60b3ce5d353eda6700",
+  "bubblewrap_trace_sha256": "e0135453805300b787f04a5900efffd3fd2e657114a28e64f6b73df9e19ad19e",
+  "static_probe_sha256": "1d8b35c2ceedda1bdacbabab66705308b82f27edcce4ebdeb6726756504a053c",
+  "dynamic_probe_sha256": "6db9832b6f7652a1bbf6ad0fcdf05cd93ab080b711a0c51d15205d9ec0bbdc53",
+  "process_cases": [
+    {
+      "variant": "static",
+      "uid": 0,
+      "mode": "reject",
+      "result": "PASS"
+    },
+    {
+      "variant": "static",
+      "uid": 0,
+      "mode": "attach",
+      "result": "PASS"
+    },
+    {
+      "variant": "static",
+      "uid": 65534,
+      "mode": "reject",
+      "result": "PASS"
+    },
+    {
+      "variant": "static",
+      "uid": 65534,
+      "mode": "attach",
+      "result": "PASS"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 0,
+      "mode": "reject",
+      "result": "PASS"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 0,
+      "mode": "attach",
+      "result": "PASS"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 65534,
+      "mode": "reject",
+      "result": "PASS"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 65534,
+      "mode": "attach",
+      "result": "PASS"
+    }
+  ],
+  "linux_controls": "PASS all four static/dynamic UID0/65534; see mount-process-linux-results.json",
+  "canonical_acceptance": "LX_MOUNT_PROCESS_PASS",
+  "enforcement_driver_exit": 0,
+  "mount_backend_driver_exit": 0,
+  "userns_driver_exit": 0,
+  "views_at_end": 0,
+  "experimental_switches_at_end": {
+    "seccomp": 0,
+    "userns": 0
+  },
+  "codex_version": "0.166.0",
+  "bubblewrap_experimental_switches": {
+    "seccomp": 1,
+    "userns": 1
+  },
+  "bubblewrap_clone_flags": "0x78020011",
+  "bubblewrap_clone_results": [
+    -22,
+    -22
+  ],
+  "linux_mount_namespace_published": false,
+  "codex_sandbox_accepted": false,
+  "pool_export_exit": 0,
+  "synced_poweroff": true,
+  "qemu_pid_exited": 1906741,
+  "evidence_file": "lx-sandbox/lab/evidence/boot-84-process-mount-view-acceptance.log",
+  "evidence_sha256": "7bc83680403d7a94099cd8608a28e9207bf97c7d8bc16332a056fe138fa20b2a",
+  "logs_sha256": {
+    "vm84-acceptance.log": "c6c1197cafeebe8cb7e97f21989a2e6971682b9a990b923f0fdadcf72a882aaf",
+    "vm84-backend.log": "fab5abbe67b60537abb8a7bf60711395d2057f355e89653105602cedfc6760f7",
+    "vm84-bwrap.log": "a8c42d465d5d0623121f5d42f0a0bf9c6e4665e4af948249fec794ca3057d991",
+    "vm84-dynamic-0-attach.log": "e63ca0403e30f7fd5a512c4ea2473bf5d7ea00c3c40124878237568bed1a0ee1",
+    "vm84-dynamic-0-reject.log": "9bfbeb944cbf537b94c7cecf1da6feafd4d01a19cd7bba56c726ed22cf10aded",
+    "vm84-dynamic-0-result.log": "0571a291a4966bd6479eb545008f4219142fa91048101592a195b06b7166fdae",
+    "vm84-dynamic-65534-attach.log": "3825f6c8d8a69edaaeb7b4a01d498740d718202c044c6f04c1d291c8749d6854",
+    "vm84-dynamic-65534-reject.log": "084c730109dd3de171e1664216ffd751809f6b0fa363a1efcbe61e13c320df5b",
+    "vm84-dynamic-65534-result.log": "7b69accc46b18a52edfd171c2604c3835a0323a1a475ae7b8e534480853673fd",
+    "vm84-enforcement.log": "807ec2ef33327934464ea763eb4d09b4c7d71044fe2779563507901cca34ae8b",
+    "vm84-static-0-attach.log": "52c1e47386650dffa3cd566b67d93ef03dc69e0ce07c985a035aef2ffa36bbf7",
+    "vm84-static-0-reject.log": "418c9da66a0bfcf9aede80c7bc0ef52a7fd0ecd1d6a25bb556dd3d2b9b46e640",
+    "vm84-static-0-result.log": "7ea58713b5b8af4de16c8ff2a5131c85985106492eb40fbc418b19fdfa8f66a5",
+    "vm84-static-65534-attach.log": "7a1c878b1c382389df5e15ac4d10163397f921a83b5ec540e082702c78913a9c",
+    "vm84-static-65534-reject.log": "b04980602c2ea17529c7a99b921338d83944f476f75632cd63d4a9e3bf2615a2",
+    "vm84-static-65534-result.log": "9507d638ced2f138689de1cf0644156e97e7f9b711515606f71f2fbfc8b3680a",
+    "vm84-userns.log": "4681971118a0d79fb8dd3bd1e5a35b0982c6ac0d8603a671a1a2016391e3316d"
+  },
+  "launcher_commit": "670ad873f1036fe820680d5e07c21a0079ac5b44",
+  "launcher_path": "lx-sandbox/launch-lab",
+  "launcher_sha256": "ece2f8445e5745dd320cc1f837a51ca7dc206f9798292dfdb41f71ddffc16739",
+  "limitations": [
+    "Trusted kernel fixture attaches the process view; no Linux namespace creation syscall invokes it yet",
+    "Namespace creation authority, budgets and descriptors remain incomplete",
+    "Stable source directory hierarchy is required; rename handling remains incomplete",
+    "Mount syscall routing, pivot/remount/proc/devpts and per-mount lazy detach remain incomplete",
+    "PID/IPC/network namespace isolation remains incomplete",
+    "Not a full platform build or production Debian acceptance",
+    "Immediate-exit Codex PTY tail-loss issue remains unresolved"
+  ],
+  "host_deployment": false
+}

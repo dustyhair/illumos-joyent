@@ -973,10 +973,10 @@ held through cleanup. The worker fences fired timeout callbacks with
 `untimeout` before reclaiming their argument. Active views prevent brand
 unload, and successful unload drains the task queue before removing code.
 
-This is backend ownership, not process namespace attachment. Process root/cwd
-publication, namespace budgets, stable handling of directory renames, mount
-syscall routing and the remaining bubblewrap namespaces are still required.
-Per-mount lazy detach also remains separate from retiring an entire view.
+VM81 covered backend ownership. The process root/cwd work is described below.
+Namespace budgets, stable handling of directory renames, mount syscall routing
+and the remaining bubblewrap namespaces are still required. Per-mount lazy
+detach also remains separate from retiring an entire view.
 
 
 VM81 passed the ownership/lifetime case eight times: twice directly, twice
@@ -995,3 +995,56 @@ release and debug; runtime used release on the retained mixed VM73 platform.
 The actual Codex 0.166.0 workspace sandbox still requests clone 0x78020011 and
 receives EINVAL. See lab/mount-lifetime-results.json for exact source and
 artifact hashes. No production host deployment occurred.
+
+
+## Process mount-view roots
+
+The internal root/cwd handoff prepares vnode references outside process locks,
+then exchanges the prepared state under `p_lock` after checking the expected
+old root/cwd. It invalidates the cached cwd. It requires a guarded lx process,
+one LWP, private filesystem state and a stopped/current/pre-runnable target;
+tracing, vfork and shared-FS groups are rejected. The old references are
+returned to the caller for release outside process locks.
+
+A process owns one view reference. Fork retains it; Linux exec preserves it.
+Process exit clears it before zombie reaping, while native root/cwd and open
+vnode references keep busy filesystems alive until they can be reclaimed.
+Clearbrand handles references from failed creation or brand teardown. View
+membership itself participates in the native-entry guard.
+
+Topology copying preserves native filesystem root kinds, including mntfs
+regular-file roots over directory mountpoints and namefs door roots. These
+copy operations are distinct from new directory/regular-file binds, which
+retain their type-matching checks. The real-zone fixture snapshots and clones
+the zone tree before assigning its root/cwd, covering these native mounts.
+
+No Linux mount-namespace syscall invokes the handoff yet. Namespace creation
+authority, budgets, mount syscall routing, namespace descriptors, rename
+handling, pivot/remount/proc/devpts behavior and remaining PID/IPC/network
+isolation are still required for bubblewrap.
+
+
+VM84 passed all eight process cases: static/dynamic programs, UID0/65534,
+and guarded attachment versus unguarded rejection. The fixture verified
+stale-cwd rejection without publication, private tmpfs and read-only file
+binds, cached and raw getcwd, root boundaries, retained filtering, Linux
+fork/exec inheritance, SIGKILL wait status and reference release before
+zombie reaping. An orphan retained its view after the original parent exited,
+then released it on exit. Outside processes retained the original mount tree,
+and the active-view count returned to zero after every case. The same probe
+passed four Linux controls covering static/dynamic programs and both UIDs.
+
+The full enforcement, mount-backend and user-namespace regression drivers
+passed. The runner now inherits /dev/null on stdin, including its zlogin
+children. This fixes the serial-console SIGTTIN interruption in VM83. The
+actual Codex 0.166.0 workspace sandbox still requested clone 0x78020011 twice
+and received EINVAL with both experiments enabled. No Linux mount-namespace
+creation syscall is enabled by this checkpoint.
+
+Brand, lx_proc and namespace-test modules were clean-built for release and
+debug. Runtime used release on the retained mixed VM73 common kernel, LOFS,
+ZFS and user libraries. Both experimental switches were reset to zero and
+all views retired. The zone halted, the pool exported, filesystem sync
+completed and QEMU exited. See lab/mount-process-results.json and
+lab/mount-process-linux-results.json for source/artifact hashes and results.
+This does not establish full-platform or production-host acceptance.
