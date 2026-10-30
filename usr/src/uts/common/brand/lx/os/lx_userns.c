@@ -100,9 +100,8 @@ lx_userns_map_write(lx_userns_t *ns, int gid, const lx_userns_cred_t *opener,
 	lx_idmap_t *map;
 	int error;
 
-	if (ns->un_parent == NULL || (opener->luc_ns != ns &&
-	    opener->luc_ns != ns->un_parent))
-		return (EPERM);
+	if ((error = lx_userns_map_write_scope(ns, opener->luc_ns)) != 0)
+		return (error);
 	if (offset != 0 || size >= 4096)
 		return (EINVAL);
 	map = kmem_alloc(sizeof (*map), KM_SLEEP);
@@ -428,4 +427,13 @@ lx_userns_groups_allowed(lx_userns_t *ns)
 	allowed = ns->un_model.lum_setgroups;
 	mutex_exit(&ns->un_lock);
 	return (allowed);
+}
+
+/* Linux checks the captured opener's namespace before copying map data. */
+int
+lx_userns_map_write_scope(lx_userns_t *ns, lx_userns_t *opener)
+{
+	if (ns->un_parent == NULL || (opener != ns && opener != ns->un_parent))
+		return (EPERM);
+	return (0);
 }

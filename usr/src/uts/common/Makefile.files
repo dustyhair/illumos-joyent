@@ -2428,4 +2428,4 @@ TMP43X_OBJS += tmp43x.o
 AT24C_OBJS += at24c.o
 
 LX_NAMESPACE_KTEST_OBJS += lx_namespace_ktest.o lx_userns_ktest.o \
-	lx_brand_cred_ktest.o
+	lx_brand_cred_ktest.o lx_proc_maps_ktest.o

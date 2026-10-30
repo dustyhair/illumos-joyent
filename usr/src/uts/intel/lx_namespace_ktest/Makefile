@@ -8,7 +8,8 @@ include $(UTSBASE)/intel/Makefile.intel
 INC_PATH += -I$(UTSBASE)/common/brand/lx -I$(SRC)/common/brand/lx
 ALL_TARGET = $(BINARY)
 INSTALL_TARGET = $(BINARY) $(ROOTMODULE)
-LDFLAGS += -N drv/ktest -N brand/lx_brand
+INC_PATH += -I$(UTSBASE)/common/brand/lx/procfs
+LDFLAGS += -N drv/ktest -N brand/lx_brand -N fs/lx_proc
 
 .KEEP_STATE:
 def: $(DEF_DEPS)

@@ -37,5 +37,6 @@ extern void lx_userns_exec(struct proc *, const cred_t *);
 extern int lx_userns_map_actor(const cred_t *, lx_userns_t *,
     lx_userns_cred_t *);
 extern int lx_userns_groups_allowed(lx_userns_t *);
+extern int lx_userns_map_write_scope(lx_userns_t *, lx_userns_t *);
 
 #endif /* _SYS_LX_USERNS_H */

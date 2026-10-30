@@ -2090,6 +2090,9 @@ lxpr_write_userns(lxpr_node_t *node, uio_t *uio, cred_t *cred,
 	    &opener)) != 0 || (error = lx_userns_map_actor(CRED(),
 	    node->lxpr_userns, &current)) != 0)
 		return (error);
+	if (!groups && (error = lx_userns_map_write_scope(node->lxpr_userns,
+	    opener.luc_ns)) != 0)
+		return (error);
 	if (size >= (groups ? 8 : 4096) || uio->uio_loffset != 0) {
 		if (groups)
 			return (EINVAL);
