@@ -1,3 +1,6 @@
+Emulated resource-limit authority and inheritance are described in
+[Emulated resource limits](#emulated-resource-limits) below.
+
 Initial-namespace administration guards are described in
 [Initial-namespace administration](#initial-namespace-administration) below.
 Public namespace entry remains disabled.
@@ -757,3 +760,56 @@ other remaining privileged ABI checks, filesystem permissions, independent
 FSIDs and complete mount/PID/IPC/network isolation still need implementation
 or validation. An actual newest-Codex sandboxed coding workflow and complete
 platform validation remain required; no sandbox acceptance is claimed here.
+
+## Emulated resource limits
+
+The four existing per-process limits without native rctls, LOCKS, NICE,
+RTPRIO and RTTIME, now serialize reads and updates with p_lock. Raising a
+hard limit requires effective initial-namespace CAP_SYS_RESOURCE through
+lx_cap_initial. Namespace-local capability bits and backing native UID0 do
+not provide that authority. Lowering hard limits and adjusting soft limits
+within the hard limit remain permitted. The change adds no process fields.
+
+Fork copies these limits under the parent's existing p_lock and retains
+them rather than resetting them to defaults. Defaults are initialized by
+lx_setbrand when brand data is created, before a fork child receives its
+parent's copy. Ordinary lx exec retains the inherited values. The existing
+initial defaults are preserved.
+
+For these four limits, prlimit64 obtains the old value and installs the new
+value in one p_lock critical section. Input is copied before mutation and
+output after releasing the lock. Rejected hard-limit increases leave both
+the stored limits and the caller's old-value buffer unchanged. An aliased
+input/output buffer returns the value from before the update. Existing
+foreign-process prlimit64 support remains incomplete. This work does not
+add enforcement for the emulated limits or complete scheduling policy
+compatibility.
+
+Linux controls pass 66 identity cases per static/dynamic executable and
+three initial-namespace authority cases per executable. New controls cover
+all four emulated resources through raw setrlimit, getrlimit and prlimit64:
+soft/hard bounds, invalid pairs, finite and infinite denied increases,
+effective versus permitted authority, ordinary users, backing native UID0,
+fork and exec inheritance. A separate two-thread case exchanges 2,000
+unique soft limits and requires every preceding value to be returned
+exactly once, including the initial and final values. Initial authority
+controls change only per-process limits in short-lived children.
+
+Linux reference: https://github.com/torvalds/linux/blob/master/kernel/sys.c
+
+VM64 passes both canonical drivers without serial overrides: 66+66 identity
+cases, 19+19 capability cases, 3+3 initial-limit authority cases, and the
+existing ABI/i386/NNP/BPF/filter/signal/fork/exec/thread/map/mount/budget/
+lifetime/native-control and filesystem ACL/race suites. Runtime hashes match
+the staged modules and probes. The pool exported successfully and the VM
+completed synced poweroff. Evidence is
+lab/evidence/boot-64-emulated-rlimits-acceptance.log.
+
+Kernel brand dc6c025b53 passes clean release/debug builds. Probe/driver source
+is a0d0f82a89. Runtime uses the release object; debug remains compile-only.
+Common/unix a2f98e1dd2, ZFS/proc/elf89c4ea1aa5, ktestb756a76b32 and retained
+Native tl600d/LOFSa8b/VM30 libraries/VM46 support remain over the mixed May
+platform. This is not full-platform or actual Codex-workflow acceptance.
+No ZFS, common-kernel, pool format, physical host, boot tree or production
+Debian zone change is part of this checkpoint. Scheduling policy checks and
+public namespace creation remain incomplete.
