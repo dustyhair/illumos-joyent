@@ -1,6 +1,7 @@
 # lx seccomp enforcement probe
 
-The latest ownership and peer-ID translation checkpoint is documented in
+The native user-namespace allocation budget is documented in
+[USERNS-BUDGET.md](USERNS-BUDGET.md). Ownership and peer-ID translation is in
 [ID-BOUNDARIES.md](ID-BOUNDARIES.md). Traced exec is documented in
 [TRACED-EXEC.md](TRACED-EXEC.md). Native-backed UID/GID/groups are documented in
 [SCOPED-IDS.md](SCOPED-IDS.md), and ordinary exec in
