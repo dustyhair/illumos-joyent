@@ -13,6 +13,7 @@
 #include <sys/brand.h>
 #include <sys/cred.h>
 #include <sys/priv.h>
+#include <sys/priv_impl.h>
 #include <sys/proc.h>
 #include <sys/file.h>
 #include <sys/vnode.h>
@@ -360,6 +361,9 @@ lx_cap_native_test(ktest_ctx_hdl_t *ctx)
 	boolean_t passed = B_FALSE;
 
 	lx_cap_native_get(CRED(), &original);
+	BC_CHECK(lx_cap_initial(CRED(), LX_CAP_SYS_ADMIN) &&
+	    !lx_cap_initial(CRED(), LX_CAP_LAST + 1),
+	    "initial capability query rejected native authority or bad index");
 	wanted = original;
 	BC_CHECK((wanted.lc_permitted & LX_CAP_BIT(10)) != 0,
 	    "native fixture lacks net_privaddr");
@@ -405,6 +409,8 @@ lx_cap_native_test(ktest_ctx_hdl_t *ctx)
 	    actual.lc_inheritable == 0 &&
 	    priv_issubset(priv_basic, &CR_EPRIV(candidate)),
 	    "zero Linux capabilities erased basic native privileges");
+	BC_CHECK(!lx_cap_initial(candidate, LX_CAP_SYS_ADMIN),
+	    "zero native capabilities retained initial administration");
 	lx_cap_native_get(CRED(), &unchanged);
 	BC_CHECK(bcmp(&original, &unchanged, sizeof (original)) == 0,
 	    "copy-on-write candidate changed its source credential");
@@ -424,6 +430,29 @@ lx_cap_native_test(ktest_ctx_hdl_t *ctx)
 	    lx_userns_caps_get(scoped, &actual) == 0 &&
 	    actual.lc_effective == LX_CAP_ALL,
 	    "native capability update overwrote a scoped immutable payload");
+	crfree(candidate);
+	candidate = crdup(CRED());
+	CR_EPRIV(candidate) = CR_OEPRIV(CRED());
+	CR_PPRIV(candidate) = CR_OPPRIV(CRED());
+	CR_FLAGS(candidate) |= PRIV_AWARE;
+	BC_CHECK(crsetresuid(candidate, 1000, 1000, 1000) == 0 &&
+	    lx_cap_initial(candidate, LX_CAP_SYS_ADMIN),
+	    "initial administration depended on native UID0");
+	priv_delset(&CR_EPRIV(candidate), PRIV_SYS_MOUNT);
+	BC_CHECK(!lx_cap_initial(candidate, LX_CAP_SYS_ADMIN),
+	    "initial SYS_ADMIN ignored missing native mount authority");
+	CR_EPRIV(candidate) = CR_OEPRIV(CRED());
+	priv_delset(&CR_EPRIV(candidate), PRIV_SYS_ADMIN);
+	BC_CHECK(!lx_cap_initial(candidate, LX_CAP_SYS_ADMIN),
+	    "initial SYS_ADMIN ignored missing native admin authority");
+	CR_EPRIV(candidate) = CR_OEPRIV(CRED());
+	/* Test the realm check independently of the scoped privilege floor. */
+	crsetbrand(candidate, crgetbrand(scoped));
+	BC_CHECK(!lx_cap_initial(candidate, LX_CAP_SYS_ADMIN),
+	    "scoped credential acquired initial-realm authority");
+	lx_cap_native_get(CRED(), &unchanged);
+	BC_CHECK(bcmp(&original, &unchanged, sizeof (original)) == 0,
+	    "initial authority fixtures changed their source credential");
 	passed = B_TRUE;
 out:
 	if (scoped != NULL)
