@@ -467,6 +467,8 @@ lx_freelwp(klwp_t *lwp)
 	VERIFY(lwpd->br_ptrace_cred == NULL);
 	VERIFY(lwpd->br_ptrace_accord == NULL);
 
+	if (lwpd->br_clone_cred != NULL)
+		crfree(lwpd->br_clone_cred);
 	lx_sigframes_free(lwpd);
 	lwp->lwp_brand = NULL;
 	kmem_free(lwpd, sizeof (struct lx_lwp_data));
@@ -522,6 +524,7 @@ lx_lwpdata_free(void *lwpbd)
 	VERIFY(lwpd != NULL);
 	VERIFY(lwpd->br_lpid != NULL);
 	VERIFY(lwpd->br_affinitymask != NULL);
+	VERIFY(lwpd->br_clone_cred == NULL);
 
 	lx_sigframes_free(lwpd);
 	cpuset_free(lwpd->br_affinitymask);

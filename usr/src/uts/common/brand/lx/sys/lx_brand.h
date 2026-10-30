@@ -272,7 +272,7 @@ typedef enum lx_proc_flags {
 	/* internal flags */
 	LX_PROC_CHILD_DEATHSIG	= 0x04,
 	LX_PROC_NO_DUMP		= 0x08,	/* for lx_prctl LX_PR_[GS]ET_DUMPABLE */
-	LX_PROC_USERNS		= 0x10	/* irreversible scoped execution guard */
+	LX_PROC_USERNS		= 0x10	/* irreversible namespace guard */
 } lx_proc_flags_t;
 
 #define	LX_PROC_ALL	(LX_PROC_INSTALL_MODE | LX_PROC_STRICT_MODE)
@@ -637,6 +637,7 @@ struct lx_lwp_data {
 	int	br_syscall_entry;	/* kernel-supplied entry ABI */
 	struct lx_sigrecord *br_sigframes; /* private signal return records */
 	struct cred *br_ptrace_cred; /* tracer credential captured at attach */
+	struct cred *br_clone_cred; /* kernel-owned pending namespace clone */
 };
 
 /*

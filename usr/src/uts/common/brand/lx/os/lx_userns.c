@@ -694,6 +694,87 @@ lx_userns_entry_check(proc_t *p)
 	return (0);
 }
 
+static int
+lx_userns_cred_create(const cred_t *source, cred_t **result)
+{
+	lx_userns_cred_t actor;
+	lx_userns_t *ns = NULL;
+	int error;
+
+	*result = NULL;
+	if ((error = lx_userns_map_actor(source,
+	    ztolxzd(curzone)->lxzd_userns, &actor)) != 0 ||
+	    (error = lx_userns_child_create(&actor, &ns)) != 0)
+		return (error);
+	actor.luc_ns = ns;
+	lx_caps_new_namespace(&actor.luc_caps);
+	*result = lx_userns_native_for((cred_t *)source, &actor);
+	lx_userns_rele(ns);
+	return (0);
+}
+
+boolean_t
+lx_userns_clone_enabled(void)
+{
+	return (lx_userns_experimental != 0);
+}
+
+/* Until shared-FS/parallel parent changes are supported, use entry's checks. */
+int
+lx_userns_clone_prepare(cred_t **result)
+{
+	proc_t *p = curproc;
+	lx_lwp_data_t *lwpd = ttolxlwp(curthread);
+	cred_t *source = NULL;
+	int error;
+
+	*result = NULL;
+	if (!lx_userns_experimental)
+		return (EINVAL);
+	if (get_udatamodel() != DATAMODEL_NATIVE ||
+	    lwpd->br_syscall_entry != BRAND_ENTRY_AMD64 ||
+	    lwpd->br_stack_mode != LX_STACK_MODE_BRAND)
+		return (EOPNOTSUPP);
+	mutex_enter(&p->p_lock);
+	error = lx_userns_entry_check(p);
+	if (error == 0) {
+		mutex_enter(&p->p_crlock);
+		crhold(source = CRED());
+		mutex_exit(&p->p_crlock);
+	}
+	mutex_exit(&p->p_lock);
+	if (error != 0)
+		return (error);
+	error = lx_userns_cred_create(source, result);
+	crfree(source);
+	return (error);
+}
+
+/* The native fork hook runs in the parent before this child can execute. */
+void
+lx_userns_clone_install(klwp_t *child, const cred_t *prepared)
+{
+	proc_t *p = lwptoproc(child);
+	kthread_t *task = lwptot(child);
+	cred_t *scoped = (cred_t *)prepared, *old_process, *old_task;
+
+	VERIFY(p != curproc && p->p_stat == SIDL);
+	mutex_enter(&p->p_lock);
+	mutex_enter(&p->p_crlock);
+	VERIFY(p->p_lwpcnt == 1);
+	VERIFY3U(crgetruid(p->p_cred), ==, crgetruid(scoped));
+	old_process = p->p_cred;
+	old_task = task->t_cred;
+	crhold(scoped);
+	crhold(scoped);
+	p->p_cred = task->t_cred = scoped;
+	ptolxproc(p)->l_flags |= LX_PROC_USERNS;
+	mutex_exit(&p->p_crlock);
+	mutex_exit(&p->p_lock);
+	crfree(old_process);
+	crfree(old_task);
+}
+
 /*
  * Publish the first or a nested namespace only for a single, unshared task.
  * Allocation and credential release stay outside native process locks.
@@ -705,8 +786,6 @@ lx_userns_unshare(uintptr_t flags)
 	proc_t *p = curproc;
 	lx_proc_data_t *pd = ptolxproc(p);
 	lx_lwp_data_t *lwpd = ttolxlwp(curthread);
-	lx_userns_cred_t actor;
-	lx_userns_t *ns = NULL;
 	cred_t *source = NULL, *base = NULL, *scoped = NULL;
 	cred_t *old_process, *old_task;
 	int error;
@@ -732,13 +811,8 @@ lx_userns_unshare(uintptr_t flags)
 	if (error != 0)
 		return (set_errno(error));
 
-	if ((error = lx_userns_map_actor(source,
-	    ztolxzd(p->p_zone)->lxzd_userns, &actor)) != 0 ||
-	    (error = lx_userns_child_create(&actor, &ns)) != 0)
+	if ((error = lx_userns_cred_create(source, &scoped)) != 0)
 		goto out;
-	actor.luc_ns = ns;
-	lx_caps_new_namespace(&actor.luc_caps);
-	scoped = lx_userns_native_for(source, &actor);
 
 	mutex_enter(&p->p_lock);
 	mutex_enter(&p->p_crlock);
@@ -765,7 +839,6 @@ lx_userns_unshare(uintptr_t flags)
 out:
 	if (scoped != NULL)
 		crfree(scoped);
-	lx_userns_rele(ns);
 	crfree(base);
 	crfree(source);
 	return (error != 0 ? set_errno(error) : 0);

@@ -612,12 +612,15 @@ lx_kernel_fork(int nr, uintptr_t *args)
 	proc_t *p = curproc;
 	lx_proc_data_t *pd = ptolxproc(p);
 	uint_t flags = nr == 57 ? LX_SIGCHLD : args[0];
-	uint_t allowed = LX_CSIGNAL | LX_CLONE_PARENT_SETTID |
+	lx_lwp_data_t *lwpd = ttolxlwp(curthread);
+	uint_t allowed = LX_CSIGNAL | LX_CLONE_NEWUSER |
+	    LX_CLONE_PARENT_SETTID |
 	    LX_CLONE_CHILD_SETTID | LX_CLONE_CHILD_CLEARTID;
 	pid_t pid;
 	boolean_t unsupported;
 
-	VERIFY(lx_kernel_restricted(p));
+	VERIFY(lx_kernel_restricted(p) ||
+	    (nr == 56 && (flags & LX_CLONE_NEWUSER) != 0));
 	if (nr == 56 && args[0] == flags &&
 	    (flags & LX_CLONE_THREAD) != 0)
 		return (lx_kernel_thread(flags, args));
@@ -634,8 +637,22 @@ lx_kernel_fork(int nr, uintptr_t *args)
 	if (unsupported)
 		return (set_errno(EOPNOTSUPP));
 
+	VERIFY(lwpd->br_clone_cred == NULL);
+	if (nr == 56 && (flags & LX_CLONE_NEWUSER) != 0) {
+		int error = lx_userns_clone_prepare(&lwpd->br_clone_cred);
+
+		if (error != 0)
+			return (set_errno(error));
+	}
+
 	pid = (pid_t)forksys(0, (flags & LX_CSIGNAL) == 0 ?
 	    FORK_NOSIGCHLD : 0);
+	if (lwpd->br_clone_cred != NULL) {
+		cred_t *prepared = lwpd->br_clone_cred;
+
+		lwpd->br_clone_cred = NULL;
+		crfree(prepared);
+	}
 	if (pid > 0 && (flags & LX_CLONE_PARENT_SETTID) != 0)
 		(void) suword32((void *)args[2], pid);
 	return (pid);
@@ -650,10 +667,13 @@ lx_kernel_fork_child(klwp_t *parent, klwp_t *child)
 	proc_t *cp = lwptoproc(child);
 	uint_t flags;
 
-	if (!lx_kernel_restricted(lwptoproc(parent)) ||
+	if ((!lx_kernel_restricted(lwptoproc(parent)) &&
+	    src->br_clone_cred == NULL) ||
 	    src->br_stack_mode != LX_STACK_MODE_BRAND ||
 	    (src->br_syscall_num != 56 && src->br_syscall_num != 57))
 		return;
+	if (src->br_clone_cred != NULL)
+		lx_userns_clone_install(child, src->br_clone_cred);
 	VERIFY(lx_kernel_restricted(cp));
 	flags = src->br_syscall_num == 57 ? LX_SIGCHLD :
 	    src->br_syscall_args[0];
