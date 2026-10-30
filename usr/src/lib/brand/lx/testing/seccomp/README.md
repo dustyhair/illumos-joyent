@@ -1,6 +1,7 @@
 # lx seccomp enforcement probe
 
-The latest scoped ordinary-exec checkpoint and its limits are recorded in
+The latest native-backed UID/GID/group checkpoint and its limits are recorded
+in [SCOPED-IDS.md](SCOPED-IDS.md). Ordinary exec is documented in
 [SCOPED-EXEC.md](SCOPED-EXEC.md). Public namespace entry remains disabled.
 
 Build and run this test inside a Linux environment or an lx zone:

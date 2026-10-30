@@ -16,7 +16,9 @@ The kernel-entry guard also applies to scoped processes without a seccomp
 filter. Unsupported native and usermode-emulation transitions terminate the
 process. At VM34, scoped exec and UID/GID mutations returned EOPNOTSUPP. Ordinary
 scoped exec is now implemented and validated in [SCOPED-EXEC.md](SCOPED-EXEC.md).
-Scoped UID/GID mutations remain explicitly unsupported.
+Scoped UID/GID and supplementary-group transitions are now implemented for
+AMD64 and validated in [SCOPED-IDS.md](SCOPED-IDS.md). The earlier VM34 results
+below describe the restrictions at that checkpoint.
 
 ## Evidence before the trap refresh fix
 

@@ -18,8 +18,9 @@ Ordinary exec handles root, bounding and ambient capabilities, NOROOT,
 no_new_privs and clearing KEEPCAPS while retaining its lock. Set-id files are
 allowed when NNP or the filesystem suppresses set-id effects. Other privileged
 file transitions return EOPNOTSUPP. Native Solaris ELF execution still returns
-ENOEXEC, and native entry remains prohibited after exec. UID/GID mutations are
-still explicitly unsupported in scoped tasks.
+ENOEXEC, and native entry remains prohibited after exec. UID/GID and group
+mutations were unsupported at VM36; the later AMD64 implementation and its
+limits are documented in [SCOPED-IDS.md](SCOPED-IDS.md).
 
 Scoped security.capability writes now return EOPNOTSUPP. They cannot use the
 legacy initial-namespace root path that reports success without storing the
@@ -98,7 +99,7 @@ provenance is /build/RUNNING_TESTS.md. Production hosts and zones are unchanged.
 
 ## Remaining work
 
-Public namespace entry, full ID translation and identity transitions,
+Public namespace entry, remaining ID-bearing interfaces and filesystem IDs,
 per-task procfs/concurrency checks, traced/privileged exec, file capabilities,
 and complete mount/PID/IPC/network isolation remain unfinished. Acceptance
 here covers untraced, identity-mapped lab fixtures. The normal Codex sandbox
