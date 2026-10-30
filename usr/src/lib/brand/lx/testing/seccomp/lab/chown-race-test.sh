@@ -42,13 +42,13 @@ for probe in /test/scope_ids /test/dynamic/scope_ids; do
     cat > /lab/chown-race.d <<DSCRIPT
 BEGIN { printf("CHOWN_TRACE_READY\n"); }
 fbt:zfs:zfs_setattr:entry /pid == $target_pid/ { self->checks=0; self->granted=0; }
-fbt:genunix:brand_cred_vnode_setattr:entry /pid == $target_pid/ {
+fbt:unix:brand_cred_vnode_setattr:entry /pid == $target_pid/ {
     self->uid=((vattr_t *)arg3)->va_uid; self->gid=((vattr_t *)arg3)->va_gid; self->checks++;
 }
-fbt:genunix:brand_cred_vnode_setattr:return /pid == $target_pid && self->checks == 1 && arg1 == 0 && self->uid == 1001 && self->delays < 10/ {
+fbt:unix:brand_cred_vnode_setattr:return /pid == $target_pid && self->checks == 1 && arg1 == 0 && self->uid == 1001 && self->delays < 10/ {
     self->granted=1; self->delays++; chill(17000000);
 }
-fbt:genunix:brand_cred_vnode_setattr:return /pid == $target_pid && self->checks > 1 && self->granted && self->uid == 2000 && self->gid == 2000/ {
+fbt:unix:brand_cred_vnode_setattr:return /pid == $target_pid && self->checks > 1 && self->granted && self->uid == 2000 && self->gid == 2000/ {
     printf("SCOPED_CHOWN_STALE_CHECK uid=%u gid=%u result=%d\n",self->uid,self->gid,arg1);
     if(arg1 == 1) { printf("SCOPED_CHOWN_STALE_DENIED\n"); }
     else { printf("SCOPED_CHOWN_STALE_VIOLATION\n"); exit(1); }
