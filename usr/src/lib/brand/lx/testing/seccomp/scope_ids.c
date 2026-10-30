@@ -1638,6 +1638,8 @@ static int chown_race_probe(void)
     for(unsigned i=0;i<1000;i++) {
         if(fchown(fd,0,0)==0) allowed++;
         else {CHECK(errno==EPERM);denied++;}
+        /* Span native ownership changes instead of exhausting one phase. */
+        (void)usleep(1000);
     }
     close(fd);printf("CHOWN_RACE_PROBE_PASS allowed=%u denied=%u\n",allowed,denied);
     return 0;
