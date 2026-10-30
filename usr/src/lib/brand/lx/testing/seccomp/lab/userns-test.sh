@@ -72,6 +72,7 @@ for probe in /test/scope_caps /test/dynamic/scope_caps \
     else
         expected='SCOPE_CAPS cases=19 failures=0'
     fi
+    : > "$scope_log"
     zlogin -S lx-probe "LX_CHOWN_TMPFS=/test/chown-tmpfs $probe" > "$scope_log" 2>&1 &
     scope_job=$!
     scope_pid=
@@ -128,6 +129,7 @@ zonecfg -z lx-probe 'set scheduling-class=FSS'
 zoneadm -z lx-probe boot
 for probe in /test/scope_ids /test/dynamic/scope_ids; do
     sched_log=/lab/$(echo "$probe" | tr / _)-initial-sched.log
+    : > "$sched_log"
     zlogin -S lx-probe "$probe --initial-sched" > "$sched_log" 2>&1 &
     sched_job=$!
     for phase in FIFO RR OTHER; do
@@ -160,6 +162,7 @@ for probe in /test/scope_ids /test/dynamic/scope_ids; do
     grep -qx INITIAL_SCHED_REPEAT_PASS "$sched_log"
 
     sched_log=/lab/$(echo "$probe" | tr / _)-scoped-sched.log
+    : > "$sched_log"
     zlogin -S lx-probe "$probe --sched-scope" > "$sched_log" 2>&1 &
     sched_job=$!
     sched_pid=

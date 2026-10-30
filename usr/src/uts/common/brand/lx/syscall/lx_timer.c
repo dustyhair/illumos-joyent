@@ -680,7 +680,7 @@ lx_clock_nanosleep(int clock, int flags, timespec_t *rqtp, timespec_t *rmtp)
 	case 4:		/* CLOCK_MONOTONIC_RAW */
 	case 5:		/* CLOCK_REALTIME_COARSE */
 	case 6:		/* CLOCK_MONOTONIC_COARSE */
-		return (set_errno(ENOTSUP));
+		return (set_errno(EOPNOTSUPP));
 	default:
 		return (set_errno(EINVAL));
 	}

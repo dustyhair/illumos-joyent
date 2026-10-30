@@ -26,9 +26,10 @@ exec_rc=$?
 zlogin -S lx-probe '/test/thread_probe'
 thread_rc=$?
 sleep_rc=0
-for probe in /test/clock_sleep /test/dynamic/clock_sleep /test/clock_sleep32; do
+for probe in /test/clock_sleep /test/dynamic/clock_sleep; do
     zlogin -S lx-probe "$probe" || sleep_rc=$?
 done
+zlogin -S lx-probe '/test/clock_sleep32 --lx' || sleep_rc=$?
 boundary_rc=0
 if test -f /usr/lib/lx_brand.so.1; then
     zlogin -S lx-probe '/test/boundary32_probe'

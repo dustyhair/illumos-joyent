@@ -2,6 +2,11 @@
 .section .text
 .global _start
 _start:
+    /* --lx expects the existing i386 seccomp rejection. */
+    cmpl $2, (%esp)
+    jne linux_filter
+    movl $1, expect_rejection
+linux_filter:
     movl $1, %ebp
     movl $172, %eax
     movl $38, %ebx
@@ -17,8 +22,15 @@ _start:
     movl $2, %ecx
     movl $program, %edx
     int $0x80
+    cmpl $1, expect_rejection
+    je lx_filter
     testl %eax, %eax
     jne failed
+    jmp sleep_tests
+lx_filter:
+    cmpl $-22, %eax
+    jne failed
+sleep_tests:
 
     /* All three supported clocks accept the 8-byte relative request. */
     incl %ebp
@@ -106,6 +118,11 @@ elapsed:
     movl $1, %ebx
     movl $message, %ecx
     movl $message_end-message, %edx
+    cmpl $1, expect_rejection
+    jne print_message
+    movl $lx_message, %ecx
+    movl $lx_message_end-lx_message, %edx
+print_message:
     int $0x80
     movl $252, %eax
     xorl %ebx, %ebx
@@ -134,6 +151,7 @@ failed:
     int $0x80
 .section .data
 .balign 4
+expect_rejection: .long 0
 program:
     .short 1
     .short 0
@@ -150,4 +168,6 @@ before: .long 0,0
 after: .long 0,0
 message: .ascii "CLOCK_SLEEP32_PASS\n"
 message_end:
+lx_message: .ascii "CLOCK_SLEEP32_PASS unfiltered; i386 seccomp remains unsupported\n"
+lx_message_end:
 .section .note.GNU-stack,"",@progbits
