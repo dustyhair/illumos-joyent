@@ -866,7 +866,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"clock_settime", lx_clock_settime,	0,		2}, /* 264 */
 	{"clock_gettime", lx_clock_gettime,	0,		2}, /* 265 */
 	{"clock_getres", lx_clock_getres,	0,		2}, /* 266 */
-	{"clock_nanosleep", NULL,		0,		4}, /* 267 */
+	{"clock_nanosleep", lx_clock_nanosleep, 0,		4}, /* 267 */
 	{"statfs64",	NULL,			0,		2}, /* 268 */
 	{"fstatfs64",	NULL,			0,		2}, /* 269 */
 	{"tgkill",	lx_tgkill,		0,		3}, /* 270 */
@@ -1200,7 +1200,7 @@ lx_sysent_t lx_sysent64[] = {
 	{"clock_settime", lx_clock_settime,	0,		2}, /* 227 */
 	{"clock_gettime", lx_clock_gettime,	0,		2}, /* 228 */
 	{"clock_getres", lx_clock_getres,	0,		2}, /* 229 */
-	{"clock_nanosleep", NULL,		0,		4}, /* 230 */
+	{"clock_nanosleep", lx_clock_nanosleep, 0,		4}, /* 230 */
 	{"exit_group",	NULL,			0,		1}, /* 231 */
 	{"epoll_wait",	lx_epoll_wait,		0,		4}, /* 232 */
 	{"epoll_ctl",	lx_epoll_ctl,		0,		4}, /* 233 */

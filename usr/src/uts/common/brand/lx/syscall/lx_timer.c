@@ -35,6 +35,7 @@
 #include <sys/brand.h>
 #include <sys/lx_brand.h>
 #include <sys/lx_impl.h>
+#include <sys/int_limits.h>
 #include <lx_signum.h>
 
 /*
@@ -634,4 +635,117 @@ long
 lx_nanosleep(timespec_t *rqtp, timespec_t *rmtp)
 {
 	return (nanosleep(rqtp, rmtp));
+}
+
+/* Convert a validated interval without overflowing the native time source. */
+static hrtime_t
+lx_sleep_deadline(const timespec_t *request, hrtime_t base)
+{
+	hrtime_t interval;
+
+	if (request->tv_sec > INT64_MAX / NANOSEC)
+		return (INT64_MAX);
+	interval = request->tv_sec * NANOSEC;
+	if (INT64_MAX - interval < request->tv_nsec)
+		return (INT64_MAX);
+	interval += request->tv_nsec;
+	if (INT64_MAX - base < interval)
+		return (INT64_MAX);
+	return (base + interval);
+}
+
+/*
+ * Linux relative sleeps use monotonic time, including CLOCK_REALTIME sleeps.
+ * Absolute realtime sleeps must instead recheck the adjustable wall clock.
+ * Reuse the native LWP delay CV so signal interruption follows nanosleep's
+ * native scheduling path, without an emulation-library transition.
+ */
+long
+lx_clock_nanosleep(int clock, int flags, timespec_t *rqtp, timespec_t *rmtp)
+{
+	kthread_t *t = curthread;
+	timespec_t request, remaining, now, until;
+	hrtime_t deadline = 0, current;
+	boolean_t absolute = (flags & 1) != 0;
+	boolean_t realtime = absolute && clock == 0;
+	int ret = 1, timecheck;
+
+	switch (clock) {
+	case 0:		/* CLOCK_REALTIME */
+	case 1:		/* CLOCK_MONOTONIC */
+	case 7:		/* CLOCK_BOOTTIME uses the lx monotonic clock. */
+		break;
+	case 2:		/* CPU clock sleeps lack a native backend. */
+	case 4:		/* CLOCK_MONOTONIC_RAW */
+	case 5:		/* CLOCK_REALTIME_COARSE */
+	case 6:		/* CLOCK_MONOTONIC_COARSE */
+		return (set_errno(ENOTSUP));
+	default:
+		return (set_errno(EINVAL));
+	}
+#ifdef _SYSCALL32_IMPL
+	if (get_udatamodel() != DATAMODEL_NATIVE) {
+		timespec32_t request32;
+
+		if (copyin(rqtp, &request32, sizeof (request32)) != 0)
+			return (set_errno(EFAULT));
+		TIMESPEC32_TO_TIMESPEC(&request, &request32);
+	} else
+#endif
+	if (copyin(rqtp, &request, sizeof (request)) != 0)
+		return (set_errno(EFAULT));
+	if (request.tv_sec < 0 || request.tv_nsec < 0 ||
+	    request.tv_nsec >= NANOSEC)
+		return (set_errno(EINVAL));
+
+	if (!realtime)
+		deadline = lx_sleep_deadline(&request,
+		    absolute ? 0 : gethrtime());
+	mutex_enter(&t->t_delay_lock);
+	while (ret > 0) {
+		if (realtime) {
+			timecheck = timechanged;
+			gethrestime(&now);
+			if (request.tv_sec < now.tv_sec ||
+			    (request.tv_sec == now.tv_sec &&
+			    request.tv_nsec <= now.tv_nsec))
+				break;
+			until = request;
+			/* Bound interval conversion for huge deadlines. */
+			if (request.tv_sec - now.tv_sec > 86400) {
+				until = now;
+				until.tv_sec += 86400;
+			}
+			ret = cv_waituntil_sig(&t->t_delay_cv,
+			    &t->t_delay_lock, &until, timecheck);
+			/* A timeout may mean the realtime clock changed. */
+			if (ret != 0)
+				ret = 1;
+		} else {
+			ret = cv_timedwait_sig_hrtime(&t->t_delay_cv,
+			    &t->t_delay_lock, deadline);
+		}
+	}
+	mutex_exit(&t->t_delay_lock);
+	if (ret != 0)
+		return (0);
+
+	/* Linux only writes a remainder for interrupted relative sleeps. */
+	if (!absolute && rmtp != NULL) {
+		current = gethrtime();
+		hrt2ts(deadline > current ? deadline - current : 0, &remaining);
+#ifdef _SYSCALL32_IMPL
+		if (get_udatamodel() != DATAMODEL_NATIVE) {
+			timespec32_t remaining32;
+
+			TIMESPEC_TO_TIMESPEC32(&remaining32, &remaining);
+			if (copyout(&remaining32, rmtp,
+			    sizeof (remaining32)) != 0)
+				return (set_errno(EFAULT));
+		} else
+#endif
+		if (copyout(&remaining, rmtp, sizeof (remaining)) != 0)
+			return (set_errno(EFAULT));
+	}
+	return (set_errno(EINTR));
 }

@@ -52,6 +52,7 @@ extern long lx_chown16();
 extern long lx_chroot();
 extern long lx_clock_getres();
 extern long lx_clock_gettime();
+extern long lx_clock_nanosleep();
 extern long lx_clock_settime();
 extern long lx_close();
 extern long lx_connect();
