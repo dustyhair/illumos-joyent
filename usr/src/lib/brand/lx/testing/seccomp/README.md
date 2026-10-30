@@ -463,11 +463,11 @@ keep their existing behavior.
 
 These entry points are internal and still require native mount privilege.
 Snapshot capture currently discovers submounts from canonical global mount
-paths and traverses them with the caller's credentials. It does not implement
-namespace cloning from an existing detached view, inherited inaccessible
+paths and traverses them with the caller's credentials. The separate copy
+backend described below handles stable detached views. Inherited inaccessible
 submounts, concurrent directory-rename handling, root overlays, recursive
-binds, remount policy changes or deferred teardown after process exit. Those
-must be completed before enabling a Linux mount namespace interface. No
+binds, remount policy changes and deferred teardown after process exit still
+need implementation before enabling a Linux mount namespace interface. No
 Linux namespace request succeeds merely because this backend exists.
 
 ## Internal user namespace backend
