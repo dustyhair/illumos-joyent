@@ -676,6 +676,7 @@ lx_clock_nanosleep(int clock, int flags, timespec_t *rqtp, timespec_t *rmtp)
 	case 7:		/* CLOCK_BOOTTIME uses the lx monotonic clock. */
 		break;
 	case 2:		/* CPU clock sleeps lack a native backend. */
+	case 3:
 	case 4:		/* CLOCK_MONOTONIC_RAW */
 	case 5:		/* CLOCK_REALTIME_COARSE */
 	case 6:		/* CLOCK_MONOTONIC_COARSE */
