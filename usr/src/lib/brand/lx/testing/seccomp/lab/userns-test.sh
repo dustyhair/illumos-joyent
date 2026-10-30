@@ -146,7 +146,7 @@ for probe in /test/scope_ids /test/dynamic/scope_ids; do
         esac
         priocntl -d -i pid "$sched_pid" > /lab/sched-native-priority.log
         cat /lab/sched-native-priority.log
-        grep -q 'FAIR SHARE' /lab/sched-native-priority.log
+        grep -q 'FAIR SHARING PROCESSES' /lab/sched-native-priority.log
         awk -v pid="$sched_pid" -v priority="$priority" '
             $1 == pid && $NF == priority && $(NF-1) == priority { found=1 }
             END { exit !found }
