@@ -32,6 +32,7 @@ static void receive(int fd, pid_t pid, uid_t uid)
 }
 int main(void)
 {
+    alarm(20);
     int pair[2], one = 1, status;
     pid_t child;
     CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);

@@ -4545,13 +4545,20 @@ tl_stream_ucred(mblk_t *mp, tl_endpt_t *tep, tl_endpt_t *peer)
 		if (out != NULL)
 			out->b_cont = mp;
 	} else {
-		/* As with datagrams, an fdbuf cannot be reallocated. */
-		if (mp->b_datap->db_frtnp != NULL &&
-		    (mp->b_datap->db_ref != 1 || MBLKSIZE(mp) < need)) {
-			tl_merror(tep->te_wq, mp, EPROTO);
-			return (NULL);
+		if (mp->b_datap->db_frtnp != NULL) {
+			/*
+			 * kstrputmsg holds a duplicate of the protocol block.
+			 * As in tl_unitdata, use the space sockfs reserved;
+			 * reallocb would lose the fdbuf ownership callback.
+			 */
+			if (mp->b_datap->db_lim - mp->b_rptr < need) {
+				tl_merror(tep->te_wq, mp, EPROTO);
+				return (NULL);
+			}
+			out = mp;
+		} else {
+			out = reallocb(mp, MAX(need, MBLKL(mp)), 1);
 		}
-		out = reallocb(mp, MAX(need, MBLKL(mp)), 1);
 	}
 	if (out == NULL) {
 		tl_memrecover(tep->te_wq, mp, need);
