@@ -53,7 +53,11 @@ if test "${LX_LAB_UPDATE_USERLIBS:-0}" = 1; then
     pfexec lofiadm -d "$usr_lo"
     usr_lo=
     pfexec lofiadm -C "$usr_image"
+    # Release the old UFS allocation before writing its replacement.
+    pfexec rm "$lab/mnt-root/usr.lgz"
+    sync
     pfexec cp "$usr_image" "$lab/mnt-root/usr.lgz"
+    pfexec digest -a sha256 "$usr_image" "$lab/mnt-root/usr.lgz"
 fi
 pfexec cp "$lab/lx-root.tar" "$lab/mnt-root/lab/lx-root.tar"
 pfexec cp "$lab/enforcement-test.sh" "$lab/mnt-root/lab/enforcement-test.sh"
