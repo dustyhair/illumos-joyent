@@ -32,8 +32,10 @@ lx_brand_cred_test_copies(ktest_ctx_hdl_t *ctx)
 	cred_t *original = NULL, *copy = NULL, *keep = NULL, *temporary;
 	boolean_t two_refs = B_FALSE, passed = B_FALSE;
 	proc_t *target = kmem_zalloc(sizeof (*target), KM_SLEEP);
+	struct plock lock = { 0 };
 	uint_t variant;
 
+	target->p_lockp = &lock;
 	mutex_init(&target->p_crlock, NULL, MUTEX_DEFAULT, NULL);
 	mutex_init(&target->p_lock, NULL, MUTEX_DEFAULT, NULL);
 	target->p_cred = CRED();
@@ -142,10 +144,12 @@ lx_brand_cred_test_access(ktest_ctx_hdl_t *ctx)
 	cred_t *basic = lx_userns_native_cred(CRED()), *real = NULL;
 	cred_t *captured = NULL, *initial_real = NULL;
 	proc_t *target = kmem_zalloc(sizeof (*target), KM_SLEEP);
+	struct plock lock = { 0 };
 	lx_proc_data_t *pd = kmem_zalloc(sizeof (*pd), KM_SLEEP);
 	char path[MAXPATHLEN], uidmap[64], gidmap[64];
 	boolean_t passed = B_FALSE;
 
+	target->p_lockp = &lock;
 	mutex_init(&target->p_crlock, NULL, MUTEX_DEFAULT, NULL);
 	mutex_init(&target->p_lock, NULL, MUTEX_DEFAULT, NULL);
 	target->p_brand = &lx_brand;
