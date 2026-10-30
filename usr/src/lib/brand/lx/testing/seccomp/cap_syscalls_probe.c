@@ -173,12 +173,64 @@ effective_and_zero(void)
     return 0;
 }
 
+static int
+remote_atomic(void)
+{
+    int ready[2], go[2], finish[2], status;
+    char byte;
+    CHECK(pipe(ready) == 0 && pipe(go) == 0 && pipe(finish) == 0);
+    pid_t child = fork();
+    CHECK(child >= 0);
+    if (child == 0) {
+        caps_t data;
+        close(ready[0]); close(go[1]); close(finish[1]);
+        if (get(data) != 0 || (data[0].effective & BIND) == 0)
+            _exit(2);
+        data[0].inheritable |= BIND;
+        if (set(data) != 0 || write(ready[1], "x", 1) != 1 ||
+            read(go[0], &byte, 1) != 1)
+            _exit(2);
+        data[0].effective &= ~BIND;
+        data[0].permitted &= ~BIND;
+        data[0].inheritable &= ~BIND;
+        if (set(data) != 0 || write(ready[1], "x", 1) != 1 ||
+            read(finish[0], &byte, 1) != 1)
+            _exit(2);
+        _exit(0);
+    }
+    close(ready[1]); close(go[0]); close(finish[0]);
+    CHECK(read(ready[0], &byte, 1) == 1);
+    struct __user_cap_header_struct h = { V3, child };
+    caps_t data;
+    CHECK(syscall(SYS_capget, &h, data) == 0 &&
+        (data[0].effective & BIND) != 0 &&
+        (data[0].permitted & BIND) != 0 &&
+        (data[0].inheritable & BIND) != 0);
+    CHECK(write(go[1], "x", 1) == 1);
+    for (unsigned i = 0; i < 256; i++) {
+        CHECK(syscall(SYS_capget, &h, data) == 0);
+        unsigned e = !!(data[0].effective & BIND);
+        unsigned p = !!(data[0].permitted & BIND);
+        unsigned inherited = !!(data[0].inheritable & BIND);
+        CHECK(e == p && p == inherited);
+    }
+    CHECK(read(ready[0], &byte, 1) == 1 &&
+        syscall(SYS_capget, &h, data) == 0 &&
+        ((data[0].effective | data[0].permitted | data[0].inheritable) & BIND) == 0);
+    CHECK(write(finish[1], "x", 1) == 1);
+    close(ready[0]); close(go[1]); close(finish[1]);
+    CHECK(waitpid(child, &status, 0) == child && WIFEXITED(status) &&
+        WEXITSTATUS(status) == 0);
+    CHECK(syscall(SYS_capget, &h, data) == -1 && errno == ESRCH);
+    return 0;
+}
+
 int
 main(int argc, char **argv)
 {
     int (*tests[])(void) = { versions, negotiation, version_boundary, pid_errors,
         inheritable_only, inheritable_outside_permitted, failed_atomic,
-        unknown_high_bits, effective_and_zero };
+        unknown_high_bits, effective_and_zero, remote_atomic };
     unsigned failed = 0;
     int filter = argc == 2 && strcmp(argv[1], "--filter") == 0;
     for (unsigned i = 0; i < sizeof tests / sizeof tests[0]; i++) {

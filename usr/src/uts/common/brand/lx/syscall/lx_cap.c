@@ -211,6 +211,7 @@ lx_cap_native_update(cred_t *cred, const lx_caps_t *wanted)
 	priv_set_t effective, permitted, inheritable;
 	int error;
 
+	ASSERT(cred->cr_ref <= 2);
 	if (crgetbrand(cred) != NULL)
 		return (EOPNOTSUPP);
 	lx_cap_native_get(cred, &caps);

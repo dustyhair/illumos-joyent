@@ -13,6 +13,8 @@
 #include <sys/file.h>
 #include <sys/vnode.h>
 #include <sys/lx_userns.h>
+#include <sys/lx_cap.h>
+#include <sys/priv_impl.h>
 #include <sys/lx_brand.h>
 
 extern brand_t lx_brand;
@@ -295,6 +297,87 @@ out:
 	mutex_destroy(&target->p_lock);
 	mutex_destroy(&target->p_crlock);
 	kmem_free(target, sizeof (*target));
+	if (passed)
+		KT_PASS(ctx);
+}
+
+void
+lx_cap_native_test(ktest_ctx_hdl_t *ctx)
+{
+	cred_t *candidate = crdup(CRED()), *scoped = NULL;
+	lx_userns_t *root = lx_userns_root_create(), *ns = NULL;
+	lx_userns_cred_t actor = { 0 };
+	lx_caps_t original, wanted, actual, unchanged;
+	cred_priv_t saved;
+	boolean_t passed = B_FALSE;
+
+	lx_cap_native_get(CRED(), &original);
+	wanted = original;
+	BC_CHECK((wanted.lc_permitted & LX_CAP_BIT(10)) != 0,
+	    "native fixture lacks net_privaddr");
+	wanted.lc_inheritable &= ~LX_CAP_BIT(10);
+	BC_CHECK(lx_cap_native_update(candidate, &wanted) == 0,
+	    "inheritable-only capability drop failed");
+	lx_cap_native_get(candidate, &actual);
+	BC_CHECK(actual.lc_effective == wanted.lc_effective &&
+	    actual.lc_permitted == wanted.lc_permitted &&
+	    actual.lc_inheritable == wanted.lc_inheritable,
+	    "inheritable-only update changed the wrong sets");
+	wanted.lc_inheritable |= LX_CAP_BIT(10);
+	BC_CHECK(lx_cap_native_update(candidate, &wanted) == 0,
+	    "inheritable-only capability addition failed");
+	wanted.lc_effective &= ~LX_CAP_BIT(10);
+	wanted.lc_permitted &= ~LX_CAP_BIT(10);
+	BC_CHECK(lx_cap_native_update(candidate, &wanted) == 0,
+	    "inheritable capability could not outlive permitted capability");
+	lx_cap_native_get(candidate, &actual);
+	BC_CHECK((actual.lc_inheritable & LX_CAP_BIT(10)) != 0 &&
+	    (actual.lc_permitted & LX_CAP_BIT(10)) == 0,
+	    "native permitted drop erased the inheritable set");
+	saved = *CR_PRIVS(candidate);
+	wanted.lc_effective |= LX_CAP_BIT(10);
+	BC_CHECK(lx_cap_native_update(candidate, &wanted) == EPERM &&
+	    bcmp(&saved, CR_PRIVS(candidate), sizeof (saved)) == 0,
+	    "rejected capability update partially changed its credential");
+	wanted = actual;
+	wanted.lc_effective &= ~LX_CAP_BIT(LX_CAP_SETUID);
+	BC_CHECK(lx_cap_native_update(candidate, &wanted) == EPERM &&
+	    bcmp(&saved, CR_PRIVS(candidate), sizeof (saved)) == 0,
+	    "coupled native SETUID/SETGID privileges pretended to separate");
+	bzero(&wanted, sizeof (wanted));
+	BC_CHECK(lx_cap_native_update(candidate, &wanted) == 0,
+	    "native zero capability sets failed");
+	lx_cap_native_get(candidate, &actual);
+	BC_CHECK(actual.lc_effective == 0 && actual.lc_permitted == 0 &&
+	    actual.lc_inheritable == 0 &&
+	    priv_issubset(priv_basic, &CR_EPRIV(candidate)),
+	    "zero Linux capabilities erased basic native privileges");
+	lx_cap_native_get(CRED(), &unchanged);
+	BC_CHECK(bcmp(&original, &unchanged, sizeof (original)) == 0,
+	    "copy-on-write candidate changed its source credential");
+
+	actor.luc_ns = root;
+	actor.luc_uid = crgetuid(CRED());
+	actor.luc_gid = crgetgid(CRED());
+	BC_CHECK(lx_userns_child_create(&actor, &ns) == 0,
+	    "cannot create scoped capability fixture");
+	actor.luc_ns = ns;
+	lx_caps_new_namespace(&actor.luc_caps);
+	scoped = lx_userns_native_for(CRED(), &actor);
+	BC_CHECK(lx_userns_caps_get(scoped, &actual) == 0 &&
+	    actual.lc_effective == LX_CAP_ALL,
+	    "scoped capability query fell back to native privilege mapping");
+	BC_CHECK(lx_cap_native_update(scoped, &wanted) == EOPNOTSUPP &&
+	    lx_userns_caps_get(scoped, &actual) == 0 &&
+	    actual.lc_effective == LX_CAP_ALL,
+	    "native capability update overwrote a scoped immutable payload");
+	passed = B_TRUE;
+out:
+	if (scoped != NULL)
+		crfree(scoped);
+	crfree(candidate);
+	lx_userns_rele(ns);
+	lx_userns_rele(root);
 	if (passed)
 		KT_PASS(ctx);
 }
