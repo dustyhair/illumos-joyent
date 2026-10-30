@@ -1,3 +1,7 @@
+Experimental amd64 `unshare(CLONE_NEWUSER)` entry is implemented and disabled
+by default. See [USERNS-ENTRY.md](USERNS-ENTRY.md). Namespace clone entry and
+mount/PID/IPC/network isolation remain incomplete.
+
 Scoped CPU-affinity and scheduling authority are described in
 [Scheduling and affinity](#scheduling-and-affinity) below.
 
