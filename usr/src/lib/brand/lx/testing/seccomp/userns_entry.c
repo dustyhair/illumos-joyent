@@ -131,6 +131,24 @@ static int inheritance(void)
     CHECK(waitpid(child,&status,0)==child && WIFEXITED(status) && WEXITSTATUS(status)==0);
     return image();
 }
+static int memory_owner(void)
+{
+    CHECK(enter()==0);
+    pid_t parent=getpid();char path[80];snprintf(path,sizeof(path),"/proc/%d/maps",parent);
+    for(int dumpable=1;dumpable>=0;dumpable--) {
+        CHECK(prctl(PR_SET_DUMPABLE,dumpable,0,0,0)==0);
+        int own=open("/proc/self/maps",O_RDONLY|O_CLOEXEC);CHECK(own>=0);close(own);
+        pid_t child=fork();int status;CHECK(child>=0);
+        if(child==0) {
+            if(!(capbits()&(1ULL<<CAP_SYS_PTRACE))) _exit(1);
+            errno=0;int fd=open(path,O_RDONLY|O_CLOEXEC),error=errno;
+            if(fd>=0) close(fd);
+            _exit(dumpable ? fd<0 : !(fd<0 && (error==EPERM || error==EACCES)));
+        }
+        CHECK(waitpid(child,&status,0)==child && WIFEXITED(status) && WEXITSTATUS(status)==0);
+    }
+    CHECK(prctl(PR_SET_DUMPABLE,1,0,0,0)==0);return 0;
+}
 static void *worker(void *unused)
 {
     (void)unused;atomic_store(&ready,1);
@@ -250,6 +268,7 @@ int main(int argc,char **argv)
     run("nested namespace maps parent-relative identities",nested);
     run("namespace depth limit preserves current credentials",depth);
     run("fork and exec preserve namespace and NNP",inheritance);
+    run("entry retains the older address-space owner namespace",memory_owner);
     run("multithreaded entry rejects without mutation",threads_case);
     run("nested multithreaded entry rejects without mutation",scoped_threads);
     run("chroot entry is denied",chroot_case);

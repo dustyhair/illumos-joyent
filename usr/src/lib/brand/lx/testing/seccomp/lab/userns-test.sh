@@ -18,7 +18,8 @@ trap cleanup EXIT
 (cd /zones/lx-probe-zfs/root &&
     tar xf /lab/lx-root.tar ./test/proc_maps_baseline \
         ./test/cap_syscalls_probe ./test/cap_syscalls_probe32 ./test/scope_caps \
-        ./test/dynamic/scope_caps ./test/scope_ids ./test/dynamic/scope_ids)
+        ./test/dynamic/scope_caps ./test/scope_ids ./test/dynamic/scope_ids \
+        ./test/userns_entry ./test/dynamic/userns_entry)
 # The vendor bundle lives on read-only ISO media, outside the small archive.
 if test ! -x /zones/lx-probe-zfs/root/test/codex-current/bin/codex; then
     mkdir -p /mnt/lx-media
@@ -194,5 +195,6 @@ done
 cleanup
 zonecfg -z lx-probe 'set scheduling-class=TS'
 trap - EXIT
+/lab/userns-entry-test.sh
 /lab/ktest run lx_namespace:user:credentials
 echo LX_USERNS_BACKEND_PASS

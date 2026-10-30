@@ -86,6 +86,8 @@ if test -f "$lab/userns-budget-native"; then
     pfexec cp "$lab/userns-budget-native" "$lab/mnt-root/lab/userns-budget-native"
     pfexec chmod 0555 "$lab/mnt-root/lab/userns-budget-native"
 fi
+pfexec cp "$lab/userns-entry-test.sh" "$lab/mnt-root/lab/userns-entry-test.sh"
+pfexec chmod 0555 "$lab/mnt-root/lab/userns-entry-test.sh"
 pfexec cp "$lab/lx-root.tar" "$lab/mnt-root/lab/lx-root.tar"
 pfexec cp "$lab/enforcement-test.sh" "$lab/mnt-root/lab/enforcement-test.sh"
 pfexec chmod 0555 "$lab/mnt-root/lab/enforcement-test.sh"
