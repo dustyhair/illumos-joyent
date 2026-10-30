@@ -761,7 +761,7 @@ ns_zone_quota(ktest_ctx_hdl_t *ctx)
 		NS_CHECK(error == 0, "cannot create zone-charged view");
 		error = lx_mntns_view_clone(a, CRED(), &b);
 		NS_CHECK(error == 0, "cannot clone zone-charged view");
-		/* Native controller observes used=2, then lowers maximum to 1. */
+		/* Native controller observes used=2 and lowers the limit. */
 		for (i = 0; i < 100; i++) {
 			lx_mntns_budget_get(budget, &maximum, &used);
 			if (maximum == 1)
