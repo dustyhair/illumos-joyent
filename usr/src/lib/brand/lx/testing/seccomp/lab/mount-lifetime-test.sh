@@ -49,5 +49,11 @@ printf '%s\n' 'lx_brand`lx_mntns_nviews/D' \
     'lx_brand`lx_userns_experimental/D' \
     'lx_brand`lx_seccomp_experimental/D' | mdb -k > /lab/mount-lifetime-end.log
 cat /lab/mount-lifetime-end.log
-awk '$NF == "0" { n++ } END { exit n != 3 }' /lab/mount-lifetime-end.log
+awk -F: '
+    NF == 2 {
+        gsub(/[ \t]/, "", $2)
+        if ($2 == "0") n++
+    }
+    END { exit n != 3 }
+' /lab/mount-lifetime-end.log
 echo LX_MOUNT_LIFETIME_PASS
