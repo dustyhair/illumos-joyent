@@ -15,6 +15,7 @@
 #include <string.h>
 #include <sys/auxv.h>
 #include <sys/prctl.h>
+#include <sys/ptrace.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
@@ -334,6 +335,154 @@ static int concurrent_snapshots(void)
     CHECK(ids(0, 0, 0, 0) && ids(1, 0, 0, 0));
     return 0;
 }
+static int set_effective(uint64_t effective)
+{
+    struct __user_cap_header_struct h = { _LINUX_CAPABILITY_VERSION_3, 0 };
+    struct __user_cap_data_struct d[2];
+    if (syscall(SYS_capget, &h, d)) return -1;
+    d[0].effective = (uint32_t)effective;
+    d[1].effective = effective >> 32;
+    return (int)syscall(SYS_capset, &h, d);
+}
+static int trace_image(int argc, char **argv)
+{
+    uint64_t expected = strtoull(argv[2], NULL, 16);
+    int error = !(ids(0, 0, 0, 0) && ids(1, 0, 0, 0) &&
+        capbits(0) == expected && capbits(1) == expected);
+    if (expected != 0 && prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) == 1)
+        error = 1;
+    if (error) fprintf(stderr, "traced exec E=%llx P=%llx expected=%llx dump=%d\n",
+        (unsigned long long)capbits(0), (unsigned long long)capbits(1),
+        (unsigned long long)expected, prctl(PR_GET_DUMPABLE, 0, 0, 0, 0));
+    if (argc == 4) {
+        int fd = atoi(argv[3]);
+        if (write(fd, &error, sizeof(error)) != sizeof(error)) return 1;
+    }
+    return error;
+}
+static void trace_exec(uint64_t expected, int report)
+{
+    char caps[32], fd[32];
+    snprintf(caps, sizeof(caps), "%llx", (unsigned long long)expected);
+    snprintf(fd, sizeof(fd), "%d", report);
+    char *args[] = {(char *)self, "--trace-image", caps, report < 0 ? NULL : fd, NULL};
+    syscall(SYS_execve, self, args, NULL);
+    _exit(90);
+}
+/* mode0 full, mode1 weak, mode2 full then weak, mode3 weak then full. */
+static int trace_case(int attach, int mode, int detach)
+{
+    CHECK(root_ids() == 0);
+    uint64_t full = capbits(0), weak = full & ~(UINT64_C(1) << CAP_SYS_PTRACE);
+    CHECK(set_effective(mode & 1 ? weak : full) == 0);
+    int ready_pipe[2], gate[2];
+    CHECK(pipe(ready_pipe) == 0 && pipe(gate) == 0);
+    pid_t child = fork();
+    CHECK(child >= 0);
+    if (child == 0) {
+        close(ready_pipe[0]); close(gate[1]);
+        if ((mode < 4 && drop_caps()) ||
+            (mode >= 4 && set_effective(mode & 1 ? weak : full)) ||
+            prctl(PR_SET_DUMPABLE, 1, 0, 0, 0)) _exit(91);
+        if (!attach && ptrace(PTRACE_TRACEME, 0, NULL, NULL)) _exit(92);
+        if (write(ready_pipe[1], "r", 1) != 1) _exit(93);
+        if (!attach) raise(SIGSTOP);
+        char byte;
+        if (read(gate[0], &byte, 1) != 1) _exit(94);
+        if (mode >= 4 && drop_caps()) _exit(101);
+        int gain = detach || (attach && !(mode & 1)) || mode == 4;
+        trace_exec(gain ? full : 0, -1);
+    }
+    close(ready_pipe[1]); close(gate[0]);
+    char byte;
+    CHECK(read(ready_pipe[0], &byte, 1) == 1);
+    close(ready_pipe[0]);
+    if (attach) CHECK(ptrace(PTRACE_ATTACH, child, NULL, NULL) == 0);
+    int status;
+    CHECK(waitpid(child, &status, 0) == child && WIFSTOPPED(status));
+    if (mode == 2 || mode == 3) CHECK(set_effective(mode & 1 ? full : weak) == 0);
+    CHECK(ptrace(detach ? PTRACE_DETACH : PTRACE_CONT, child, NULL, NULL) == 0);
+    CHECK(write(gate[1], "x", 1) == 1 && close(gate[1]) == 0);
+    for (int stops = 0; stops < 8; stops++) {
+        CHECK(waitpid(child, &status, 0) == child);
+        if (WIFEXITED(status)) return WEXITSTATUS(status);
+        CHECK(WIFSTOPPED(status) && WSTOPSIG(status) == SIGTRAP);
+        CHECK(ptrace(PTRACE_CONT, child, NULL, NULL) == 0);
+    }
+    return 1;
+}
+static int traceme_full(void) { return trace_case(0, 0, 0); }
+static int traceme_weak(void) { return trace_case(0, 1, 0); }
+static int traceme_drop(void) { return trace_case(0, 2, 0); }
+static int traceme_restore(void) { return trace_case(0, 3, 0); }
+static int traceme_child_full(void) { return trace_case(0, 4, 0); }
+static int traceme_child_weak(void) { return trace_case(0, 5, 0); }
+static int attach_full(void) { return trace_case(1, 0, 0); }
+static int attach_weak(void) { return trace_case(1, 1, 0); }
+static int attach_drop(void) { return trace_case(1, 2, 0); }
+static int attach_restore(void) { return trace_case(1, 3, 0); }
+static int detach_traceme(void) { return trace_case(0, 1, 1); }
+static int detach_attach(void) { return trace_case(1, 1, 1); }
+static int traceme_denied(void)
+{
+    CHECK(root_ids() == 0);
+    int gate[2], status;
+    CHECK(pipe(gate) == 0);
+    pid_t child = fork(); CHECK(child >= 0);
+    if (child == 0) {
+        char byte; close(gate[1]);
+        if (read(gate[0], &byte, 1) != 1) _exit(95);
+        errno = 0;
+        _exit(ptrace(PTRACE_TRACEME, 0, NULL, NULL) == -1 && errno == EPERM ? 0 : 96);
+    }
+    close(gate[0]); CHECK(drop_caps() == 0);
+    CHECK(write(gate[1], "x", 1) == 1 && close(gate[1]) == 0);
+    CHECK(waitpid(child, &status, 0) == child && WIFEXITED(status));
+    return WEXITSTATUS(status);
+}
+static int tracer_exits(void)
+{
+    CHECK(root_ids() == 0);
+    uint64_t full = capbits(0);
+    int report[2], status, result = 99;
+    CHECK(pipe(report) == 0);
+    pid_t tracer = fork(); CHECK(tracer >= 0);
+    if (tracer == 0) {
+        close(report[0]);
+        if (set_effective(full & ~(UINT64_C(1) << CAP_SYS_PTRACE))) _exit(97);
+        pid_t tracee = fork();
+        if (tracee < 0) _exit(98);
+        if (tracee == 0) {
+            if (drop_caps() || ptrace(PTRACE_TRACEME, 0, NULL, NULL)) _exit(99);
+            raise(SIGSTOP);
+            trace_exec(full, report[1]);
+        }
+        if (waitpid(tracee, &status, 0) != tracee || !WIFSTOPPED(status)) _exit(100);
+        _exit(0);
+    }
+    close(report[1]);
+    CHECK(waitpid(tracer, &status, 0) == tracer && WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    CHECK(read(report[0], &result, sizeof(result)) == sizeof(result));
+    CHECK(close(report[0]) == 0 && result == 0);
+    return 0;
+}
+static atomic_int trace_sibling_done;
+static void *trace_sibling(void *unused)
+{
+    (void)unused;
+    while (!atomic_load(&trace_sibling_done)) sched_yield();
+    return NULL;
+}
+static int traceme_task_snapshot(void)
+{
+    CHECK(root_ids() == 0);
+    pthread_t sibling;
+    CHECK(pthread_create(&sibling, NULL, trace_sibling, NULL) == 0);
+    int error = traceme_denied();
+    atomic_store(&trace_sibling_done, 1);
+    CHECK(pthread_join(sibling, NULL) == 0);
+    return error;
+}
 static int image_check(void)
 {
     CHECK(ids(0, 1, 1, 1) && ids(1, 1, 1, 1));
@@ -370,6 +519,7 @@ static int map_file(pid_t p, const char *name)
 }
 int main(int argc, char **argv)
 {
+    if (argc >= 3 && !strcmp(argv[1], "--trace-image")) return trace_image(argc, argv);
     if (argc == 2 && !strcmp(argv[1], "--image")) return image_check();
     self = argv[0];
     if (argc == 2 && !strcmp(argv[1], "--linux")) {
@@ -404,6 +554,21 @@ int main(int argc, char **argv)
     run("mapped file ownership and native access", file_access);
     run("glibc broadcasts identity changes from a worker", libc_broadcast);
     run("concurrent task identity and procfs snapshots", concurrent_snapshots);
+    run("TRACEME full parent cannot bypass child snapshot", traceme_full);
+    run("TRACEME weak tracer restricts exec", traceme_weak);
+    run("TRACEME parent drop does not replace child snapshot", traceme_drop);
+    run("TRACEME parent restore does not replace child snapshot", traceme_restore);
+    run("TRACEME retains full child attach credential", traceme_child_full);
+    run("TRACEME retains weak child attach credential", traceme_child_weak);
+    run("ATTACH privileged tracer exec", attach_full);
+    run("ATTACH weak tracer restricts exec", attach_weak);
+    run("ATTACH retains pre-drop tracer credential", attach_drop);
+    run("ATTACH retains pre-restore tracer credential", attach_restore);
+    run("TRACEME detach clears exec restriction", detach_traceme);
+    run("ATTACH detach clears exec restriction", detach_attach);
+    run("TRACEME rejects weaker parent", traceme_denied);
+    run("tracer exit clears exec restriction", tracer_exits);
+    run("TRACEME parent permission uses task credential", traceme_task_snapshot);
     if (argc == 1) {
         unsigned group = 1;
         CHECK(root_ids() == 0);

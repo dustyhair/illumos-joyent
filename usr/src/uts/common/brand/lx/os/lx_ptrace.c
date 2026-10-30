@@ -1361,6 +1361,8 @@ lx_ptrace_traceme(void)
 		crfree(parent);
 		return (EPERM);
 	}
+	crfree(parent);
+	parent = NULL;
 
 	/*
 	 * We now lock _our_ process and determine if we can install our parent
@@ -1382,8 +1384,8 @@ lx_ptrace_traceme(void)
 		lwpd->br_ptrace_attach = LX_PTA_TRACEME;
 		lwpd->br_ptrace_tracer = accord;
 		VERIFY(lwpd->br_ptrace_cred == NULL);
-		lwpd->br_ptrace_cred = parent;
-		parent = NULL;
+		/* TRACEME records the requesting child, as Linux does. */
+		crhold(lwpd->br_ptrace_cred = CRED());
 		did_attach = B_TRUE;
 		error = 0;
 
