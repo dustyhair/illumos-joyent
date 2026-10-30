@@ -16,6 +16,7 @@
 #include <sys/policy.h>
 #include <sys/lx_userns.h>
 #include <sys/lx_cap.h>
+#include <sys/lx_misc.h>
 #include <sys/lx_brand.h>
 #include <sys/proc.h>
 #include <sys/vnode.h>
@@ -251,6 +252,7 @@ typedef struct lx_userns_native {
 	brand_cred_t un_cred;
 	lx_userns_t *un_namespace;
 	lx_caps_t un_caps;
+	boolean_t un_exec_gain;
 } lx_userns_native_t;
 
 extern brand_t lx_brand;
@@ -265,6 +267,7 @@ lx_userns_native_attach(cred_t *cred, const lx_userns_cred_t *actor)
 	data->un_namespace = actor->luc_ns;
 	lx_userns_hold(data->un_namespace);
 	data->un_caps = actor->luc_caps;
+	data->un_exec_gain = B_FALSE;
 	brand_cred_init(&data->un_cred, &lx_brand);
 	crsetbrand(cred, &data->un_cred);
 	brand_cred_rele(&data->un_cred);
@@ -306,6 +309,10 @@ lx_userns_exec(proc_t *process, const cred_t *cred)
 	old = pd->l_userns_mmap;
 	pd->l_userns_mmap = owner;
 	pd->l_flags &= ~LX_PROC_NO_DUMP;
+	if (data != NULL && data->un_exec_gain) {
+		pd->l_flags |= LX_PROC_NO_DUMP;
+		process->p_flag |= SNOCD;
+	}
 	mutex_exit(&process->p_lock);
 	lx_userns_rele(old);
 }
@@ -733,6 +740,58 @@ lx_userns_prctl(int option, uintptr_t a2, uintptr_t a3, uintptr_t a4,
 	return (B_TRUE);
 }
 
+/* Native administration and namespace-relative ptrace authority. */
+static boolean_t
+lx_userns_tracer_capable(const cred_t *tracer, const cred_t *tracee)
+{
+	const lx_userns_native_t *data = (void *)crgetbrand(tracee);
+	lx_userns_cred_t actor;
+
+	VERIFY(data != NULL && data->un_cred.bc_brand == &lx_brand);
+	if (crgetzone(tracer) != crgetzone(tracee))
+		return (B_FALSE);
+	if (lx_userns_map_actor(tracer, data->un_namespace, &actor) == 0 &&
+	    lx_userns_has_cap(&actor, data->un_namespace, LX_USERNS_PTRACE))
+		return (B_TRUE);
+	return (crgetbrand(tracer) == NULL &&
+	    secpolicy_proc_access(tracer) == 0);
+}
+
+boolean_t
+lx_userns_traceme(const cred_t *parent, const cred_t *child)
+{
+	const lx_userns_native_t *to = (void *)crgetbrand(child);
+	lx_userns_cred_t actor;
+
+	/* Preserve the existing initial-namespace implementation. */
+	if (to == NULL)
+		return (B_TRUE);
+	if (lx_userns_tracer_capable(parent, child))
+		return (B_TRUE);
+	return (lx_userns_map_actor(parent, to->un_namespace, &actor) == 0 &&
+	    actor.luc_ns == to->un_namespace &&
+	    (to->un_caps.lc_permitted & ~actor.luc_caps.lc_permitted) == 0);
+}
+
+/* Replace an effective identity's native SID, just as native set-id does. */
+static int
+lx_userns_exec_sid(cred_t *candidate, const cred_t *source, boolean_t gid)
+{
+	uid_t id = gid ? crgetgid(candidate) : crgetuid(candidate);
+	ksid_t sid, *ksp = NULL;
+
+	if (id == (gid ? crgetgid(source) : crgetuid(source)))
+		return (0);
+	if (id > MAXUID) {
+		if ((gid ? ksid_lookupbygid(curproc->p_zone, id, &sid) :
+		    ksid_lookupbyuid(curproc->p_zone, id, &sid)) != 0)
+			return (EINVAL);
+		ksp = &sid;
+	}
+	crsetsid(candidate, ksp, gid ? KSID_GROUP : KSID_USER);
+	return (0);
+}
+
 /* Ordinary exec; privileged file transitions remain explicitly unsupported. */
 int
 lx_userns_cred_exec(const cred_t *source, cred_t *candidate, vnode_t *vp,
@@ -742,6 +801,10 @@ lx_userns_cred_exec(const cred_t *source, cred_t *candidate, vnode_t *vp,
 	lx_proc_data_t *pd = ptolxproc(curproc);
 	lx_userns_cred_t actor;
 	boolean_t nnp = ttolwp(curthread)->lwp_no_new_privs != 0;
+	boolean_t limited, gain;
+	cred_t *tracer;
+	lx_caps_t trial;
+	int error;
 
 	if (data == NULL || data->un_cred.bc_brand != &lx_brand ||
 	    pd == NULL || (pd->l_flags & LX_PROC_USERNS) == 0)
@@ -758,11 +821,37 @@ lx_userns_cred_exec(const cred_t *source, cred_t *candidate, vnode_t *vp,
 	actor.luc_uid = crgetuid(candidate);
 	actor.luc_gid = crgetgid(candidate);
 	actor.luc_caps = data->un_caps;
+	tracer = lx_ptrace_getcred();
+	limited = nnp || (tracer != NULL &&
+	    !lx_userns_tracer_capable(tracer, source));
+	if (tracer != NULL)
+		crfree(tracer);
+	trial = actor.luc_caps;
+	lx_caps_exec_plain(&trial,
+	    lx_userns_id(actor.luc_ns, 0, crgetruid(source), 0) == 0,
+	    lx_userns_id(actor.luc_ns, 0, crgetuid(source), 0) == 0, 0);
+	gain = (trial.lc_permitted & ~data->un_caps.lc_permitted) != 0;
 	lx_caps_exec_plain(&actor.luc_caps,
 	    lx_userns_id(actor.luc_ns, 0, crgetruid(source), 0) == 0,
-	    lx_userns_id(actor.luc_ns, 0, crgetuid(source), 0) == 0, nnp);
+	    lx_userns_id(actor.luc_ns, 0, crgetuid(source), 0) == 0, limited);
+	if (gain && limited && (nnp ||
+	    (data->un_caps.lc_effective & LX_CAP_BIT(7)) == 0)) {
+		VERIFY0(crsetresuid(candidate, crgetruid(source),
+		    crgetruid(source), crgetsuid(source)));
+		VERIFY0(crsetresgid(candidate, crgetrgid(source),
+		    crgetrgid(source), crgetsgid(source)));
+		error = lx_userns_exec_sid(candidate, source, B_FALSE);
+		if (error == 0)
+			error = lx_userns_exec_sid(candidate, source, B_TRUE);
+		if (error != 0)
+			return (error);
+		actor.luc_uid = crgetuid(candidate);
+		actor.luc_gid = crgetgid(candidate);
+	}
 	lx_userns_native_limit(candidate);
 	lx_userns_native_attach(candidate, &actor);
+	((lx_userns_native_t *)crgetbrand(candidate))->un_exec_gain =
+	    (actor.luc_caps.lc_permitted & ~data->un_caps.lc_permitted) != 0;
 	return (0);
 }
 

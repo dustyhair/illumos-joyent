@@ -462,6 +462,7 @@ lx_freelwp(klwp_t *lwp)
 	 * ptrace(2) tracers and tracees.
 	 */
 	VERIFY(lwpd->br_ptrace_tracer == NULL);
+	VERIFY(lwpd->br_ptrace_cred == NULL);
 	VERIFY(lwpd->br_ptrace_accord == NULL);
 
 	lx_sigframes_free(lwpd);

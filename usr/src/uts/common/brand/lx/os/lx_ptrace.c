@@ -221,6 +221,7 @@
 #include <sys/lx_brand.h>
 #include <sys/lx_impl.h>
 #include <sys/lx_misc.h>
+#include <sys/lx_userns.h>
 #include <lx_syscall.h>
 #include <lx_signum.h>
 
@@ -396,7 +397,8 @@ lx_ptrace_accord_get_locked(klwp_t *lwp, lx_ptrace_accord_t **accordp,
  * If successful, we return holding the accord lock (lxpa_lock).
  */
 static int
-lx_ptrace_accord_get_by_pid(pid_t lxpid, lx_ptrace_accord_t **accordp)
+lx_ptrace_accord_get_by_pid(pid_t lxpid, lx_ptrace_accord_t **accordp,
+    cred_t **credp)
 {
 	int ret = ESRCH;
 	proc_t *aproc;
@@ -437,6 +439,15 @@ lx_ptrace_accord_get_by_pid(pid_t lxpid, lx_ptrace_accord_t **accordp)
 	 * Fetch (or allocate) the accord owned by this tracer LWP:
 	 */
 	ret = lx_ptrace_accord_get_locked(alwp, accordp, B_TRUE);
+	if (ret == 0) {
+		if ((ptolxproc(aproc)->l_flags & LX_PROC_USERNS) != 0) {
+			crhold(*credp = athr->t_cred);
+		} else {
+			mutex_enter(&aproc->p_crlock);
+			crhold(*credp = aproc->p_cred);
+			mutex_exit(&aproc->p_crlock);
+		}
+	}
 
 	/*
 	 * Unlock the process and return.
@@ -872,6 +883,20 @@ lx_ptrace_getsiginfo(lx_lwp_data_t *remote, void *usiginfo)
 }
 
 
+/* Return a held attach-time snapshot, or NULL when no tracer is present. */
+cred_t *
+lx_ptrace_getcred(void)
+{
+	cred_t *cred;
+
+	mutex_enter(&curproc->p_lock);
+	cred = ttolxlwp(curthread)->br_ptrace_cred;
+	if (cred != NULL)
+		crhold(cred);
+	mutex_exit(&curproc->p_lock);
+	return (cred);
+}
+
 /*
  * Implements the PTRACE_CONT subcommand of the Linux ptrace(2) interface.
  */
@@ -920,11 +945,12 @@ lx_ptrace_cont(lx_lwp_data_t *remote, lx_ptrace_cont_flags_t flags, int signo)
  * The LWP identified by the Linux pid "lx_pid" will, if it as a tracee of the
  * current LWP, be detached and (optionally) set runnable.
  */
-static void
+static cred_t *
 lx_ptrace_detach(lx_ptrace_accord_t *accord, lx_lwp_data_t *remote, int signo,
     boolean_t restart)
 {
 	klwp_t *rlwp = remote->br_lwp;
+	cred_t *cred = remote->br_ptrace_cred;
 
 	/*
 	 * The tracee LWP may have been in "ptrace-stop" (restart is true if
@@ -939,6 +965,7 @@ lx_ptrace_detach(lx_ptrace_accord_t *accord, lx_lwp_data_t *remote, int signo,
 
 	remote->br_ptrace_attach = LX_PTA_NONE;
 	remote->br_ptrace_tracer = NULL;
+	remote->br_ptrace_cred = NULL;
 	remote->br_ptrace_flags = 0;
 
 	/*
@@ -957,6 +984,7 @@ lx_ptrace_detach(lx_ptrace_accord_t *accord, lx_lwp_data_t *remote, int signo,
 	if (restart) {
 		lx_ptrace_restart_lwp(rlwp);
 	}
+	return (cred);
 }
 
 /*
@@ -1063,6 +1091,8 @@ lx_ptrace_attach(pid_t lx_pid)
 		VERIFY(rlwpd->br_ptrace_attach == LX_PTA_NONE);
 		rlwpd->br_ptrace_attach = LX_PTA_ATTACH;
 		rlwpd->br_ptrace_tracer = accord;
+		VERIFY(rlwpd->br_ptrace_cred == NULL);
+		crhold(rlwpd->br_ptrace_cred = CRED());
 
 		/* Don't emit ptrace syscall-stop-exit event on kernel exit. */
 		rlwpd->br_ptrace_flags |= LX_PTF_NOSTOP;
@@ -1233,6 +1263,8 @@ lx_ptrace_inherit_tracer(lx_lwp_data_t *src, lx_lwp_data_t *dst)
 	 * Install the tracer and copy the current PTRACE_SETOPTIONS options.
 	 */
 	dst->br_ptrace_tracer = accord;
+	VERIFY(src->br_ptrace_cred != NULL && dst->br_ptrace_cred == NULL);
+	crhold(dst->br_ptrace_cred = src->br_ptrace_cred);
 	dst->br_ptrace_options = src->br_ptrace_options;
 
 	/*
@@ -1278,6 +1310,7 @@ static int
 lx_ptrace_traceme(void)
 {
 	int error;
+	cred_t *parent = NULL, *discard = NULL;
 	boolean_t did_attach = B_FALSE;
 	/*
 	 * Our (Tracee) LWP:
@@ -1295,7 +1328,7 @@ lx_ptrace_traceme(void)
 	 * for our parent LWP.
 	 */
 	if ((error = lx_ptrace_accord_get_by_pid(lx_lwp_ppid(lwp, NULL,
-	    NULL), &accord)) != 0) {
+	    NULL), &accord, &parent)) != 0) {
 		/*
 		 * Could not determine the Linux pid of the parent LWP, or
 		 * could not get the accord for that LWP.
@@ -1311,6 +1344,7 @@ lx_ptrace_traceme(void)
 		 * The accord is marked for death; give up now.
 		 */
 		lx_ptrace_accord_exit(accord);
+		crfree(parent);
 		return (ESRCH);
 	}
 
@@ -1320,6 +1354,13 @@ lx_ptrace_traceme(void)
 	 */
 	lx_ptrace_accord_hold(accord);
 	lx_ptrace_accord_exit(accord);
+	if (!lx_userns_traceme(parent, CRED())) {
+		lx_ptrace_accord_enter(accord);
+		lx_ptrace_accord_rele(accord);
+		lx_ptrace_accord_exit(accord);
+		crfree(parent);
+		return (EPERM);
+	}
 
 	/*
 	 * We now lock _our_ process and determine if we can install our parent
@@ -1340,6 +1381,9 @@ lx_ptrace_traceme(void)
 		VERIFY(lwpd->br_ptrace_attach == LX_PTA_NONE);
 		lwpd->br_ptrace_attach = LX_PTA_TRACEME;
 		lwpd->br_ptrace_tracer = accord;
+		VERIFY(lwpd->br_ptrace_cred == NULL);
+		lwpd->br_ptrace_cred = parent;
+		parent = NULL;
 		did_attach = B_TRUE;
 		error = 0;
 
@@ -1403,8 +1447,14 @@ lx_ptrace_traceme(void)
 
 		lwpd->br_ptrace_attach = LX_PTA_NONE;
 		lwpd->br_ptrace_tracer = NULL;
+		discard = lwpd->br_ptrace_cred;
+		lwpd->br_ptrace_cred = NULL;
 	}
 	mutex_exit(&p->p_lock);
+	if (discard != NULL)
+		crfree(discard);
+	if (parent != NULL)
+		crfree(parent);
 
 	/*
 	 * Remove our speculative hold on the accord, possibly causing it to be
@@ -1830,6 +1880,7 @@ lx_ptrace_exit_tracer(proc_t *p, lx_lwp_data_t *lwpd,
 		proc_t *rproc;
 		lx_lwp_data_t *remote;
 		kmutex_t *rmp;
+		cred_t *cred;
 
 		mutex_enter(&accord->lxpa_tracees_lock);
 		if (list_is_empty(&accord->lxpa_tracees)) {
@@ -1882,6 +1933,8 @@ lx_ptrace_exit_tracer(proc_t *p, lx_lwp_data_t *lwpd,
 		 */
 		remote->br_ptrace_attach = LX_PTA_NONE;
 		remote->br_ptrace_tracer = NULL;
+		cred = remote->br_ptrace_cred;
+		remote->br_ptrace_cred = NULL;
 		remote->br_ptrace_flags = 0;
 
 		/*
@@ -1906,6 +1959,7 @@ lx_ptrace_exit_tracer(proc_t *p, lx_lwp_data_t *lwpd,
 		 * Unlock the former tracee.
 		 */
 		mutex_exit(rmp);
+		crfree(cred);
 
 		/*
 		 * Drop the hold this tracee had on the accord.
@@ -1940,6 +1994,7 @@ static void
 lx_ptrace_exit_tracee(proc_t *p, lx_lwp_data_t *lwpd)
 {
 	lx_ptrace_accord_t *accord;
+	cred_t *cred;
 
 	VERIFY(MUTEX_HELD(&p->p_lock));
 
@@ -1992,6 +2047,8 @@ again:
 	 */
 	lwpd->br_ptrace_attach = LX_PTA_NONE;
 	lwpd->br_ptrace_tracer = NULL;
+	cred = lwpd->br_ptrace_cred;
+	lwpd->br_ptrace_cred = NULL;
 
 	/*
 	 * Remove this LWP from the accord tracee list:
@@ -2011,6 +2068,7 @@ again:
 
 	mutex_exit(&p->p_lock);
 	mutex_exit(&accord->lxpa_tracees_lock);
+	crfree(cred);
 
 	/*
 	 * Grab "pidlock" and wake the tracer if it is blocked in waitid().
@@ -2458,6 +2516,7 @@ lx_ptrace_kernel(int ptrace_op, pid_t lxpid, uintptr_t addr, uintptr_t data)
 	proc_t *rproc;
 	int error;
 	boolean_t found = B_FALSE, restart = B_TRUE;
+	cred_t *discard;
 
 	/*
 	 * PTRACE_TRACEME and PTRACE_ATTACH operations induce the tracing of
@@ -2571,12 +2630,13 @@ retry:
 			goto retry;
 		}
 
-		lx_ptrace_detach(accord, remote, (int)data, restart);
+		discard = lx_ptrace_detach(accord, remote, (int)data, restart);
 		/*
 		 * Drop the lock on both the tracee process and the tracee list.
 		 */
 		mutex_exit(&rproc->p_lock);
 		mutex_exit(&accord->lxpa_tracees_lock);
+		crfree(discard);
 
 		/*
 		 * Release a hold from the accord.

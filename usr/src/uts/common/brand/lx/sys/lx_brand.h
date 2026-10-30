@@ -632,6 +632,7 @@ struct lx_lwp_data {
 
 	int	br_syscall_entry;	/* kernel-supplied entry ABI */
 	struct lx_sigrecord *br_sigframes; /* private signal return records */
+	struct cred *br_ptrace_cred; /* tracer credential captured at attach */
 };
 
 /*

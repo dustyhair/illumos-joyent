@@ -98,6 +98,7 @@ extern void lx_stol_hwaddr(const struct sockaddr_dl *, struct sockaddr *,
     int *);
 
 extern boolean_t lx_ptrace_stop(ushort_t);
+extern struct cred *lx_ptrace_getcred(void);
 extern void lx_stop_notify(proc_t *, klwp_t *, ushort_t, ushort_t);
 extern void lx_ptrace_init(void);
 extern void lx_ptrace_fini(void);
