@@ -42,6 +42,7 @@
 #include <sys/lx_syscalls.h>
 #include <sys/lx_brand.h>
 #include <sys/lx_impl.h>
+#include <sys/lx_userns.h>
 #include <sys/lx_misc.h>
 #include <lx_errno.h>
 #include <sys/exec.h>
