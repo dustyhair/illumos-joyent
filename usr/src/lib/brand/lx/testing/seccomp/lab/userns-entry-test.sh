@@ -14,11 +14,13 @@ printf '%s\n' 'lx_brand`lx_userns_experimental/D' | mdb -k > /lab/userns-entry-d
 cat /lab/userns-entry-default.log
 awk '$NF == "0" { found=1 } END { exit !found }' /lab/userns-entry-default.log
 zoneadm -z lx-probe boot
-for probe in /test/userns_entry /test/dynamic/userns_entry; do
+for probe in /test/userns_entry /test/dynamic/userns_entry \
+    /test/userns_clone /test/dynamic/userns_clone; do
     zlogin -S lx-probe "$probe --disabled"
 done
 printf '%s\n' 'lx_brand`lx_userns_experimental/W 1' | mdb -kw
-for probe in /test/userns_entry /test/dynamic/userns_entry; do
+for probe in /test/userns_entry /test/dynamic/userns_entry \
+    /test/userns_clone /test/dynamic/userns_clone; do
     log=/lab/$(echo "$probe" | tr / _).log
     if zlogin -S lx-probe "$probe --enabled" > "$log" 2>&1; then
         cat "$log"
@@ -26,13 +28,18 @@ for probe in /test/userns_entry /test/dynamic/userns_entry; do
         cat "$log"
         exit 1
     fi
-    grep -qx 'USERNS_ENTRY cases=16 failures=0' "$log"
+    if [[ "$probe" = */userns_clone ]]; then
+        grep -qx 'USERNS_CLONE cases=11 failures=0' "$log"
+    else
+        grep -qx 'USERNS_ENTRY cases=16 failures=0' "$log"
+    fi
     /lab/ktest run lx_namespace:user:zone_budget_idle
 done
 zoneadm -z lx-probe halt
 zonecfg -z lx-probe 'select attr name=max-user-namespaces; set value=0; end;'
 zoneadm -z lx-probe boot
-for probe in /test/userns_entry /test/dynamic/userns_entry; do
+for probe in /test/userns_entry /test/dynamic/userns_entry \
+    /test/userns_clone /test/dynamic/userns_clone; do
     zlogin -S lx-probe "$probe --budget-zero"
 done
 cleanup

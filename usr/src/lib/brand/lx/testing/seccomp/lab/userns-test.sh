@@ -19,7 +19,8 @@ trap cleanup EXIT
     tar xf /lab/lx-root.tar ./test/proc_maps_baseline \
         ./test/cap_syscalls_probe ./test/cap_syscalls_probe32 ./test/scope_caps \
         ./test/dynamic/scope_caps ./test/scope_ids ./test/dynamic/scope_ids \
-        ./test/userns_entry ./test/dynamic/userns_entry)
+        ./test/userns_entry ./test/dynamic/userns_entry \
+        ./test/userns_clone ./test/dynamic/userns_clone)
 # The vendor bundle lives on read-only ISO media, outside the small archive.
 if test ! -x /zones/lx-probe-zfs/root/test/codex-current/bin/codex; then
     mkdir -p /mnt/lx-media
