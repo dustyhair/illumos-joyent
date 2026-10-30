@@ -63,7 +63,7 @@ for variant in static dynamic; do
         wait_marker "$fixture/result" '^MP_CHILD_PASS mode=2 .*failures=0$'
         orphan=
         grep -qx "MP_PARENT failures=0 uid=$uid" "$log"
-        grep -qx "MP_CHILD_PASS mode=1 uid=$uid failures=0" "$fixture/result"
+        grep -qx "MP_CHILD_SIGNAL_READY uid=$uid failures=0" "$fixture/result"
         "$binary" --base "$fixture" --outside "${args[@]}"
         printf 'LINUX_MOUNT_PROCESS_PASS variant=%s uid=%s\n' "$variant" "$uid"
     done

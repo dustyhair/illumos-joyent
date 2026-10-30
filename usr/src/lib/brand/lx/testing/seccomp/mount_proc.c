@@ -187,6 +187,12 @@ main(int argc, char **argv)
         close(STDOUT_FILENO);
         close(STDERR_FILENO);
         inside();
+        if (child_mode == 1) {
+            dprintf(report, "MP_CHILD_SIGNAL_READY uid=%ld failures=%d\n",
+                (long)getuid(), failures);
+            raise(SIGKILL);
+            return 92;
+        }
         if (child_mode == 2) {
             dprintf(report, "MP_INHERIT_READY pid=%ld\n", (long)getpid());
             raise(SIGSTOP);
@@ -230,12 +236,13 @@ main(int argc, char **argv)
     }
     memset(&info, 0, sizeof (info));
     check(child > 0 && waitid(P_PID, child, &info, WEXITED | WNOWAIT) == 0 &&
-        info.si_pid == child && info.si_code == CLD_EXITED && info.si_status == 0,
+        info.si_pid == child && info.si_code == CLD_KILLED &&
+        info.si_status == SIGKILL,
         "wait-without-reaping");
     printf("MP_ZOMBIE_PID=%ld\n", (long)child);
     raise(SIGSTOP);
-    check(waitpid(child, &status, 0) == child && WIFEXITED(status) &&
-        WEXITSTATUS(status) == 0, "reap-child");
+    check(waitpid(child, &status, 0) == child && WIFSIGNALED(status) &&
+        WTERMSIG(status) == SIGKILL, "reap-killed-child");
     child = fork();
     if (child == 0) {
         execl(argv[0], argv[0], "--base", base, "--inherited", fdarg,
