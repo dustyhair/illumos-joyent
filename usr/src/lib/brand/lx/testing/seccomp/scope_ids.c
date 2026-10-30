@@ -17,7 +17,6 @@
 #include <sys/prctl.h>
 #include <sys/ptrace.h>
 #include <sys/stat.h>
-#include <sys/sysinfo.h>
 #include <sys/utsname.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -1217,12 +1216,21 @@ static int native_root_setid(void)
     CHECK(fchmod(fd,0644)==0 && mode_is(fd,0644));
     close(fd);return 0;
 }
+static int swap_total(unsigned long long *total)
+{
+    FILE *f=fopen("/proc/meminfo","r");CHECK(f!=NULL);
+    char line[256];int found=0;
+    while(fgets(line,sizeof(line),f)!=NULL) {
+        if(sscanf(line,"SwapTotal: %llu kB",total)==1) {found=1;break;}
+    }
+    fclose(f);CHECK(found);return 0;
+}
 static int admin_denials(int scoped)
 {
-    struct sysinfo before,after;
+    unsigned long long before,after;
     struct utsname names,check;
     const char path[]="/tmp/lx-admin-not-a-swap-device";
-    CHECK(syscall(SYS_sysinfo,&before)==0 && uname(&names)==0);
+    CHECK(swap_total(&before)==0 && uname(&names)==0);
     errno=0;CHECK(syscall(SYS_swapoff,path)==-1 && errno==EPERM);
     errno=0;CHECK(syscall(SYS_swapoff,NULL)==-1 && errno==EPERM);
     errno=0;CHECK(syscall(SYS_swapon,path,0)==-1 && errno==EPERM);
@@ -1240,7 +1248,7 @@ static int admin_denials(int scoped)
         errno=0;CHECK(syscall(SYS_syslog,5,NULL,0)==-1 && errno==EPERM);
         errno=0;CHECK(syscall(SYS_vhangup)==-1 && errno==EPERM);
     }
-    CHECK(syscall(SYS_sysinfo,&after)==0 && after.totalswap==before.totalswap);
+    CHECK(swap_total(&after)==0 && after==before);
     CHECK(uname(&check)==0 && !strcmp(names.nodename,check.nodename) &&
         !strcmp(names.domainname,check.domainname));
     return 0;
@@ -1262,12 +1270,12 @@ static int initial_admin_control(void)
     CHECK(access("/native/usr/bin/uname",X_OK)==0 && getuid()==0);
     CHECK(capbits(0)&(1ULL<<CAP_SYS_ADMIN));
     const char path[]="/tmp/lx-admin-not-a-swap-device";
-    struct sysinfo before,after;
-    CHECK(syscall(SYS_sysinfo,&before)==0);
+    unsigned long long before,after;
+    CHECK(swap_total(&before)==0);
     CHECK(syscall(SYS_swapoff,path)==0);
-    CHECK(syscall(SYS_sysinfo,&after)==0 && after.totalswap==0);
+    CHECK(swap_total(&after)==0 && after==0);
     CHECK(syscall(SYS_swapon,path,0)==0);
-    CHECK(syscall(SYS_sysinfo,&after)==0 && after.totalswap==before.totalswap);
+    CHECK(swap_total(&after)==0 && after==before);
     CHECK(syscall(SYS_reboot,0xfee1deadU,672274793,0x89abcdefU,NULL)==0);
     CHECK(syscall(SYS_syslog,0,NULL,0)==0 && syscall(SYS_syslog,5,NULL,0)==0);
     CHECK(syscall(SYS_vhangup)==0);
