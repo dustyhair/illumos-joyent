@@ -1,0 +1,15 @@
+{
+  "vm": 115,
+  "accepted": false,
+  "runtime_source": "454cb459f8d9966b9d574aef04dc4ed4b74bf66c",
+  "kernel_source": "da001592deff694589d5a002b2941c8d9b1efbaa",
+  "hashes_verified": 44,
+  "scope": "First maps_hold rollback path",
+  "failure": "PID_RELE expands to ASSERT plus a second statement, without do/while. Unbraced if guarded only ASSERT, so releasing an unpublished map dereferenced a NULL identity. Disassembly fault map_rele+d3 loads pid_ref at NULL+0x20. Fixed with braces around the complete macro.",
+  "cleanup": "Panic reboot, QEMU3029055 exited; no clean zone halt/pool export or filesystem-sync acceptance. Disposable pool recovery needed next boot.",
+  "console": {
+    "name": "boot-115-pid-map-rollback-panic.log",
+    "sha256": "3cc52b36c40ef92c2d8fd338f30bbbd702fb7d6962e6fe1f94bc86ac2bbe6354"
+  },
+  "physical_changes": false
+}
