@@ -256,6 +256,7 @@ typedef struct vfs {
 #define	VFS_NOEXEC	0x1000		/* executables disallowed */
 #define	VFS_STATS	0x2000		/* file system can collect stats */
 #define	VFS_XID		0x4000		/* file system supports extended ids */
+#define	VFS_DETACHED	0x8000		/* unlinked, retained mount */
 
 #define	VFS_NORESOURCE	"unspecified_resource"
 #define	VFS_NOMNTPT	"unspecified_mountpoint"
@@ -492,6 +493,7 @@ void	vfs_sync(int);
 void	vfs_mountroot(void);
 void	vfs_add(vnode_t *, struct vfs *, int);
 void	vfs_remove(struct vfs *);
+void	vfs_detach(struct vfs *);
 
 /* VFS feature routines */
 void	vfs_set_feature(vfs_t *, vfs_feature_t);

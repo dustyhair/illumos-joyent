@@ -950,13 +950,41 @@ out:
 	return (rv == 0 ? rv : set_errno(rv));
 }
 
+#define	LX_MNT_DETACH	0x2
+
+static int
+lx_mnt_private_umount(lx_mntns_view_t *view, const char *pathp, int flags)
+{
+	char *path = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+	int error;
+
+	error = copyinstr(pathp, path, MAXPATHLEN, NULL);
+	if (error == 0) {
+		if (!lx_mntns_view_capable(view, CRED()))
+			error = EPERM;
+		else if (flags == LX_MNT_DETACH)
+			error = lx_mntns_mount_detach(view, path, CRED());
+		else
+			error = flags == 0 ? EOPNOTSUPP : EINVAL;
+	}
+	kmem_free(path, MAXPATHLEN);
+	return (error);
+}
+
 /*
  * umount() is identical to illumos, though implemented on top of umount2().
  */
 long
 lx_umount(char *path)
 {
+	lx_mntns_view_t *view = lx_mntns_current();
 	int error;
+
+	if (view != NULL) {
+		error = lx_mnt_private_umount(view, path, 0);
+		lx_mntns_view_rele(view);
+		return (error == 0 ? 0 : set_errno(error));
+	}
 
 	if ((error = lx_mnt_legacy_check()) != 0)
 		return (set_errno(error));
@@ -972,7 +1000,14 @@ lx_umount(char *path)
 long
 lx_umount2(char *path, int flg)
 {
+	lx_mntns_view_t *view = lx_mntns_current();
 	int flags = 0, error;
+
+	if (view != NULL) {
+		error = lx_mnt_private_umount(view, path, flg);
+		lx_mntns_view_rele(view);
+		return (error == 0 ? 0 : set_errno(error));
+	}
 
 	if ((error = lx_mnt_legacy_check()) != 0)
 		return (set_errno(error));

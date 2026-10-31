@@ -344,7 +344,18 @@ checkforroot:
 			 * same checking here as well even though it
 			 * may not be needed.
 			 */
-			if (((vp = cvp->v_vfsp->vfs_vnodecovered) == NULL) ||
+			vp = cvp->v_vfsp->vfs_vnodecovered;
+			if (vp == NULL &&
+			    (cvp->v_vfsp->vfs_flag &
+			    (VFS_DETACHED | VFS_UNMOUNTED)) == VFS_DETACHED) {
+				/* A retained mount root is its own parent. */
+				vp = cvp;
+				cvp = NULL;
+				component[1] = '\0';
+				vfs_unlock(vfsp);
+				goto root_boundary;
+			}
+			if (vp == NULL ||
 			    (cvp->v_vfsp->vfs_flag & VFS_UNMOUNTED)) {
 				vfs_unlock(vfsp);
 				VN_RELE(cvp);
@@ -368,6 +379,7 @@ checkforroot:
 			goto checkforroot;
 		}
 	}
+root_boundary:
 
 	/*
 	 * LOOKUP_CHECKREAD is a private flag used by vnodetopath() to indicate

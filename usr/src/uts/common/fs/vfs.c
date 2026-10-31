@@ -3265,6 +3265,24 @@ vfs_remove(struct vfs *vfsp)
 }
 
 /*
+ * Unlink a busy mount without destroying its filesystem. The caller holds
+ * the VFS and covered-vnode write locks and keeps a covered-vnode reference
+ * for unlocking after vfs_remove. Retain the splice hold as an unspliced
+ * ownership reference for eventual dounmount. Zone accounting stays live.
+ */
+void
+vfs_detach(struct vfs *vfsp)
+{
+	ASSERT(vfs_lock_held(vfsp));
+	ASSERT(vfsp->vfs_vnodecovered != NULL);
+	ASSERT(vn_vfswlock_held(vfsp->vfs_vnodecovered));
+	ASSERT(VFS_ON_LIST(vfsp));
+	vfsp->vfs_flag |= VFS_DETACHED;
+	VFS_HOLD(vfsp);
+	vfs_remove(vfsp);
+}
+
+/*
  * Lock a filesystem to prevent access to it while mounting,
  * unmounting and syncing.  Return EBUSY immediately if lock
  * can't be acquired.

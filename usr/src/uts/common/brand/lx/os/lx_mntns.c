@@ -407,7 +407,8 @@ lx_mntns_owns(lx_mntns_view_t *view, vnode_t *vp)
 	if (vp->v_vfsp == view->lv_vfs)
 		return (B_TRUE);
 	for (mount = view->lv_mounts; mount != NULL; mount = mount->lm_next) {
-		if (vp->v_vfsp == mount->lm_vfs)
+		if (vp->v_vfsp == mount->lm_vfs &&
+		    mount->lm_vfs->vfs_vnodecovered != NULL)
 			return (B_TRUE);
 	}
 	return (B_FALSE);
@@ -631,7 +632,8 @@ lx_mntns_path_locked(lx_mntns_view_t *view, vnode_t *vp, cred_t *actor,
 	else {
 		for (mount = view->lv_mounts; mount != NULL;
 		    mount = mount->lm_next) {
-			if (vp->v_vfsp == mount->lm_vfs) {
+			if (vp->v_vfsp == mount->lm_vfs &&
+			    mount->lm_vfs->vfs_vnodecovered != NULL) {
 				base = refstr_value(mount->lm_path);
 				break;
 			}
@@ -938,7 +940,8 @@ lx_mntns_mount_readonly(lx_mntns_view_t *view, const char *target,
 		vfs = view->lv_vfs;
 	for (mount = view->lv_mounts; vfs == NULL && mount != NULL;
 	    mount = mount->lm_next) {
-		if (vp == mount->lm_root)
+		if (vp == mount->lm_root &&
+		    mount->lm_vfs->vfs_vnodecovered != NULL)
 			vfs = mount->lm_vfs;
 	}
 	if (vfs == NULL || !(vp->v_flag & VROOT)) {
@@ -972,6 +975,100 @@ out:
 	return (error);
 }
 
+/* Native graph removal remains identifiable after a namespace copy. */
+static boolean_t
+lx_mntns_detached(vnode_t *vp)
+{
+	vfs_t *vfs = vp->v_vfsp;
+	boolean_t detached;
+
+	vfs_rlock_wait(vfs);
+	detached = (vfs->vfs_flag & VFS_DETACHED) != 0;
+	vfs_unlock(vfs);
+	return (detached);
+}
+
+/*
+ * Remove graph edges without unmounting busy filesystems. Lock every covered
+ * vnode before changing any edge, so a failed lock leaves the tree intact.
+ * Records remain in reverse creation order for eventual native dounmount.
+ */
+int
+lx_mntns_mount_detach(lx_mntns_view_t *view, const char *target, cred_t *actor)
+{
+	typedef struct lx_mntns_unlink {
+		vfs_t *lu_vfs;
+		vnode_t *lu_covered;
+	} lx_mntns_unlink_t;
+	lx_mntns_unlink_t *list;
+	lx_mntns_mount_t *mount;
+	vnode_t *vp = NULL;
+	vfs_t *root = NULL;
+	uint_t count = 0, locked = 0, i;
+	size_t size;
+	int error;
+
+	if (!lx_mntns_entry_enabled() ||
+	    !lx_mntns_view_capable(view, actor))
+		return (EPERM);
+	mutex_enter(&view->lv_lock);
+	if ((error = lookupname((char *)target, UIO_SYSSPACE, FOLLOW,
+	    NULL, &vp)) != 0)
+		goto out;
+	for (mount = view->lv_mounts; mount != NULL; mount = mount->lm_next) {
+		if (vp == mount->lm_root &&
+		    mount->lm_vfs->vfs_vnodecovered != NULL) {
+			root = mount->lm_vfs;
+			break;
+		}
+	}
+	if (root == NULL || !(vp->v_flag & VROOT)) {
+		error = vp == view->lv_root ? EOPNOTSUPP : EINVAL;
+		goto out;
+	}
+	size = view->lv_nmounts * sizeof (*list);
+	list = kmem_alloc(size, KM_SLEEP);
+	for (mount = view->lv_mounts; mount != NULL; mount = mount->lm_next) {
+		if (mount->lm_vfs->vfs_vnodecovered == NULL ||
+		    !lx_mntns_descendant(view, mount->lm_vfs, root))
+			continue;
+		list[count].lu_vfs = mount->lm_vfs;
+		VN_HOLD(list[count].lu_covered =
+		    mount->lm_vfs->vfs_vnodecovered);
+		count++;
+	}
+	zone_hold(curzone);
+	mount_in_progress(curzone);
+	for (i = 0; i < count; i++) {
+		if ((error = vn_vfswlock(list[i].lu_covered)) != 0)
+			goto unlock;
+		locked++;
+	}
+	for (i = 0; i < count; i++) {
+		vfs_t *vfs = list[i].lu_vfs;
+
+		(void) dnlc_purge_vfsp(vfs, 0);
+		vfs_lock_wait(vfs);
+		vfs_detach(vfs);
+		/* Keep native zone ownership for tmpfs accounting. */
+	}
+	error = 0;
+unlock:
+	for (i = 0; i < count; i++) {
+		if (i < locked)
+			vn_vfsunlock(list[i].lu_covered);
+		VN_RELE(list[i].lu_covered);
+	}
+	mount_completed(curzone);
+	zone_rele(curzone);
+	kmem_free(list, size);
+out:
+	if (vp != NULL)
+		VN_RELE(vp);
+	mutex_exit(&view->lv_lock);
+	return (error);
+}
+
 /*
  * Public bind. Resolve both operands with the actor's root,
  * cwd and credentials, then pass held vnodes to domount. The kernel mount
@@ -993,6 +1090,10 @@ lx_mntns_mount_bind(lx_mntns_view_t *view, const char *source,
 	error = lookupname((char *)source, UIO_SYSSPACE, FOLLOW, NULL, &from);
 	if (error != 0)
 		goto out;
+	if (!lx_mntns_owns(view, from)) {
+		error = EINVAL;
+		goto out;
+	}
 	if (!lx_mntns_bindable(from->v_type)) {
 		error = EINVAL;
 		goto out;
@@ -1002,7 +1103,7 @@ lx_mntns_mount_bind(lx_mntns_view_t *view, const char *source,
 	if (error != 0)
 		goto out;
 	if (!lx_mntns_owns(view, covered)) {
-		error = EINVAL;
+		error = lx_mntns_detached(covered) ? ENOENT : EINVAL;
 		goto out;
 	}
 	if ((from->v_type == VDIR) != (covered->v_type == VDIR)) {
@@ -1058,7 +1159,7 @@ lx_mntns_mount_tmpfs(lx_mntns_view_t *view, const char *target,
 	if (error != 0)
 		goto out;
 	if (!lx_mntns_owns(view, covered)) {
-		error = EINVAL;
+		error = lx_mntns_detached(covered) ? ENOENT : EINVAL;
 		goto out;
 	}
 	if (covered->v_type != VDIR) {
@@ -1286,6 +1387,8 @@ lx_mntns_view_clone(lx_mntns_view_t *source, cred_t *cr, cred_t *owner,
 	mutex_enter(&source->lv_lock);
 	for (mount = source->lv_mounts; mount != NULL;
 	    mount = mount->lm_next) {
+		if (mount->lm_vfs->vfs_vnodecovered == NULL)
+			continue;
 		if (++count > LX_MNTNS_MAX_MOUNTS) {
 			error = E2BIG;
 			goto out;
@@ -1444,7 +1547,8 @@ lx_mntns_tree_fini(lx_mntns_view_t *view, cred_t *cr)
 	ASSERT(MUTEX_HELD(&view->lv_lock));
 	while ((mount = view->lv_mounts) != NULL) {
 		covered = mount->lm_vfs->vfs_vnodecovered;
-		if ((error = vn_vfswlock(covered)) != 0)
+		if (covered != NULL &&
+		    (error = vn_vfswlock(covered)) != 0)
 			return (error);
 		VN_RELE(mount->lm_root);
 		mount->lm_root = NULL;
