@@ -278,6 +278,12 @@ lx_mntns_mount(const char *source, const char *path, const char *type,
 	}
 	*out = NULL;
 	error = domount((char *)type, &args, covered, cr, out);
+	if (error == 0) {
+		/* NOSPLICE skips vfs_add(), which normally sets NOMNTTAB. */
+		vfs_lock_wait(*out);
+		(*out)->vfs_flag |= VFS_NOMNTTAB;
+		vfs_unlock(*out);
+	}
 	kmem_free(opts, MAX_MNTOPT_STR);
 	return (error);
 }
