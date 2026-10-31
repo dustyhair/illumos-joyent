@@ -209,12 +209,16 @@ lo_mount(struct vfs *vfsp, struct vnode *vp, struct mounta *uap,
 	int nodev;
 	boolean_t pinned = B_FALSE;
 
+	if (uap->flags & MS_REMOUNT) {
+		/* The native ownership check does not change mount options. */
+		if ((error = secpolicy_fs_unmount(cr, vfsp)) != 0)
+			return (error);
+		return (lo_private_freeze(vfsp, uap));
+	}
 	nodev = vfs_optionisset(vfsp, MNTOPT_NODEVICES, NULL);
 
 	if ((error = secpolicy_fs_mount(cr, vp, vfsp)) != 0)
 		return (EPERM);
-	if (uap->flags & MS_REMOUNT)
-		return (lo_private_freeze(vfsp, uap));
 
 	/*
 	 * Loopback devices which get "nodevices" added can be done without
