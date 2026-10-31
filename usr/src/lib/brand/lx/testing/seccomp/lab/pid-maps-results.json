@@ -231,7 +231,7 @@
     "vm116-full-peer-dynamic-65534-1-exec.log": "957077bd5a368952b6da1f4ebea0e929feb4c0d509581430244eed6ed40d0c87"
   },
   "console": {
-    "name": "boot-114-pid-maps-acceptance.log",
+    "name": "boot-116-pid-maps-acceptance.log",
     "sha256": "df66d8717f971cdede5357adc9f86ea58495775a1c77967f778eda9c9534f9f2"
   }
 }
