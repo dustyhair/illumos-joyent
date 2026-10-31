@@ -136,6 +136,7 @@
 #include <sys/brand.h>
 #include <sys/lx_brand.h>
 #include <sys/lx_userns.h>
+#include <sys/lx_mntns.h>
 #include <sys/lx_ldt.h>
 #include <sys/lx_misc.h>
 #include <lx_signum.h>
@@ -613,14 +614,15 @@ lx_kernel_fork(int nr, uintptr_t *args)
 	lx_proc_data_t *pd = ptolxproc(p);
 	uint_t flags = nr == 57 ? LX_SIGCHLD : args[0];
 	lx_lwp_data_t *lwpd = ttolxlwp(curthread);
-	uint_t allowed = LX_CSIGNAL | LX_CLONE_NEWUSER |
+	uint_t allowed = LX_CSIGNAL | LX_CLONE_NEWUSER | LX_CLONE_NEWNS |
 	    LX_CLONE_PARENT_SETTID |
 	    LX_CLONE_CHILD_SETTID | LX_CLONE_CHILD_CLEARTID;
 	pid_t pid;
 	boolean_t unsupported;
 
 	VERIFY(lx_kernel_restricted(p) ||
-	    (nr == 56 && (flags & LX_CLONE_NEWUSER) != 0));
+	    (nr == 56 &&
+	    (flags & (LX_CLONE_NEWUSER | LX_CLONE_NEWNS)) != 0));
 	if (nr == 56 && args[0] == flags &&
 	    (flags & LX_CLONE_THREAD) != 0)
 		return (lx_kernel_thread(flags, args));
@@ -638,8 +640,11 @@ lx_kernel_fork(int nr, uintptr_t *args)
 		return (set_errno(EOPNOTSUPP));
 
 	VERIFY(lwpd->br_clone_cred == NULL);
-	if (nr == 56 && (flags & LX_CLONE_NEWUSER) != 0) {
-		int error = lx_userns_clone_prepare(&lwpd->br_clone_cred);
+	VERIFY(lwpd->br_clone_mntns == NULL);
+	if (nr == 56 &&
+	    (flags & (LX_CLONE_NEWUSER | LX_CLONE_NEWNS)) != 0) {
+		int error = lx_namespace_clone_prepare(flags,
+		    &lwpd->br_clone_cred, &lwpd->br_clone_mntns);
 
 		if (error != 0)
 			return (set_errno(error));
@@ -647,6 +652,13 @@ lx_kernel_fork(int nr, uintptr_t *args)
 
 	pid = (pid_t)forksys(0, (flags & LX_CSIGNAL) == 0 ?
 	    FORK_NOSIGCHLD : 0);
+	if (lwpd->br_clone_mntns != NULL) {
+		lx_mntns_state_t *state = lwpd->br_clone_mntns;
+
+		lwpd->br_clone_mntns = NULL;
+		lx_mntns_state_fini(state);
+		kmem_free(state, sizeof (*state));
+	}
 	if (lwpd->br_clone_cred != NULL) {
 		cred_t *prepared = lwpd->br_clone_cred;
 
@@ -668,12 +680,21 @@ lx_kernel_fork_child(klwp_t *parent, klwp_t *child)
 	uint_t flags;
 
 	if ((!lx_kernel_restricted(lwptoproc(parent)) &&
-	    src->br_clone_cred == NULL) ||
+	    src->br_clone_cred == NULL && src->br_clone_mntns == NULL) ||
 	    src->br_stack_mode != LX_STACK_MODE_BRAND ||
 	    (src->br_syscall_num != 56 && src->br_syscall_num != 57))
 		return;
 	if (src->br_clone_cred != NULL)
 		lx_userns_clone_install(child, src->br_clone_cred);
+	if (src->br_clone_mntns != NULL) {
+		proc_t *pp = lwptoproc(parent);
+
+		VERIFY(cp != pp && cp->p_stat == SIDL);
+		mutex_enter(&cp->p_lock);
+		VERIFY0(lx_mntns_proc_swap(cp, PTOU(pp)->u_rdir,
+		    PTOU(pp)->u_cdir, src->br_clone_mntns));
+		mutex_exit(&cp->p_lock);
+	}
 	VERIFY(lx_kernel_restricted(cp));
 	flags = src->br_syscall_num == 57 ? LX_SIGCHLD :
 	    src->br_syscall_args[0];

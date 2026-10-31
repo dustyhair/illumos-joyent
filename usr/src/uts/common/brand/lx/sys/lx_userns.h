@@ -23,7 +23,9 @@ typedef struct lx_userns_cred {
 
 extern long lx_namespace_unshare(uintptr_t);
 extern boolean_t lx_userns_clone_enabled(void);
-extern int lx_userns_clone_prepare(cred_t **);
+struct lx_mntns_state;
+extern int lx_namespace_clone_prepare(uint_t, cred_t **,
+    struct lx_mntns_state **);
 extern void lx_userns_clone_install(struct _klwp *, const cred_t *);
 extern lx_userns_t *lx_userns_root_create(void);
 extern int lx_userns_child_create(const lx_userns_cred_t *, lx_userns_t **);

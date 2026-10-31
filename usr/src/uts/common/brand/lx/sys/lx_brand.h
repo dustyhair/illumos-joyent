@@ -644,6 +644,7 @@ struct lx_lwp_data {
 	struct lx_sigrecord *br_sigframes; /* private signal return records */
 	struct cred *br_ptrace_cred; /* tracer credential captured at attach */
 	struct cred *br_clone_cred; /* kernel-owned pending namespace clone */
+	struct lx_mntns_state *br_clone_mntns; /* prepared child root/cwd */
 };
 
 /*

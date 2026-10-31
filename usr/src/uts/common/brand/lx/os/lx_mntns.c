@@ -496,12 +496,26 @@ lx_mntns_proc_swap(proc_t *p, vnode_t *expected_root, vnode_t *expected_cwd,
 	lx_proc_data_t *pd = ptolxproc(p);
 	kthread_t *task = p->p_tlist;
 	user_t *up = PTOU(p);
+	boolean_t clone_child = B_FALSE;
 
 	ASSERT(MUTEX_HELD(&p->p_lock));
 	if (p->p_brand != &lx_brand || pd == NULL)
 		return (EPERM);
-	/* Only current amd64 unshare may activate the guard. */
-	if (!lx_kernel_restricted(p) && (p != curproc || task != curthread ||
+	/* A pending kernel-owned clone state authorizes its fresh child. */
+	if (p != curproc && p->p_stat == SIDL &&
+	    curproc->p_brand == &lx_brand &&
+	    get_udatamodel() == DATAMODEL_NATIVE) {
+		lx_lwp_data_t *parent = ttolxlwp(curthread);
+
+		clone_child = parent->br_clone_mntns == state &&
+		    parent->br_syscall_entry == BRAND_ENTRY_AMD64 &&
+		    parent->br_syscall_num == 56 &&
+		    parent->br_stack_mode == LX_STACK_MODE_BRAND &&
+		    (parent->br_syscall_args[0] & LX_CLONE_NEWNS) != 0;
+	}
+	/* Activate through amd64 unshare or the prepared fork child only. */
+	if (!lx_kernel_restricted(p) && !clone_child &&
+	    (p != curproc || task != curthread ||
 	    get_udatamodel() != DATAMODEL_NATIVE ||
 	    ttolxlwp(curthread)->br_syscall_entry != BRAND_ENTRY_AMD64 ||
 	    ttolxlwp(curthread)->br_syscall_num != 272 ||

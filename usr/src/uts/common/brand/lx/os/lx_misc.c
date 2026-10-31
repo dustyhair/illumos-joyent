@@ -37,6 +37,7 @@
 #include <sys/brand.h>
 #include <sys/lx_brand.h>
 #include <sys/lx_userns.h>
+#include <sys/lx_mntns.h>
 #include <sys/lx_misc.h>
 #include <sys/lx_siginfo.h>
 #include <sys/lx_futex.h>
@@ -469,6 +470,11 @@ lx_freelwp(klwp_t *lwp)
 
 	if (lwpd->br_clone_cred != NULL)
 		crfree(lwpd->br_clone_cred);
+	if (lwpd->br_clone_mntns != NULL) {
+		lx_mntns_state_fini(lwpd->br_clone_mntns);
+		kmem_free(lwpd->br_clone_mntns,
+		    sizeof (*lwpd->br_clone_mntns));
+	}
 	lx_sigframes_free(lwpd);
 	lwp->lwp_brand = NULL;
 	kmem_free(lwpd, sizeof (struct lx_lwp_data));
@@ -525,6 +531,7 @@ lx_lwpdata_free(void *lwpbd)
 	VERIFY(lwpd->br_lpid != NULL);
 	VERIFY(lwpd->br_affinitymask != NULL);
 	VERIFY(lwpd->br_clone_cred == NULL);
+	VERIFY(lwpd->br_clone_mntns == NULL);
 
 	lx_sigframes_free(lwpd);
 	cpuset_free(lwpd->br_affinitymask);

@@ -43,6 +43,7 @@
 #include <sys/lx_brand.h>
 #include <sys/lx_impl.h>
 #include <sys/lx_userns.h>
+#include <sys/lx_mntns.h>
 #include <sys/lx_misc.h>
 #include <lx_errno.h>
 #include <lx_syscall.h>
@@ -448,8 +449,10 @@ lx_syscall_enter(int entry)
 
 	if ((lx_kernel_restricted(curproc) &&
 	    (syscall_num == 56 || syscall_num == 57)) ||
-	    (syscall_num == 56 && lx_userns_clone_enabled() &&
-	    (args[0] & LX_CLONE_NEWUSER) != 0)) {
+	    (syscall_num == 56 &&
+	    ((lx_userns_clone_enabled() &&
+	    (args[0] & LX_CLONE_NEWUSER) != 0) ||
+	    (lx_mntns_entry_enabled() && (args[0] & LX_CLONE_NEWNS) != 0)))) {
 		ret = lx_kernel_fork(syscall_num, args);
 		lx_syscall_return(lwp, syscall_num, ret);
 		return (0);

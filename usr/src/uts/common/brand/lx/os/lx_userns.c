@@ -724,17 +724,25 @@ lx_userns_clone_enabled(void)
 	return (lx_userns_experimental != 0);
 }
 
-/* Until shared-FS/parallel parent changes are supported, use entry's checks. */
+/* Reserve both namespaces before native fork can publish a child. */
 int
-lx_userns_clone_prepare(cred_t **result)
+lx_namespace_clone_prepare(uint_t flags, cred_t **result,
+    lx_mntns_state_t **mountresult)
 {
 	proc_t *p = curproc;
 	lx_lwp_data_t *lwpd = ttolxlwp(curthread);
-	cred_t *source = NULL;
+	boolean_t user = (flags & LX_CLONE_NEWUSER) != 0;
+	boolean_t mount = (flags & LX_CLONE_NEWNS) != 0;
+	cred_t *source = NULL, *scoped = NULL;
+	vnode_t *root = NULL, *cwd = NULL;
+	lx_mntns_view_t *view = NULL;
+	lx_mntns_state_t *state = NULL;
 	int error;
 
 	*result = NULL;
-	if (!lx_userns_experimental)
+	*mountresult = NULL;
+	if ((user && !lx_userns_experimental) ||
+	    (mount && !lx_mntns_entry_enabled()))
 		return (EINVAL);
 	if (get_udatamodel() != DATAMODEL_NATIVE ||
 	    lwpd->br_syscall_entry != BRAND_ENTRY_AMD64 ||
@@ -742,15 +750,46 @@ lx_userns_clone_prepare(cred_t **result)
 		return (EOPNOTSUPP);
 	mutex_enter(&p->p_lock);
 	error = lx_userns_entry_check(p);
+	if (error == 0 && ptolxproc(p)->l_ptrace != 0)
+		error = EOPNOTSUPP;
 	if (error == 0) {
-		mutex_enter(&p->p_crlock);
 		crhold(source = CRED());
-		mutex_exit(&p->p_crlock);
+		if (mount) {
+			if ((root = PTOU(p)->u_rdir) != NULL)
+				VN_HOLD(root);
+			VN_HOLD(cwd = PTOU(p)->u_cdir);
+			if ((view = ptolxproc(p)->l_mntns) != NULL)
+				lx_mntns_view_hold(view);
+		}
 	}
 	mutex_exit(&p->p_lock);
 	if (error != 0)
 		return (error);
-	error = lx_userns_cred_create(source, result);
+	if (user && (error = lx_userns_cred_create(source, &scoped)) != 0)
+		goto out;
+	if (mount) {
+		state = kmem_zalloc(sizeof (*state), KM_SLEEP);
+		if ((error = lx_mntns_entry_prepare(user ? scoped : source,
+		    root, cwd, view, state)) != 0)
+			goto out;
+	}
+	*result = scoped;
+	scoped = NULL;
+	*mountresult = state;
+	state = NULL;
+out:
+	if (state != NULL) {
+		lx_mntns_state_fini(state);
+		kmem_free(state, sizeof (*state));
+	}
+	if (root != NULL)
+		VN_RELE(root);
+	if (cwd != NULL)
+		VN_RELE(cwd);
+	if (view != NULL)
+		lx_mntns_view_rele(view);
+	if (scoped != NULL)
+		crfree(scoped);
 	crfree(source);
 	return (error);
 }
