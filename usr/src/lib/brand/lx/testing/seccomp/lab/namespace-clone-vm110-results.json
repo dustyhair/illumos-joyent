@@ -1,0 +1,28 @@
+{
+  "vm": 110,
+  "accepted_checkpoint": false,
+  "kernel": "4fc2fb45a6",
+  "runtime_source": "65f6bd8823ab403eee81a5f1bedb40adab9c5885",
+  "driver_fix": "e02f899abd",
+  "enabled_cases_passed": 56,
+  "linux_cases_passed": 56,
+  "stage": "Native baseline and enabled namespace-clone smoke pass; full/negative phases pending on refreshed kernel with stale tracing-state cleanup7ba829f8ae",
+  "cleanup": {
+    "flags": [
+      0,
+      0,
+      0
+    ],
+    "views": 0,
+    "zone_stopped": true,
+    "pool_export": 0,
+    "filesystems_synced": true,
+    "qemu_exited": 2874205
+  },
+  "initial_failure": "Old native bash rejects empty array expansion under set-u; stopped before any clone. Driver changed to plain option string; original failure retained, final56cases and both idle checks PASS.",
+  "console": {
+    "name": "boot-110-namespace-clone-smoke.log",
+    "sha256": "b5d2554a16847151cb5fe445aeab4dcb168983741d30648898ce41b4e70fac86"
+  },
+  "physical_host_deployed": false
+}
