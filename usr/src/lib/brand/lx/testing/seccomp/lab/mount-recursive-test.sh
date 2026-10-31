@@ -5,8 +5,8 @@ test -f /lab/offline-lx-guest
 bootparams | grep -q '^lx_lab=true$'
 test "$(zonename)" = global
 zonepath=$(zonecfg -z lx-probe info zonepath | awk '{print $2}')
-test "$(digest -a sha256 "$zonepath/root/test/mntns_recursive" | awk '{print $NF}')" = 5854614600e94d0597e762ff945e975aebaffd321eb7722b104dc7183e400490
-test "$(digest -a sha256 "$zonepath/root/test/dynamic/mntns_recursive" | awk '{print $NF}')" = cba2d288ef696dd1444c3d4d59d607417c9d59c69c50ddbba43b06545189a045
+test "$(digest -a sha256 "$zonepath/root/test/mntns_recursive" | awk '{print $NF}')" = d8b44be7030919215b0c29a7b4f7d8c0b6c951df03ecdd7ebb51e93d5c479761
+test "$(digest -a sha256 "$zonepath/root/test/dynamic/mntns_recursive" | awk '{print $NF}')" = 70663c9a1725a76f86ebc5825c74b5f8f9a9a6e9768cf9ba0e7074aa4d3f2d04
 mkdir -p "$zonepath/root/test/mnt-recursive"
 chmod 1777 "$zonepath/root/test/mnt-recursive"
 printf '%s\n' 'lx_brand`lx_seccomp_experimental/W 1' \

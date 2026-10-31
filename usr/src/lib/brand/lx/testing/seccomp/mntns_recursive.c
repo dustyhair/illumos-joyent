@@ -81,13 +81,14 @@ static int filter(void)
         syscall(SYS_seccomp, SECCOMP_SET_MODE_FILTER, 0, &fp);
 }
 
-static void bind_path(const char *from, const char *to, unsigned long flags,
+static int bind_path(const char *from, const char *to, unsigned long flags,
     int want, const char *what)
 {
     int rv;
     errno = 0;
     rv = mount(from, to, NULL, flags, NULL);
     check(want ? rv == -1 && errno == want : rv == 0, what);
+    return rv;
 }
 
 static int read_at(int dir, const char *name, char *data, size_t size)
@@ -161,7 +162,7 @@ static void types(void)
         check(stat(target, &st) == 0 && S_ISCHR(st.st_mode) &&
             st.st_rdev == original.st_rdev, "device-identity");
         if (i == 5) continue;
-        fd = open(target, O_RDWR | O_NONBLOCK);
+        fd = open(target, (i == 3 || i == 4 ? O_RDONLY : O_RDWR) | O_NONBLOCK);
         check(fd >= 0, "bound-device-open");
         if (fd < 0) continue;
         if (i == 0) {
@@ -196,8 +197,8 @@ static void types(void)
         close(fd);
     }
     path("regular", source);
-    bind_path(source, target, MS_BIND, 0, "file-over-fifo");
-    check(contents(target, "regular\n"), "file-over-fifo-contents");
+    if (bind_path(source, target, MS_BIND, 0, "file-over-fifo") == 0)
+        check(contents(target, "regular\n"), "file-over-fifo-contents");
 }
 
 static void observer(int ready)

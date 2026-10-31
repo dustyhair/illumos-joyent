@@ -1,0 +1,52 @@
+{
+  "vm": 92,
+  "accepted": false,
+  "source_commit": "935b2b79f0710c7e5fc264e4a9a560557c10e008",
+  "brand_sha256": "ce0710c774333b414b7794b97f0e2856cff40b5d77b7f425912f4c5691652469",
+  "root_tar_sha256": "496278b104503582f02ce1cccb4c937785ca16836af699cd0ed41653b9778128",
+  "prior_full_regressions_exit": 0,
+  "entry_cases_passed": 70,
+  "bind_cases_passed": 12,
+  "retained_record_limit_cases_passed": 2,
+  "new_recursive_case": "static UID0 recursive/self/nested/stack/observer/namespace-copy PASS",
+  "new_types_case": "static UID0 failed: two RW RNG opens EACCES; file-over-fifo EINVAL; dependent FIFO read blocked until alarm",
+  "trace_findings": [
+    "RNG source RW opens EACCES before binding; source readonly opens succeed",
+    "file-over-fifo fails before domount",
+    "LOFS IS_DEVVP includes VFIFO; specvp/fifovp flattens the held private mount vnode to its backing pipe"
+  ],
+  "diagnostic_probe_sha256": "bcfa418443dfc73483e0c4a14e111e8e19ed86113eacda950f42df3095bbf5f1",
+  "trace_script_sha256": "17591b1f11ed973b22f9ba3e3d35890656be8fdf60963c10121e26b3a6b21cc3",
+  "fix_commit": "1baa1612c86dd14ca6533975906d1df4e6e2b954",
+  "fix": "preserve FIFO wrapper and mountpoint identity for pinned private LOFS mounts; backing pipe remains unchanged",
+  "cleanup": {
+    "driver_and_trace_terminal": true,
+    "process_idle": "PASS",
+    "user_budget_idle": "PASS",
+    "views": 0,
+    "seccomp": 0,
+    "userns": 0,
+    "mntns": 0,
+    "pool_export_exit": 0,
+    "synced_poweroff": true,
+    "qemu_pid_exited": 2188233
+  },
+  "logs": {
+    "vm92-full.log": "079a7b6db844a0162b6c8e442a7551fa506b254fd879d33de0a005cf1a76892f",
+    "vm92-regressions.log": "b902d4f441b8fccf0efd24bfea5c9a0b3a611098d693fdc2d832536ae3027647",
+    "vm92-entry-regressions.log": "5494dd5612fa28613a9fbba211a49b6f63145ad6dd6d931c492c1d058498c930",
+    "vm92-entry-public.log": "043743cb00dbc4bcf2c22807380416372d9246dac03d9772c52097c5987fb9c9",
+    "vm92-bind-public.log": "477bb5ecdc394a07ab47f70338dc4d5e5a576cd03536e0ced7941780dd4baa07",
+    "vm92-public.log": "46bc965e128249788c0d6435968bfd844d4d920fd9995a33fbc0754b57faa118",
+    "vm92-recursive.log": "60b7a6fa23c0f814c03f0bc8b70ede59b31edb5a490f504390760f02a8867d35",
+    "vm92-types.log": "eb68022a9a4fb844e08f539725bab6a7114ce3645a6a61558d2f968b190986e3",
+    "vm92-trace.log": "cd5b6ced181585e8a06e6bb1cb1658c2f01ddea3b580526b5c2e78460be77e17"
+  },
+  "console_evidence": {
+    "name": "boot-92-recursive-and-fifo-diagnostic.log",
+    "sha256": "95992d192f0d95fa47d9907aab0fc14073535ca35863ea788f811ff6cf836b6b"
+  },
+  "new_vm_required": true,
+  "latest_accepted": "ef8cc94edbb6c11b7fb484dc6d77a8ee84b25cbf",
+  "production_deployment": false
+}
