@@ -106,7 +106,7 @@ static void setup(void)
 {
     const char *dirs[] = { "src", "src/sub", "src/sub/deep", "a", "a/deep",
         "b", "b/deep", "c", "c/deep", "plain", "rec", "rec/sub",
-        "rec/sub/deep", "rec2", "top" };
+        "rec/sub/deep", "rec2", "top", "self" };
     char p[PATH_MAX];
     size_t i;
     for (i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++)
@@ -122,6 +122,7 @@ static void setup(void)
         write_text(path("c/deep/file", p), "Cdeep\n", 1) ||
         write_text(path("rec/root-marker", p), "old\n", 1) ||
         write_text(path("rec/sub/deep/file", p), "old\n", 1) ||
+        write_text(path("self/file", p), "self\n", 1) ||
         write_text(path("regular", p), "regular\n", 1) ||
         write_text(path("fifo-target", p), "outside\n", 1) ||
         mkfifo(path("fifo", p), 0600)) _exit(2);
@@ -233,6 +234,10 @@ static void recursive(void)
     char source[PATH_MAX], target[PATH_MAX], p[PATH_MAX], token;
     int ready[2], status;
     pid_t child;
+    path("self", source);
+    bind_path(source, source, 0xc0ed0000UL | MS_BIND | MS_REC | MS_SILENT,
+        0, "recursive-self-bind");
+    check(contents(path("self/file", p), "self\n"), "recursive-self-contents");
     path("a", source);
     bind_path(source, path("src/sub", target), MS_BIND, 0, "source-submount");
     path("b", source);
@@ -279,6 +284,7 @@ static void recursive(void)
     check(contents(path("rec/sub/deep/file", p), "C\n"), "namespace-copy-recursive");
     check(contents(path("rec2/sub/deep/file", p), "C\n"), "namespace-copy-stack");
     check(contents(path("top/deep/file", p), "Cdeep\n"), "namespace-copy-top");
+    check(contents(path("self/file", p), "self\n"), "namespace-copy-self");
 }
 
 int main(int argc, char **argv)
