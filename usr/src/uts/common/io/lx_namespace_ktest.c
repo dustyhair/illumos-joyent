@@ -17,6 +17,7 @@
 #include <sys/zone.h>
 #include <sys/lx_brand.h>
 #include <sys/lx_mntns.h>
+#include <sys/lx_pidns.h>
 #include <sys/lx_userns.h>
 #include <sys/lx_cap.h>
 
@@ -1630,6 +1631,346 @@ ns_pid_release(ktest_ctx_hdl_t *ctx)
 		    "final reference did not release the PID reservation");
 }
 
+/* These maps describe stopped fixtures; they do not change their namespaces. */
+static lx_pidns_map_t *ns_pid_maps[3];
+static lx_pidns_t *ns_pid_spaces[3];
+static zone_t *ns_pid_maps_zone;
+static pid_t ns_pid_maps_worker;
+
+static void
+ns_pid_maps_drop(void)
+{
+	int i;
+
+	ASSERT(MUTEX_HELD(&ns_pid_lock));
+	/* Match freeproc: final map/namespace release may hold pidlock. */
+	mutex_enter(&pidlock);
+	for (i = 2; i >= 0; i--) {
+		if (ns_pid_maps[i] != NULL)
+			lx_pidns_map_rele(ns_pid_maps[i]);
+		ns_pid_maps[i] = NULL;
+		ns_pid_spaces[i] = NULL;
+	}
+	mutex_exit(&pidlock);
+	if (ns_pid_maps_zone != NULL)
+		zone_rele(ns_pid_maps_zone);
+	ns_pid_maps_zone = NULL;
+	ns_pid_maps_worker = 0;
+}
+
+static boolean_t
+ns_pid_pair(ktest_ctx_hdl_t *ctx, pid_t *worker, pid_t *peer)
+{
+	uchar_t *input;
+	size_t size, i;
+	pid_t numbers[2] = { 0, 0 };
+	uint_t at = 0;
+
+	ktest_get_input(ctx, &input, &size);
+	if (size < 4 || size > 22 || input[size - 1] != 0)
+		return (B_FALSE);
+	for (i = 0; i + 1 < size; i++) {
+		if (input[i] == ' ' && at == 0 && numbers[0] > 1) {
+			at = 1;
+			continue;
+		}
+		if (input[i] < '0' || input[i] > '9' || numbers[at] >= 10000000)
+			return (B_FALSE);
+		numbers[at] = numbers[at] * 10 + input[i] - '0';
+	}
+	*worker = numbers[0];
+	*peer = numbers[1];
+	return (at == 1 && *peer > 1 && *worker != *peer);
+}
+
+static boolean_t
+ns_pid_map_absent(lx_pidns_t *ns, pid_t number)
+{
+	struct pid *identity = lx_pidns_lookup(ns, number);
+
+	if (identity == NULL)
+		return (B_TRUE);
+	lx_pid_identity_rele(identity);
+	return (B_FALSE);
+}
+
+static void
+ns_pid_maps_hold(ktest_ctx_hdl_t *ctx)
+{
+	lx_pidns_t *spaces[3] = { NULL, NULL, NULL }, *temp = NULL;
+	lx_pidns_t *chain[LX_PIDNS_MAX_DEPTH] = { NULL };
+	lx_pidns_map_t *maps[3] = { NULL, NULL, NULL };
+	lx_pidns_map_t *pending = NULL, *extra = NULL;
+	lx_userns_t *root = NULL, *user = NULL;
+	lx_userns_cred_t actor;
+	zone_t *zone = NULL;
+	cred_t *base = NULL, *scope = NULL, *weak = NULL;
+	proc_t *p = NULL;
+	kthread_t *t;
+	struct pid *identity = NULL;
+	pid_t worker, peer, mainpid;
+	uint32_t maximum = 0, used, after;
+	boolean_t changed = B_FALSE, passed = B_FALSE;
+	int i;
+
+#define	PM_CHECK(expr, why) do { \
+	if (!(expr)) { \
+		KT_FAIL(ctx, "%s", why); \
+		goto out; \
+	} \
+} while (0)
+	mutex_enter(&ns_pid_lock);
+	PM_CHECK(ns_pid_identity == NULL && ns_pid_maps[0] == NULL &&
+	    !lx_pidns_busy(), "another PID fixture is still held");
+	PM_CHECK(ns_pid_pair(ctx, &worker, &peer), "invalid worker PID pair");
+	zone = zone_find_by_name("lx-probe");
+	PM_CHECK(zone != NULL && lx_lpid_lock(worker, zone, 0, &p, &t) == 0,
+	    "cannot find primary worker");
+	PM_CHECK(t != NULL && t->t_state == TS_STOPPED &&
+	    p->p_pid != worker && strcmp(PTOU(p)->u_comm, "pid_identity") == 0,
+	    "primary fixture is not a stopped worker");
+	mainpid = p->p_pid;
+	mutex_enter(&p->p_crlock);
+	crhold(base = p->p_cred);
+	mutex_exit(&p->p_crlock);
+	mutex_exit(&p->p_lock);
+	p = NULL;
+	PM_CHECK(lx_lpid_lock(peer, zone, 0, &p, &t) == 0,
+	    "cannot find peer worker");
+	PM_CHECK(t != NULL && t->t_state == TS_STOPPED && p->p_pid != peer &&
+	    p->p_pid != mainpid && strcmp(PTOU(p)->u_comm, "pid_identity") == 0,
+	    "peer fixture is not a different stopped process");
+	mutex_exit(&p->p_lock);
+	p = NULL;
+	root = ztolxzd(zone)->lxzd_userns;
+	PM_CHECK(lx_userns_map_actor(base, root, &actor) == 0 &&
+	    lx_userns_child_create(&actor, &user) == 0,
+	    "cannot prepare private test user namespace");
+	actor.luc_ns = user;
+	lx_caps_new_namespace(&actor.luc_caps);
+	scope = lx_userns_native_for(base, &actor);
+	actor.luc_caps.lc_effective &= ~LX_CAP_BIT(LX_CAP_SYS_ADMIN);
+	weak = lx_userns_native_for(base, &actor);
+	lx_userns_pidns_budget_get(root, &maximum, &used);
+	PM_CHECK(used == 0 && maximum >= LX_PIDNS_MAX_DEPTH + 4,
+	    "PID namespace budget is not initially idle");
+	PM_CHECK(lx_pidns_create(weak, NULL, 5, &temp) == EPERM && temp == NULL,
+	    "missing owner capability was accepted");
+	PM_CHECK(lx_pidns_create(scope, NULL, 5, &spaces[0]) == 0 &&
+	    lx_pidns_reserve(spaces[0], &maps[0]) == 0 &&
+	    lx_pidns_map_id(maps[0], spaces[0]) == 1,
+	    "cannot reserve outer init ID");
+	PM_CHECK(ns_pid_map_absent(spaces[0], 1),
+	    "unpublished init reservation became visible");
+	PM_CHECK(lx_pidns_reserve(spaces[0], &pending) == EAGAIN &&
+	    pending == NULL, "second init reservation was accepted");
+	PM_CHECK(lx_pidns_publish(maps[0], mainpid) == 0 &&
+	    lx_pidns_create(scope, spaces[0], 3, &spaces[1]) == 0 &&
+	    lx_pidns_reserve(spaces[1], &maps[1]) == 0 &&
+	    lx_pidns_publish(maps[1], worker) == 0 &&
+	    lx_pidns_create(scope, spaces[0], 3, &spaces[2]) == 0 &&
+	    lx_pidns_reserve(spaces[2], &maps[2]) == 0 &&
+	    lx_pidns_publish(maps[2], peer) == 0,
+	    "cannot publish nested and sibling mappings");
+	PM_CHECK(lx_pidns_visible(spaces[0], mainpid) == 1 &&
+	    lx_pidns_visible(spaces[0], worker) == 2 &&
+	    lx_pidns_visible(spaces[0], peer) == 3 &&
+	    lx_pidns_visible(spaces[1], worker) == 1 &&
+	    lx_pidns_visible(spaces[1], peer) == 0 &&
+	    lx_pidns_visible(spaces[2], peer) == 1 &&
+	    lx_pidns_visible(spaces[2], worker) == 0,
+	    "ancestor or sibling PID views are wrong");
+	PM_CHECK(lx_pidns_map_id(maps[1], spaces[0]) == 2 &&
+	    lx_pidns_map_id(maps[1], spaces[1]) == 1 &&
+	    lx_pidns_map_id(maps[1], spaces[2]) == 0,
+	    "map IDs crossed a sibling namespace");
+	identity = lx_pidns_lookup(spaces[1], 1);
+	PM_CHECK(identity != NULL && identity->pid_id == worker,
+	    "namespace lookup lost the native identity");
+	lx_pid_identity_rele(identity);
+	identity = NULL;
+	PM_CHECK(lx_pidns_reserve(spaces[0], &pending) == 0 &&
+	    lx_pidns_map_id(pending, spaces[0]) == 4 &&
+	    lx_pidns_reserve(spaces[1], &extra) == EAGAIN && extra == NULL,
+	    "ancestor exhaustion did not reject a partial reservation");
+	lx_pidns_map_rele(pending);
+	pending = NULL;
+	PM_CHECK(lx_pidns_reserve(spaces[1], &pending) == 0 &&
+	    lx_pidns_map_id(pending, spaces[1]) == 2 &&
+	    lx_pidns_map_id(pending, spaces[0]) == 4,
+	    "failed reservation leaked a descendant or ancestor ID");
+	PM_CHECK(lx_pidns_publish(pending, curproc->p_pid) == ESRCH &&
+	    lx_pidns_publish(pending, worker) == EEXIST &&
+	    ns_pid_map_absent(spaces[0], 4) &&
+	    ns_pid_map_absent(spaces[1], 2) &&
+	    lx_pidns_publish(maps[1], worker) == EALREADY,
+	    "failed or duplicate publication changed the visible maps");
+	lx_pidns_map_rele(pending);
+	pending = NULL;
+	PM_CHECK(lx_pidns_create(CRED(), spaces[0], 5, &temp) == EINVAL &&
+	    temp == NULL, "foreign-zone owner was accepted");
+	lx_userns_pidns_budget_get(root, &maximum, &used);
+	PM_CHECK(used == 3 && lx_userns_pidns_budget_set(root, used) == 0,
+	    "PID namespace accounting is wrong");
+	changed = B_TRUE;
+	PM_CHECK(lx_pidns_create(scope, NULL, 5, &temp) == ENOSPC &&
+	    temp == NULL,
+	    "exhausted namespace budget allowed creation");
+	VERIFY0(lx_userns_pidns_budget_set(root, maximum));
+	changed = B_FALSE;
+	PM_CHECK(lx_pidns_create(scope, NULL, 5, &temp) == 0 &&
+	    lx_pidns_reserve(temp, &pending) == 0,
+	    "cannot reserve rollback init");
+	lx_pidns_map_rele(pending);
+	pending = NULL;
+	PM_CHECK(lx_pidns_reserve(temp, &pending) == 0 &&
+	    lx_pidns_map_id(pending, temp) == 1,
+	    "aborted init reservation could not be retried");
+	lx_pidns_shutdown(temp);
+	PM_CHECK(lx_pidns_publish(pending, worker) == ENOMEM,
+	    "shutdown allowed a pending task to publish");
+	lx_pidns_map_rele(pending);
+	pending = NULL;
+	PM_CHECK(lx_pidns_reserve(temp, &pending) == ENOMEM && pending == NULL,
+	    "shutdown was undone by reservation cleanup");
+	lx_pidns_rele(temp);
+	temp = NULL;
+	for (i = 0; i < LX_PIDNS_MAX_DEPTH; i++) {
+		PM_CHECK(lx_pidns_create(scope, i == 0 ? NULL : chain[i - 1],
+		    3, &chain[i]) == 0, "allowed namespace depth failed");
+	}
+	PM_CHECK(lx_pidns_create(scope, chain[LX_PIDNS_MAX_DEPTH - 1], 3,
+	    &temp) == ENOSPC && temp == NULL, "namespace depth exceeded 32");
+	for (i = LX_PIDNS_MAX_DEPTH - 1; i >= 0; i--) {
+		lx_pidns_rele(chain[i]);
+		chain[i] = NULL;
+	}
+	lx_userns_pidns_budget_get(root, &maximum, &after);
+	PM_CHECK(after == used, "temporary namespaces leaked a budget charge");
+	for (i = 0; i < 3; i++) {
+		ns_pid_maps[i] = maps[i];
+		ns_pid_spaces[i] = spaces[i];
+		maps[i] = NULL;
+		/* The map owns the namespace; test final release at reap. */
+		lx_pidns_rele(spaces[i]);
+		spaces[i] = NULL;
+	}
+	ns_pid_maps_zone = zone;
+	zone = NULL;
+	ns_pid_maps_worker = worker;
+	passed = B_TRUE;
+out:
+	if (p != NULL)
+		mutex_exit(&p->p_lock);
+	if (identity != NULL)
+		lx_pid_identity_rele(identity);
+	if (changed)
+		VERIFY0(lx_userns_pidns_budget_set(root, maximum));
+	if (pending != NULL)
+		lx_pidns_map_rele(pending);
+	if (extra != NULL)
+		lx_pidns_map_rele(extra);
+	lx_pidns_rele(temp);
+	for (i = LX_PIDNS_MAX_DEPTH - 1; i >= 0; i--)
+		lx_pidns_rele(chain[i]);
+	for (i = 2; i >= 0; i--) {
+		if (maps[i] != NULL)
+			lx_pidns_map_rele(maps[i]);
+		lx_pidns_rele(spaces[i]);
+	}
+	if (weak != NULL)
+		crfree(weak);
+	if (scope != NULL)
+		crfree(scope);
+	lx_userns_rele(user);
+	if (base != NULL)
+		crfree(base);
+	if (zone != NULL)
+		zone_rele(zone);
+	mutex_exit(&ns_pid_lock);
+	if (passed)
+		KT_PASS(ctx);
+#undef PM_CHECK
+}
+
+static void
+ns_pid_maps_retired(ktest_ctx_hdl_t *ctx)
+{
+	struct pid *identity;
+	proc_t *p = NULL;
+	boolean_t retained = B_FALSE;
+	uint_t attempt;
+	lx_pidns_map_t *pending = NULL;
+
+	mutex_enter(&ns_pid_lock);
+	if (ns_pid_maps[1] == NULL) {
+		KT_ERROR(ctx, "no PID map fixture held");
+		goto out;
+	}
+	for (attempt = 0; attempt < 100; attempt++) {
+		identity = lx_pidns_lookup(ns_pid_spaces[1], 1);
+		if (identity == NULL)
+			break;
+		mutex_enter(&pidlock);
+		retained = identity->pid_id == ns_pid_maps_worker &&
+		    identity->pid_ref == 2 && identity->pid_prinactive &&
+		    pid_find(ns_pid_maps_worker) == identity &&
+		    prfind_zone(ns_pid_maps_worker, ALL_ZONES) == NULL;
+		PID_RELE(identity);
+		mutex_exit(&pidlock);
+		if (retained)
+			break;
+		delay(MAX(1, hz / 10));
+	}
+	if (lx_lpid_lock(ns_pid_maps_worker, ns_pid_maps_zone, 0,
+	    &p, NULL) == 0) {
+		mutex_exit(&p->p_lock);
+		retained = B_FALSE;
+	}
+	lx_pidns_shutdown(ns_pid_spaces[1]);
+	if (lx_pidns_reserve(ns_pid_spaces[1], &pending) != ENOMEM) {
+		if (pending != NULL)
+			lx_pidns_map_rele(pending);
+		retained = B_FALSE;
+	}
+	if (retained)
+		KT_PASS(ctx);
+	else
+		KT_FAIL(ctx,
+		    "retired namespace identity is lost or still a task");
+out:
+	mutex_exit(&ns_pid_lock);
+}
+
+static void
+ns_pid_maps_release(ktest_ctx_hdl_t *ctx)
+{
+	pid_t worker;
+	boolean_t gone;
+	lx_userns_t *root = NULL;
+	uint32_t maximum, used = 1;
+
+	mutex_enter(&ns_pid_lock);
+	worker = ns_pid_maps_worker;
+	if (ns_pid_maps_zone != NULL) {
+		root = ztolxzd(ns_pid_maps_zone)->lxzd_userns;
+		lx_userns_hold(root);
+	}
+	ns_pid_maps_drop();
+	if (root != NULL) {
+		lx_userns_pidns_budget_get(root, &maximum, &used);
+		lx_userns_rele(root);
+	}
+	mutex_enter(&pidlock);
+	gone = worker > 1 && pid_find(worker) == NULL;
+	mutex_exit(&pidlock);
+	mutex_exit(&ns_pid_lock);
+	if (gone && used == 0 && !lx_pidns_busy())
+		KT_PASS(ctx);
+	else
+		KT_FAIL(ctx, "map release retained an identity or namespace");
+}
+
 static struct modlmisc ns_modlmisc = {
 	.misc_modops = &mod_miscops,
 	.misc_linkinfo = "lx namespace tests"
@@ -1727,6 +2068,12 @@ _init(void)
 	    KTEST_FLAG_INPUT)) != 0 ||
 	    (error = ktest_add_test(ks, "retired", ns_pid_retired, 0)) != 0 ||
 	    (error = ktest_add_test(ks, "release", ns_pid_release, 0)) != 0 ||
+	    (error = ktest_add_test(ks, "maps_hold", ns_pid_maps_hold,
+	    KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "maps_retired", ns_pid_maps_retired,
+	    0)) != 0 ||
+	    (error = ktest_add_test(ks, "maps_release", ns_pid_maps_release,
+	    0)) != 0 ||
 	    (error = ktest_register_module(km)) != 0) {
 		ktest_free_module(km);
 		mutex_destroy(&ns_pid_lock);
@@ -1749,6 +2096,7 @@ _fini(void)
 		lx_userns_test_scope_sids_fini();
 		mutex_enter(&ns_pid_lock);
 		ns_pid_drop();
+		ns_pid_maps_drop();
 		mutex_exit(&ns_pid_lock);
 		mutex_destroy(&ns_pid_lock);
 	}
