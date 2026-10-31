@@ -102,7 +102,7 @@ filter(void)
 int
 main(int argc, char **argv)
 {
-	int drop = 0, deny = 0, shared = 0, outsidefd, tempfd, fd;
+	int drop = 0, deny = 0, shared = 0, bindroot = 0, outsidefd, tempfd, fd;
 	uid_t uid;
 	gid_t gid;
 	char candidate[PATH_MAX], p[PATH_MAX], oldpath[PATH_MAX];
@@ -114,6 +114,8 @@ main(int argc, char **argv)
 	for (int i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "--drop") == 0)
 			drop = 1;
+		else if (strcmp(argv[i], "--bind-root") == 0)
+			bindroot = 1;
 		else if (strcmp(argv[i], "--lx-shared") == 0)
 			shared = 1;
 		else if (strcmp(argv[i], "--deny") == 0)
@@ -228,6 +230,9 @@ main(int argc, char **argv)
 	    "mode=0755") == 0 &&
 	    write_text("/newroot/final", "final\n", 1) == 0,
 	    "prepare-final-root");
+	if (bindroot)
+		check(mount("/newroot", "/newroot", NULL,
+		    MS_BIND | MS_REC, NULL) == 0, "final-root-is-bind-mount");
 	check(mount(NULL, "/oldroot", NULL, MS_REC | MS_PRIVATE, NULL) == 0,
 	    "old-root-private");
 	check(umount2("/oldroot", MNT_DETACH) == 0, "detach-original-root");
