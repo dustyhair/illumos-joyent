@@ -2110,7 +2110,8 @@ ns_pid_process_attach(ktest_ctx_hdl_t *ctx)
 	    !(p->p_flag & (SEXITING | SEXITLWPS | SHOLDFORK | SHOLDFORK1)) &&
 	    t != NULL && t->t_state == TS_STOPPED &&
 	    (strcmp(PTOU(p)->u_comm, "pid_ownership") == 0 ||
-	    strcmp(PTOU(p)->u_comm, "pid_orphan") == 0) &&
+	    strcmp(PTOU(p)->u_comm, "pid_orphan") == 0 ||
+	    strcmp(PTOU(p)->u_comm, "pid_nested") == 0) &&
 	    ld != NULL && ld->br_stack_mode == LX_STACK_MODE_BRAND &&
 	    ld->br_syscall_entry == BRAND_ENTRY_AMD64 &&
 	    ptolxproc(p)->l_ptrace == 0 && ptolxproc(p)->l_pidns_map == NULL &&
@@ -2619,6 +2620,308 @@ ns_pid_process_idle(ktest_ctx_hdl_t *ctx)
 		    "native reap retained a PID namespace or budget charge");
 }
 
+/*
+ * Private nested drain fixture. Never replace an inherited published map.
+ * ns_pid_lock serializes test state; process pointers never outlive p_lock.
+ */
+static lx_pidns_t *ns_nested_space;
+static lx_pidns_map_t *ns_nested_maps[4];
+static pid_t ns_nested_pids[4];
+
+static void
+ns_nested_drop(void)
+{
+	uint_t i;
+
+	ASSERT(MUTEX_HELD(&ns_pid_lock));
+	for (i = 0; i < 4; i++) {
+		if (ns_nested_maps[i] != NULL)
+			lx_pidns_map_rele(ns_nested_maps[i]);
+		ns_nested_maps[i] = NULL;
+		ns_nested_pids[i] = 0;
+	}
+	lx_pidns_rele(ns_nested_space);
+	ns_nested_space = NULL;
+}
+
+static void
+ns_nested_arm(ktest_ctx_hdl_t *ctx)
+{
+	proc_t *p = NULL;
+	kthread_t *t;
+	cred_t *base = NULL, *scope = NULL;
+	lx_userns_t *user = NULL;
+	lx_userns_cred_t actor;
+	lx_pidns_t *space = NULL;
+	lx_pidns_map_t *map = NULL;
+	pid_t pid;
+	boolean_t passed = B_FALSE;
+
+#define	ND_CHECK(expr, why) do { \
+	if (!(expr)) { \
+		KT_FAIL(ctx, "%s", why); \
+		goto out; \
+	} \
+} while (0)
+	mutex_enter(&ns_pid_lock);
+	ND_CHECK(ns_pid_process_space != NULL && ns_nested_space == NULL &&
+	    ns_pid_process_observer == NULL &&
+	    ns_pid_process_descendant_map == NULL &&
+	    ns_process_pid(ctx, &pid), "invalid nested fixture state");
+	ND_CHECK(lx_lpid_lock(pid, ns_pid_process_zone, 0, &p, &t) == 0,
+	    "missing nested helper");
+	ND_CHECK(p->p_lwpcnt == 1 && t != NULL &&
+	    t->t_state == TS_STOPPED && p->p_brand == &lx_brand &&
+	    strcmp(PTOU(p)->u_comm, "pid_nested") == 0 &&
+	    !(p->p_flag & (SEXITING | SEXITLWPS | SHOLDFORK | SHOLDFORK1)) &&
+	    p->p_ppid == ns_pid_process_owner && ptolxproc(p)->l_ptrace == 0 &&
+	    lx_kernel_restricted(p) &&
+	    lx_pidns_active(p) == ns_pid_process_space &&
+	    ptolxproc(p)->l_pidns_children == NULL &&
+	    ttolxlwp(t)->br_clone_pidns_map == NULL &&
+	    ttolxlwp(t)->br_clone_pidns_error == 0 &&
+	    ttolxlwp(t)->br_clone_cred == NULL &&
+	    ttolxlwp(t)->br_clone_mntns == NULL &&
+	    ttolxlwp(t)->br_pidns_map == ptolxproc(p)->l_pidns_map &&
+	    ttolxlwp(t)->br_stack_mode == LX_STACK_MODE_BRAND &&
+	    ttolxlwp(t)->br_syscall_entry == BRAND_ENTRY_AMD64 &&
+	    lx_pidns_map_id(ptolxproc(p)->l_pidns_map,
+	    ns_pid_process_space) == 2, "helper is not stopped outer child");
+	map = ptolxproc(p)->l_pidns_map;
+	lx_pidns_map_hold(map);
+	mutex_enter(&p->p_crlock);
+	crhold(base = p->p_cred);
+	mutex_exit(&p->p_crlock);
+	mutex_exit(&p->p_lock);
+	p = NULL;
+	ND_CHECK(ns_pid_process_childless(pid, ns_pid_process_zone),
+	    "helper already has children");
+	ND_CHECK(lx_userns_map_actor(base,
+	    ztolxzd(ns_pid_process_zone)->lxzd_userns, &actor) == 0 &&
+	    lx_userns_child_create(&actor, &user) == 0,
+	    "cannot prepare nested owner");
+	actor.luc_ns = user;
+	lx_caps_new_namespace(&actor.luc_caps);
+	scope = lx_userns_native_for(base, &actor);
+	ND_CHECK(lx_pidns_create(scope, ns_pid_process_space,
+	    LX_PIDNS_PID_LIMIT, &space) == 0, "cannot create nested space");
+	ND_CHECK(lx_lpid_lock(pid, ns_pid_process_zone, 0, &p, &t) == 0,
+	    "helper disappeared");
+	ND_CHECK(p->p_lwpcnt == 1 && t != NULL &&
+	    t->t_state == TS_STOPPED && p->p_cred == base &&
+	    !(p->p_flag & (SEXITING | SEXITLWPS | SHOLDFORK | SHOLDFORK1)) &&
+	    ptolxproc(p)->l_pidns_map == map &&
+	    ptolxproc(p)->l_pidns_children == NULL &&
+	    ttolxlwp(t)->br_clone_pidns_map == NULL &&
+	    ttolxlwp(t)->br_clone_pidns_error == 0 &&
+	    ttolxlwp(t)->br_clone_cred == NULL &&
+	    ttolxlwp(t)->br_clone_mntns == NULL,
+	    "helper changed during preparation");
+	/* Process owns one hold; test owns the creation hold until release. */
+	lx_pidns_hold(space);
+	ptolxproc(p)->l_pidns_children = space;
+	ns_nested_space = space;
+	space = NULL;
+	ns_nested_maps[0] = map;
+	map = NULL;
+	ns_nested_pids[0] = pid;
+	passed = B_TRUE;
+out:
+	if (p != NULL)
+		mutex_exit(&p->p_lock);
+	if (map != NULL)
+		lx_pidns_map_rele(map);
+	lx_pidns_rele(space);
+	if (scope != NULL)
+		crfree(scope);
+	lx_userns_rele(user);
+	if (base != NULL)
+		crfree(base);
+	mutex_exit(&ns_pid_lock);
+	if (passed)
+		KT_PASS(ctx);
+#undef ND_CHECK
+}
+
+static void
+ns_nested_observe(ktest_ctx_hdl_t *ctx, uint_t slot)
+{
+	proc_t *p = NULL;
+	kthread_t *t;
+	lx_pidns_map_t *map;
+	pid_t pid, inner = slot == 1 ? 1 : slot + 1;
+	pid_t outer = slot == 1 ? 3 : slot + 3;
+	boolean_t passed = B_FALSE;
+
+	mutex_enter(&ns_pid_lock);
+	if (ns_nested_space == NULL || ns_nested_maps[slot] != NULL ||
+	    !ns_process_pid(ctx, &pid) ||
+	    lx_lpid_lock(pid, ns_pid_process_zone,
+	    slot == 3 ? LXP_ZOMBOK : 0, &p, &t) != 0) {
+		KT_ERROR(ctx, "missing nested observation target");
+		goto out;
+	}
+	if (p->p_brand != &lx_brand) {
+		KT_FAIL(ctx, "nested target is not lx");
+		goto out;
+	}
+	map = ptolxproc(p)->l_pidns_map;
+	if (p->p_pid != pid ||
+	    ptolxproc(p)->l_parent_deathsig != 0 ||
+	    strcmp(PTOU(p)->u_comm, "pid_nested") != 0 ||
+	    lx_pidns_active(p) != ns_nested_space || map == NULL ||
+	    ptolxproc(p)->l_pidns_children != NULL ||
+	    p->p_ppid != ns_nested_pids[slot == 1 ? 0 : 1] ||
+	    lx_pidns_map_id(map, ns_nested_space) != inner ||
+	    lx_pidns_map_id(map, ns_pid_process_space) != outer ||
+	    (slot == 3 ? p->p_stat != SZOMB :
+	    (t == NULL || t->t_state != TS_STOPPED ||
+	    ttolxlwp(t)->br_pidns_map != map))) {
+		KT_FAIL(ctx,
+		    "nested maps, adoption or stop/zombie state differ");
+		goto out;
+	}
+	lx_pidns_map_hold(map);
+	ns_nested_maps[slot] = map;
+	ns_nested_pids[slot] = pid;
+	passed = B_TRUE;
+out:
+	if (p != NULL)
+		mutex_exit(&p->p_lock);
+	mutex_exit(&ns_pid_lock);
+	if (passed)
+		KT_PASS(ctx);
+}
+
+static void
+ns_nested_inner(ktest_ctx_hdl_t *ctx)
+{
+	ns_nested_observe(ctx, 1);
+}
+
+static void
+ns_nested_live(ktest_ctx_hdl_t *ctx)
+{
+	ns_nested_observe(ctx, 2);
+}
+
+static void
+ns_nested_zombie(ktest_ctx_hdl_t *ctx)
+{
+	ns_nested_observe(ctx, 3);
+}
+
+/* Lookup holds only an identity. A held retired map must not delay wait. */
+static boolean_t
+ns_nested_retired(uint_t slot)
+{
+	struct pid *id;
+	boolean_t passed;
+	pid_t inner = slot == 1 ? 1 : slot + 1;
+	pid_t outer = slot == 0 ? 2 : slot == 1 ? 3 : slot + 3;
+
+	id = lx_pidns_lookup(ns_pid_process_space, outer);
+	mutex_enter(&pidlock);
+	passed = id != NULL && id->pid_id == ns_nested_pids[slot] &&
+	    id->pid_prinactive && id->pid_ref == 2 &&
+	    prfind_zone(ns_nested_pids[slot], ALL_ZONES) == NULL;
+	if (id != NULL) {
+		PID_RELE(id);
+	}
+	mutex_exit(&pidlock);
+	if (!passed || slot == 0)
+		return (passed);
+	id = lx_pidns_lookup(ns_nested_space, inner);
+	mutex_enter(&pidlock);
+	passed = id != NULL && id->pid_id == ns_nested_pids[slot] &&
+	    id->pid_prinactive && id->pid_ref == 2;
+	if (id != NULL) {
+		PID_RELE(id);
+	}
+	mutex_exit(&pidlock);
+	return (passed);
+}
+
+static void
+ns_nested_check(ktest_ctx_hdl_t *ctx, boolean_t final)
+{
+	uint_t i;
+	proc_t *p;
+	boolean_t passed = B_TRUE;
+	lx_pidns_map_t *pending = NULL;
+
+	mutex_enter(&ns_pid_lock);
+	for (i = 0; i < 4; i++) {
+		if (ns_nested_maps[i] == NULL)
+			passed = B_FALSE;
+	}
+	if (!passed) {
+		KT_ERROR(ctx, "incomplete nested observations");
+		goto out;
+	}
+	for (i = final ? 0 : 1; i < 4; i++)
+		passed = ns_nested_retired(i) && passed;
+	mutex_enter(&pidlock);
+	p = prfind_zone(ns_pid_process_owner, ALL_ZONES);
+	passed = passed && (final ? p == NULL :
+	    p != NULL && p->p_stat == SRUN);
+	p = prfind_zone(ns_nested_pids[0], ALL_ZONES);
+	passed = passed && (final ? p == NULL :
+	    p != NULL && p->p_stat == SRUN);
+	mutex_exit(&pidlock);
+	passed = (lx_pidns_reserve(ns_nested_space, &pending) == ENOMEM) &&
+	    passed;
+	if (pending != NULL) {
+		lx_pidns_map_rele(pending);
+		pending = NULL;
+	}
+	if (final)
+		passed = (lx_pidns_reserve(ns_pid_process_space, &pending) ==
+		    ENOMEM) && passed;
+	if (passed)
+		KT_PASS(ctx);
+	else
+		KT_FAIL(ctx, "wait returned before nested native reap");
+out:
+	if (pending != NULL)
+		lx_pidns_map_rele(pending);
+	mutex_exit(&ns_pid_lock);
+}
+
+static void
+ns_nested_inner_drained(ktest_ctx_hdl_t *ctx)
+{
+	ns_nested_check(ctx, B_FALSE);
+}
+
+static void
+ns_nested_drained(ktest_ctx_hdl_t *ctx)
+{
+	ns_nested_check(ctx, B_TRUE);
+}
+
+static void
+ns_nested_release(ktest_ctx_hdl_t *ctx)
+{
+	uint_t i;
+	pid_t pids[4];
+	boolean_t gone = B_TRUE;
+
+	mutex_enter(&ns_pid_lock);
+	bcopy(ns_nested_pids, pids, sizeof (pids));
+	ns_nested_drop();
+	ns_pid_process_drop();
+	mutex_enter(&pidlock);
+	for (i = 0; i < 4; i++)
+		gone = pids[i] > 1 && pid_find(pids[i]) == NULL && gone;
+	mutex_exit(&pidlock);
+	mutex_exit(&ns_pid_lock);
+	if (gone)
+		KT_PASS(ctx);
+	else
+		KT_FAIL(ctx, "nested release retained native identities");
+}
+
 static struct modlmisc ns_modlmisc = {
 	.misc_modops = &mod_miscops,
 	.misc_linkinfo = "lx namespace tests"
@@ -2722,6 +3025,20 @@ _init(void)
 	    0)) != 0 ||
 	    (error = ktest_add_test(ks, "maps_release", ns_pid_maps_release,
 	    0)) != 0 ||
+	    (error = ktest_add_test(ks, "nested_arm",
+	    ns_nested_arm, KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "nested_inner",
+	    ns_nested_inner, KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "nested_live",
+	    ns_nested_live, KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "nested_zombie",
+	    ns_nested_zombie, KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "nested_inner_drained",
+	    ns_nested_inner_drained, 0)) != 0 ||
+	    (error = ktest_add_test(ks, "nested_drained",
+	    ns_nested_drained, 0)) != 0 ||
+	    (error = ktest_add_test(ks, "nested_release",
+	    ns_nested_release, 0)) != 0 ||
 	    (error = ktest_add_test(ks, "process_attach", ns_pid_process_attach,
 	    KTEST_FLAG_INPUT)) != 0 ||
 	    (error = ktest_add_test(ks, "process_thread", ns_pid_process_thread,
@@ -2773,6 +3090,7 @@ _fini(void)
 		mutex_enter(&ns_pid_lock);
 		ns_pid_drop();
 		ns_pid_maps_drop();
+		ns_nested_drop();
 		ns_pid_process_drop();
 		mutex_exit(&ns_pid_lock);
 		mutex_destroy(&ns_pid_lock);
