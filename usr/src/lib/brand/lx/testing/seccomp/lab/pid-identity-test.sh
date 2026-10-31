@@ -42,6 +42,7 @@ printf '%s\n' 'lx_brand`lx_seccomp_experimental/W 1' \
     'lx_brand`lx_userns_experimental/W 1' \
     'lx_brand`lx_mntns_experimental/W 1' | mdb -kw
 zoneadm -z lx-probe boot
+ktest run lx_namespace:pid:reservation
 for variant in static dynamic; do
     probe=/test/pid_identity
     test "$variant" != dynamic || probe=/test/dynamic/pid_identity

@@ -1487,6 +1487,29 @@ ns_pid_drop(void)
 	}
 }
 
+/* Native reservations must never resolve to proc slot zero. */
+static void
+ns_pid_reservation(ktest_ctx_hdl_t *ctx)
+{
+	struct pid *identity;
+	pid_t number;
+	boolean_t hidden;
+
+	if ((number = pid_allocate(curproc, 0, 0)) < 0) {
+		KT_ERROR(ctx, "cannot allocate native PID reservation");
+		return;
+	}
+	mutex_enter(&pidlock);
+	identity = pid_find(number);
+	hidden = prfind_zone(number, ALL_ZONES) == NULL;
+	PID_RELE(identity);
+	mutex_exit(&pidlock);
+	if (hidden)
+		KT_PASS(ctx);
+	else
+		KT_FAIL(ctx, "native PID reservation resolved to a process");
+}
+
 static void
 ns_pid_hold(ktest_ctx_hdl_t *ctx)
 {
@@ -1698,6 +1721,8 @@ _init(void)
 	    (error = ktest_add_test(ks, "scope_sids",
 	    lx_userns_test_scope_sids, KTEST_FLAG_INPUT)) != 0 ||
 	    (error = ktest_add_suite(km, "pid", &ks)) != 0 ||
+	    (error = ktest_add_test(ks, "reservation", ns_pid_reservation,
+	    0)) != 0 ||
 	    (error = ktest_add_test(ks, "hold", ns_pid_hold,
 	    KTEST_FLAG_INPUT)) != 0 ||
 	    (error = ktest_add_test(ks, "retired", ns_pid_retired, 0)) != 0 ||
