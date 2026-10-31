@@ -589,7 +589,7 @@ lx_lwpdata_alloc(proc_t *p)
 		    parent->br_clone_pidns_map != NULL)
 			parent->br_clone_pidns_error = error;
 		if (pidp != NULL)
-			(void) pid_rele(pidp);
+			lx_pid_identity_rele(pidp);
 		cpuset_free(affmask);
 		kmem_free(lpidp, sizeof (*lpidp));
 		kmem_free(lwpd, sizeof (*lwpd));
@@ -622,7 +622,7 @@ lx_lwpdata_free(void *lwpbd)
 	lx_sigframes_free(lwpd);
 	cpuset_free(lwpd->br_affinitymask);
 	if (lwpd->br_lpid->lxp_pidp != NULL) {
-		(void) pid_rele(lwpd->br_lpid->lxp_pidp);
+		lx_pid_identity_rele(lwpd->br_lpid->lxp_pidp);
 	}
 	kmem_free(lwpd->br_lpid, sizeof (*lwpd->br_lpid));
 	kmem_free(lwpd, sizeof (*lwpd));
