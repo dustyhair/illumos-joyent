@@ -150,6 +150,54 @@ vfsops_t *lo_vfsops;
  * Set up mount info record and attach it to vfs struct.
  */
 /*ARGSUSED*/
+/*
+ * A fresh private tree can be sealed before exposure to file operations.
+ * After use, dynamic readonly transitions need mapping/writer lifetime
+ * tracking. Refuse those explicitly instead of accepting an unsafe remount.
+ * The caller holds the VFS lock. li_lfslock serializes first use and seals
+ * both current and future derived VFS policy without holding a mutex over IO.
+ */
+static int
+lo_private_freeze(vfs_t *vfsp, struct mounta *uap)
+{
+	lofs_freeze_args_t *args = (void *)uap->dataptr;
+	struct loinfo *li = vtoli(vfsp);
+	struct lfsnode *lfs;
+	uint_t mask = VFS_RDONLY | VFS_NOSETUID | VFS_NODEVICES | VFS_NOEXEC;
+	int error = 0;
+
+	if ((uap->flags & (MS_SYSSPACE | MS_DATA)) !=
+	    (MS_SYSSPACE | MS_DATA) || uap->datalen != sizeof (*args) ||
+	    args == NULL || args->lfa_version != LOFS_FREEZE_ARGS_VERSION)
+		return (EINVAL);
+	if (!(li->li_flag & LO_PRIVATE) || !(vfsp->vfs_flag & VFS_NOMNTTAB))
+		return (EOPNOTSUPP);
+	if (!(args->lfa_flags & VFS_RDONLY) || (args->lfa_flags & ~mask) != 0)
+		return (EINVAL);
+	mutex_enter(&li->li_lfslock);
+	if ((li->li_flag & LO_PRIVATE_USED) && !(vfsp->vfs_flag & VFS_RDONLY)) {
+		error = EOPNOTSUPP;
+	} else if ((vfsp->vfs_flag & mask & ~args->lfa_flags) != 0) {
+		error = EOPNOTSUPP;
+	} else {
+		li->li_mflag |= args->lfa_flags;
+		vfsp->vfs_flag |= args->lfa_flags;
+		for (lfs = li->li_lfs; lfs != NULL; lfs = lfs->lfs_next)
+			lfs->lfs_vfs.vfs_flag |= args->lfa_flags;
+	}
+	mutex_exit(&li->li_lfslock);
+	if (error == 0) {
+		vfs_setmntopt(vfsp, MNTOPT_RO, NULL, 0);
+		if (args->lfa_flags & VFS_NOSETUID)
+			vfs_setmntopt(vfsp, MNTOPT_NOSETUID, NULL, 0);
+		if (args->lfa_flags & VFS_NODEVICES)
+			vfs_setmntopt(vfsp, MNTOPT_NODEVICES, NULL, 0);
+		if (args->lfa_flags & VFS_NOEXEC)
+			vfs_setmntopt(vfsp, MNTOPT_NOEXEC, NULL, 0);
+	}
+	return (error);
+}
+
 static int
 lo_mount(struct vfs *vfsp, struct vnode *vp, struct mounta *uap,
     struct cred *cr)
@@ -165,6 +213,8 @@ lo_mount(struct vfs *vfsp, struct vnode *vp, struct mounta *uap,
 
 	if ((error = secpolicy_fs_mount(cr, vp, vfsp)) != 0)
 		return (EPERM);
+	if (uap->flags & MS_REMOUNT)
+		return (lo_private_freeze(vfsp, uap));
 
 	/*
 	 * Loopback devices which get "nodevices" added can be done without
@@ -329,7 +379,7 @@ lo_mount(struct vfs *vfsp, struct vnode *vp, struct mounta *uap,
 	li->li_realvfs = realrootvp->v_vfsp;
 	li->li_mountvfs = vfsp;
 	if (pinned && (uap->flags & MS_NOMNTTAB))
-		li->li_flag |= LO_PRESERVE_FIFO;
+		li->li_flag |= LO_PRESERVE_FIFO | LO_PRIVATE;
 
 	/*
 	 * Set mount flags to be inherited by loopback vfs's

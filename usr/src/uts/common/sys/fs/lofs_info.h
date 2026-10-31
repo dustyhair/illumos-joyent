@@ -91,6 +91,8 @@ struct loinfo {
  */
 #define	LO_NOSUB	0x02	/* don't traverse sub-mounts */
 #define	LO_PRESERVE_FIFO	0x04	/* retain private FIFO mount identity */
+#define	LO_PRIVATE	0x08	/* pinned, non-mnttab kernel construction */
+#define	LO_PRIVATE_USED	0x10	/* write access granted or mutation begun */
 
 /*
  * lfsnodes are allocated as new real vfs's are encountered
@@ -118,6 +120,13 @@ typedef struct lofs_mount_args {
 	uint_t lma_version;
 	struct vnode *lma_source;
 } lofs_mount_args_t;
+
+/* One-way policy tightening before a private construction is used. */
+#define	LOFS_FREEZE_ARGS_VERSION	1
+typedef struct lofs_freeze_args {
+	uint_t lfa_version;
+	uint_t lfa_flags;
+} lofs_freeze_args_t;
 
 extern struct vfs *lo_realvfs(struct vfs *, struct vnode **);
 extern void lofs_subrinit(void);

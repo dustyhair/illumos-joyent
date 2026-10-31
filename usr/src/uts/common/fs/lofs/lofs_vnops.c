@@ -32,6 +32,7 @@
 #include <sys/vfs_opreg.h>
 #include <sys/uio.h>
 #include <sys/cred.h>
+#include <sys/file.h>
 #include <sys/pathname.h>
 #include <sys/debug.h>
 #include <sys/fs/lofs_node.h>
@@ -46,6 +47,31 @@
  * and then calling the appropriate real vnode routine(s) to do the work.
  */
 
+/*
+ * Fence the first potential writer against construction-time sealing.
+ * Keep the mark after close/unmap: full dynamic remount is not implemented.
+ * Never hold li_lfslock while invoking a potentially sleeping backing VOP.
+ */
+static int
+lo_private_write(vnode_t *vp)
+{
+	struct loinfo *li;
+	int error = 0;
+
+	if (!vn_matchops(vp, lo_vnodeops))
+		return (0);
+	li = vtoli(vp->v_vfsp);
+	if (!(li->li_flag & LO_PRIVATE))
+		return (0);
+	mutex_enter(&li->li_lfslock);
+	if (vp->v_vfsp->vfs_flag & VFS_RDONLY)
+		error = EROFS;
+	else
+		li->li_flag |= LO_PRIVATE_USED;
+	mutex_exit(&li->li_lfslock);
+	return (error);
+}
+
 static int
 lo_open(vnode_t **vpp, int flag, struct cred *cr, caller_context_t *ct)
 {
@@ -53,6 +79,10 @@ lo_open(vnode_t **vpp, int flag, struct cred *cr, caller_context_t *ct)
 	vnode_t *rvp;
 	vnode_t *oldvp;
 	int error;
+
+	if (vp->v_type == VREG && (flag & FWRITE) &&
+	    (error = lo_private_write(vp)) != 0)
+		return (error);
 
 #ifdef LODEBUG
 	lo_dprint(4, "lo_open vp %p cnt=%d realvp %p cnt=%d\n",
@@ -131,6 +161,10 @@ static int
 lo_write(vnode_t *vp, struct uio *uiop, int ioflag, struct cred *cr,
 	caller_context_t *ct)
 {
+	int error;
+
+	if (vp->v_type == VREG && (error = lo_private_write(vp)) != 0)
+		return (error);
 #ifdef LODEBUG
 	lo_dprint(4, "lo_write vp %p realvp %p\n", vp, realvp(vp));
 #endif
@@ -189,6 +223,10 @@ lo_setattr(
 	struct cred *cr,
 	caller_context_t *ct)
 {
+	int error;
+
+	if ((error = lo_private_write(vp)) != 0)
+		return (error);
 #ifdef LODEBUG
 	lo_dprint(4, "lo_setattr vp %p realvp %p\n", vp, realvp(vp));
 #endif
@@ -684,6 +722,30 @@ lo_create(
 	int error;
 	vnode_t *vp = NULL;
 
+	/* Readonly O_CREAT can open an existing file without creating one. */
+	if ((vtoli(dvp->v_vfsp)->li_flag & LO_PRIVATE) &&
+	    vn_is_readonly(dvp) && exclusive == NONEXCL && !(mode & VWRITE) &&
+	    va->va_type == VREG && !(va->va_mask & AT_SIZE)) {
+		error = VOP_LOOKUP(dvp, nm, &vp, NULL, 0, NULL, cr,
+		    ct, NULL, NULL);
+		if (error == ENOENT)
+			return (EROFS);
+		if (error != 0)
+			return (error);
+		if (vp->v_type == VDIR) {
+			VN_RELE(vp);
+			return (EISDIR);
+		}
+		if ((error = VOP_ACCESS(vp, mode, 0, cr, ct)) != 0) {
+			VN_RELE(vp);
+			return (error);
+		}
+		*vpp = vp;
+		return (0);
+	}
+	if ((error = lo_private_write(dvp)) != 0)
+		return (error);
+
 #ifdef LODEBUG
 	lo_dprint(4, "lo_create vp %p realvp %p\n", dvp, realvp(dvp));
 #endif
@@ -759,6 +821,10 @@ lo_remove(
 	caller_context_t *ct,
 	int flags)
 {
+	int error;
+
+	if ((error = lo_private_write(dvp)) != 0)
+		return (error);
 #ifdef LODEBUG
 	lo_dprint(4, "lo_remove vp %p realvp %p\n", dvp, realvp(dvp));
 #endif
@@ -776,6 +842,11 @@ lo_link(
 	int flags)
 {
 	vnode_t *realvp;
+	int error;
+
+	if ((error = lo_private_write(vp)) != 0 ||
+	    (error = lo_private_write(tdvp)) != 0)
+		return (error);
 
 #ifdef LODEBUG
 	lo_dprint(4, "lo_link vp %p realvp %p\n", vp, realvp(vp));
@@ -834,6 +905,11 @@ lo_rename(
 	int flags)
 {
 	vnode_t *tnvp;
+	int error;
+
+	if ((error = lo_private_write(odvp)) != 0 ||
+	    (error = lo_private_write(ndvp)) != 0)
+		return (error);
 
 #ifdef LODEBUG
 	lo_dprint(4, "lo_rename vp %p realvp %p\n", odvp, realvp(odvp));
@@ -921,6 +997,9 @@ lo_mkdir(
 {
 	int error;
 
+	if ((error = lo_private_write(dvp)) != 0)
+		return (error);
+
 #ifdef LODEBUG
 	lo_dprint(4, "lo_mkdir vp %p realvp %p\n", dvp, realvp(dvp));
 #endif
@@ -954,6 +1033,10 @@ lo_rmdir(
 	int flags)
 {
 	vnode_t *rvp = cdir;
+	int error;
+
+	if ((error = lo_private_write(dvp)) != 0)
+		return (error);
 
 #ifdef LODEBUG
 	lo_dprint(4, "lo_rmdir vp %p realvp %p\n", dvp, realvp(dvp));
@@ -975,6 +1058,10 @@ lo_symlink(
 	caller_context_t *ct,
 	int flags)
 {
+	int error;
+
+	if ((error = lo_private_write(dvp)) != 0)
+		return (error);
 #ifdef LODEBUG
 	lo_dprint(4, "lo_symlink vp %p realvp %p\n", dvp, realvp(dvp));
 #endif
@@ -1065,6 +1152,10 @@ lo_space(
 	struct cred *cr,
 	caller_context_t *ct)
 {
+	int error;
+
+	if ((error = lo_private_write(vp)) != 0)
+		return (error);
 	vp = realvp(vp);
 	return (VOP_SPACE(vp, cmd, bfp, flag, offset, cr, ct));
 }
@@ -1114,6 +1205,11 @@ lo_map(
 	struct cred *cr,
 	caller_context_t *ct)
 {
+	int error;
+
+	if (vp->v_type == VREG && (flags & MAP_SHARED) &&
+	    (maxprot & PROT_WRITE) && (error = lo_private_write(vp)) != 0)
+		return (error);
 	vp = realvp(vp);
 	return (VOP_MAP(vp, off, as, addrp, len, prot, maxprot, flags, cr, ct));
 }
@@ -1223,6 +1319,10 @@ lo_setsecattr(
 	struct cred *cr,
 	caller_context_t *ct)
 {
+	int error;
+
+	if ((error = lo_private_write(vp)) != 0)
+		return (error);
 	if (vn_is_readonly(vp))
 		return (EROFS);
 	vp = realvp(vp);

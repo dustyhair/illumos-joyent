@@ -908,6 +908,64 @@ lx_mntns_mount_private(lx_mntns_view_t *view, const char *target, cred_t *actor)
 	return (error);
 }
 
+/* Seal a tracked private LOFS constructor, without changing its source. */
+int
+lx_mntns_mount_readonly(lx_mntns_view_t *view, const char *target,
+    uint_t restrictions, cred_t *actor)
+{
+	lofs_freeze_args_t args = { LOFS_FREEZE_ARGS_VERSION, restrictions };
+	struct mounta ma = { 0 };
+	lx_mntns_mount_t *mount;
+	vnode_t *vp = NULL;
+	vfs_t *vfs = NULL;
+	boolean_t lofs;
+	int error;
+
+	if (!lx_mntns_entry_enabled() ||
+	    !lx_mntns_view_capable(view, actor))
+		return (EPERM);
+	mutex_enter(&view->lv_lock);
+	if ((error = lookupname((char *)target, UIO_SYSSPACE, FOLLOW,
+	    NULL, &vp)) != 0)
+		goto out;
+	if (vp == view->lv_root)
+		vfs = view->lv_vfs;
+	for (mount = view->lv_mounts; vfs == NULL && mount != NULL;
+	    mount = mount->lm_next) {
+		if (vp == mount->lm_root)
+			vfs = mount->lm_vfs;
+	}
+	if (vfs == NULL || !(vp->v_flag & VROOT)) {
+		error = EINVAL;
+		goto out;
+	}
+	RLOCK_VFSSW();
+	lofs = strcmp(vfssw[vfs->vfs_fstype].vsw_name, "lofs") == 0;
+	RUNLOCK_VFSSW();
+	if (!lofs || (vp->v_type != VDIR && vp->v_type != VREG)) {
+		error = EOPNOTSUPP;
+		goto out;
+	}
+	ma.spec = "lx-private-freeze";
+	ma.dir = (char *)target;
+	ma.fstype = "lofs";
+	ma.flags = MS_SYSSPACE | MS_DATA | MS_REMOUNT;
+	ma.dataptr = (char *)&args;
+	ma.datalen = sizeof (args);
+	zone_hold(curzone);
+	mount_in_progress(curzone);
+	vfs_lock_wait(vfs);
+	error = VFS_MOUNT(vfs, vp, &ma, view->lv_cred);
+	vfs_unlock(vfs);
+	mount_completed(curzone);
+	zone_rele(curzone);
+out:
+	if (vp != NULL)
+		VN_RELE(vp);
+	mutex_exit(&view->lv_lock);
+	return (error);
+}
+
 /*
  * Public bind. Resolve both operands with the actor's root,
  * cwd and credentials, then pass held vnodes to domount. The kernel mount

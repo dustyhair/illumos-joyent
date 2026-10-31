@@ -25,6 +25,7 @@
 #include <sys/lx_userns.h>
 #include <sys/zone.h>
 #include <sys/param.h>
+#include <sys/vfs.h>
 #include <sys/lx_syscalls.h>
 #include <sys/lx_autofs.h>
 
@@ -549,7 +550,7 @@ lx_mnt_private_mount(lx_mntns_view_t *view, const char *sourcep,
 	char *source, *target, *type, *options;
 	char byte;
 	uint_t propagation;
-	boolean_t change, bind;
+	boolean_t change, bind, readonly;
 	int error;
 
 	/* Old mount callers, including bwrap, still send the magic prefix. */
@@ -558,11 +559,19 @@ lx_mnt_private_mount(lx_mntns_view_t *view, const char *sourcep,
 
 	propagation = flags & (LX_MS_PRIVATE | LX_MS_SLAVE);
 	bind = (flags & LX_MS_BIND) != 0;
+	readonly = bind && (flags & LX_MS_REMOUNT) != 0;
 	change = !bind && propagation != 0;
 	if (!lx_mntns_entry_enabled())
 		return (lx_mntns_view_capable(view, CRED()) ?
 		    EOPNOTSUPP : EPERM);
-	if (change) {
+	if (readonly) {
+		if (!(flags & LX_MS_RDONLY) ||
+		    (flags & ~(LX_MS_BIND | LX_MS_REMOUNT | LX_MS_RDONLY |
+		    LX_MS_NOSUID | LX_MS_NODEV | LX_MS_NOEXEC | LX_MS_SILENT |
+		    LX_MS_RELATIME)) != 0)
+			return (lx_mntns_view_capable(view, CRED()) ?
+			    EOPNOTSUPP : EPERM);
+	} else if (change) {
 		if (propagation == (LX_MS_PRIVATE | LX_MS_SLAVE) ||
 		    (flags & ~(LX_MS_PRIVATE | LX_MS_SLAVE | LX_MS_REC |
 		    LX_MS_SILENT)) != 0)
@@ -600,7 +609,17 @@ lx_mnt_private_mount(lx_mntns_view_t *view, const char *sourcep,
 		error = EPERM;
 	else if (change)
 		error = lx_mntns_mount_private(view, target, CRED());
-	else if (!bind) {
+	else if (readonly) {
+		uint_t policy = VFS_RDONLY;
+
+		if (flags & LX_MS_NOSUID)
+			policy |= VFS_NOSETUID;
+		if (flags & LX_MS_NODEV)
+			policy |= VFS_NODEVICES;
+		if (flags & LX_MS_NOEXEC)
+			policy |= VFS_NOEXEC;
+		error = lx_mntns_mount_readonly(view, target, policy, CRED());
+	} else if (!bind) {
 		if (fstypep == NULL)
 			error = EINVAL;
 		else if (strcmp(type, "tmpfs") != 0)
