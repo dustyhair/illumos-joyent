@@ -1,0 +1,45 @@
+{
+  "vm": 96,
+  "accepted_checkpoint": false,
+  "source": "9245447bc53f1e9ebd213097f24fbb5dd632c324",
+  "counts": {
+    "^MNT_ENTRY_CASE_PASS ": 70,
+    "^MOUNT_BIND_CASE_PASS ": 12,
+    "^MOUNT_BIND_FILL_PASS ": 2,
+    "^MOUNT_RECURSIVE_CASE_PASS ": 12,
+    "^MOUNT_PRIVATE_CASE_PASS ": 8,
+    "^MOUNT_TMPFS_CASE_PASS ": 1
+  },
+  "prior_full_regressions_exit": 0,
+  "new_tmpfs_basic_root_static": "PASS including ownership relative target namespace copy/shared data/sibling isolation and cleanup",
+  "new_tmpfs_options_root_static": "SIGSYS at statfs before size/noexec tests; previous bad-option and descriptor checks produced no failure output",
+  "trace": "PID6936 reaches Linux statfs then dies; syscall table137 has NULL kernel handler, restricted fallback deliberately terminates SIGSYS. Guard remains unchanged.",
+  "cleanup": {
+    "process_idle": "PASS",
+    "user_budget_idle": "PASS",
+    "views": 0,
+    "flags": [
+      0,
+      0,
+      0
+    ],
+    "pool_export_exit": 0,
+    "synced_shutdown": true,
+    "qemu_pid_exited": 2271666
+  },
+  "console": {
+    "name": "boot-96-tmpfs-statfs-diagnostic.log",
+    "sha256": "87e265333883efd8069113c65937d466cdbe2e78925518a3bf65f13460f75280"
+  },
+  "logs": {
+    "vm96-full.log": "56c58c0281404828f3d9a0051dcfc294910ebd08ed34a65858c966d3cd0b415c",
+    "vm96-tmpfs.log": "0832e6dc1b69e0cd8a04b8e3188c1a3e964a7f61357a4ad57f9f713aa823ca0b",
+    "vm96-trace.log": "ffbefef70e7c0f964f86d17400edbe9ee8eb070b5c68bf3495cce76353e80e49",
+    "vm96-regressions.log": "5494dd5612fa28613a9fbba211a49b6f63145ad6dd6d931c492c1d058498c930",
+    "vm96-entry.log": "a4f05f4bbb58dfdbce952939e25241a0b9d296b5275cf609cf304b6da37ecd6f",
+    "vm96-bind.log": "83931f21438d00e7a887d9ebc46aaddbb5364708a5071de18ab0ddbdf429d2a2",
+    "vm96-recursive.log": "448112141251295bc65a2aff22b1075e9dbf1e643b3619277415eee3621fb63c",
+    "vm96-private.log": "ef52600e5830638aa5ceb963020131a6984ebb678f8085312f9a9c067ea8dd3c"
+  },
+  "physical_host_deployed": false
+}
