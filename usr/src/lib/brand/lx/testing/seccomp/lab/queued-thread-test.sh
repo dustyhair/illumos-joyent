@@ -12,10 +12,18 @@ for variant in dynamic static; do
     actual=$(digest -a sha256 "$dir/queued_threads" | awk '{print $NF}')
     test "$actual" = "$(cat "$dir/sha256")"
     log="/lab/queued-thread-signals-$variant.log"
+    controller=$$
+    ( sleep 75; echo QUEUED_THREAD_TIMEOUT >&2; kill -TERM "$controller" ) </dev/null &
+    watchdog=$!
+    trap 'kill -TERM "$watchdog" 2>/dev/null || true' EXIT
+    trap 'exit 124' TERM
     # The fixture bounds pipe waits, supervises numeric-UID children, and reaps.
     # A failed phase is fatal; retain the raw zlogin output.
     zlogin -S lx-probe "/test/queued-thread-signals/$variant/queued_threads" \
         </dev/null >"$log" 2>&1
+    kill -TERM "$watchdog"
+    wait "$watchdog" || true
+    trap - EXIT TERM
     cat "$log"
     grep -q '^PASS queued_threads main=8 worker=8 zero=8192 reaped=5$' "$log"
 done

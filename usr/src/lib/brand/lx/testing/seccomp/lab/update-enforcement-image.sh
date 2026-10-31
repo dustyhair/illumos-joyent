@@ -117,6 +117,8 @@ for controller in mntns-budget-native mount-owner-test.sh \
     pid-drain-test.sh pid-drain-smoke-test.sh pid-drain-full-test.sh \
     pid-zombie-test.sh pid-wait-test.sh zombie-sigcld.d native-wait-regress \
     pid-nested-test.sh \
+    queued-thread-test.sh queued-signal-abi-test.sh queued-zero-alloc.d \
+    queued-signal-checkpoint.sh \
     bubblewrap-trace.sh; do
     test -f "$lab/$controller"
     pfexec cp "$lab/$controller" "$lab/mnt-root/lab/$controller"
