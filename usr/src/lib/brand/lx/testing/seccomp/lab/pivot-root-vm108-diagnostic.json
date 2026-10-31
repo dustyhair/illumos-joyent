@@ -1,0 +1,25 @@
+{
+  "vm": 108,
+  "accepted": false,
+  "source": "ed1c6304342de562d93d34e4854c156c7554f63c",
+  "failure": "First tmpfs setup mount returns EAGAIN before pivot_root. Native baseline passes.",
+  "diagnosis": "Replacing NOSPLICE mountpoint during construction changes the constructor prefix used to validate cached LOFS vnode names. Keep it immutable, retain a separate private prefix when native mountpoint changes at root publication.",
+  "fix": "606e662599cb1f6820b3d6297c977f94fafb358e: optional private view/mount prefix holds transfer with root and release during retirement; native vfs_setmntpoint at publication supplies absolute path; actor lookup/exact-vnode validation unchanged",
+  "cleanup": {
+    "flags": [
+      0,
+      0,
+      0
+    ],
+    "views": 0,
+    "zone_halted": true,
+    "pool_export": 0,
+    "filesystems_synced": true,
+    "qemu_exited": 2767970
+  },
+  "console": {
+    "name": "boot-108-root-prefix-diagnostic.log",
+    "sha256": "5cc90155d5cbdff3c6d511f71b51a47ec2197a741b29de364f956a19a5b6e342"
+  },
+  "physical_host_deployed": false
+}
