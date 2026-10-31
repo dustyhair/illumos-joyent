@@ -45,7 +45,14 @@ typedef struct lx_mntns_mount {
 	vnode_t *lm_root;
 	refstr_t *lm_path;
 	struct lx_mntns_mount *lm_next;
+	uint_t lm_order;
 } lx_mntns_mount_t;
+
+/* Covered vnode references survive vfs_remove long enough to unlock them. */
+typedef struct lx_mntns_unlink {
+	vfs_t *lu_vfs;
+	vnode_t *lu_covered;
+} lx_mntns_unlink_t;
 
 typedef struct lx_mntns_clone_mount {
 	vnode_t *lc_source;
@@ -73,6 +80,8 @@ struct lx_mntns_view {
 	vfs_t *lv_vfs;
 	lx_mntns_mount_t *lv_mounts;
 	uint_t lv_nmounts;
+	uint_t lv_root_order;
+	uint_t lv_next_order;
 };
 
 static kmutex_t lx_mntns_lock;
@@ -82,6 +91,7 @@ static volatile uint_t lx_mntns_nviews;
 static int lx_mntns_destroy(lx_mntns_view_t *, cred_t *);
 static int lx_mntns_tree_fini(lx_mntns_view_t *, cred_t *);
 static void lx_mntns_reap(void *);
+static void lx_mntns_retire(lx_mntns_view_t *);
 
 lx_mntns_budget_t *
 lx_mntns_budget_create(uint32_t maximum)
@@ -242,8 +252,11 @@ lx_mntns_view_hold(lx_mntns_view_t *view)
 void
 lx_mntns_view_rele(lx_mntns_view_t *view)
 {
-	if (atomic_dec_uint_nv(&view->lv_refs) == 0)
+	if (atomic_dec_uint_nv(&view->lv_refs) == 0) {
+		/* End graph membership before the last release returns. */
+		lx_mntns_retire(view);
 		lx_mntns_dispatch(view);
+	}
 }
 
 static int
@@ -341,6 +354,7 @@ lx_mntns_create(vnode_t *source, cred_t *cr, cred_t *owner,
 	view = kmem_zalloc(sizeof (*view), KM_SLEEP);
 	mutex_init(&view->lv_lock, NULL, MUTEX_DEFAULT, NULL);
 	view->lv_refs = 1;
+	view->lv_next_order = 1;
 	view->lv_cred = cr;
 	view->lv_budget = budget;
 	crhold(view->lv_owner = owner);
@@ -579,6 +593,7 @@ lx_mntns_bind_locked(lx_mntns_view_t *view, vnode_t *source,
 		return (error);
 	}
 	mount->lm_path = refstr_alloc(path);
+	mount->lm_order = view->lv_next_order++;
 	mount->lm_next = view->lv_mounts;
 	view->lv_mounts = mount;
 	view->lv_nmounts++;
@@ -781,6 +796,7 @@ lx_mntns_rbind_locked(lx_mntns_view_t *view, vnode_t *from,
 	stage = kmem_zalloc(sizeof (*stage), KM_SLEEP);
 	mutex_init(&stage->lv_lock, NULL, MUTEX_DEFAULT, NULL);
 	stage->lv_cred = view->lv_cred;
+	stage->lv_next_order = 1;
 	error = lx_mntns_path_locked(view, from, actor, source);
 	if (error != 0)
 		goto out;
@@ -843,11 +859,13 @@ lx_mntns_rbind_locked(lx_mntns_view_t *view, vnode_t *from,
 		}
 		refstr_rele(mount->lm_path);
 		mount->lm_path = refstr_alloc(full);
+		mount->lm_order += view->lv_next_order;
 	}
 	base = kmem_zalloc(sizeof (*base), KM_SLEEP);
 	base->lm_vfs = stage->lv_vfs;
 	base->lm_root = stage->lv_root;
 	base->lm_path = refstr_alloc(destination);
+	base->lm_order = view->lv_next_order;
 	if ((error = lx_mntns_attach(covered, stage->lv_vfs)) != 0)
 		goto out;
 	base->lm_next = view->lv_mounts;
@@ -861,6 +879,7 @@ lx_mntns_rbind_locked(lx_mntns_view_t *view, vnode_t *from,
 		view->lv_mounts = base;
 	}
 	view->lv_nmounts += count;
+	view->lv_next_order += stage->lv_next_order;
 	base = NULL;
 	stage->lv_root = NULL;
 	stage->lv_vfs = NULL;
@@ -988,6 +1007,94 @@ lx_mntns_detached(vnode_t *vp)
 	return (detached);
 }
 
+/* Preserve constructor order when a namespace root becomes a mount record. */
+static void
+lx_mntns_insert_ordered(lx_mntns_view_t *view, lx_mntns_mount_t *mount)
+{
+	lx_mntns_mount_t **link = &view->lv_mounts;
+
+	ASSERT(MUTEX_HELD(&view->lv_lock));
+	while (*link != NULL && (*link)->lm_order > mount->lm_order)
+		link = &(*link)->lm_next;
+	mount->lm_next = *link;
+	*link = mount;
+}
+
+/*
+ * Namespace membership ends independently of filesystem vnode lifetime.
+ * The final reference is released outside process locks. Unlink every graph
+ * edge synchronously; native unmount and backing-source release stay deferred.
+ * Constructor order keeps newer LOFS source references ahead of their sources,
+ * including a current root that pins a retained older mount after pivot_root.
+ */
+static void
+lx_mntns_retire(lx_mntns_view_t *view)
+{
+	lx_mntns_unlink_t *list;
+	lx_mntns_mount_t *mount, *root;
+	zone_t *zone = crgetzone(view->lv_cred);
+	uint_t count = 0, locked, i;
+	size_t size;
+
+	ASSERT(!MUTEX_HELD(&curproc->p_lock));
+	ASSERT(!MUTEX_HELD(&pidlock));
+	VERIFY3U(view->lv_refs, ==, 0);
+	mutex_enter(&view->lv_lock);
+	ASSERT(view->lv_vfs != NULL && view->lv_root != NULL);
+	root = kmem_zalloc(sizeof (*root), KM_SLEEP);
+	root->lm_vfs = view->lv_vfs;
+	root->lm_root = view->lv_root;
+	root->lm_path = refstr_alloc("/");
+	root->lm_order = view->lv_root_order;
+	size = (view->lv_nmounts + 1) * sizeof (*list);
+	list = kmem_alloc(size, KM_SLEEP);
+	for (mount = view->lv_mounts; mount != NULL; mount = mount->lm_next) {
+		if (mount->lm_vfs->vfs_vnodecovered == NULL)
+			continue;
+		list[count].lu_vfs = mount->lm_vfs;
+		VN_HOLD(list[count].lu_covered =
+		    mount->lm_vfs->vfs_vnodecovered);
+		count++;
+	}
+	zone_hold(zone);
+	mount_in_progress(zone);
+	/* No namespace participant remains to add another graph edge. */
+	for (;;) {
+		locked = 0;
+		for (i = 0; i < count; i++) {
+			if (vn_vfswlock(list[i].lu_covered) != 0)
+				break;
+			locked++;
+		}
+		if (locked == count)
+			break;
+		for (i = 0; i < locked; i++)
+			vn_vfsunlock(list[i].lu_covered);
+		/* Retry readers without exposing partial teardown. */
+		delay(1);
+	}
+	for (i = 0; i < count; i++) {
+		(void) dnlc_purge_vfsp(list[i].lu_vfs, 0);
+		vfs_lock_wait(list[i].lu_vfs);
+		vfs_detach(list[i].lu_vfs);
+	}
+	vfs_lock_wait(view->lv_vfs);
+	view->lv_vfs->vfs_flag |= VFS_DETACHED;
+	vfs_unlock(view->lv_vfs);
+	for (i = 0; i < count; i++) {
+		vn_vfsunlock(list[i].lu_covered);
+		VN_RELE(list[i].lu_covered);
+	}
+	mount_completed(zone);
+	zone_rele(zone);
+	kmem_free(list, size);
+	lx_mntns_insert_ordered(view, root);
+	view->lv_nmounts++;
+	view->lv_root = NULL;
+	view->lv_vfs = NULL;
+	mutex_exit(&view->lv_lock);
+}
+
 /*
  * Remove graph edges without unmounting busy filesystems. Lock every covered
  * vnode before changing any edge, so a failed lock leaves the tree intact.
@@ -996,10 +1103,6 @@ lx_mntns_detached(vnode_t *vp)
 int
 lx_mntns_mount_detach(lx_mntns_view_t *view, const char *target, cred_t *actor)
 {
-	typedef struct lx_mntns_unlink {
-		vfs_t *lu_vfs;
-		vnode_t *lu_covered;
-	} lx_mntns_unlink_t;
 	lx_mntns_unlink_t *list;
 	lx_mntns_mount_t *mount;
 	vnode_t *vp = NULL;
@@ -1179,6 +1282,7 @@ lx_mntns_mount_tmpfs(lx_mntns_view_t *view, const char *target,
 	if (error == 0)
 		error = lx_mntns_pin(mount, view->lv_cred);
 	if (error == 0) {
+		mount->lm_order = view->lv_next_order++;
 		mount->lm_next = view->lv_mounts;
 		view->lv_mounts = mount;
 		view->lv_nmounts++;
@@ -1523,6 +1627,7 @@ lx_mntns_view_tmpfs(lx_mntns_view_t *view, const char *path, cred_t *cr)
 	VN_RELE(covered);
 	if (error == 0) {
 		mount->lm_path = refstr_alloc(resolved);
+		mount->lm_order = view->lv_next_order++;
 		mount->lm_next = view->lv_mounts;
 		view->lv_mounts = mount;
 		view->lv_nmounts++;
@@ -1563,6 +1668,10 @@ lx_mntns_tree_fini(lx_mntns_view_t *view, cred_t *cr)
 		VFS_RELE(mount->lm_vfs);
 		refstr_rele(mount->lm_path);
 		kmem_free(mount, sizeof (*mount));
+	}
+	if (view->lv_vfs == NULL) {
+		ASSERT(view->lv_root == NULL);
+		return (0);
 	}
 	VN_RELE(view->lv_root);
 	view->lv_root = NULL;
