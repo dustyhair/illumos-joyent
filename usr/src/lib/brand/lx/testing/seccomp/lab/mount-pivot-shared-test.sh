@@ -5,7 +5,7 @@ test -f /lab/offline-lx-guest
 bootparams | grep -q '^lx_lab=true$'
 test "$(zonename)" = global
 zonepath=$(zonecfg -z lx-probe info zonepath | awk '{print $2}')
-test "$(digest -a sha256 /lab/mntns_pivot_shared | awk '{print $NF}')" = d9f08cdf3df0381788e8d1f428a71806000043e3f0d2b23cb50c151215d55f18
+test "$(digest -a sha256 /lab/mntns_pivot_shared | awk '{print $NF}')" = 724a1fe358e345ef59e591ea86a7527c1bfe634476a8717f12dd46357c86b057
 cp /lab/mntns_pivot_shared "$zonepath/root/test/dynamic/mntns_pivot_shared"
 chmod 0555 "$zonepath/root/test/dynamic/mntns_pivot_shared"
 mkdir -p "$zonepath/root/test/mnt-pivot"
