@@ -106,7 +106,7 @@ main(int argc, char **argv)
 	uid_t uid;
 	gid_t gid;
 	char source[PATH_MAX], target[PATH_MAX], p[PATH_MAX], relative[PATH_MAX];
-	char data[16] = { 0 };
+	char data[16] = { 0 }, cwd[PATH_MAX];
 	struct stat before, after;
 	struct statfs stats;
 
@@ -181,6 +181,10 @@ main(int argc, char **argv)
 	    contents(path("target/subdir/data", p), "child\n") &&
 	    contents(path("source/subdir/data", p), "child\n"),
 	    "new-namespace-child-mounts-still-present");
+	check(chdir(path("target/subdir", p)) == 0 &&
+	    getcwd(cwd, sizeof (cwd)) != NULL && strcmp(cwd, p) == 0,
+	    "new-namespace-mount-cwd-exact-path");
+	check(chdir("/") == 0, "restore-new-root");
 	check(unshare(CLONE_NEWNS) == 0 &&
 	    contents(path("target/subdir/data", p), "child\n"),
 	    "copy-remains-valid-after-second-retirement");

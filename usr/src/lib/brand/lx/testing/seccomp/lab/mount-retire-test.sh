@@ -5,8 +5,8 @@ test -f /lab/offline-lx-guest
 bootparams | grep -q '^lx_lab=true$'
 test "$(zonename)" = global
 zonepath=$(zonecfg -z lx-probe info zonepath | awk '{print $2}')
-test "$(digest -a sha256 "$zonepath/root/test/mntns_retire" | awk '{print $NF}')" = 8f4911fb277a11f47472b45fea234c6f2c7adb12e4178d862146989ff7fdce1d
-test "$(digest -a sha256 "$zonepath/root/test/dynamic/mntns_retire" | awk '{print $NF}')" = a8b1c84d3fde99f22934b850eccf30f510aa091a931afe46ed406db819cdcb42
+test "$(digest -a sha256 "$zonepath/root/test/mntns_retire" | awk '{print $NF}')" = e4727eb2b064725edf6b54e920ced43274b050ff4a318f80803446a3649f3464
+test "$(digest -a sha256 "$zonepath/root/test/dynamic/mntns_retire" | awk '{print $NF}')" = 233f082758c05d8a61c3628d7d46732eaefc3eab87a7cd8a39c54aee176b15f9
 mkdir -p "$zonepath/root/test/mnt-retire"
 chmod 1777 "$zonepath/root/test/mnt-retire"
 printf '%s\n' 'lx_brand`lx_seccomp_experimental/W 1' \

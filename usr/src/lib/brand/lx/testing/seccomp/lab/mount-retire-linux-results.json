@@ -1,13 +1,13 @@
 {
   "cases_passed": 4,
-  "scope": "last namespace membership release unlinks old graph synchronously, held FDs remain usable, copies preserve active graph",
+  "scope": "last namespace membership release unlinks old graph synchronously, held FDs remain usable, copies preserve active graph; exact copied mount cwd path",
   "profile": "existing lxc-unshare; global policy unchanged",
-  "static_probe": "8f4911fb277a11f47472b45fea234c6f2c7adb12e4178d862146989ff7fdce1d",
-  "dynamic_probe": "a8b1c84d3fde99f22934b850eccf30f510aa091a931afe46ed406db819cdcb42",
+  "static_probe": "e4727eb2b064725edf6b54e920ced43274b050ff4a318f80803446a3649f3464",
+  "dynamic_probe": "233f082758c05d8a61c3628d7d46732eaefc3eab87a7cd8a39c54aee176b15f9",
   "logs": {
-    "dynamic-0.log": "4786456c516e70d40c4bfa3a505d23ca829b7c0fb03bcec7dd9ee37703872e81",
-    "dynamic-65534.log": "25930e3a52522316cfcff245c8d57b9737b1e0f7558a6766711d3344495abbc5",
-    "static-0.log": "6e71ac8edbe62016f70fed531ed876256ef4f2286a3f2ce17c26302e6bd07bca",
-    "static-65534.log": "123bcce5054802dc30c32f8b6112c63b39587f5511a8e91ae27d75ec0af547fb"
+    "dynamic-0.log": "c98b70500e647ff46128dca526807908fc14e546d97d9a3df3647ee9fca3586d",
+    "dynamic-65534.log": "7614197b6384f8499d2bea11bbb8add99da2e0915eb34db0a70bb3b302079c80",
+    "static-0.log": "60775a872124b3c044eec5848555b14496eb6b0c28bb9258b8734aa412edd824",
+    "static-65534.log": "8d5753c19a8bce77475bd58ce36d7e8c8d18208c1dddee4a9c119e045a6f9912"
   }
 }
