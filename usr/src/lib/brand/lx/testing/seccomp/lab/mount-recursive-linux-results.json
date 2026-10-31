@@ -1,0 +1,77 @@
+{
+  "source_commit": "e78821d40cc4432923b4523ac0f291a46e0c4d40",
+  "brand_main_source": "b08b99de4f9e694cc0124b32cbfea53719e20d61",
+  "brand_magic_source": "213660e099330849d0dcf65c0715722015a45781",
+  "static_sha256": "d8b44be7030919215b0c29a7b4f7d8c0b6c951df03ecdd7ebb51e93d5c479761",
+  "dynamic_sha256": "70663c9a1725a76f86ebc5825c74b5f8f9a9a6e9768cf9ba0e7074aa4d3f2d04",
+  "host": "codex-testbox Ubuntu Linux 7.0.0-38-generic",
+  "remote_evidence": "/var/tmp/lx-mnt-recursive-controls",
+  "apparmor": "existing lxc-unshare profile via aa-exec; no global policy changed",
+  "total_passed": 12,
+  "cases": [
+    {
+      "log": "dynamic-0-deny.log",
+      "sha256": "18a3555ccf3705316bcf3629d3680bb16de3938942b755c35fa08ed380ffc8f2",
+      "result": "PASS"
+    },
+    {
+      "log": "dynamic-0-recursive.log",
+      "sha256": "b5c03a5da816e9db002cb49dcdaef28f49943979ba264d33f69030a0bdc058b2",
+      "result": "PASS"
+    },
+    {
+      "log": "dynamic-0-types.log",
+      "sha256": "a4e7a2137513be366de97adc9d95808b0a082e1cb7f76be6ce47d91a48da5af2",
+      "result": "PASS"
+    },
+    {
+      "log": "dynamic-65534-deny.log",
+      "sha256": "8c47abd8108926aeac2142d9872597145c41ecc26f2cab02f7571dca510a42e3",
+      "result": "PASS"
+    },
+    {
+      "log": "dynamic-65534-recursive.log",
+      "sha256": "eb7d622f0063f169acb92da9d6933958f310e93deb5bd03e71d70d3597089ab9",
+      "result": "PASS"
+    },
+    {
+      "log": "dynamic-65534-types.log",
+      "sha256": "940fa9aeda5150880494267f4933f10a7ac0889a1c9359bd9cb0126e40d5220d",
+      "result": "PASS"
+    },
+    {
+      "log": "static-0-deny.log",
+      "sha256": "dfe4e6092ab6194324ff18a518bca6031b5ae56c9e31cad6be3547af84cd6a1c",
+      "result": "PASS"
+    },
+    {
+      "log": "static-0-recursive.log",
+      "sha256": "356817d667f929ec0d8b6a1fa259e61d473af1eaab849ec1964c31134e75af9d",
+      "result": "PASS"
+    },
+    {
+      "log": "static-0-types.log",
+      "sha256": "6940af97d7cb9d890aabfdbe0e3540badce4a6e71ec63136f271b799f3b447e5",
+      "result": "PASS"
+    },
+    {
+      "log": "static-65534-deny.log",
+      "sha256": "da1a33204d037d6f1dacad1b1f3d0cc1bd96006a82afe2d09d67c5a59b22340c",
+      "result": "PASS"
+    },
+    {
+      "log": "static-65534-recursive.log",
+      "sha256": "4780b79503a3ab56339d4974de34dcfd548b985685cf7e10c03c06022e5c3d3b",
+      "result": "PASS"
+    },
+    {
+      "log": "static-65534-types.log",
+      "sha256": "14b2e276288e57efa8355682eddc1c38b9a527ea0110e52a4322caeb1278b36b",
+      "result": "PASS"
+    }
+  ],
+  "coverage": "root/nobody static/dynamic; device and FIFO binds with I/O; MS_REC on non-directories; nested and stacked recursive binds; selected top excludes hidden mounts; bwrap legacy magic and recursive self-bind; concurrent observer old-or-complete-new tree; source/sibling isolation; namespace copy; dropped SYS_ADMIN; retained seccomp",
+  "lofs_fifo_fix": "1baa1612c86dd14ca6533975906d1df4e6e2b954",
+  "rng_mode": "read-only RNG opens; native VM92 source and bound RW both EACCES before fix, independent of bind",
+  "failed_mount_assertion": "retained; dependent FIFO contents read skipped when the mount failed to avoid blocking"
+}

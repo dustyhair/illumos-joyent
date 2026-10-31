@@ -1,0 +1,79 @@
+{
+  "vm": 93,
+  "accepted_checkpoint": true,
+  "full_codex_workflow_accepted": false,
+  "source_commit": "e78821d40cc4432923b4523ac0f291a46e0c4d40",
+  "recursive_source": "b08b99de4f9e694cc0124b32cbfea53719e20d61",
+  "magic_source": "213660e099330849d0dcf65c0715722015a45781",
+  "lofs_fifo_source": "1baa1612c86dd14ca6533975906d1df4e6e2b954",
+  "prior_full_regressions_exit": 0,
+  "entry_cases_passed": 70,
+  "bind_fd_cases_passed": 12,
+  "mount_limit_cases_passed": 2,
+  "new_cases_passed": 12,
+  "atomic_observers_passed": 4,
+  "linux_controls_passed": 12,
+  "coverage": [
+    "root/nobody static/dynamic recursive/types/deny",
+    "recursive self-bind using bwrap legacy magic flags",
+    "ordinary bind omits submounts; recursive bind includes nested mounts",
+    "covered-stack copy and selection of top excludes hidden descendants",
+    "destination mutations preserve source mount graph",
+    "copied namespace retains recursive mounts and stacks",
+    "six device binds; null/zero/full IO, readonly RNG reads, tty metadata",
+    "regular file over device, FIFO over file with IO, regular file over FIFO",
+    "existing sibling namespace unchanged and effective SYS_ADMIN removal",
+    "seccomp retained and all private views/account charges retire"
+  ],
+  "rng_note": "unbound native RNG RW opens already return EACCES; source RO reads succeed. Device data tests use RO for RNG reads. No write policy was relaxed.",
+  "cleanup": {
+    "driver_and_bwrap_trace_terminal": true,
+    "process_idle": "PASS",
+    "user_budget_idle": "PASS",
+    "views": 0,
+    "seccomp": 0,
+    "userns": 0,
+    "mntns": 0,
+    "pool_export_exit": 0,
+    "synced_poweroff": true,
+    "qemu_pid_exited": 2227650
+  },
+  "artifacts": {
+    "lofs": "e150c26a608daac065ab3214949993bba95ead2984e4c7f3d3c4cd47d8427175",
+    "brand": "ce0710c774333b414b7794b97f0e2856cff40b5d77b7f425912f4c5691652469",
+    "genunix_retained": "1b0a9800d58a82cc871d3b5341deb949252a37554cb56042195eb3114c822d51",
+    "proc_retained": "59bccb23ab35373244cb3f26eaf30d85862cd2dc80fc37f3ac7839aa2048874a",
+    "ktest": "cef32a9584137194a1f284497caaeb9753ac4de312c5f3c6877db1b5c114cd3a",
+    "root_tar": "6694d3ed4ffa2ddac2c003f8d20fec7fd062e3ed833d3c041f9bdeb5c7bbb09d",
+    "static_probe": "d8b44be7030919215b0c29a7b4f7d8c0b6c951df03ecdd7ebb51e93d5c479761",
+    "dynamic_probe": "70663c9a1725a76f86ebc5825c74b5f8f9a9a6e9768cf9ba0e7074aa4d3f2d04",
+    "driver": "96228ea263882ba7f36adbfd2855edb614c1aca96f5004c4142b2e1c86865c62",
+    "full_driver": "e56fc42b2890836ea3bbd589bc38c1ac0f65776e6602b0837b40d323a59941bd"
+  },
+  "build": "clean release/debug brand and LOFS builds plus final updates PASS; release runtime on retained mixed platform",
+  "codex": {
+    "fixture_version": "0.166.0",
+    "all_experiments_enabled": true,
+    "clone_flags": "0x78020011",
+    "clone_results": [
+      -22,
+      -22
+    ],
+    "workflow": "incomplete"
+  },
+  "logs": {
+    "vm93-full.log": "e995a4805a6898b50a53de4e32b0989c3c9f3498585ca87f8f760cccf9406fb3",
+    "vm93-regressions.log": "b902d4f441b8fccf0efd24bfea5c9a0b3a611098d693fdc2d832536ae3027647",
+    "vm93-entry-regressions.log": "5494dd5612fa28613a9fbba211a49b6f63145ad6dd6d931c492c1d058498c930",
+    "vm93-entry-public.log": "4ce0e73b4eebebe91e190fb1ba73eb55a150c438bd075dcab75012b97f376b20",
+    "vm93-bind-public.log": "1b688dfc506bdf905b0942f43285f5392ba95908db1743262a0c1101f5f764e9",
+    "vm93-public.log": "746126f99793d9125f0da871c3430e57c4c5049d802aff3b763d8491c63986e6",
+    "vm93-bwrap.log": "a979f061c1c07d837696b6d5f5c636d2fca4bc3c4890e6a164739a9404ffbf74"
+  },
+  "console_evidence": {
+    "name": "boot-93-device-recursive-bind-acceptance.log",
+    "sha256": "debb23234f4ffecc6a383f71a3404bde898c2689b8813cd08e54be7fbc452437"
+  },
+  "no_physical_host_deployment": true,
+  "remaining": "private/slave operations, readonly remount, tmpfs/root/proc/devpts/mountinfo/lazy detach, descriptors/stable hierarchy, combined clone plus real PID/IPC/network, newest stable coding/Git/shell/PTYS and full platform acceptance"
+}

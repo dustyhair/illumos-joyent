@@ -1364,3 +1364,84 @@ See lab/mount-path-results.json and lab/mount-path-linux-results.json for exact
 source, artifacts, controls and console evidence. The runtime still combines
 rebuilt release modules with retained platform components; a complete platform
 build and production-zone acceptance remain outstanding.
+## Experimental device and recursive private binds
+
+Plain binds now use Linux's directory-versus-nondirectory type rule. Device,
+fifo and socket vnode types can bind onto file placeholders; internal snapshot
+copies still permit native roots whose types differ from their mountpoint.
+MS_REC is ignored for nondirectory sources. Private mounts also recognize the
+legacy mount magic prefix used by the current bwrap binary.
+
+Recursive directory binds collect the recorded mount graph under the held
+source, rather than filtering only currently visible paths. Creation order
+preserves covered stacks and nested mounts, while a selected top mount excludes
+hidden children belonging to older ancestors. Sources currently require the
+current private view. Other source namespace trees remain unsupported.
+
+The entire copy is built below an unspliced LOFS root. Root and all recorded
+submounts are prepared, pinned and assigned destination metadata before the
+new root is attached at the held target. The final attachment uses existing VFS
+locks, vfs_add, mount-in-progress zone fencing and a reference exchange from
+unspliced to spliced ownership. It preserves the already prepared restriction
+flags. The destination view's mount lock serializes mutation and quota checks;
+all allocation and failure points precede publication. No new common VFS API
+or on-disk format is introduced. Rollback reuses the tree-unmount portion of the
+existing namespace retirement code without allocating another namespace charge.
+
+The new Linux controls cover root/nobody with static/dynamic probes, six device
+binds and I/O, FIFO binds, ordinary versus recursive directory behavior, nested
+and covered mount stacks, selected-top behavior, a simultaneous old-or-complete-
+new observer, recursive self-bind with bwrap's legacy flags, namespace copies,
+source/sibling isolation, capability removal and retained seccomp. All12 pass
+under the existing lxc-unshare profile. No global Linux policy changes.
+
+Source b08b99de implements the kernel paths, f528abb6 adds probes/drivers,
+213660e0 adds legacy magic handling and 935b2b79 tests recursive self-bind.
+Initial clean release/debug brand build and final incremental builds passed.
+Disposable VM acceptance is pending. Other modules retain VM91's accepted
+versions; the platform remains mixed. No physical host has been deployed.
+
+Tracked remount/tmpfs/root rearrangement/proc/devpts/mountinfo/lazy detach,
+namespace descriptors and stable rename handling still require work. Combined
+clone and real PID/IPC/network isolation remain absent. This checkpoint cannot
+establish the complete newest Codex sandbox workflow or resolve the parked PTY
+output-tail issue by itself.
+
+
+VM92 is diagnostic, not accepted. The prior full wrappers, 70 entry cases,
+12 bind cases and two limit cases passed, followed by the first root static
+recursive case including observer/self-bind and namespace-copy checks. The
+device case found that unbound RNG sources already reject RW opens while RO
+opens work; these probes now test RNG reads using RO descriptors. File-over-FIFO
+remains a required success assertion. A failed mount no longer triggers a
+blocking contents read against the still-uncovered FIFO.
+
+Native IS_DEVVP includes VFIFO. LOFS normally converts such roots and lookup
+results through specvp/fifovp, which deliberately flattens backing vnodes for
+pipe communication. That discards private mount identity. Source1baa1612 adds
+a LO_PRESERVE_FIFO flag only for pinned, non-mnttab LOFS instances, preserves
+their FIFO wrappers for pathname operations and permits mounting over those
+private wrappers. The underlying pipe and ordinary LOFS behavior remain under
+their existing rules. This is a metadata/namespace fix; pipe I/O still uses the
+native pipe operations. Release/debug LOFS and brand rebuilds pass. Fresh VM93
+must validate the complete matrix before the checkpoint is accepted.
+
+
+VM93 accepted the complete checkpoint. The prior full wrapper, all70 public
+entry cases, twelve bind/fd cases, two mount-record limit cases and all twelve
+new recursive/device/deny cases passed. Four concurrent observers saw only the
+old tree or the complete new tree. Both root and nobody passed static/dynamic
+recursive self-bind, nested/stacked copies, selected-top behavior, namespace
+copy and sibling isolation. Device checks cover six binds, null/zero/full IO,
+readonly RNG reads and tty metadata. FIFO IO and regular-file-over-FIFO now pass.
+No failed bind assertion was waived. All account and view idle checks passed.
+
+Release/debug builds passed for the changed brand and LOFS modules. The final
+runtime remains a mixture with retained platform components. All flags were
+reset, the zone halted, pool export returned zero, filesystems synced and QEMU
+exited. No physical host was changed. Exact artifact, source and evidence hashes
+are in lab/mount-recursive-results.json and lab/mount-recursive-linux-results.json.
+
+The current Codex fixture still requests combined clone0x78020011 twice and
+receives EINVAL with all three experiments enabled. This accepts filesystem
+building operations and their isolation/cleanup checks, not the full sandbox.
