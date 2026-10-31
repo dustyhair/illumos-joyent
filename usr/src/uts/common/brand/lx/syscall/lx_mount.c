@@ -463,7 +463,8 @@ lx_mnt_private_tmpfs(lx_mntns_view_t *view, const char *target, char *data,
 				if (end[1] != '\0' || pages == 0 ||
 				    number > UINT64_MAX / (uint64_t)pages)
 					return (EINVAL);
-				number = (uint64_t)pages * number / 100;
+				number *= (uint64_t)pages;
+				number = number / 100 + (number % 100 != 0);
 				if (number > UINT64_MAX >> PAGESHIFT)
 					return (EINVAL);
 				number = ptob(number);
