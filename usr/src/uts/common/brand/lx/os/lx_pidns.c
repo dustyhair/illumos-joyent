@@ -49,6 +49,7 @@ struct lx_pidns_map {
 	lx_pidns_t *pm_namespace;
 	struct pid *pm_identity;
 	boolean_t pm_init;
+	boolean_t pm_committed;
 	lx_pidns_slot_t pm_slots[];
 };
 
@@ -223,18 +224,17 @@ lx_pidns_reserve(lx_pidns_t *ns, lx_pidns_map_t **out)
 	return (0);
 }
 
-int
-lx_pidns_publish(lx_pidns_map_t *map, pid_t backing)
+/* Consume a held native identity, including on failure. */
+static int
+lx_pidns_bind_identity(lx_pidns_map_t *map, struct pid *identity,
+    boolean_t commit)
 {
 	lx_pidns_t *ns = map->pm_namespace;
-	struct pid *identity;
+	pid_t backing = identity->pid_id;
 	uint_t i;
 	int error = 0;
 
 	ASSERT(MUTEX_NOT_HELD(&pidlock));
-	if ((identity = lx_pid_identity_hold(backing,
-	    crgetzone(ns->pn_owner))) == NULL)
-		return (ESRCH);
 	mutex_enter(&pidlock);
 	if (map->pm_identity != NULL) {
 		error = EALREADY;
@@ -269,13 +269,81 @@ lx_pidns_publish(lx_pidns_map_t *map, pid_t backing)
 	}
 	map->pm_identity = identity;
 	identity = NULL;
-	if (map->pm_init)
-		ns->pn_state = LX_PIDNS_LIVE;
+	if (commit) {
+		map->pm_committed = B_TRUE;
+		if (map->pm_init)
+			ns->pn_state = LX_PIDNS_LIVE;
+	}
 out:
 	mutex_exit(&pidlock);
 	if (identity != NULL)
 		lx_pid_identity_rele(identity);
 	return (error);
+}
+
+/* Bind before lx_pid_assign, while the caller owns the native reservation. */
+int
+lx_pidns_bind_native(lx_pidns_map_t *map, zone_t *zone, struct pid *identity)
+{
+	int error = 0;
+
+	ASSERT(MUTEX_NOT_HELD(&pidlock));
+	if (zone != crgetzone(map->pm_namespace->pn_owner))
+		return (EXDEV);
+	mutex_enter(&pidlock);
+	if (pid_find(identity->pid_id) != identity || identity->pid_id <= 1) {
+		error = ESRCH;
+	} else if (identity->pid_prinactive) {
+		/* Unpublished LWP reservations have no native proc slot. */
+		if (identity->pid_prslot != 0)
+			error = ESRCH;
+	} else if (prfind_zone(identity->pid_id, zone->zone_id) == NULL) {
+		error = EXDEV;
+	}
+	if (error == 0) {
+		PID_HOLD(identity);
+	}
+	mutex_exit(&pidlock);
+	if (error != 0)
+		return (error);
+	return (lx_pidns_bind_identity(map, identity, B_FALSE));
+}
+
+/* Called at native fork's successful b_lwp_setrval, before the child runs. */
+boolean_t
+lx_pidns_commit(lx_pidns_map_t *map)
+{
+	lx_pidns_t *ns = map->pm_namespace;
+	boolean_t held = MUTEX_HELD(&pidlock), alive = B_TRUE;
+	uint_t i;
+
+	if (!held)
+		mutex_enter(&pidlock);
+	VERIFY(map->pm_identity != NULL);
+	for (i = 0; i < map->pm_count; i++) {
+		if (map->pm_slots[i].ps_namespace->pn_state == LX_PIDNS_DEAD)
+			alive = B_FALSE;
+	}
+	map->pm_committed = B_TRUE;
+	if (map->pm_init && ns->pn_state != LX_PIDNS_DEAD)
+		ns->pn_state = alive ? LX_PIDNS_LIVE : LX_PIDNS_DEAD;
+	if (!held)
+		mutex_exit(&pidlock);
+	return (alive);
+}
+
+/* Atomic registered-task adapter, used by the private map fixtures. */
+int
+lx_pidns_publish(lx_pidns_map_t *map, pid_t backing)
+{
+	struct pid *identity;
+
+	ASSERT(MUTEX_NOT_HELD(&pidlock));
+	identity = lx_pid_identity_hold(backing,
+	    crgetzone(map->pm_namespace->pn_owner));
+	if (identity == NULL)
+		return (ESRCH);
+	return (lx_pidns_bind_identity(map, identity, B_TRUE));
 }
 
 void
@@ -308,8 +376,8 @@ lx_pidns_map_rele(lx_pidns_map_t *map)
 		id_free(at->pn_ids, slot->ps_number);
 	}
 	if (map->pm_init && ns->pn_state != LX_PIDNS_DEAD)
-		ns->pn_state = map->pm_identity == NULL ?
-		    LX_PIDNS_NEW : LX_PIDNS_DEAD;
+		ns->pn_state = map->pm_committed ?
+		    LX_PIDNS_DEAD : LX_PIDNS_NEW;
 	if (map->pm_identity != NULL) {
 		PID_RELE(map->pm_identity);
 	}
@@ -342,7 +410,8 @@ lx_pidns_visible(lx_pidns_t *ns, pid_t backing)
 	if (!held)
 		mutex_enter(&pidlock);
 	slot = avl_find(&ns->pn_backing, &key, NULL);
-	number = slot == NULL ? 0 : slot->ps_number;
+	number = slot == NULL || !slot->ps_map->pm_committed ?
+	    0 : slot->ps_number;
 	if (!held)
 		mutex_exit(&pidlock);
 	return (number);
@@ -358,7 +427,7 @@ lx_pidns_lookup(lx_pidns_t *ns, pid_t number)
 	if (!held)
 		mutex_enter(&pidlock);
 	slot = avl_find(&ns->pn_numbers, &key, NULL);
-	if (slot != NULL) {
+	if (slot != NULL && slot->ps_map->pm_committed) {
 		identity = slot->ps_map->pm_identity;
 		PID_HOLD(identity);
 	}

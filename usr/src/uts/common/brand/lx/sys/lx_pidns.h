@@ -14,6 +14,7 @@
 typedef struct lx_pidns lx_pidns_t;
 typedef struct lx_pidns_map lx_pidns_map_t;
 struct pid;
+struct zone;
 
 /*
  * Private PID map backend; Linux namespace flags remain disabled.
@@ -24,9 +25,14 @@ struct pid;
  * unpublished reservation permits another attempt. A published PID1 cannot
  * be replaced after shutdown or its map's last release.
  *
- * Reserve outside process locks, before native fork/LWP publication. Publish
- * only after the global lx task hash exists, without pidlock or p_lock held.
- * Publication is atomic across ancestors. A map owns its namespace chain
+ * Reserve outside process locks, before native fork/LWP publication. Bind
+ * an owned native reservation before lx_pid_assign, passing its allocating
+ * zone. The caller retains its original reservation reference. Commit only
+ * after native fork cannot fail, before the child can run. A false commit
+ * result requires killing that child before user execution. Bound maps stay
+ * hidden until commit; failed construction can retry the initial PID1.
+ * publish is an atomic adapter for already-registered private test tasks.
+ * Binding/publication requires no pidlock or p_lock held. A map owns its chain
  * and a native PID reference; it does not keep the task alive. Lookup returns
  * a held native identity, not task existence or signal/lookup authority.
  * Release and lookup accept pidlock held, as required by native reap.
@@ -37,6 +43,8 @@ extern void lx_pidns_rele(lx_pidns_t *);
 extern boolean_t lx_pidns_busy(void);
 extern void lx_pidns_shutdown(lx_pidns_t *);
 extern int lx_pidns_reserve(lx_pidns_t *, lx_pidns_map_t **);
+extern int lx_pidns_bind_native(lx_pidns_map_t *, struct zone *, struct pid *);
+extern boolean_t lx_pidns_commit(lx_pidns_map_t *);
 extern int lx_pidns_publish(lx_pidns_map_t *, pid_t);
 extern void lx_pidns_map_hold(lx_pidns_map_t *);
 extern void lx_pidns_map_rele(lx_pidns_map_t *);
