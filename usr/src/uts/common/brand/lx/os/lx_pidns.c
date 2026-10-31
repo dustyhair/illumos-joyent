@@ -10,6 +10,7 @@
 #include <sys/id_space.h>
 #include <sys/kmem.h>
 #include <sys/proc.h>
+#include <sys/signal.h>
 #include <sys/sysmacros.h>
 #include <sys/zone.h>
 #include <sys/lx_brand.h>
@@ -169,6 +170,43 @@ lx_pidns_shutdown(lx_pidns_t *ns)
 	ns->pn_state = LX_PIDNS_DEAD;
 	if (!held)
 		mutex_exit(&pidlock);
+}
+
+/*
+ * Gate pending construction and signal every committed process represented
+ * in this namespace, including descendant namespaces. Native pidlock keeps
+ * both the map indices and process identities stable throughout the walk.
+ * Uncommitted children observe DEAD at commit and die before user execution.
+ */
+void
+lx_pidns_init_exit(proc_t *init)
+{
+	lx_pidns_t *ns = lx_pidns_active(init);
+	lx_pidns_slot_t *slot;
+	zoneid_t zoneid = init->p_zone->zone_id;
+
+	ASSERT(init == curproc);
+	VERIFY(ns != NULL &&
+	    lx_pidns_map_id(ptolxproc(init)->l_pidns_map, ns) == 1);
+	mutex_enter(&pidlock);
+	ns->pn_state = LX_PIDNS_DEAD;
+	for (slot = avl_first(&ns->pn_numbers); slot != NULL;
+	    slot = AVL_NEXT(&ns->pn_numbers, slot)) {
+		lx_pidns_map_t *map = slot->ps_map;
+		proc_t *p;
+
+		if (!map->pm_committed ||
+		    (p = prfind_zone(slot->ps_backing, zoneid)) == NULL ||
+		    p == init)
+			continue;
+		mutex_enter(&p->p_lock);
+		/* Retained task identities confer no process authority. */
+		if (p->p_brand == &lx_brand && ptolxproc(p) != NULL &&
+		    ptolxproc(p)->l_pidns_map == map)
+			sigtoproc(p, NULL, SIGKILL);
+		mutex_exit(&p->p_lock);
+	}
+	mutex_exit(&pidlock);
 }
 
 int

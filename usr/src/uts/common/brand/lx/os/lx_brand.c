@@ -372,9 +372,9 @@ lx_proc_exit(proc_t *p)
 	deathsig = (lxpd->l_flags & LX_PROC_CHILD_DEATHSIG) != 0;
 	pidns = lx_pidns_map_namespace(lxpd->l_pidns_map);
 	mutex_exit(&p->p_lock);
-	/* PID1 exit gates reservations; cohort termination is pending. */
+	/* Gate construction and terminate committed namespace members. */
 	if (pidns != NULL && lx_pidns_map_id(lxpd->l_pidns_map, pidns) == 1)
-		lx_pidns_shutdown(pidns);
+		lx_pidns_init_exit(p);
 	if (view != NULL)
 		lx_mntns_view_rele(view);
 	if (!deathsig)

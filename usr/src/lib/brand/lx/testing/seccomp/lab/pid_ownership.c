@@ -88,7 +88,7 @@ main(int argc, char **argv)
 	if (strcmp(mode, "image") == 0)
 		goto retired;
 	if (strcmp(mode, "exit") != 0 && strcmp(mode, "exec") != 0 &&
-	    strcmp(mode, "fork") != 0)
+	    strcmp(mode, "fork") != 0 && strcmp(mode, "death") != 0)
 		return (2);
 	for (int i = 2; i < argc; i++) {
 		if (strcmp(argv[i], "--guard") == 0)
@@ -106,7 +106,7 @@ main(int argc, char **argv)
 	    getpid(), syscall(SYS_gettid), mode);
 	if (raise(SIGSTOP))
 		return (1);
-	if (strcmp(mode, "fork") == 0) {
+	if (strcmp(mode, "fork") == 0 || strcmp(mode, "death") == 0) {
 		pid_t parent = getpid(), child = fork();
 		int status;
 
@@ -115,6 +115,27 @@ main(int argc, char **argv)
 			return (1);
 		}
 		if (child == 0) {
+			if (strcmp(mode, "death") == 0) {
+				pid_t descendant;
+
+				if (setsid() < 0 || (descendant = fork()) < 0)
+					_exit(1);
+				if (descendant == 0) {
+					if (setsid() < 0)
+						_exit(1);
+					(void) printf("PID_DESCENDANT pid=%d "
+					    "parent=%d\n", getpid(), getppid());
+				} else {
+					(void) printf("PID_CHILD pid=%d "
+					    "parent=%d descendant=%d\n",
+					    getpid(),
+					    getppid(), descendant);
+				}
+				/* No parent-death signal is configured. */
+				if (raise(SIGSTOP))
+					_exit(1);
+				_exit(99);
+			}
 			if (prctl(PR_SET_PDEATHSIG, SIGKILL) != 0 ||
 			    getppid() != parent)
 				_exit(1);

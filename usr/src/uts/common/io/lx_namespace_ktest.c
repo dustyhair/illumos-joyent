@@ -2040,6 +2040,8 @@ ns_pid_maps_release(ktest_ctx_hdl_t *ctx)
 static lx_pidns_t *ns_pid_process_space;
 static zone_t *ns_pid_process_zone;
 static lx_pidns_map_t *ns_pid_process_observer;
+static lx_pidns_map_t *ns_pid_process_descendant_map;
+static pid_t ns_pid_process_descendant_pid;
 static pid_t ns_pid_process_owner, ns_pid_process_target;
 
 static void
@@ -2048,6 +2050,10 @@ ns_pid_process_drop(void)
 	ASSERT(MUTEX_HELD(&ns_pid_lock));
 	if (ns_pid_process_observer != NULL)
 		lx_pidns_map_rele(ns_pid_process_observer);
+	if (ns_pid_process_descendant_map != NULL)
+		lx_pidns_map_rele(ns_pid_process_descendant_map);
+	ns_pid_process_descendant_map = NULL;
+	ns_pid_process_descendant_pid = 0;
 	lx_pidns_rele(ns_pid_process_space);
 	if (ns_pid_process_zone != NULL)
 		zone_rele(ns_pid_process_zone);
@@ -2163,16 +2169,20 @@ out:
 }
 
 static void
-ns_pid_process_observe(ktest_ctx_hdl_t *ctx, boolean_t child)
+ns_pid_process_observe(ktest_ctx_hdl_t *ctx, uint_t kind)
 {
 	proc_t *p = NULL;
 	kthread_t *t;
 	lx_pidns_map_t *map = NULL;
-	pid_t target;
+	pid_t target, number = kind == 2 ? 3 : 2;
+	boolean_t child = kind != 0, descendant = kind == 2;
 	boolean_t passed = B_FALSE;
+	lx_pidns_map_t **observer = descendant ?
+	    &ns_pid_process_descendant_map : &ns_pid_process_observer;
 
 	mutex_enter(&ns_pid_lock);
-	if (ns_pid_process_space == NULL || ns_pid_process_observer != NULL ||
+	if (ns_pid_process_space == NULL || *observer != NULL ||
+	    (descendant && ns_pid_process_observer == NULL) ||
 	    !ns_process_pid(ctx, &target) ||
 	    lx_lpid_lock(target, ns_pid_process_zone, 0, &p, &t) != 0) {
 		KT_ERROR(ctx,
@@ -2189,23 +2199,39 @@ ns_pid_process_observe(ktest_ctx_hdl_t *ctx, boolean_t child)
 		goto out;
 	}
 	map = child ? ptolxproc(p)->l_pidns_map : ttolxlwp(t)->br_pidns_map;
-	if ((child && (p->p_ppid != ns_pid_process_owner ||
+	if ((child && (p->p_ppid != (descendant ? ns_pid_process_target :
+	    ns_pid_process_owner) ||
 	    p->p_pid != target || ttolxlwp(t)->br_pidns_map != map)) ||
 	    (!child && (p->p_pid != ns_pid_process_owner ||
 	    target == p->p_pid ||
 	    ttolxlwp(t)->br_pidns_map == ptolxproc(p)->l_pidns_map)) ||
-	    map == NULL || lx_pidns_map_id(map, ns_pid_process_space) != 2) {
+	    map == NULL ||
+	    lx_pidns_map_id(map, ns_pid_process_space) != number ||
+	    (descendant && ptolxproc(p)->l_parent_deathsig != 0)) {
 		KT_FAIL(ctx, "fork or thread did not receive the next PID map");
 		goto out;
 	}
 	lx_pidns_map_hold(map);
-	ns_pid_process_observer = map;
-	ns_pid_process_target = target;
+	*observer = map;
+	if (descendant)
+		ns_pid_process_descendant_pid = target;
+	else
+		ns_pid_process_target = target;
 	mutex_exit(&p->p_lock);
 	p = NULL;
-	if (lx_pidns_visible(ns_pid_process_space, target) != 2) {
+	if (lx_pidns_visible(ns_pid_process_space, target) != number) {
 		KT_FAIL(ctx, "native success did not commit the observed PID");
 		goto out;
+	}
+	if (descendant) {
+		if (lx_lpid_lock(ns_pid_process_target, ns_pid_process_zone,
+		    0, &p, &t) != 0 ||
+		    ptolxproc(p)->l_parent_deathsig != 0) {
+			KT_FAIL(ctx, "cohort child has a parent-death signal");
+			goto out;
+		}
+		mutex_exit(&p->p_lock);
+		p = NULL;
 	}
 	passed = B_TRUE;
 out:
@@ -2219,13 +2245,69 @@ out:
 static void
 ns_pid_process_thread(ktest_ctx_hdl_t *ctx)
 {
-	ns_pid_process_observe(ctx, B_FALSE);
+	ns_pid_process_observe(ctx, 0);
 }
 
 static void
 ns_pid_process_child(ktest_ctx_hdl_t *ctx)
 {
-	ns_pid_process_observe(ctx, B_TRUE);
+	ns_pid_process_observe(ctx, 1);
+}
+
+static void
+ns_pid_process_descendant(ktest_ctx_hdl_t *ctx)
+{
+	ns_pid_process_observe(ctx, 2);
+}
+
+/* Native reap may finish after the exiting PID1 has queued cohort signals. */
+static void
+ns_pid_process_dead(ktest_ctx_hdl_t *ctx)
+{
+	uint_t attempt;
+	boolean_t passed = B_FALSE;
+	lx_pidns_map_t *reserved = NULL;
+
+	mutex_enter(&ns_pid_lock);
+	if (ns_pid_process_observer == NULL ||
+	    ns_pid_process_descendant_map == NULL) {
+		KT_ERROR(ctx, "no observed cohort");
+		goto out;
+	}
+	for (attempt = 0; attempt < 100; attempt++) {
+		struct pid *child = lx_pidns_lookup(ns_pid_process_space, 2);
+		struct pid *descendant =
+		    lx_pidns_lookup(ns_pid_process_space, 3);
+
+		mutex_enter(&pidlock);
+		passed = child != NULL && descendant != NULL &&
+		    child->pid_prinactive && descendant->pid_prinactive &&
+		    child->pid_ref == 2 && descendant->pid_ref == 2 &&
+		    prfind_zone(ns_pid_process_owner, ALL_ZONES) == NULL &&
+		    prfind_zone(ns_pid_process_target, ALL_ZONES) == NULL &&
+		    prfind_zone(ns_pid_process_descendant_pid,
+		    ALL_ZONES) == NULL;
+		if (child != NULL) {
+			PID_RELE(child);
+		}
+		if (descendant != NULL) {
+			PID_RELE(descendant);
+		}
+		mutex_exit(&pidlock);
+		if (passed)
+			break;
+		delay(MAX(1, hz / 10));
+	}
+	if (passed && lx_pidns_reserve(ns_pid_process_space, &reserved) ==
+	    ENOMEM) {
+		KT_PASS(ctx);
+	} else {
+		KT_FAIL(ctx, "PID1 did not kill the cohort and gate new tasks");
+	}
+out:
+	if (reserved != NULL)
+		lx_pidns_map_rele(reserved);
+	mutex_exit(&ns_pid_lock);
 }
 
 static void
@@ -2316,14 +2398,16 @@ out:
 static void
 ns_pid_process_release(ktest_ctx_hdl_t *ctx)
 {
-	pid_t target;
+	pid_t target, descendant;
 	boolean_t gone;
 
 	mutex_enter(&ns_pid_lock);
 	target = ns_pid_process_target;
+	descendant = ns_pid_process_descendant_pid;
 	ns_pid_process_drop();
 	mutex_enter(&pidlock);
-	gone = target > 1 && pid_find(target) == NULL;
+	gone = target > 1 && pid_find(target) == NULL &&
+	    (descendant == 0 || pid_find(descendant) == NULL);
 	mutex_exit(&pidlock);
 	mutex_exit(&ns_pid_lock);
 	if (gone)
@@ -2460,6 +2544,10 @@ _init(void)
 	    KTEST_FLAG_INPUT)) != 0 ||
 	    (error = ktest_add_test(ks, "process_child", ns_pid_process_child,
 	    KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "process_descendant",
+	    ns_pid_process_descendant, KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "process_dead", ns_pid_process_dead,
+	    0)) != 0 ||
 	    (error = ktest_add_test(ks, "process_zombie", ns_pid_process_zombie,
 	    0)) != 0 ||
 	    (error = ktest_add_test(ks, "process_retired",
