@@ -100,7 +100,9 @@ for controller in mntns-budget-native mount-owner-test.sh \
     mount-statfs-test.sh mount-statfs-full-test.sh \
     mount-freeze-test.sh mount-freeze-full-test.sh \
     mount-detach-test.sh mount-detach-full-test.sh \
-    mount-detach-smoke-test.sh bubblewrap-trace.sh; do
+    mount-detach-smoke-test.sh \
+    mount-retire-test.sh mount-retire-full-test.sh \
+    mount-retire-smoke-test.sh bubblewrap-trace.sh; do
     test -f "$lab/$controller"
     pfexec cp "$lab/$controller" "$lab/mnt-root/lab/$controller"
     pfexec chmod 0555 "$lab/mnt-root/lab/$controller"
