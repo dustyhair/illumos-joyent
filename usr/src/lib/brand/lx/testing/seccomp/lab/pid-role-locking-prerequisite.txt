@@ -1,0 +1,71 @@
+Map final-release / index-to-held-map prerequisite
+
+Baseline e3884a37cdec4bc5407c7809503216e4e4e9dff5, authoritative source unchanged.
+No patch supplied: source inspection found an existing reverse-lock caller
+that must be fixed/tested with any final-release locking change.
+
+Current map_rele at lx_pidns.c:447 decrements pm_refs before entering pidlock
+at :450. A hypothetical new pn_backing lookup+lx_pidns_map_hold under pidlock
+could find an indexed map whose refs have already become0 while its releaser
+waits for pidlock. map_hold VERIFY(nonzero) would fail; blindly incrementing0
+would resurrect an object already committed to destruction. Current lookup
+holds only native struct pid and does not add a map ref, so this audit does not
+claim an existing map_hold-from-index production race.
+
+Rejected easy patch
+
+Moving mutex_enter(pidlock) before every atomic decrement would remove that
+window but would acquire pidlock on formerly nonfinal paths. That changes
+caller lock obligations. At common/os/lwp.c:783 the LWP creation error path
+asserts p_lock held and at :793 calls BROP(p)->b_lwpdata_free(brand_data) before
+unlocking p_lock at :796. lx_misc.c:620-621 releases br_pidns_map there.
+
+The new-thread branch lx_pidns_lwp_prepare at lx_misc.c:505, :525-532 reserves
+its own map with pm_refs=1 and binds it; unlike a process-main-LWP map, no
+process-data reference necessarily remains. Thus this failure callback can
+already reach a FINAL map release under p_lock and then acquire pidlock.
+The ordinary global lock order elsewhere is pidlock -> p_lock. This is a real
+source-level ABBA hazard in the existing private namespace construction path,
+not proven exercised by current tests. A blanket release change would expand
+rather than solve the risk. Moving free outside p_lock needs a separate audit
+of what lwp_create error state is exposed while the lock is dropped.
+
+Other caller paths inspected
+
+* lx_clearbrand detaches process pointers under p_lock, unlocks it, then
+  map_rele. freeproc already holds pidlock, so recursion is avoided by the
+  MUTEX_HELD branch. Native exec/fork_fail generally call without pidlock.
+* lx_exec releases replaced LWP map outside p_lock after exec reset.
+* normal lwp_exit at common/os/lwp.c:1016 drops p_lock around both brand exit
+  callbacks, then takes it again. Last-LWP proc_exit also calls without p_lock.
+* forklwp_fail at common/os/fork.c:719 explicitly works on an unpublished
+  child without p_lock; the freelwp callback is at :753.
+* lx_pidns_lwp_prepare reserves/binds before native lwp_create takes p_lock;
+  its own error cleanup therefore does not have the lwpdata_free inversion.
+* clone preparatory-map cleanup is after forksys returns, outside p_lock.
+* KTEST callers serialize via their ns_pid_lock; some release under pidlock,
+  which existing held detection supports. Test-only map observers deliberately
+  keep identity refs after process reap. They cannot prove role lifetime.
+
+Bounded next task
+
+1. Add a deterministic private test fault after lx_pidns_lwp_prepare succeeds
+   and before LWP publication, with another thread exercising pidlock->p_lock.
+   Require completion with all map/native ID/namespace/user quota refs drained.
+2. Fix the LWP creation error callback boundary to perform map destruction
+   outside p_lock, preserving unpublished LWP invariants and process lifetime.
+   Prefer existing native preallocation/post-init conventions; do not paper
+   over with an async destroy worker or a second map registry.
+3. Then serialize final map removal versus future index-based map acquisition.
+   Either use a proven CAS nonfinal-release fast path with the final1->0
+   transition/removal under pidlock, or audited lock-before-decrement callers.
+   A tryhold-if-nonzero under pidlock can avoid resurrection without changing
+   release, but it must treat a retiring indexed object as absent; it is not
+   an excuse to silently lose a required live role at a membership boundary.
+4. Add the map acquisition API only together with its actual role consumer or
+   a narrowly justified KTEST regression, not an unused exported helper.
+
+Because steps1-2 require touching the native LWP error path and proving its
+publication/cleanup invariants, this is not a safe one-line artifact patch in
+this bounded audit. No cstyle/applicability claims are made for a nonexistent
+patch. Snapshot hashes and exact baseline are supplied for the next task.

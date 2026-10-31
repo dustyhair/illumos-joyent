@@ -1,0 +1,43 @@
+VM126 accepted the ordinary lx process-group correction.
+
+Production source 35b265003f9de88cb757c7b91eadbf92aa64192f;
+test/image source e3884a37cdec4bc5407c7809503216e4e4e9dff5.
+This supersedes VM125's note that this correction was unintegrated.
+
+setpgid now passes destination group identities to native setpgrp instead of
+requiring a live group leader. The native PID hold reserves populated groups
+through leader reap. Native zone/session/parent checks remain authoritative.
+Synthetic nonleader TIDs do not name groups. Incorrect session-leader EPERM
+suppression is removed. No new lookup, allocator, common hook or ABI is added.
+
+Static/dynamic ordinary fixtures passed 44 assertions. Two actual lx zones
+passed 112 foreign-group refusal and own-group control assertions across
+live/leaderless peer groups and both fixture variants. Eight peer integrity
+acknowledgments passed. Both zone configurations/identities were preserved.
+The parent added a forked test supervisor because zlogin can launch a group
+leader, preventing setsid. Expectations were unchanged. Recompiled Linux
+ordinary 44 and extension 156 controls passed, as did three explicit
+session-leader launches. Portable tar staging avoids copying ZFS ACLs to UFS.
+
+Existing SmartOS checks passed 24 ownership, 8 cohort, 32 orphan and 12 nested
+cases. Native32/64 POSIX signal controls, unchanged i386 25-stage queued test,
+two queued64 variants and 18 SIGCONT permission/session cases passed.
+Initial/final 87 artifact hashes match. Full detailed hashes are in JSON.
+
+Clean release/debug lx_brand build; release runtime, debug compile only.
+Retained VM125 genunix and both native userlibs, matched Unix, VM123 KTEST,
+VM118 lx_proc/cgroup, LOFS/tmpfs and surrounding platform. No ZFS disk-format
+change. No physical host deployment. Both zones installed/stopped, no zone
+tasks, flags/views/PIDspaces zero, pool healthy/export0, sync complete and
+QEMU3480716 exited.
+
+Raw boot-126-pgrp-acceptance.log SHA256
+41a9a16cf02ee38c15868ecaba19bc39d8bfa7657df90914b50000368da9631b
+is retained locally and under /build/workspaces/lx/log/ on the builder.
+
+Public NEWPID is still rejected. Full Codex/bubblewrap is not accepted.
+Namespace-local PGID/SID mappings require membership lifetimes independent
+of leaders. The next prerequisite is the audited LWP-create failure callback
+lock order before adding map acquisition. See pid-role-locking-prerequisite.txt.
+Public PID numbering/signal/wait/proc semantics, PID1 signal policy and
+IPC/network namespaces remain, followed by the complete Codex workflow.

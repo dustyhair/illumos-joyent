@@ -1,0 +1,67 @@
+Runnable controls now
+
+From the task scratch root:
+  timeout 25 lx-sandbox/leaderless-pgrp-parent/package/lx/leaderless-pgrp.static
+  timeout 25 lx-sandbox/leaderless-pgrp-parent/package/lx/leaderless-pgrp.dynamic
+Each must have22 lines ending PASS and RESULT failures=0. Both were run;
+linux-controls/*.log preserves the results. These prove native Linux reference
+behavior only, not the private map lifetime design.
+
+Private KTEST design, not implemented or runnable yet
+
+Use the existing stopped fixture attachment and FIFO control style; do not
+add a public CLONE_NEWPID exception. Add map-level role assertions while each
+native membership state is held by the fixture. Observers must be released
+BEFORE testing survival, or they will mask missing membership holds.
+
+A. Same private namespace: init forks leader L and member M, L creates a
+   session/group, M joins. Observer records native identities/local numbers,
+   then releases its map refs. Kill/wait L. Require positive PID lookup of L
+   ESRCH, but M getpgid/getsid retains L's original local number; join a new
+   child into leaderless group succeeds. Reserving IDs must not reuse L's
+   number. Reap M/last role owner and prove exact original number reusable.
+B. Separate PGID and SID lifetimes: M leaves old group and creates own group
+   while retaining L's session. Old PGID disappears but SID remains. Release
+   final session member then require original SID map retires. A new setsid
+   changes both refs atomically, with no leaked equal-map double hold.
+C. Zombies: leave a final member as zombie. Require role IDs held through
+   wait and retired after reap, matching native pgexit ordering.
+D. Nested inheritance: parent active outer, child active inner inherits outer
+   native group/SID without setsid. Child-visible PGID/SID must be0, outer
+   values remain stable after original leader reap. No placeholder inner IDs.
+E. Sibling children sharing ancestor group: both hold same ancestor map;
+   one sibling exits/shuts down without losing the other sibling's role.
+F. Parent joins group created in descendant, then descendant init exits.
+   DEAD descendant namespace remains allocated only for surviving outer role
+   member; final outer departure destroys remaining map/ns. No init drain
+   signaling of role-only identity; no premature forced namespace destruction.
+G. Independent root private namespaces sharing inherited global native group:
+   maps remain absent locally; never translate foreign independent map or
+   infer namespace ownership from native pid_ref count.
+H. Initial KTEST attachment after preexisting setsid/setpgid: install map,
+   seed roles with commit under pidlock, no duplicate holds. Also exercise
+   attach with inherited unmapped pgrp/sid and require0, no placeholder.
+I. Fork failure before pgjoin: map and copied role refs must drain without a
+   phantom membership. Successful fork must hold destination roles before
+   child becomes SRUN. Nonleader thread creation must not create role owners.
+J. LWP-create error after private map preparation: deterministic failure
+   callback and opposing pidlock->p_lock waiter must complete without ABBA;
+   map counts, native identity holds, userns charge and namespaces return0.
+K. Retiring-map race: barrier last map release against pn_backing acquisition;
+   no refcount0 resurrection, use-after-free, VERIFY failure or ID duplication.
+   Run held-pidlock and outside-pidlock release cases separately.
+L. Namespace init map retained only as PGID/SID: DEAD preserved, no transition
+   back NEW, no fork admitted after shutdown. Retained identity confers no
+   positive PID signal/wait/ptrace/proc authority.
+M. Native exec: explicitly decide and test supported behavior before enabling
+   public namespaces. Current clearbrand drops process namespace data while
+   native membership persists; do not count this case passed by ordinary exec.
+
+SmartOS controller safety
+
+Use fresh offline disposable VM, existing lx_lab gate, explicit identities,
+per-case deadlines and existing idle/quota/pool checks. Require map index/ID
+availability snapshots plus all original signal/drain/orphan/nested cases.
+Keep namespace counters0 only AFTER all legitimate outer role holders exit.
+No retries for post-wait disappearance or opportunistic cleanup before raw
+failure evidence is captured. Parent owns current VM126; do not use it here.

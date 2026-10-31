@@ -1,0 +1,152 @@
+PID namespace PGID/SID identity lifetime audit
+
+Baseline: illumos lx/codex-sandbox e3884a37cdec4bc5407c7809503216e4e4e9dff5.
+Production PGID change: 35b265003f9de88cb757c7b91eadbf92aa64192f.
+Read-only builder inspection. Authoritative checkout, images and VMs untouched.
+Source snapshots under source/ preserve the inspected files.
+Local Linux reference source: /build/linux at b4f0dd314b39ea154f62f3bd3115ed0470f9f71e.
+
+Conclusion
+
+Yes, namespace PID mappings must remain allocated while their identities are
+used as a process group or session, independently of the original process.
+Native illumos already reserves the GLOBAL identity for these roles. The lx
+namespace map currently has a separate, shorter lifetime. Native PID_HOLD is
+therefore necessary but insufficient for namespace-local numbering.
+
+A concrete caller-lock defect must be resolved before changing map final
+release or introducing index-to-held-map acquisition. No production patch is
+provided here, because a simple move of the decrement under pidlock introduces
+additional lock-order risk and does not resolve the existing LWP failure path.
+See locking-prerequisite.txt for exact evidence and bounded next work.
+
+Native lifecycle, exact source locations
+
+All paths below start at usr/src/uts/ in the snapshot.
+* common/os/pgrp.c:113 pgjoin links native members under pidlock. Lines142-143
+  PID_HOLD on first group member; common/os/pgrp.c:153 pgexit unlinks and
+  lines181-182 PID_RELE on last member. Leader process need not survive.
+* common/os/session.c:64 sess_hold increments s_ref; :76 sess_rele ultimately
+  releases s_sidp at :115. :194 sess_create takes pidlock,p_lock,p_splock,
+  switches session, pgexit/pgjoin, and holds its new SID identity at :230.
+  Session refs also include temporary tty users, not just process membership.
+* common/os/fork.c:1108-1109 copies p_sessp and sess_hold, before getproc's brand
+  copy at :1203. lx_copy_procdata runs at common/brand/lx/os/lx_brand.c:2091
+  before native process group attachment. It cannot infer child membership
+  from child p_pgidp, which has not yet been set.
+* Successful fork sets brand child return/commits its PID map at fork.c:517,
+  then pgjoin at :550, and only then sets SRUN/releases child LWPs. This is
+  an actual atomic native membership boundary, before the child can run.
+* Other pgjoin callers are common/os/fork.c:944, common/os/session.c:229,
+  common/syscall/pgrpsys.c:123,:138, and common/os/zone.c:6881. Zone entry
+  switches session at :6880 immediately before pgjoin. All hold pidlock.
+* common/os/exit.c:560 invokes proc-exit while brand data still exists; it
+  retains process brand data through zombie state. At freeproc :1536 brand
+  cleanup runs before pid_exit at :1625. common/os/pid.c:286 pid_exit then
+  pgexit(:299), sess_rele(:301), proc_entry_free and process PID_RELE(:324).
+  Zombies therefore remain native group/session members until reap.
+* common/brand/lx/os/lx_brand.c:675 lx_clearbrand detaches l_pidns_map and
+  releases it at :697. It knows no separate PGID/SID map owners.
+* common/brand/lx/os/lx_pidns.c:440 map_rele removes all ancestor AVL slots
+  and id_free at :459 when pm_refs reaches zero. Its pm_identity PID_RELE
+  happens later at :465. A native group/session PID hold cannot stop that
+  namespace numeric ID being freed.
+
+Smallest credible integration after the locking prerequisite
+
+Keep the existing map, ancestry slots, native identity, and native allocator.
+Do not add group/session registries, role ID allocators, or infer map ownership
+from aggregate native pid_ref counts. Two explicit lx process-data references,
+one for current group map and one for current session map, can cover role
+membership even when both references point to the same map. Map->namespace
+holds do not point back to processes, so this creates no ownership cycle.
+
+One native pgjoin completion notification could be sufficient for ordinary
+membership updates. Every current native group/session switch ends at pgjoin.
+It would have a real lx consumer: update those two role map references after
+native p_pgidp and p_sessp are final, under pidlock, before publishing SRUN.
+Acquire replacements before releasing old references, including equal-ID and
+self-map cases. Avoid releasing refs at pgexit during a transient switch;
+pgjoin can exchange them while the same pidlock is held. Final brand cleanup
+can release role refs at reap before native pgexit, since freeproc holds
+pidlock for the entire operation. No observer sees a gap at that boundary.
+
+This notification is a proposed bounded mechanism, not approved source.
+It would require an appended, version-gated brand operation and a real lx
+consumer together. Existing brand version2 struct storage is shorter; do not
+read a new tail field for a version1/2 brand. common/os/brand.c:40-41 currently
+accepts versions1..2. That file is Unix CORE, so a new version requires a
+matched Unix rebuild as well as genunix/brand. Do not append an unused hook.
+
+Root/ancestor/sibling behavior
+
+Search the member's active namespace then its ancestor chain by native backing
+identity, and retain the first existing committed map. That map contains all
+of its ancestor numbers. Do not allocate a placeholder if no map is found.
+A group inherited from outside the managed ancestry has no visible number in
+that namespace. The correct inner result is0; global native identity still
+handles membership. Existing root-zone init compatibility is a separate path.
+
+For a member in a child namespace, an inherited group may have no slot in the
+child but a slot in an ancestor. Retain the ancestor map; inner getpgid/getsid
+still returns0. Linux kernel/fork.c:2422-2442 inherits the parent's PGID/SID
+objects even for a new child-reaper. It does not unconditionally make that
+process a new session/group. pid_nr_ns at kernel/pid.c:533 returns0 if the
+identity has no number in the requested namespace. Do not invent child IDs.
+
+Members in sibling namespaces may share an ancestor-visible native group.
+Their role holds must retain the same existing map through the shared ancestor,
+not generate separate maps keyed by their own current namespace. Conversely,
+independent root private namespaces with no common managed ancestor must not
+learn each other's maps merely because they share a native group/session.
+
+A member in an ancestor namespace can also retain a descendant-owned map via
+its ancestor slot. If the descendant init exits, that descendant namespace may
+legitimately remain allocated while the outer group/session member survives.
+DEAD must remain distinct from fully destroyed. Namespace tables do not own
+process references, so retaining such a map is bounded by actual role owners,
+not a cycle. Shutdown/drain must not assume all map slots imply live tasks.
+Existing init_exit already verifies map matches live process brand data before
+signaling. Role-only identities must never authorize positive PID signals,
+wait targets, ptrace or proc lookups.
+
+Initial attachment / absent leader maps
+
+The private KTEST ns_pid_process_attach at common/io/lx_namespace_ktest.c:2080
+attaches a namespace after native session/group membership already exists.
+It currently binds at :2137, stores process/LWP refs at :2148-2151, commits at
+:2156, and never calls pgjoin. A pgjoin hook alone will miss this case. Seed
+role holds explicitly under pidlock after binding/committing and revalidate the
+stopped fixture's native pgrp/session. If own native PID is group/session ID,
+use the newly installed own map. If an existing ancestor role map exists, hold
+that. If no map exists in managed ancestry, leave NULL and inner number0.
+Do not synthesize identities for external inherited roles.
+
+Debrand caveat before public enablement
+
+A per-lx-process design alone does not cover native helpers that outlive lx
+brand data. common/os/exec.c:560-563 invokes b_freelwp/brand_clearbrand for a
+successful native exec while retaining native group/session membership.
+common/os/brand.c:508-515 destroys process brand data. Dropping the last role
+hold here would lose a still-populated role if only native helpers remain.
+Public namespace/native-exec policy must be explicit before claiming complete
+semantics. Options require separate design: preserve required namespace state
+for supported native helper execution, or reject that transition for privately
+mapped tasks. Silently retaining an orphan map or adding a global side registry
+is not a completed solution. Ordinary same-brand Linux exec keeps process data.
+
+Linux lifetime comparison
+
+Linux kernel/pid.c:393 __change_pid scans every PIDTYPE task list after detach,
+and frees a PID only when no role remains. free_pid removes namespace numbers.
+An external object reference can retain memory after the namespace number is
+unhashed; memory lifetime and numeric-identity membership are distinct. Existing
+private lx observer map refs intentionally reserve IDs beyond task reap for
+fixture checks. Do not call that complete public Linux PID-reuse semantics.
+
+Validation and limits
+
+Existing parent leaderless static/dynamic executables were rerun locally under
+25-second deadlines: both passed22 checks, RESULT failures=0. Logs retained.
+No new SmartOS code was compiled or run. No namespaces were enabled. This is
+source audit/design only; parent owns VM126 runtime acceptance. See tests.txt.
