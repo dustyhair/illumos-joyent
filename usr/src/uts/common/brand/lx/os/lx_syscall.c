@@ -439,6 +439,12 @@ lx_syscall_enter(int entry)
 		}
 		return (0);
 	}
+	if (lx_kernel_restricted(curproc) &&
+	    (syscall_num == 137 || syscall_num == 138)) {
+		ret = lx_kernel_statfs(syscall_num, args[0], args[1]);
+		lx_syscall_return(lwp, syscall_num, ret);
+		return (0);
+	}
 
 	if ((lx_kernel_restricted(curproc) &&
 	    (syscall_num == 56 || syscall_num == 57)) ||

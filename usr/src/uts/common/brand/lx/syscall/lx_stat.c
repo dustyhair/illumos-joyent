@@ -30,6 +30,10 @@
 #include <sys/lx_impl.h>
 #include <sys/brand.h>
 #include <sys/ddi.h>
+#include <sys/vfs.h>
+#include <sys/statvfs.h>
+#include <sys/pathname.h>
+#include <sys/param.h>
 
 /* From "uts/common/syscall/stat.c" */
 extern int cstatat_getvp(int, char *, int, vnode_t **, cred_t **);
@@ -480,5 +484,118 @@ lx_lstat64(char *name, void *outp)
 	if (error != 0) {
 		return (set_errno(error));
 	}
+	return (0);
+}
+
+/* Native Linux amd64 statfs, including the flags word formerly left spare. */
+typedef struct lx_kstatfs {
+	uint64_t f_type;
+	uint64_t f_bsize;
+	uint64_t f_blocks;
+	uint64_t f_bfree;
+	uint64_t f_bavail;
+	uint64_t f_files;
+	uint64_t f_ffree;
+	uint64_t f_fsid;
+	uint64_t f_namelen;
+	uint64_t f_frsize;
+	uint64_t f_flags;
+	uint64_t f_spare[4];
+} lx_kstatfs_t;
+
+CTASSERT(sizeof (lx_kstatfs_t) == 120);
+
+/* Retain the filesystem magic mapping used by the existing user emulator. */
+static uint64_t
+lx_statfs_type(const char *name)
+{
+	static const struct {
+		const char *name;
+		uint64_t magic;
+	} types[] = {
+		{ "hsfs", 0x9660 },
+		{ "nfs", 0x6969 },
+		{ "pcfs", 0x4d44 },
+		{ "lx_proc", 0x9fa0 },
+		{ "tmpfs", 0x01021994 },
+		{ "ufs", 0x00011954 },
+		{ "lofs", 0xef53 },
+		{ "zfs", 0xef53 },
+		{ "lxautofs", 0x0187 },
+		{ "lx_cgroup", 0x27e0eb },
+		{ "lx_sysfs", 0x62656572 }
+	};
+
+	for (uint_t i = 0; i < sizeof (types) / sizeof (types[0]); i++) {
+		if (strcmp(name, types[i].name) == 0)
+			return (types[i].magic);
+	}
+	return (0);
+}
+
+/*
+ * Restricted processes cannot enter the user emulator. Resolve the path as
+ * the actor, or retain the actual descriptor vnode, then use native VFS stats.
+ * Keep mount restrictions from that vnode: LOFS delegates its statistics to
+ * the backing filesystem, whose permissions may be less restrictive.
+ */
+long
+lx_kernel_statfs(int number, uintptr_t object, uintptr_t output)
+{
+	struct statvfs64 native;
+	lx_kstatfs_t stats;
+	vnode_t *vp;
+	file_t *fp = NULL;
+	ulong_t flags;
+	int error;
+
+	ASSERT(get_udatamodel() == DATAMODEL_NATIVE);
+	bzero(&stats, sizeof (stats));
+	bzero(&native, sizeof (native));
+	if (number == 138) {
+		if ((fp = getf((int)object)) == NULL)
+			return (set_errno(EBADF));
+		vp = fp->f_vnode;
+		VN_HOLD(vp);
+		releasef((int)object);
+	} else {
+		if ((error = lookupname((char *)object, UIO_USERSPACE, FOLLOW,
+		    NULL, &vp)) != 0)
+			return (set_errno(error));
+	}
+	flags = vp->v_vfsp->vfs_flag;
+	if (number == 138 && (vp->v_type == VFIFO || vp->v_type == VSOCK)) {
+		/* These descriptors have no storage capacity to report. */
+		stats.f_type = vp->v_type == VFIFO ? 0x50495045 : 0x534f434b;
+		stats.f_bsize = PAGESIZE;
+		stats.f_frsize = PAGESIZE;
+		stats.f_namelen = 255;
+		error = 0;
+	} else if ((error = VFS_STATVFS(vp->v_vfsp, &native)) == 0) {
+		stats.f_type = lx_statfs_type(native.f_basetype);
+		stats.f_bsize = native.f_frsize;
+		stats.f_blocks = native.f_blocks;
+		stats.f_bfree = native.f_bfree;
+		stats.f_bavail = native.f_bavail;
+		stats.f_files = native.f_files;
+		stats.f_ffree = native.f_ffree;
+		stats.f_fsid = native.f_fsid;
+		stats.f_namelen = native.f_namemax;
+		stats.f_frsize = native.f_frsize;
+	}
+	VN_RELE(vp);
+	if (error != 0)
+		return (set_errno(error));
+	stats.f_flags = 0x20; /* Linux ST_VALID. */
+	if ((flags & VFS_RDONLY) || (native.f_flag & ST_RDONLY))
+		stats.f_flags |= 0x1;
+	if (flags & VFS_NOSETUID)
+		stats.f_flags |= 0x2;
+	if (flags & VFS_NODEVICES)
+		stats.f_flags |= 0x4;
+	if (flags & VFS_NOEXEC)
+		stats.f_flags |= 0x8;
+	if (copyout(&stats, (void *)output, sizeof (stats)) != 0)
+		return (set_errno(EFAULT));
 	return (0);
 }

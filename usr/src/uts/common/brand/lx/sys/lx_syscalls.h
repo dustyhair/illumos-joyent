@@ -224,6 +224,7 @@ extern long lx_setfsuid();
 extern long lx_setfsuid16();
 extern long lx_setfsgid();
 extern long lx_setfsgid16();
+extern long lx_kernel_statfs(int, uintptr_t, uintptr_t);
 extern long lx_setgid();
 extern long lx_setgid16();
 extern long lx_sethostname();
