@@ -1,0 +1,97 @@
+{
+  "vm": 100,
+  "accepted_checkpoint": true,
+  "full_codex_workflow_accepted": false,
+  "source_commit": "09f177794dc88d54e9860bd257947aaa2304779a",
+  "readonly_source": "91243448dc",
+  "lofs_followups": [
+    "0cc30b8bd3",
+    "b8ead63d9e"
+  ],
+  "private_marker_fix": "158131f976",
+  "directory_removal_fix": "746008cad0",
+  "prior_full_regressions_exit": 0,
+  "cases_passed": {
+    "MNT_ENTRY_CASE_PASS": 70,
+    "MOUNT_BIND_CASE_PASS": 12,
+    "MOUNT_BIND_FILL_PASS": 2,
+    "MOUNT_RECURSIVE_CASE_PASS": 12,
+    "MOUNT_PRIVATE_CASE_PASS": 8,
+    "MOUNT_TMPFS_CASE_PASS": 12,
+    "MOUNT_STATFS_CASE_PASS": 4,
+    "MOUNT_FREEZE_CASE_PASS": 8
+  },
+  "linux_setup_cases_passed": 8,
+  "scope": "one-way readonly sealing of fresh private LOFS binds before potential write exposure",
+  "late_remount": "explicit EOPNOTSUPP after target writable-open/shared-map/mutator exposure; readonly-to-readwrite unsupported; full Linux late reference preserved separately",
+  "build": "clean release/debug genunix+brand rebuild and clean release/debug LOFS build passed without warnings/errors; cstyle/diff clean; retained release platform, debug compile only",
+  "cleanup": {
+    "process_idle": "PASS",
+    "user_budget_idle": "PASS",
+    "views": 0,
+    "flags": [
+      0,
+      0,
+      0
+    ],
+    "zone_halted": true,
+    "pool_export_exit": 0,
+    "synced_shutdown": true,
+    "qemu_pid_exited": 2398449
+  },
+  "codex": {
+    "version": "0.166.0",
+    "combined_clone": "0x78020011",
+    "clone_results": [
+      -22,
+      -22
+    ],
+    "complete_workflow": false
+  },
+  "physical_host_deployed": false,
+  "artifacts": {
+    "lofs": "ec609542d41ae0b3a79178a39aab403b5fc9f3343bd8059b3c1360d9701a1236",
+    "brand": "3bb1cffb8efeb1af23ccbc3e6e2d00371440277127d2f741104ebdaceb3ac8c2",
+    "genunix_retained": "1b0a9800d58a82cc871d3b5341deb949252a37554cb56042195eb3114c822d51",
+    "proc_retained": "59bccb23ab35373244cb3f26eaf30d85862cd2dc80fc37f3ac7839aa2048874a",
+    "ktest": "cef32a9584137194a1f284497caaeb9753ac4de312c5f3c6877db1b5c114cd3a",
+    "root_tar": "a302263eacd707adf203bb8018d19b65383c2a0ca3c6feb338cfb26c84d06f67",
+    "static_probe": "61ec1043b16935c5d7a86ca64f77be9dabe4001239853bb7b88c7badeb54c90f",
+    "dynamic_probe": "61f5b4debbff945ede5067b91713bf6e386042cc5dae4f093f52f09c478d941c",
+    "driver": "7e7bfe41982d24f134750c8cde7bf7f92e7f55afaeb328a2026aad3a1a9f49b9",
+    "full_driver": "9a85fc8c72223d0430b43828d13401b2bf3b515c50f0c545e88d43dcb3d4ef25",
+    "tmpfs": "35ea5925f4b02bda424ca48a2916f975d26bdecf2336ac6792b9f10d446d2823",
+    "tmpfs_static_probe": "68e276cfd687fc1b3e02e0ecdb82e23b0a3ec96327213454f328f2b61bc658a1",
+    "tmpfs_dynamic_probe": "d0057906a75d550ca4708cef57a8740dda52976e50e2295787cd195e18fd56ec",
+    "image_update_helper": "331811548b69ba48eeb37e26f191cca95b7873e5d8cce8ac54bcc9c14913ac16",
+    "genunix": "5a90a16b493a120224b153ca479388d42519f56f132438d734d35aefb8bcf73d"
+  },
+  "coverage": [
+    "static/dynamic root/nobody allow/deny",
+    "fresh readonly bind through held mount descriptor with unchanged source writer",
+    "primary and derived VFS flags plus future copies",
+    "parent seal preserves separate child mount policy, child sealed independently",
+    "write/chmod/chown/unlink/mkdir/rmdir/symlink/rename refusal",
+    "readonly mounted-child and empty-directory removal through rmdir and fd-relative unlinkat",
+    "existing readonly O_CREAT opens, missing creation refused, symlink and file-root handling, DAC permission refusal",
+    "private writable mmap COW and noexec script refusal",
+    "late write-exposure sealing fails closed, mapped writer remains conservatively unsupported after unmap",
+    "denied owner capability leaves mount writable"
+  ],
+  "logs": {
+    "vm100-full.log": "3d15b4990de09dd22e5590ba2d37159dafe28a84cab6075f84411944cd70d0df",
+    "vm100-freeze.log": "d02fe3e7f15edb585b1fe25c1d0bfa220bb8e8197248deac5d2c79312615cda2",
+    "vm100-regressions.log": "5494dd5612fa28613a9fbba211a49b6f63145ad6dd6d931c492c1d058498c930",
+    "vm100-entry.log": "71ba42b7eb13c92e36e3a87a2cbf8e5fade7f5c815fc2a94f86f8f2b4059bf82",
+    "vm100-bind.log": "19a8beada0047dae2c92d59062f3f12405e455ef48343a88ec943dec7cbe659a",
+    "vm100-recursive.log": "34901cebbdef8c41659eecb8909c60f27a3db6b449f0188e056e03c885a88d14",
+    "vm100-private.log": "1c4f89b8c1af59dcf971a9f4af6c29cf52071e112a255904de19a6e11a8d2757",
+    "vm100-tmpfs.log": "0d39cce81a0b88ad5314ebf883201c4e467e3585bfcb77a679e54c12ac6230ea",
+    "vm100-statfs.log": "141d13763e4bd9d15b21860968fb10c808a9cc5078f50a2f6f7554b63d9acc78",
+    "vm100-bwrap.log": "0a33a44a543e4bc8b927ea55b1892742c01c28c3b5263d59d9c282db1b1bef8f"
+  },
+  "console_evidence": {
+    "name": "boot-100-readonly-bind-acceptance.log",
+    "sha256": "d0cf1b674d040df0797b0793e24abdd8a55f51cd658ef6bad31b01fb170cdcb3"
+  }
+}

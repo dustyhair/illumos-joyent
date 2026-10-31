@@ -1,0 +1,17 @@
+{
+  "cases_passed": 8,
+  "scope": "early setup matches Linux, including readonly mounted-child and fd-relative directory removal; late writer/mmap transitions remain explicitly unsupported on lx",
+  "profile": "existing lxc-unshare; global policy unchanged",
+  "static_probe": "61ec1043b16935c5d7a86ca64f77be9dabe4001239853bb7b88c7badeb54c90f",
+  "dynamic_probe": "61f5b4debbff945ede5067b91713bf6e386042cc5dae4f093f52f09c478d941c",
+  "logs": {
+    "dynamic-0-allow.log": "b5e06e551d561f0e98779e0a9251f93af8c70a16157831c2a66e335d789cc961",
+    "dynamic-0-deny.log": "a17c40219f2fd7d62129710f3016d24146368e4aa8c94f3c8bdb8a11e8616945",
+    "dynamic-65534-allow.log": "cb1db63f955139d08201da7e283ece7b7d5e8efa9c096cba5ea052847ce19e44",
+    "dynamic-65534-deny.log": "70cd4072ba8e58755110875b4f33eb973fb9c776caa53bb0f30c6c5d6748a496",
+    "static-0-allow.log": "cbb8ffe01f87e4e77ac65547d5704d38118932b83a12306ae82de79398519ae1",
+    "static-0-deny.log": "7d820a525cc7373a9351e23266c41355bfad921d2456175b7dcc01e570a9a6a6",
+    "static-65534-allow.log": "b727713c337091fa505e7481a59178e64062986ba43fe624a0d69e370e794c27",
+    "static-65534-deny.log": "489f240130331ca25e09677df9c882c0086ec1e324c38915cfde46a917d983e3"
+  }
+}
