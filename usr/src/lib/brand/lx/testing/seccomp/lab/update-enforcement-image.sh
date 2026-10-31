@@ -119,6 +119,7 @@ for controller in mntns-budget-native mount-owner-test.sh \
     pid-nested-test.sh \
     queued-thread-test.sh queued-signal-abi-test.sh queued-zero-alloc.d \
     queued-signal-checkpoint.sh siginfo32-test.sh siginfo32-checkpoint.sh \
+    pgrp-checkpoint.sh \
     native_errno32 native_errno64 native_errno32.sha256 native_errno64.sha256 \
     bubblewrap-trace.sh; do
     test -f "$lab/$controller"
