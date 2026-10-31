@@ -1,0 +1,25 @@
+{
+  "vm": 105,
+  "accepted_checkpoint": false,
+  "source": "6acbf738d5cefd895e141a3035cabe20dfdb7bbb",
+  "kernel": "b8318a1052",
+  "stage": "First static root retirement probe, getcwd after leaving old namespace",
+  "failure": "lofs:lo_lookup+0x278 NULLfault0x8 in mntns_retire pid2478; dirtopath directly invokes VOP_LOOKUP(..), bypassing common pathname boundary handling.",
+  "diagnosis": "The backing source root is itself now unlinked. LOFS dotdot ascent assumes non-NULL vfs_vnodecovered. Direct private-root VOP dotdot must return its own root, and ascent must pin/check covered parents under VFS lock.",
+  "fix": [
+    "985589dbb1 direct private boundary and covered-parent pin/check",
+    "75e9d04165 common cleanup return helper preserves bare-if control flow and closes all parent holds; clean LOFS release/debug build PASS"
+  ],
+  "cleanup": {
+    "clean_shutdown": false,
+    "pool_imported_by_guest_driver": true,
+    "pool_export_not_reached": true,
+    "panic_reboot_qemu_exited": 2499311
+  },
+  "console": {
+    "name": "boot-105-retire-lofs-dotdot-diagnostic.log",
+    "sha256": "94294f4bbb0afee77f13e069908302322a6de2abfbc1bad93347f4043f314096"
+  },
+  "assertions_waived": false,
+  "physical_host_deployed": false
+}
