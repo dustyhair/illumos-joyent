@@ -34,6 +34,7 @@
 #include <sys/signal.h>
 #include <sys/brand.h>
 #include <sys/lx_brand.h>
+#include <sys/lx_syscalls.h>
 #include <lx_signum.h>
 #include <sys/contract/process_impl.h>
 
@@ -124,17 +125,11 @@ lx_thrkill(pid_t tgid, pid_t pid, int lx_sig, boolean_t tgkill)
 	}
 
 	/*
-	 * Deny permission to send the signal if either of the following
-	 * is true:
-	 *
-	 *	+ The signal is SIGCONT and the target pid is not in the same
-	 *	  session as the sender
-	 *
-	 *	+ prochasprocperm() shows the user lacks sufficient permission
-	 *	  to send the signal to the target pid
+	 * SIGCONT permits a same-session sender regardless of credentials.
+	 * Other sends, including SIGCONT across sessions, require permission.
 	 */
-	if (((sig == SIGCONT) && (pp->p_sessp != cp->p_sessp)) ||
-	    (!prochasprocperm(pp, cp, CRED()))) {
+	if (!(sig == SIGCONT && pp->p_sessp == cp->p_sessp) &&
+	    !prochasprocperm(pp, cp, CRED())) {
 		mutex_exit(&pp->p_lock);
 		rv = set_errno(EPERM);
 		goto free_and_exit;
@@ -347,62 +342,91 @@ lx_helper_rt_tgsigqueueinfo(pid_t tgid, pid_t tid, int sig, siginfo_t *uinfo)
 {
 	int err;
 	proc_t *p = NULL;
+	proc_t *cp = curproc;
 	kthread_t *t;
-	sigqueue_t *sqp;
+	sigqueue_t *sqp = NULL;
 	siginfo_t kinfo;
 
-	if (copyin(uinfo, &kinfo, sizeof (siginfo_t)) != 0) {
+	bzero(&kinfo, sizeof (kinfo));
+#ifdef _SYSCALL32_IMPL
+	if (get_udatamodel() == DATAMODEL_ILP32) {
+		siginfo32_t info32;
+
+		if (copyin(uinfo, &info32, sizeof (info32)) != 0)
+			return (set_errno(EFAULT));
+		kinfo.si_code = info32.si_code;
+		kinfo.si_errno = info32.si_errno;
+		kinfo.si_pid = info32.si_pid;
+		kinfo.si_uid = info32.si_uid;
+		kinfo.si_value.sival_ptr =
+		    (void *)(uintptr_t)(uint32_t)info32.si_value.sival_ptr;
+	} else
+#endif
+	if (copyin(uinfo, &kinfo, sizeof (kinfo)) != 0) {
 		return (set_errno(EFAULT));
 	}
-	sqp = kmem_zalloc(sizeof (sigqueue_t), KM_SLEEP);
+
+	if (tgid <= 0 || tid <= 0)
+		return (set_errno(EINVAL));
+
+	/* Reserved codes may only be supplied to the calling thread. */
+	if ((kinfo.si_code >= 0 || kinfo.si_code == SI_LWP) &&
+	    tid != lx_gettid())
+		return (set_errno(EPERM));
+
+	/* Accept only codes supported by the existing usermode conversion. */
+	if (kinfo.si_code < 0 && kinfo.si_code != SI_LWP &&
+	    kinfo.si_code != SI_QUEUE && kinfo.si_code != SI_TIMER &&
+	    kinfo.si_code != SI_ASYNCIO && kinfo.si_code != SI_MESGQ)
+		return (set_errno(EINVAL));
+
+	/* Never allocate for signal zero, or sleep with target p_lock held. */
+	if (sig != 0)
+		sqp = kmem_zalloc(sizeof (sigqueue_t), KM_SLEEP);
 
 	if (lx_lpid_lock(tid, curzone, 0, &p, &t) != 0) {
 		err = ESRCH;
 		goto errout;
 	}
 
-	/*
-	 * For group leaders, the SunOS pid == Linux pid, so the SunOS leader
-	 * pid should be the same as the tgid.   Because the tgid comes in via
-	 * the syscall, we need to check for an invalid value.
-	 */
-	if (p->p_pid != tgid) {
-		err = EINVAL;
+	/* PID 1 names the zone init, including its nonleader threads. */
+	if ((tgid == 1 ? cp->p_zone->zone_proc_initpid : tgid) != p->p_pid) {
+		err = ESRCH;
 		goto errout;
 	}
 
-	/*
-	 * In order to match the Linux behavior of emitting ESRCH errors before
-	 * confirming that the signal is valid, this check _must_ be performed
-	 * after the target process/thread is located.
-	 */
+	/* As in Linux, target lookup precedes signal and credential checks. */
 	if (sig < 0 || sig >= NSIG) {
 		err = EINVAL;
 		goto errout;
 	}
 
-	/*
-	 * To merely check for the existence of a thread, the caller will pass
-	 * a signal value of 0.
-	 */
-	if (sig != 0) {
-		ASSERT(sqp != NULL);
+	/* SIGCONT has the same-session exemption used by Linux kill. */
+	if (!(sig == SIGCONT && p->p_sessp == cp->p_sessp) &&
+	    !prochasprocperm(p, cp, CRED())) {
+		err = EPERM;
+		goto errout;
+	}
 
+	if (sig != 0) {
 		sqp->sq_info.si_signo = sig;
 		sqp->sq_info.si_code = kinfo.si_code;
-		sqp->sq_info.si_pid = p->p_pid;
-		sqp->sq_info.si_ctid = PRCTID(p);
+		sqp->sq_info.si_errno = kinfo.si_errno;
+		/* Linux permits supplied sender metadata for queued signals. */
+		sqp->sq_info.si_pid = kinfo.si_pid;
+		sqp->sq_info.si_uid = kinfo.si_uid;
+		sqp->sq_info.si_value = kinfo.si_value;
+		sqp->sq_info.si_ctid = PRCTID(cp);
 		sqp->sq_info.si_zoneid = getzoneid();
-		sqp->sq_info.si_uid = crgetruid(CRED());
+		/* sigaddqa consumes the queue, including ignored signals. */
 		sigaddqa(p, t, sqp);
 	}
 	mutex_exit(&p->p_lock);
 	return (0);
 
 errout:
-	if (p != NULL) {
+	if (p != NULL)
 		mutex_exit(&p->p_lock);
-	}
-	kmem_free(sqp, sizeof (sigqueue_t));
+	siginfofree(sqp);
 	return (set_errno(err));
 }

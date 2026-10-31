@@ -2347,10 +2347,10 @@ lx_rt_tgsigqueueinfo(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4)
 
 	if (uucopy((void *)p4, &lx_siginfo, sizeof (lx_siginfo_t)) != 0)
 		return (-EFAULT);
-	if (lx_sig < 0 || lx_sig > LX_NSIG || (sig = ltos_signo[lx_sig]) < 0) {
-		return (-EINVAL);
-	}
-	si_code = ltos_sigcode(lx_siginfo.lsi_code);
+	if (lx_sig < 0 || lx_sig > LX_NSIG || (sig = ltos_signo[lx_sig]) < 0)
+		sig = -1;
+	si_code = lx_siginfo.lsi_code >= 0 ? lx_siginfo.lsi_code :
+	    ltos_sigcode(lx_siginfo.lsi_code);
 	if (si_code == LX_SI_CODE_NOT_EXIST)
 		return (-EINVAL);
 	/*
@@ -2359,6 +2359,8 @@ lx_rt_tgsigqueueinfo(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4)
 	 */
 	if (tgid <= 0 || tid <= 0)
 		return (-EINVAL);
+	bzero(&siginfo, sizeof (siginfo));
+	siginfo.si_errno = lx_siginfo.lsi_errno;
 	siginfo.si_signo = sig;
 	siginfo.si_code = si_code;
 	siginfo.si_pid = lx_siginfo.lsi_pid;
