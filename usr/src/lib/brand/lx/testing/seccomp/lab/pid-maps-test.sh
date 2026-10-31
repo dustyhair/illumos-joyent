@@ -67,12 +67,12 @@ for variant in static dynamic; do
                 zlogin -S lx-probe "$probe exit $options" </dev/null > "$peerlog" 2>&1 &
                 peerrunner=$!
                 wait_marker "$log" '^PID_WORKER '
+                pid=$(awk '/^PID_WORKER / {sub("pid=", "", $2); print $2; exit}' "$log")
+                tid=$(awk '/^PID_WORKER / {sub("tid=", "", $3); print $3; exit}' "$log")
                 wait_marker "$peerlog" '^PID_WORKER '
                 peerpid=$(awk '/^PID_WORKER / {sub("pid=", "", $2); print $2; exit}' "$peerlog")
                 peertid=$(awk '/^PID_WORKER / {sub("tid=", "", $3); print $3; exit}' "$peerlog")
                 wait_stopped "$peerpid"
-                pid=$(awk '/^PID_WORKER / {sub("pid=", "", $2); print $2; exit}' "$log")
-                tid=$(awk '/^PID_WORKER / {sub("tid=", "", $3); print $3; exit}' "$log")
                 wait_stopped "$pid"
                 printf '%s %s\0' "$tid" "$peertid" > /lab/pid-maps-worker.bin
                 ktest run -i /lab/pid-maps-worker.bin lx_namespace:pid:maps_hold
