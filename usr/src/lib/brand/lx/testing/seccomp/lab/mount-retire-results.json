@@ -1,0 +1,141 @@
+{
+  "vm": 106,
+  "accepted_checkpoint": true,
+  "full_codex_workflow_accepted": false,
+  "runtime_source": "d206f2a3314555a6c6f141470064ca4bde74b504",
+  "retirement_source": "b8318a1052",
+  "lofs_fix": [
+    "985589dbb1",
+    "75e9d04165"
+  ],
+  "test_controller_source": "d547bb30f4",
+  "cases_passed": {
+    "MNT_ENTRY_CASE_PASS": 70,
+    "MOUNT_BIND_CASE_PASS": 12,
+    "MOUNT_BIND_FILL_PASS": 2,
+    "MOUNT_RECURSIVE_CASE_PASS": 12,
+    "MOUNT_PRIVATE_CASE_PASS": 8,
+    "MOUNT_TMPFS_CASE_PASS": 12,
+    "MOUNT_STATFS_CASE_PASS": 4,
+    "MOUNT_FREEZE_CASE_PASS": 8,
+    "MOUNT_DETACH_CASE_PASS": 8,
+    "MOUNT_RETIRE_CASE_PASS": 4
+  },
+  "native_reinsert_tests": 6,
+  "native_reinsert_cycles": 24,
+  "lx_retire_smoke_cases": 4,
+  "linux_retire_control_cases": 4,
+  "scope": "End old mount namespace graph membership synchronously at final view release while preserving independently held filesystem references; root switching not yet implemented",
+  "cleanup": {
+    "process_idle_before_halt": "all4 retire smoke plus4 full plus8 detach PASS",
+    "user_budget_idle_before_halt": "same cases PASS, original zero-charge assertion/deadline unchanged",
+    "flags": [
+      0,
+      0,
+      0
+    ],
+    "views": 0,
+    "zone_installed_not_running": true,
+    "pool_export_exit": 0,
+    "synced_shutdown": true,
+    "qemu_pid_exited": 2514593
+  },
+  "native_cleanup_diagnosis": "Initial nobody idle check timed out; DTrace identifies native thread_reaper holding t_cred until its batched wakeup. Last reference dropped48.001399083seconds after creation. Test-only controller now supplies32native exits before unchanged user-idle check. No kernel workaround or tunable.",
+  "initial_attempts_accepted": false,
+  "physical_host_deployed": false,
+  "build": "Clean release/debug lx_brand and LOFS compile; runtime release modules on retained platform. Mixed image recorded; no whole-platform acceptance.",
+  "artifacts": {
+    "genunix": "66a35a49ba06fd62e25595cd96f1b2d7c6648aca1deb23ce62ab134bcdff6682",
+    "brand": "95af7c5dd45d3bc1c834f79b73b4424004208b7c329bad07e3eb6a7306f595a3",
+    "lofs": "e039807a168e500b1517a8920c315deac57b96fcfec3989ee41d291d238f8357",
+    "tmpfs": "35ea5925f4b02bda424ca48a2916f975d26bdecf2336ac6792b9f10d446d2823",
+    "ktest": "318ba8f0eca5e3da3680def170a5c63cc0a975607ede138c1508a5d4ea31ac54",
+    "root_tar": "9372b15c0c3e2362f55e0ad8111ade60ffc42fb4c442f8c2ef8d2cf8b385a50f",
+    "retire_source": "a3350771f23bb5d5e00aa8f1fdb6af419870fecc2f3acc1ea9972ceb74f40871",
+    "retire_static_probe": "e4727eb2b064725edf6b54e920ced43274b050ff4a318f80803446a3649f3464",
+    "retire_dynamic_probe": "233f082758c05d8a61c3628d7d46732eaefc3eab87a7cd8a39c54aee176b15f9",
+    "retire_controller": "f10c2a6fa6f318161a0c4033f80ff74fbe678aeeab00acb1a5046fa97a6c5a14",
+    "retire_full_controller": "b0937f3ccb8ce20498e2ee66b2eeb3a66f8ae5af64bb91ad296489e2eeecc4e8",
+    "retire_smoke_controller": "b2c8831ad6fe7d16372f00217e2acaa6f3d7e14efd41008da87bb6e52d7c7dd0"
+  },
+  "controller_manifest_at_boot": {
+    "mntns-budget-native": "55063407d5715e1fa4421c80cce337df2b5dd524d8bec4d083947e8702fb2384",
+    "mount-owner-test.sh": "b93019af7aae4b77f4b640ef57225567ace9d7c266ef3c20e56d128598220168",
+    "mount-entry-test.sh": "d8b428adf510d09595ad566dbf015f7378b61e67b646fc9ffeecd73386e43b92",
+    "mount-entry-full-test.sh": "e8dea09eab367e2b8c673fd0b9aafc90ddc6f1f7993fffded4601dd9aba323a9",
+    "mount-bind-test.sh": "20533812165f51e5ebbf1d803de8ff21879125241f7da219d4bd37ece5f8d8bb",
+    "mount-bind-full-test.sh": "961ebfb03527ecd1305788f54c9baa1b6f4a00b68e098971ad43362ff73525be",
+    "mount-recursive-test.sh": "96228ea263882ba7f36adbfd2855edb614c1aca96f5004c4142b2e1c86865c62",
+    "mount-recursive-full-test.sh": "e56fc42b2890836ea3bbd589bc38c1ac0f65776e6602b0837b40d323a59941bd",
+    "mount-private-test.sh": "fab4da2f2688c2175574ba1b3cf4b13d9cb430802c50b4b23cbbd3245532f6ad",
+    "mount-private-full-test.sh": "c9bac9c7ed9feb44854a1111b153f8e683a413628d349b0f2be4973e3cf8efe4",
+    "mount-tmpfs-test.sh": "f92d68b54ff7b481a9e59660d088a551d81a8f4416d8a9a878d981141a2fd17b",
+    "mount-tmpfs-full-test.sh": "0f1f34a1cc5841b334c37f94947dab58a05692dbe57c601d1dfe3a58926d1870",
+    "mount-statfs-test.sh": "8ac956b24250d59de3a6df7ade82f3e4381506d12fd6ec87475a309a20667062",
+    "mount-statfs-full-test.sh": "efd52f5bfceae7886bc1770fb4731ea1487f042c7a620ec8eb9eabe7da8cf38a",
+    "mount-freeze-test.sh": "7e7bfe41982d24f134750c8cde7bf7f92e7f55afaeb328a2026aad3a1a9f49b9",
+    "mount-freeze-full-test.sh": "9a85fc8c72223d0430b43828d13401b2bf3b515c50f0c545e88d43dcb3d4ef25",
+    "bubblewrap-trace.sh": "e0135453805300b787f04a5900efffd3fd2e657114a28e64f6b73df9e19ad19e",
+    "mount-detach-test.sh": "e25e153eb19af66fc88e39799d355bfc500966fee3f160efea0938760271a554",
+    "mount-detach-full-test.sh": "3889e8bbcf80335238cbaf0ea9261aa15d18efbe13fdc1edcc8837473c4375a6",
+    "mount-detach-smoke-test.sh": "4ddb036241de56c12a85dcd7b946e737be3cd95a6d4854b4db0b06f24d4bdab6",
+    "namespace-test.sh": "0835e1dea180f2fdee6e2d6d86be278c93b538144db63da1f408e5fadd6628d7",
+    "mount-retire-test.sh": "3e7c5ebae10c68a8709e6064e00665e9c5e8c354388b713c23630750734492b5",
+    "mount-retire-full-test.sh": "b0937f3ccb8ce20498e2ee66b2eeb3a66f8ae5af64bb91ad296489e2eeecc4e8",
+    "mount-retire-smoke-test.sh": "b2c8831ad6fe7d16372f00217e2acaa6f3d7e14efd41008da87bb6e52d7c7dd0"
+  },
+  "controller_overrides_after_boot": {
+    "mount-retire-test.sh": "f10c2a6fa6f318161a0c4033f80ff74fbe678aeeab00acb1a5046fa97a6c5a14"
+  },
+  "codex": {
+    "version": "0.166.0",
+    "combined_clone": "0x78020011",
+    "clone_results": [
+      -22,
+      -22
+    ],
+    "complete_workflow": false,
+    "last_trace_vm": 100,
+    "latest_registry_check": {
+      "checked_at": "2026-10-31T06:04:59.115360+00:00",
+      "registry": "https://registry.npmjs.org/@openai%2fcodex",
+      "stable": "0.166.0",
+      "linux_x64": "0.166.0-linux-x64",
+      "raw_sha256": "2e6b631c51268c96a01966d390b23c5aa7b49c605a28141c79b874986ceac84c"
+    }
+  },
+  "coverage": [
+    "old child mount edges disappear immediately when last namespace participant leaves",
+    "held old root, child, namespace root and writable file descriptors preserve intended data access",
+    "detached private roots dotdot self-parent, including direct native reverse path lookup",
+    "old cwd returns ENOENT while active copied bound cwd reports exact current path",
+    "second namespace copy remains usable and seccomp filter persists",
+    "constructor-order root record prepares native cleanup for same-view backing-source dependencies",
+    "public view_destroy busy-retry contract and prior regressions remain intact"
+  ],
+  "logs": {
+    "vm106-public.log": "ca858f977bbf61f6242b4986e6d425d0bdb625fbed04724caad4c42660caadbb",
+    "vm106-userns-trace.log": "71fae21eec3c86fc358d97b737f9b4d916154cead8e3671fe4d650039a40d68e",
+    "vm106-repeat.log": "93d62905ebe72fc7d5232749d89c2674554fbdb94c588dce1c4c01e6040aaeff",
+    "vm106-smoke-pass.log": "e8fb92160c71e89a10fe270b54008dce728beafab1a885d3eea550ce3a5d385d",
+    "vm106-smoke-public.log": "c71ac3d5ef189d42cb49026c4898baa20a92fc146c2d271c5eb2501e84927678",
+    "vm106-smoke-backend.log": "634143a20b2205dab36c7ac4d2f7f5620f33695d8b91ba888d39f9ff5152231d",
+    "vm106-entry.log": "a8e1e79ea8b2c71cfb4aed8d4952a1af9b31ae1ffb8bbccbb5c5db2267d1e115",
+    "vm106-bind.log": "a4b0f4e679c14810cad7b4671f262b7d96537e5ac9b861a194cb087a7d6ad25d",
+    "vm106-recursive.log": "c323759aef4f97bca79040853d099dbdf78585891bd84e2cc1d48681f7bd0851",
+    "vm106-native-backend.log": "634143a20b2205dab36c7ac4d2f7f5620f33695d8b91ba888d39f9ff5152231d",
+    "vm106-userns.log": "377b3c46fa9b58494cc4675e6472a0df76f54f24a1eaee3837c922360751ac10",
+    "vm106-full.log": "63a7aa2e3a6d862393abb569ed7627f176dbd8235a86eed90064e1644a95a12c",
+    "vm106-regressions.log": "48a0eac8d57360080fc34187f091d30d8f44759adfbc10100ed542c4be2b315c",
+    "vm106-retire.log": "51b3c791361fd92308ed0a59a76fc0ec2b85e30f18361e1e488d077a0eafce42",
+    "vm106-private.log": "bd1ba15a49b8872074e0ff3773597a0bb293c635eb99a127f4a94b9f5fae36f2",
+    "vm106-tmpfs.log": "b422e77068be23e7e07a98fdbab095069edf09bd92d950e36b92e61ba78a444a",
+    "vm106-statfs.log": "a409b3624b739e841096b0d86672a3ed2b7bdd7a2fb5e2605434ac79ac50b3f5",
+    "vm106-freeze.log": "b92155fe2b1c35f77face4f5aaf7b9bb7577f311a94464ea2bd11fc2e5fa4fc6",
+    "vm106-detach.log": "7d2c13b12ff9f49fed568d81568eb507e4872bf68bba4bf6c16b1ccb020f2c46"
+  },
+  "console_evidence": {
+    "name": "boot-106-namespace-retirement-acceptance.log",
+    "sha256": "5eac387b100923ca0375d12a22b32762f56af21244fedda8f4c5d0d5dabce287"
+  }
+}

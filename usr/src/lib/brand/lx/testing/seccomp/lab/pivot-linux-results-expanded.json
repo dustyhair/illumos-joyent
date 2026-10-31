@@ -1,19 +1,20 @@
 {
-  "time": "2026-10-31T07:02:53.404583+00:00",
+  "time": "2026-10-31T07:06:54.780004+00:00",
   "cases_passed": 8,
-  "source_sha256": "dd62afa1e44f239b5ec064eebb7810dc831d3bd9356e8af62a7d870b5571fe82",
+  "source_sha256": "6fe56d4a82c88ab88663771795b5b73169f8b1ddffaabb41d0f256262dd2059a",
   "static_sha256": "9955a76a365b3449cce78a18f88374678099a23f70f6b5ec1cd33e1cf72cf20f",
   "dynamic_sha256": "8a8538d32872730b0da68c77a8e07497c24815b176a8303a497e0277258fa96c",
   "scope": "two-stage bubblewrap root switch, equal new_root/put_old, detached cwd, namespace copy, owner capability denial; invalid new/old pointers, file operands, outside put_old EBUSY, nonexistent put_old and unchanged root/cwd after failed preflights",
   "profile": "existing lxc-unshare, no global policy change",
   "logs": {
-    "dynamic-0-allow.log": "00802f6019dfeddcc70ff75a9ba956480c612c2fe174228cd31b84a6a1d7e2cb",
-    "dynamic-0-deny.log": "cafe89879c4241ed94323dcef78144e30e11d2e37a3563acf184e73f2df08b6a",
-    "dynamic-65534-allow.log": "3762e8ee9ec1eb134c05b70cbf93c4d342dd042d2d4ef48c528da7ee04cfbcd4",
-    "dynamic-65534-deny.log": "ec9275051a35e981c95c1de0c06eea81853ec9518e6646c02ae969e9dde24cc3",
-    "static-0-allow.log": "6c4bb4cb251a15c618154a4481528b1b18d5f7f434d4068e94e7559bea840d1a",
-    "static-0-deny.log": "d15701e07d3ab417d3ff99b8c7f0e24e35438736d4e701821f40b251d535cbfa",
-    "static-65534-allow.log": "5eebbe639127651a730726a2eb2c86add2ce372b671764aa8b2a6d51ed947e4b",
-    "static-65534-deny.log": "baa2e545f252e0ef6f3f8df114b3b5b3989180d0a9db536ee706dbdb748f68fd"
-  }
+    "dynamic-0-allow.log": "3faba60d5bc4a87f7420da0a593a3ac91d0ac848cc42e1aea99bd8c4f8475831",
+    "dynamic-0-deny.log": "b22b38f766e3e064441ceeb20b50d533df7e5baf9cd20797f247cc91b8262f21",
+    "dynamic-65534-allow.log": "2309f8721d876dbd5ed3fa19ce343653912eabaf4af41b6ef31db7b9e44796a7",
+    "dynamic-65534-deny.log": "a0fe9cffee196bf1fce6af44321ec5fec577dcef466f48c5529f6bb4a0289a86",
+    "static-0-allow.log": "10a6fba9fbcc3725a6d875d4f4a30ddc50c5a4bd3631ef7a6ef34790dea5ef67",
+    "static-0-deny.log": "8a873345266c31ab8726658ec8a3b4138a27b2dcd2b84ee810fa08535e36d44b",
+    "static-65534-allow.log": "1229ba6a47d99e93be19be7a26a4a18091259dc66ba32c568db8086977623711",
+    "static-65534-deny.log": "b81199137b2b4f97fb47f81f4c1f1349164f83cc5815245feb3a565e65523b8f"
+  },
+  "source_commit": "d8c7786885"
 }
