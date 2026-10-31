@@ -44,6 +44,7 @@ typedef struct lx_mntns_mount {
 	vfs_t *lm_vfs;
 	vnode_t *lm_root;
 	refstr_t *lm_path;
+	refstr_t *lm_prefix;
 	struct lx_mntns_mount *lm_next;
 	uint_t lm_order;
 } lx_mntns_mount_t;
@@ -78,6 +79,7 @@ struct lx_mntns_view {
 	timeout_id_t lv_timeout;
 	vnode_t *lv_root;
 	vfs_t *lv_vfs;
+	refstr_t *lv_prefix;
 	lx_mntns_mount_t *lv_mounts;
 	uint_t lv_nmounts;
 	uint_t lv_root_order;
@@ -373,8 +375,6 @@ lx_mntns_create(vnode_t *source, cred_t *cr, cred_t *owner,
 	    &view->lv_vfs);
 	if (error != 0)
 		goto fail;
-	/* NOSPLICE supplies no mountpoint; later publication needs a path. */
-	vfs_setmntpoint(view->lv_vfs, "/", 0);
 	if ((error = VFS_ROOT(view->lv_vfs, &view->lv_root)) != 0) {
 		VERIFY0(dounmount(view->lv_vfs, 0, cr));
 		VFS_RELE(view->lv_vfs);
@@ -383,6 +383,8 @@ lx_mntns_create(vnode_t *source, cred_t *cr, cred_t *owner,
 	*out = view;
 	return (0);
 fail:
+	if (view->lv_prefix != NULL)
+		refstr_rele(view->lv_prefix);
 	crfree(view->lv_cred);
 	crfree(view->lv_owner);
 	mutex_destroy(&view->lv_lock);
@@ -639,19 +641,22 @@ lx_mntns_path_locked(lx_mntns_view_t *view, vnode_t *vp, cred_t *actor,
 	lx_mntns_mount_t *mount;
 	vnode_t *check = NULL;
 	const char *base = NULL, *prefix, *suffix;
+	refstr_t *origin = NULL;
 	char *cached;
 	size_t len;
 	int error;
 
 	ASSERT(MUTEX_HELD(&view->lv_lock));
-	if (vp->v_vfsp == view->lv_vfs)
+	if (vp->v_vfsp == view->lv_vfs) {
 		base = "/";
-	else {
+		origin = view->lv_prefix;
+	} else {
 		for (mount = view->lv_mounts; mount != NULL;
 		    mount = mount->lm_next) {
 			if (vp->v_vfsp == mount->lm_vfs &&
 			    mount->lm_vfs->vfs_vnodecovered != NULL) {
 				base = refstr_value(mount->lm_path);
+				origin = mount->lm_prefix;
 				break;
 			}
 		}
@@ -662,7 +667,8 @@ lx_mntns_path_locked(lx_mntns_view_t *view, vnode_t *vp, cred_t *actor,
 	mutex_enter(&vp->v_lock);
 	(void) strlcpy(cached, vp->v_path, MAXPATHLEN);
 	mutex_exit(&vp->v_lock);
-	prefix = refstr_value(vp->v_vfsp->vfs_mntpt);
+	prefix = refstr_value(origin != NULL ? origin :
+	    vp->v_vfsp->vfs_mntpt);
 	len = strlen(prefix);
 	if (strncmp(cached, prefix, len) != 0 ||
 	    (cached[len] != '\0' && cached[len] != '/')) {
@@ -1024,7 +1030,7 @@ lx_mntns_insert_ordered(lx_mntns_view_t *view, lx_mntns_mount_t *mount)
 
 /*
  * Switch the sole participant's root using native mount graph operations.
- * All allocation, validation and fallible locking precedes publication.
+ * Path preparation, validation and fallible locking precede publication.
  * Shared views require a later, explicit membership/root handoff protocol.
  */
 int
@@ -1033,7 +1039,8 @@ lx_mntns_pivot(lx_mntns_view_t *view, const char *newpath,
 {
 	lx_mntns_mount_t *mount, *promote = NULL, **link;
 	lx_mntns_mount_t **records = NULL;
-	refstr_t **names = NULL, *oldname = NULL;
+	refstr_t **names = NULL, *oldname = NULL, *oldprefix = NULL;
+	refstr_t *newprefix;
 	lx_mntns_state_t state = { 0 };
 	vnode_t *newroot = NULL, *putold = NULL, *covered = NULL;
 	vnode_t *expected_root = NULL, *expected_cwd = NULL;
@@ -1105,6 +1112,9 @@ lx_mntns_pivot(lx_mntns_view_t *view, const char *newpath,
 	}
 	suffix = oldbase + prefix;
 	oldname = refstr_alloc(*suffix == '\0' ? "/" : suffix);
+	oldprefix = view->lv_prefix != NULL ? view->lv_prefix :
+	    oldvfs->vfs_mntpt;
+	refstr_hold(oldprefix);
 	capacity = view->lv_nmounts;
 	records = kmem_zalloc(capacity * sizeof (*records), KM_SLEEP);
 	names = kmem_zalloc(capacity * sizeof (*names), KM_SLEEP);
@@ -1175,6 +1185,11 @@ lx_mntns_pivot(lx_mntns_view_t *view, const char *newpath,
 	/* No fallible operation remains after process publication. */
 	vfs_detach(newvfs);
 	new_locked = B_FALSE;
+	/*
+	 * Native publication needs an absolute zone path, not NOSPLICE's
+	 * descriptive marker. Keep the original cached-vnode prefix below.
+	 */
+	vfs_setmntpoint(oldvfs, refstr_value(oldname), 0);
 	vfs_add(putold, oldvfs, MS_NOMNTTAB);
 	oldvfs->vfs_flag = oldflags & ~VFS_DETACHED;
 	vfs_unlock(oldvfs);
@@ -1194,6 +1209,12 @@ lx_mntns_pivot(lx_mntns_view_t *view, const char *newpath,
 		continue;
 	*link = promote->lm_next;
 	neworder = promote->lm_order;
+	newprefix = promote->lm_prefix;
+	promote->lm_prefix = oldprefix;
+	oldprefix = NULL;
+	if (view->lv_prefix != NULL)
+		refstr_rele(view->lv_prefix);
+	view->lv_prefix = newprefix;
 	promote->lm_vfs = view->lv_vfs;
 	promote->lm_root = view->lv_root;
 	refstr_rele(promote->lm_path);
@@ -1233,6 +1254,8 @@ out:
 		VN_RELE(putold);
 	if (oldname != NULL)
 		refstr_rele(oldname);
+	if (oldprefix != NULL)
+		refstr_rele(oldprefix);
 	for (i = 0; i < count; i++) {
 		if (names[i] != NULL)
 			refstr_rele(names[i]);
@@ -1273,6 +1296,8 @@ lx_mntns_retire(lx_mntns_view_t *view)
 	root->lm_root = view->lv_root;
 	root->lm_path = refstr_alloc("/");
 	root->lm_order = view->lv_root_order;
+	root->lm_prefix = view->lv_prefix;
+	view->lv_prefix = NULL;
 	size = (view->lv_nmounts + 1) * sizeof (*list);
 	list = kmem_alloc(size, KM_SLEEP);
 	for (mount = view->lv_mounts; mount != NULL; mount = mount->lm_next) {
@@ -1520,6 +1545,8 @@ out:
 		VN_RELE(covered);
 	if (mount != NULL) {
 		refstr_rele(mount->lm_path);
+		if (mount->lm_prefix != NULL)
+			refstr_rele(mount->lm_prefix);
 		kmem_free(mount, sizeof (*mount));
 	}
 	mutex_exit(&view->lv_lock);
@@ -1894,6 +1921,8 @@ lx_mntns_tree_fini(lx_mntns_view_t *view, cred_t *cr)
 		view->lv_nmounts--;
 		VFS_RELE(mount->lm_vfs);
 		refstr_rele(mount->lm_path);
+		if (mount->lm_prefix != NULL)
+			refstr_rele(mount->lm_prefix);
 		kmem_free(mount, sizeof (*mount));
 	}
 	if (view->lv_vfs == NULL) {
@@ -1922,6 +1951,8 @@ lx_mntns_destroy(lx_mntns_view_t *view, cred_t *cr)
 	mutex_exit(&view->lv_lock);
 	if (error != 0)
 		return (error);
+	if (view->lv_prefix != NULL)
+		refstr_rele(view->lv_prefix);
 	crfree(view->lv_cred);
 	crfree(view->lv_owner);
 	mutex_destroy(&view->lv_lock);
