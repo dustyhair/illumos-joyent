@@ -1,0 +1,104 @@
+{
+  "vm": 104,
+  "accepted_checkpoint": true,
+  "full_codex_workflow_accepted": false,
+  "source": "e07d7d961b03cdfde42b64ac99d3d5181e439d5b",
+  "native_source": "dfd70f3e75",
+  "allocation_init_fix": "0d4f087886",
+  "cases_passed": {
+    "MNT_ENTRY_CASE_PASS": 70,
+    "MOUNT_BIND_CASE_PASS": 12,
+    "MOUNT_BIND_FILL_PASS": 2,
+    "MOUNT_RECURSIVE_CASE_PASS": 12,
+    "MOUNT_PRIVATE_CASE_PASS": 8,
+    "MOUNT_TMPFS_CASE_PASS": 12,
+    "MOUNT_STATFS_CASE_PASS": 4,
+    "MOUNT_FREEZE_CASE_PASS": 8,
+    "MOUNT_DETACH_CASE_PASS": 8
+  },
+  "native_reinsert_tests_passed": 6,
+  "detach_reattach_cycles": 24,
+  "lx_detach_smoke_passed": 8,
+  "scope": "native reattachment ownership foundation only; lx pivot syscall not implemented",
+  "coverage": [
+    "existing vi_zone_ref and creation timestamp preserved on reinsert",
+    "VFS_DETACHED cleared by reattachment",
+    "exactly one reference object in actual owner zone reference list",
+    "held tmpfs file vnode identical across four detach/reattach cycles per case",
+    "fresh VFS private state initializes zone reference before first-publication decision",
+    "normal native boot and all prior private-mount/capability/enforcement regressions"
+  ],
+  "cleanup": {
+    "process_idle_before_halt": "PASS all8 full plus8 smoke cases",
+    "user_budget_idle_before_halt": "PASS all8 full plus8 smoke cases",
+    "views": 0,
+    "flags": [
+      0,
+      0,
+      0
+    ],
+    "zone_installed_not_running": true,
+    "pool_export_exit": 0,
+    "synced_shutdown": true,
+    "qemu_pid_exited": 2467555
+  },
+  "build": "clean release/debug genunix and namespace-ktest plus final clean genunix builds pass without warning/error; cstyle/diff clean; retained release platform, debug compile only",
+  "physical_host_deployed": false,
+  "artifacts": {
+    "lofs": "ec609542d41ae0b3a79178a39aab403b5fc9f3343bd8059b3c1360d9701a1236",
+    "brand": "5e6b4fca7fe7aecd064187780803bd00b8a61160994545c391bfb86290efa84e",
+    "genunix_retained": "1b0a9800d58a82cc871d3b5341deb949252a37554cb56042195eb3114c822d51",
+    "proc_retained": "59bccb23ab35373244cb3f26eaf30d85862cd2dc80fc37f3ac7839aa2048874a",
+    "ktest": "318ba8f0eca5e3da3680def170a5c63cc0a975607ede138c1508a5d4ea31ac54",
+    "root_tar": "baf91feca0e84ddbdf7ba526faf12805db4c7d78f1a5ce3272080808840db31e",
+    "static_probe": "257d4ac11b749991247a6a27bfd860384e99723cb2069913240f18d652b9df7b",
+    "dynamic_probe": "538c044fecbbd8e5678ff9b24c8a3a6c0a3706cf60c296e9b68b849f8250e612",
+    "driver": "e25e153eb19af66fc88e39799d355bfc500966fee3f160efea0938760271a554",
+    "full_driver": "3889e8bbcf80335238cbaf0ea9261aa15d18efbe13fdc1edcc8837473c4375a6",
+    "tmpfs": "35ea5925f4b02bda424ca48a2916f975d26bdecf2336ac6792b9f10d446d2823",
+    "tmpfs_static_probe": "68e276cfd687fc1b3e02e0ecdb82e23b0a3ec96327213454f328f2b61bc658a1",
+    "tmpfs_dynamic_probe": "d0057906a75d550ca4708cef57a8740dda52976e50e2295787cd195e18fd56ec",
+    "image_update_helper": "74cfd65b1b5fdb6490c80a4d65ec15de8c8de7ac422457fb9e56493f5d6fa139",
+    "genunix": "66a35a49ba06fd62e25595cd96f1b2d7c6648aca1deb23ce62ab134bcdff6682",
+    "smoke_driver": "4ddb036241de56c12a85dcd7b946e737be3cd95a6d4854b4db0b06f24d4bdab6",
+    "namespace_driver": "0835e1dea180f2fdee6e2d6d86be278c93b538144db63da1f408e5fadd6628d7"
+  },
+  "codex": {
+    "version": "0.166.0",
+    "combined_clone": "0x78020011",
+    "clone_results": [
+      -22,
+      -22
+    ],
+    "complete_workflow": false,
+    "last_trace_vm": 100,
+    "latest_registry_check": {
+      "checked_at": "2026-10-31T06:04:59.115360+00:00",
+      "registry": "https://registry.npmjs.org/@openai%2fcodex",
+      "stable": "0.166.0",
+      "linux_x64": "0.166.0-linux-x64",
+      "raw_sha256": "2e6b631c51268c96a01966d390b23c5aa7b49c605a28141c79b874986ceac84c"
+    }
+  },
+  "logs": {
+    "vm104-smoke.log": "35677af1f5b003aeb00bfdeecf243ddff6049d293cb3956cb0c786dc109cd163",
+    "vm104-smoke-backend.log": "634143a20b2205dab36c7ac4d2f7f5620f33695d8b91ba888d39f9ff5152231d",
+    "vm104-smoke-public.log": "d0f49868e86ac208493d5be4150f5d394816e14efdf0dc637a69192e47cb701d",
+    "vm104-full.log": "48a0eac8d57360080fc34187f091d30d8f44759adfbc10100ed542c4be2b315c",
+    "vm104-native-backend.log": "634143a20b2205dab36c7ac4d2f7f5620f33695d8b91ba888d39f9ff5152231d",
+    "vm104-userns.log": "5ef84255966fbe5ba09e8dba99e96f84bee2596e5a3b59b53f2b9e9205b1e1fb",
+    "vm104-regressions.log": "7a493c73c41bd357becd7ba0553af82de9ac2b61d8bcc4a60c3b0ab49201b4b5",
+    "vm104-entry.log": "8ce9f829d4387290261707a3eba7c47d3570e1f04a699aa7fa5f08b4948a1223",
+    "vm104-bind.log": "cf2e0f05ed3d52ec8d0e81d0ec515feaed9e4fe2a61c6a701b8cd6e3452c61a9",
+    "vm104-recursive.log": "84a136597362203d5604a613a6b78fee899d27fe7e1f1820282cc715c5f2944e",
+    "vm104-private.log": "6a71a6ddaa7dceca4a47618decc5808b1eba8ed76144c0689ff0fa617776548b",
+    "vm104-tmpfs.log": "966256daad587bf17151fa70ff84ab68d1f90b452a0269314be633268b902b7d",
+    "vm104-statfs.log": "acd687c816648a234e3efdbb0b7e50384ccbe448f8e874aa97c864bf0d61e7ae",
+    "vm104-freeze.log": "1247876433831a5908a1fef56c7060aab50ef0214446a58ec4d68dbc084b2b48",
+    "vm104-detach.log": "44a74a636e9399d802ba61285c5ecc8486d342d192bc8bfdd9bf19f7f6fe2591"
+  },
+  "console_evidence": {
+    "name": "boot-104-retained-mount-reinsert-acceptance.log",
+    "sha256": "1feb53ae0c2b0563696ec2c355fda17de6e121ee3edf068f908cab1fe1c29661"
+  }
+}
