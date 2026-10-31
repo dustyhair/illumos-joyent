@@ -16,6 +16,7 @@
 #include <sys/proc.h>
 #include <sys/zone.h>
 #include <sys/lx_brand.h>
+#include <sys/machbrand.h>
 #include <sys/lx_mntns.h>
 #include <sys/lx_pidns.h>
 #include <sys/lx_userns.h>
@@ -2035,6 +2036,321 @@ ns_pid_maps_release(ktest_ctx_hdl_t *ctx)
 		KT_FAIL(ctx, "map release retained an identity or namespace");
 }
 
+/* Private bookkeeping attachment only; Linux PID syscall values stay global. */
+static lx_pidns_t *ns_pid_process_space;
+static zone_t *ns_pid_process_zone;
+static lx_pidns_map_t *ns_pid_process_observer;
+static pid_t ns_pid_process_owner, ns_pid_process_target;
+
+static void
+ns_pid_process_drop(void)
+{
+	ASSERT(MUTEX_HELD(&ns_pid_lock));
+	if (ns_pid_process_observer != NULL)
+		lx_pidns_map_rele(ns_pid_process_observer);
+	lx_pidns_rele(ns_pid_process_space);
+	if (ns_pid_process_zone != NULL)
+		zone_rele(ns_pid_process_zone);
+	ns_pid_process_observer = NULL;
+	ns_pid_process_space = NULL;
+	ns_pid_process_zone = NULL;
+	ns_pid_process_owner = ns_pid_process_target = 0;
+}
+
+static void
+ns_pid_process_attach(ktest_ctx_hdl_t *ctx)
+{
+	zone_t *zone = NULL;
+	proc_t *p = NULL;
+	kthread_t *t;
+	lx_lwp_data_t *ld;
+	cred_t *base = NULL, *scope = NULL;
+	lx_userns_t *user = NULL;
+	lx_userns_cred_t actor;
+	lx_pidns_t *space = NULL;
+	lx_pidns_map_t *map = NULL;
+	struct pid *identity = NULL;
+	pid_t pid;
+	boolean_t installed = B_FALSE, passed = B_FALSE;
+
+#define	PO_CHECK(expr, why) do { \
+	if (!(expr)) { \
+		KT_FAIL(ctx, "%s", why); \
+		goto out; \
+	} \
+} while (0)
+	mutex_enter(&ns_pid_lock);
+	PO_CHECK(ns_pid_process_space == NULL && !lx_pidns_busy() &&
+	    ns_pid_identity == NULL, "another PID fixture is active");
+	PO_CHECK(ns_process_pid(ctx, &pid), "invalid process fixture PID");
+	zone = zone_find_by_name("lx-probe");
+	PO_CHECK(zone != NULL && lx_lpid_lock(pid, zone, 0, &p, &t) == 0,
+	    "cannot find stopped process fixture");
+	ld = t == NULL ? NULL : ttolxlwp(t);
+	PO_CHECK(p->p_brand == &lx_brand && p->p_lwpcnt == 1 &&
+	    t != NULL && t->t_state == TS_STOPPED &&
+	    strcmp(PTOU(p)->u_comm, "pid_ownership") == 0 &&
+	    ld != NULL && ld->br_stack_mode == LX_STACK_MODE_BRAND &&
+	    ld->br_syscall_entry == BRAND_ENTRY_AMD64 &&
+	    ptolxproc(p)->l_ptrace == 0 && ptolxproc(p)->l_pidns_map == NULL &&
+	    ptolxproc(p)->l_pidns_children == NULL && ld->br_pidns_map == NULL,
+	    "fixture is not a sole Linux-mode LWP without PID bookkeeping");
+	mutex_enter(&p->p_crlock);
+	crhold(base = p->p_cred);
+	mutex_exit(&p->p_crlock);
+	mutex_exit(&p->p_lock);
+	p = NULL;
+	PO_CHECK(lx_userns_map_actor(base, ztolxzd(zone)->lxzd_userns,
+	    &actor) == 0 && lx_userns_child_create(&actor, &user) == 0,
+	    "cannot prepare immutable test namespace owner");
+	actor.luc_ns = user;
+	lx_caps_new_namespace(&actor.luc_caps);
+	scope = lx_userns_native_for(base, &actor);
+	identity = lx_pid_identity_hold(pid, zone);
+	PO_CHECK(identity != NULL && lx_pidns_create(scope, NULL,
+	    LX_PIDNS_PID_LIMIT, &space) == 0 &&
+	    lx_pidns_reserve(space, &map) == 0 &&
+	    lx_pidns_bind_native(map, zone, identity) == 0,
+	    "cannot prepare the initial process PID map");
+	PO_CHECK(lx_lpid_lock(pid, zone, 0, &p, &t) == 0,
+	    "process disappeared during preparation");
+	ld = t == NULL ? NULL : ttolxlwp(t);
+	PO_CHECK(p->p_lwpcnt == 1 && p->p_cred == base &&
+	    t != NULL && t->t_state == TS_STOPPED &&
+	    ld != NULL && ld->br_stack_mode == LX_STACK_MODE_BRAND &&
+	    ld->br_syscall_entry == BRAND_ENTRY_AMD64 &&
+	    ptolxproc(p)->l_pidns_map == NULL && ld->br_pidns_map == NULL,
+	    "process state changed during preparation");
+	ptolxproc(p)->l_pidns_map = map;
+	lx_pidns_map_hold(map);
+	ld->br_pidns_map = map;
+	lx_pidns_map_hold(map);
+	installed = B_TRUE;
+	mutex_exit(&p->p_lock);
+	p = NULL;
+	PO_CHECK(lx_pidns_commit(map), "namespace died during test attachment");
+	ns_pid_process_space = space;
+	space = NULL;
+	ns_pid_process_zone = zone;
+	zone = NULL;
+	ns_pid_process_owner = pid;
+	passed = B_TRUE;
+out:
+	if (p != NULL)
+		mutex_exit(&p->p_lock);
+	if (!passed && installed) {
+		mutex_enter(&pidlock);
+		if ((p = prfind_zone(pid, zone->zone_id)) != NULL)
+			psignal(p, SIGKILL);
+		mutex_exit(&pidlock);
+	}
+	if (identity != NULL)
+		lx_pid_identity_rele(identity);
+	if (map != NULL)
+		lx_pidns_map_rele(map);
+	lx_pidns_rele(space);
+	if (scope != NULL)
+		crfree(scope);
+	lx_userns_rele(user);
+	if (base != NULL)
+		crfree(base);
+	if (zone != NULL)
+		zone_rele(zone);
+	mutex_exit(&ns_pid_lock);
+	if (passed)
+		KT_PASS(ctx);
+#undef PO_CHECK
+}
+
+static void
+ns_pid_process_observe(ktest_ctx_hdl_t *ctx, boolean_t child)
+{
+	proc_t *p = NULL;
+	kthread_t *t;
+	lx_pidns_map_t *map = NULL;
+	pid_t target;
+	boolean_t passed = B_FALSE;
+
+	mutex_enter(&ns_pid_lock);
+	if (ns_pid_process_space == NULL || ns_pid_process_observer != NULL ||
+	    !ns_process_pid(ctx, &target) ||
+	    lx_lpid_lock(target, ns_pid_process_zone, 0, &p, &t) != 0) {
+		KT_ERROR(ctx,
+		    "missing process fixture or invalid observed target");
+		goto out;
+	}
+	if (t == NULL || t->t_state != TS_STOPPED ||
+	    p->p_brand != &lx_brand || !lx_kernel_restricted(p) ||
+	    lx_pidns_active(p) != ns_pid_process_space ||
+	    ptolxproc(p)->l_pidns_children != NULL ||
+	    strcmp(PTOU(p)->u_comm, "pid_ownership") != 0) {
+		KT_FAIL(ctx,
+		    "observed process did not inherit private bookkeeping");
+		goto out;
+	}
+	map = child ? ptolxproc(p)->l_pidns_map : ttolxlwp(t)->br_pidns_map;
+	if ((child && (p->p_ppid != ns_pid_process_owner ||
+	    p->p_pid != target || ttolxlwp(t)->br_pidns_map != map)) ||
+	    (!child && (p->p_pid != ns_pid_process_owner ||
+	    target == p->p_pid ||
+	    ttolxlwp(t)->br_pidns_map == ptolxproc(p)->l_pidns_map)) ||
+	    map == NULL || lx_pidns_map_id(map, ns_pid_process_space) != 2) {
+		KT_FAIL(ctx, "fork or thread did not receive the next PID map");
+		goto out;
+	}
+	lx_pidns_map_hold(map);
+	ns_pid_process_observer = map;
+	ns_pid_process_target = target;
+	mutex_exit(&p->p_lock);
+	p = NULL;
+	if (lx_pidns_visible(ns_pid_process_space, target) != 2) {
+		KT_FAIL(ctx, "native success did not commit the observed PID");
+		goto out;
+	}
+	passed = B_TRUE;
+out:
+	if (p != NULL)
+		mutex_exit(&p->p_lock);
+	mutex_exit(&ns_pid_lock);
+	if (passed)
+		KT_PASS(ctx);
+}
+
+static void
+ns_pid_process_thread(ktest_ctx_hdl_t *ctx)
+{
+	ns_pid_process_observe(ctx, B_FALSE);
+}
+
+static void
+ns_pid_process_child(ktest_ctx_hdl_t *ctx)
+{
+	ns_pid_process_observe(ctx, B_TRUE);
+}
+
+static void
+ns_pid_process_zombie(ktest_ctx_hdl_t *ctx)
+{
+	proc_t *p = NULL;
+	boolean_t passed = B_FALSE;
+	uint_t attempt;
+
+	mutex_enter(&ns_pid_lock);
+	if (ns_pid_process_observer == NULL) {
+		KT_ERROR(ctx, "no child map held");
+		goto out;
+	}
+	for (attempt = 0; attempt < 100; attempt++) {
+		if (lx_lpid_lock(ns_pid_process_target, ns_pid_process_zone,
+		    LXP_ZOMBOK, &p, NULL) == 0) {
+			passed = p->p_stat == SZOMB &&
+			    ptolxproc(p)->l_pidns_map ==
+			    ns_pid_process_observer &&
+			    lx_pidns_active(p) == ns_pid_process_space;
+			mutex_exit(&p->p_lock);
+			p = NULL;
+		}
+		if (passed)
+			break;
+		delay(MAX(1, hz / 10));
+	}
+	if (passed)
+		KT_PASS(ctx);
+	else
+		KT_FAIL(ctx,
+		    "child did not retain its PID map as a native zombie");
+out:
+	mutex_exit(&ns_pid_lock);
+}
+
+static void
+ns_pid_process_retired(ktest_ctx_hdl_t *ctx)
+{
+	struct pid *identity;
+	proc_t *p = NULL;
+	kthread_t *t;
+	boolean_t passed = B_FALSE, retired = B_FALSE;
+	uint_t attempt;
+
+	mutex_enter(&ns_pid_lock);
+	if (ns_pid_process_observer == NULL) {
+		KT_ERROR(ctx, "no observed PID map held");
+		goto out;
+	}
+	for (attempt = 0; attempt < 100; attempt++) {
+		identity = lx_pidns_lookup(ns_pid_process_space, 2);
+		if (identity == NULL)
+			break;
+		mutex_enter(&pidlock);
+		retired = identity->pid_prinactive && identity->pid_ref == 2 &&
+		    identity->pid_id == ns_pid_process_target &&
+		    prfind_zone(ns_pid_process_target, ALL_ZONES) == NULL;
+		PID_RELE(identity);
+		mutex_exit(&pidlock);
+		if (retired)
+			break;
+		delay(MAX(1, hz / 10));
+	}
+	if (!retired || lx_lpid_lock(ns_pid_process_owner, ns_pid_process_zone,
+	    0, &p, &t) != 0) {
+		KT_FAIL(ctx,
+		    "retired child/thread lost identity or owner exited");
+		goto out;
+	}
+	passed = t != NULL && t->t_state == TS_STOPPED &&
+	    ttolxlwp(t)->br_pidns_map == ptolxproc(p)->l_pidns_map &&
+	    lx_pidns_active(p) == ns_pid_process_space &&
+	    lx_pidns_map_id(ptolxproc(p)->l_pidns_map,
+	    ns_pid_process_space) == 1;
+	mutex_exit(&p->p_lock);
+	p = NULL;
+	if (passed)
+		KT_PASS(ctx);
+	else
+		KT_FAIL(ctx,
+		    "exec or join did not preserve the process identity map");
+out:
+	mutex_exit(&ns_pid_lock);
+}
+
+static void
+ns_pid_process_release(ktest_ctx_hdl_t *ctx)
+{
+	pid_t target;
+	boolean_t gone;
+
+	mutex_enter(&ns_pid_lock);
+	target = ns_pid_process_target;
+	ns_pid_process_drop();
+	mutex_enter(&pidlock);
+	gone = target > 1 && pid_find(target) == NULL;
+	mutex_exit(&pidlock);
+	mutex_exit(&ns_pid_lock);
+	if (gone)
+		KT_PASS(ctx);
+	else
+		KT_FAIL(ctx, "observed PID outlived its last map reference");
+}
+
+static void
+ns_pid_process_idle(ktest_ctx_hdl_t *ctx)
+{
+	zone_t *zone = zone_find_by_name("lx-probe");
+	uint32_t maximum, used;
+
+	if (zone == NULL) {
+		KT_ERROR(ctx, "no lx process fixture zone");
+		return;
+	}
+	lx_userns_pidns_budget_get(ztolxzd(zone)->lxzd_userns, &maximum, &used);
+	zone_rele(zone);
+	if (used == 0 && !lx_pidns_busy())
+		KT_PASS(ctx);
+	else
+		KT_FAIL(ctx,
+		    "native reap retained a PID namespace or budget charge");
+}
+
 static struct modlmisc ns_modlmisc = {
 	.misc_modops = &mod_miscops,
 	.misc_linkinfo = "lx namespace tests"
@@ -2138,6 +2454,20 @@ _init(void)
 	    0)) != 0 ||
 	    (error = ktest_add_test(ks, "maps_release", ns_pid_maps_release,
 	    0)) != 0 ||
+	    (error = ktest_add_test(ks, "process_attach", ns_pid_process_attach,
+	    KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "process_thread", ns_pid_process_thread,
+	    KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "process_child", ns_pid_process_child,
+	    KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "process_zombie", ns_pid_process_zombie,
+	    0)) != 0 ||
+	    (error = ktest_add_test(ks, "process_retired",
+	    ns_pid_process_retired, 0)) != 0 ||
+	    (error = ktest_add_test(ks, "process_release",
+	    ns_pid_process_release, 0)) != 0 ||
+	    (error = ktest_add_test(ks, "process_idle", ns_pid_process_idle,
+	    0)) != 0 ||
 	    (error = ktest_register_module(km)) != 0) {
 		ktest_free_module(km);
 		mutex_destroy(&ns_pid_lock);
@@ -2161,6 +2491,7 @@ _fini(void)
 		mutex_enter(&ns_pid_lock);
 		ns_pid_drop();
 		ns_pid_maps_drop();
+		ns_pid_process_drop();
 		mutex_exit(&ns_pid_lock);
 		mutex_destroy(&ns_pid_lock);
 	}
