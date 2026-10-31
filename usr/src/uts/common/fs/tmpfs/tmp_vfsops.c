@@ -250,7 +250,8 @@ tmp_mount(vfs_t *vfsp, vnode_t *mvp, struct mounta *uap, cred_t *cr)
 	if ((error = secpolicy_fs_mount(cr, mvp, vfsp)) != 0)
 		return (error);
 	if ((uap->flags & (MS_SYSSPACE | MS_DATA)) ==
-	    (MS_SYSSPACE | MS_DATA)) {
+	    (MS_SYSSPACE | MS_DATA) &&
+	    (uap->dataptr != NULL || uap->datalen != 0)) {
 		args = (void *)uap->dataptr;
 		if (uap->datalen != sizeof (*args) || args == NULL ||
 		    args->tma_version != TMPFS_MOUNT_ARGS_VERSION ||
