@@ -89,6 +89,7 @@ extern int prreadenvv(proc_t *, char *, size_t, size_t *);
 extern int prreadbuf(proc_t *, uintptr_t, uint8_t *, size_t, size_t *);
 
 #include <sys/lx_cap.h>
+#include <sys/lx_mntns.h>
 #include "lx_proc.h"
 
 extern pgcnt_t swapfs_minfree;
@@ -6994,7 +6995,38 @@ lxpr_lookup(vnode_t *dp, char *comp, vnode_t **vpp, pathname_t *pathp,
 	}
 
 	*vpp = (lxpr_lookup_function[type](dp, comp));
-	return ((*vpp == NULL) ? ENOENT : 0);
+	if (*vpp == NULL)
+		return (ENOENT);
+	/* Keep displayed link text separate from the held target's identity. */
+	if ((flags & LOOKUP_FOLLOWLINK) && direntflags != NULL &&
+	    lx_mntns_entry_enabled()) {
+		lxpr_node_t *link = VTOLXP(*vpp);
+		lx_mntns_view_t *view;
+
+		if ((link->lxpr_type == LXPR_PID_FD_FD ||
+		    link->lxpr_type == LXPR_PID_CURDIR ||
+		    link->lxpr_type == LXPR_PID_ROOTDIR ||
+		    link->lxpr_type == LXPR_PID_EXE) &&
+		    link->lxpr_realvp != NULL &&
+		    (view = lx_mntns_current()) != NULL) {
+			vnode_t *target = link->lxpr_realvp;
+
+			error = lxpr_doaccess(link, B_TRUE, VREAD, 0, cr, ct);
+			if (error == 0) {
+				VN_HOLD(target);
+				VN_RELE(*vpp);
+				*vpp = target;
+				*direntflags |= LOOKUP_JUMPED;
+			}
+			lx_mntns_view_rele(view);
+			if (error != 0) {
+				VN_RELE(*vpp);
+				*vpp = NULL;
+				return (error);
+			}
+		}
+	}
+	return (0);
 }
 
 /*
@@ -9033,7 +9065,9 @@ lxpr_readlink(vnode_t *vp, uio_t *uiop, cred_t *cr, caller_context_t *ct)
 		if (error != 0)
 			goto out;
 
-		error = vnodetopath(NULL, rvp, bp, buflen, cr);
+		error = lx_mntns_vnodetopath(rvp, bp, buflen, cr);
+		if (error == ENOENT)
+			error = vnodetopath(NULL, rvp, bp, buflen, cr);
 
 		/*
 		 * Special handling for /proc/<pid>/exe where the vnode path is

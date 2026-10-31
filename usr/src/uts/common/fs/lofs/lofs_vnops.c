@@ -343,6 +343,12 @@ lo_lookup(
 		goto out;
 	}
 
+	/* A process link already selected the target's exact mount instance. */
+	if (direntflags != NULL && (*direntflags & LOOKUP_JUMPED)) {
+		*vpp = vp;
+		return (0);
+	}
+
 	/*
 	 * We do this check here to avoid returning a stale file handle to the
 	 * caller.

@@ -575,6 +575,90 @@ lx_mntns_bind(lx_mntns_view_t *view, vnode_t *source,
 }
 
 /*
+ * Unspliced mounts have no global pathname. Translate their cached vnode path
+ * using the recorded mountpoint, then validate it against this exact view.
+ * A cached name is only a candidate; backing-vnode equality is insufficient.
+ */
+static int
+lx_mntns_path_locked(lx_mntns_view_t *view, vnode_t *vp, cred_t *actor,
+    char *resolved)
+{
+	lx_mntns_mount_t *mount;
+	vnode_t *check = NULL;
+	const char *base = NULL, *prefix, *suffix;
+	char *cached;
+	size_t len;
+	int error;
+
+	ASSERT(MUTEX_HELD(&view->lv_lock));
+	if (vp->v_vfsp == view->lv_vfs)
+		base = "/";
+	else {
+		for (mount = view->lv_mounts; mount != NULL;
+		    mount = mount->lm_next) {
+			if (vp->v_vfsp == mount->lm_vfs) {
+				base = refstr_value(mount->lm_path);
+				break;
+			}
+		}
+	}
+	if (base == NULL)
+		return (EINVAL);
+	cached = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+	mutex_enter(&vp->v_lock);
+	(void) strlcpy(cached, vp->v_path, MAXPATHLEN);
+	mutex_exit(&vp->v_lock);
+	prefix = refstr_value(vp->v_vfsp->vfs_mntpt);
+	len = strlen(prefix);
+	if (strncmp(cached, prefix, len) != 0 ||
+	    (cached[len] != '\0' && cached[len] != '/')) {
+		error = EAGAIN;
+		goto out;
+	}
+	suffix = cached + len;
+	if (*suffix == '/')
+		suffix++;
+	if (snprintf(resolved, MAXPATHLEN, "%s%s%s", base,
+	    strcmp(base, "/") == 0 || *suffix == '\0' ? "" : "/", suffix) >=
+	    MAXPATHLEN) {
+		error = ENAMETOOLONG;
+		goto out;
+	}
+	error = lx_mntns_lookup_at(view->lv_root, resolved, actor, &check);
+	if (error == 0 && check != vp)
+		error = EAGAIN;
+	if (check != NULL)
+		VN_RELE(check);
+out:
+	kmem_free(cached, MAXPATHLEN);
+	return (error);
+}
+
+/* Process-link display names also need the private, validated path. */
+int
+lx_mntns_vnodetopath(vnode_t *vp, char *buffer, size_t size, cred_t *actor)
+{
+	lx_mntns_view_t *view = lx_mntns_current();
+	char *path;
+	int error;
+
+	if (view == NULL)
+		return (ENOENT);
+	path = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+	mutex_enter(&view->lv_lock);
+	if (!lx_mntns_owns(view, vp))
+		error = ENOENT;
+	else if ((error = lx_mntns_path_locked(view, vp, actor, path)) == 0) {
+		if (strlcpy(buffer, path, size) >= size)
+			error = ENAMETOOLONG;
+	}
+	mutex_exit(&view->lv_lock);
+	lx_mntns_view_rele(view);
+	kmem_free(path, MAXPATHLEN);
+	return (error);
+}
+
+/*
  * Public non-recursive bind. Resolve both operands with the actor's root,
  * cwd and credentials, then pass held vnodes to domount. The kernel mount
  * credential must never do a second, more privileged pathname lookup.
@@ -616,8 +700,7 @@ lx_mntns_mount_bind(lx_mntns_view_t *view, const char *source,
 		error = EOPNOTSUPP;
 		goto out;
 	}
-	error = vnodetopath(view->lv_root, covered, resolved, MAXPATHLEN,
-	    actor);
+	error = lx_mntns_path_locked(view, covered, actor, resolved);
 	if (error == 0)
 		error = lx_mntns_bind_locked(view, from, covered, resolved,
 		    B_FALSE, B_FALSE);

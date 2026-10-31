@@ -224,7 +224,7 @@ lookuppnvp(
 	char component[MAXNAMELEN];	/* buffer for component (incl null) */
 	int error;
 	int nlink;
-	int lookup_flags;
+	int lookup_flags, component_flags, direntflags;
 	struct pathname presrvd; /* case preserved name */
 	struct pathname *pp = NULL;
 	vnode_t *startvp;
@@ -383,8 +383,12 @@ checkforroot:
 	/*
 	 * Perform a lookup in the current directory.
 	 */
-	error = VOP_LOOKUP(vp, component, &cvp, pnp, lookup_flags,
-	    rootvp, cr, NULL, NULL, pp);
+	component_flags = lookup_flags;
+	if ((flags & FOLLOW) || pn_pathleft(pnp))
+		component_flags |= LOOKUP_FOLLOWLINK;
+	direntflags = 0;
+	error = VOP_LOOKUP(vp, component, &cvp, pnp, component_flags,
+	    rootvp, cr, NULL, &direntflags, pp);
 
 	/*
 	 * Retry with kcred - If crossing mount points & error is EACCES.
@@ -400,9 +404,11 @@ checkforroot:
 	 * For eg: UFS FS --> Mount NFS FS --> Again mount UFS on some
 	 *			directory inside NFS FS.
 	 */
-	if ((error == EACCES) && retry_with_kcred)
-		error = VOP_LOOKUP(vp, component, &cvp, pnp, lookup_flags,
-		    rootvp, zone_kcred(), NULL, NULL, pp);
+	if ((error == EACCES) && retry_with_kcred) {
+		direntflags = 0;
+		error = VOP_LOOKUP(vp, component, &cvp, pnp, component_flags,
+		    rootvp, zone_kcred(), NULL, &direntflags, pp);
+	}
 
 	if (error) {
 		cvp = NULL;
@@ -448,7 +454,12 @@ checkforroot:
 	 *	(For this to work, fetching v_vfsmountedhere had better
 	 *	be atomic!)
 	 */
-	if (vn_mountedvfs(cvp) != NULL) {
+	/* A process link names a held object in its original mount. */
+	if ((direntflags & LOOKUP_JUMPED) && ++nlink > MAXSYMLINKS) {
+		error = ELOOP;
+		goto bad;
+	}
+	if (!(direntflags & LOOKUP_JUMPED) && vn_mountedvfs(cvp) != NULL) {
 		if ((error = traverse(&cvp)) != 0)
 			goto bad;
 	}
@@ -459,7 +470,8 @@ checkforroot:
 	 * to a link, then place the contents of the link at the
 	 * front of the remaining pathname.
 	 */
-	if (cvp->v_type == VLNK && ((flags & FOLLOW) || pn_pathleft(pnp))) {
+	if (!(direntflags & LOOKUP_JUMPED) && cvp->v_type == VLNK &&
+	    ((flags & FOLLOW) || pn_pathleft(pnp))) {
 		struct pathname linkpath;
 
 		if (++nlink > MAXSYMLINKS) {

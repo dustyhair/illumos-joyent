@@ -1269,6 +1269,10 @@ extern int	fop_retzcbuf(vnode_t *, xuio_t *, cred_t *, caller_context_t *);
 #define	LOOKUP_HAVE_SYSATTR_DIR	0x08	/* Already created virtual GFS dir */
 /* LOOKUP_CHECKREAD		0x10	- private lookuppnvp flag */
 #define	LOOKUP_NOACLCHECK	0x20	/* Dont check ACL when checking perms */
+#define	LOOKUP_FOLLOWLINK	0x40	/* follow supported process links */
+
+/* Internal VOP_LOOKUP result, valid only with LOOKUP_FOLLOWLINK. */
+#define	LOOKUP_JUMPED		0x40000000 /* returned a held link target */
 
 /*
  * Flags for VOP_READDIR
