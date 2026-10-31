@@ -1466,6 +1466,132 @@ ns_process_idle(ktest_ctx_hdl_t *ctx)
 	KT_PASS(ctx);
 }
 
+/* A real stopped LX worker supplies the synthetic thread PID. */
+static kmutex_t ns_pid_lock;
+static struct pid *ns_pid_identity;
+static pid_t ns_pid_number;
+
+static void
+ns_pid_drop(void)
+{
+	ASSERT(MUTEX_HELD(&ns_pid_lock));
+	if (ns_pid_identity != NULL) {
+		mutex_enter(&pidlock);
+		/* Do not release an identity a regression already freed. */
+		if (pid_find(ns_pid_number) == ns_pid_identity) {
+			PID_RELE(ns_pid_identity);
+		}
+		mutex_exit(&pidlock);
+		ns_pid_identity = NULL;
+		ns_pid_number = 0;
+	}
+}
+
+static void
+ns_pid_hold(ktest_ctx_hdl_t *ctx)
+{
+	zone_t *zone = NULL;
+	struct pid *identity = NULL, *foreign;
+	proc_t *p = NULL;
+	kthread_t *t;
+	pid_t number;
+	boolean_t passed = B_FALSE;
+
+	if (!ns_process_pid(ctx, &number)) {
+		KT_ERROR(ctx, "invalid real worker TID");
+		return;
+	}
+	zone = zone_find_by_name("lx-probe");
+	if (zone == NULL || zone->zone_brand != &lx_brand ||
+	    (identity = lx_pid_identity_hold(number, zone)) == NULL) {
+		KT_FAIL(ctx, "worker has no held lx identity");
+		goto out;
+	}
+	if (lx_lpid_lock(number, zone, 0, &p, &t) != 0) {
+		KT_FAIL(ctx, "cannot find held worker");
+		goto out;
+	}
+	if (t == NULL || p->p_pid == number || t->t_state != TS_STOPPED ||
+	    strcmp(PTOU(p)->u_comm, "pid_identity") != 0) {
+		KT_FAIL(ctx, "fixture is not a stopped synthetic worker PID");
+		goto out;
+	}
+	mutex_exit(&p->p_lock);
+	p = NULL;
+	foreign = lx_pid_identity_hold(number, global_zone);
+	if (foreign != NULL) {
+		lx_pid_identity_rele(foreign);
+		KT_FAIL(ctx, "identity lookup crossed zone ownership");
+		goto out;
+	}
+	mutex_enter(&ns_pid_lock);
+	if (ns_pid_identity != NULL) {
+		mutex_exit(&ns_pid_lock);
+		KT_ERROR(ctx, "previous identity fixture still held");
+		goto out;
+	}
+	ns_pid_identity = identity;
+	ns_pid_number = number;
+	identity = NULL;
+	mutex_exit(&ns_pid_lock);
+	passed = B_TRUE;
+out:
+	if (p != NULL)
+		mutex_exit(&p->p_lock);
+	if (identity != NULL)
+		lx_pid_identity_rele(identity);
+	if (zone != NULL)
+		zone_rele(zone);
+	if (passed)
+		KT_PASS(ctx);
+}
+
+static void
+ns_pid_retired(ktest_ctx_hdl_t *ctx)
+{
+	struct pid *actual;
+	boolean_t retained;
+
+	mutex_enter(&ns_pid_lock);
+	if (ns_pid_identity == NULL) {
+		mutex_exit(&ns_pid_lock);
+		KT_ERROR(ctx, "no held worker identity");
+		return;
+	}
+	mutex_enter(&pidlock);
+	actual = pid_find(ns_pid_number);
+	retained = actual == ns_pid_identity && actual->pid_ref == 1 &&
+	    actual->pid_prinactive &&
+	    prfind_zone(ns_pid_number, ALL_ZONES) == NULL;
+	mutex_exit(&pidlock);
+	mutex_exit(&ns_pid_lock);
+	if (retained)
+		KT_PASS(ctx);
+	else
+		KT_FAIL(ctx,
+		    "retired PID lost identity or remained a native task");
+}
+
+static void
+ns_pid_release(ktest_ctx_hdl_t *ctx)
+{
+	pid_t number;
+	boolean_t gone;
+
+	mutex_enter(&ns_pid_lock);
+	number = ns_pid_number;
+	ns_pid_drop();
+	mutex_enter(&pidlock);
+	gone = number > 1 && pid_find(number) == NULL;
+	mutex_exit(&pidlock);
+	mutex_exit(&ns_pid_lock);
+	if (gone)
+		KT_PASS(ctx);
+	else
+		KT_FAIL(ctx,
+		    "final reference did not release the PID reservation");
+}
+
 static struct modlmisc ns_modlmisc = {
 	.misc_modops = &mod_miscops,
 	.misc_linkinfo = "lx namespace tests"
@@ -1482,8 +1608,11 @@ _init(void)
 	ktest_suite_hdl_t *ks = NULL;
 	int error;
 
-	if ((error = ktest_create_module("lx_namespace", &km)) != 0)
+	mutex_init(&ns_pid_lock, NULL, MUTEX_DEFAULT, NULL);
+	if ((error = ktest_create_module("lx_namespace", &km)) != 0) {
+		mutex_destroy(&ns_pid_lock);
 		return (error);
+	}
 	if ((error = ktest_add_suite(km, "mount", &ks)) != 0 ||
 	    (error = ktest_add_test(ks, "views", ns_views,
 	    KTEST_FLAG_INPUT)) != 0 ||
@@ -1553,12 +1682,20 @@ _init(void)
 	    lx_userns_test_scope_attach, KTEST_FLAG_INPUT)) != 0 ||
 	    (error = ktest_add_test(ks, "scope_sids",
 	    lx_userns_test_scope_sids, KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_suite(km, "pid", &ks)) != 0 ||
+	    (error = ktest_add_test(ks, "hold", ns_pid_hold,
+	    KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "retired", ns_pid_retired, 0)) != 0 ||
+	    (error = ktest_add_test(ks, "release", ns_pid_release, 0)) != 0 ||
 	    (error = ktest_register_module(km)) != 0) {
 		ktest_free_module(km);
+		mutex_destroy(&ns_pid_lock);
 		return (error);
 	}
-	if ((error = mod_install(&ns_modlinkage)) != 0)
+	if ((error = mod_install(&ns_modlinkage)) != 0) {
 		ktest_unregister_module("lx_namespace");
+		mutex_destroy(&ns_pid_lock);
+	}
 	return (error);
 }
 
@@ -1570,6 +1707,10 @@ _fini(void)
 	if (error == 0) {
 		ktest_unregister_module("lx_namespace");
 		lx_userns_test_scope_sids_fini();
+		mutex_enter(&ns_pid_lock);
+		ns_pid_drop();
+		mutex_exit(&ns_pid_lock);
+		mutex_destroy(&ns_pid_lock);
 	}
 	return (error);
 }
