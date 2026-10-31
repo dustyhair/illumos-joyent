@@ -3198,7 +3198,7 @@ vfs_add(vnode_t *coveredvp, struct vfs *vfsp, int mflag)
 
 	ASSERT(vfs_lock_held(vfsp));
 	VFS_HOLD(vfsp);
-	newflag = vfsp->vfs_flag;
+	newflag = vfsp->vfs_flag & ~VFS_DETACHED;
 	if (mflag & MS_RDONLY)
 		newflag |= VFS_RDONLY;
 	else
@@ -3554,7 +3554,6 @@ vfs_list_add(struct vfs *vfsp)
 	 */
 	if (vfsp->vfs_implp == NULL)
 		vfsimpl_setup(vfsp);
-	vfs_mono_time(&vfsp->vfs_hrctime);
 
 	/*
 	 * The zone that owns the mount is the one that performed the mount.
@@ -3562,10 +3561,18 @@ vfs_list_add(struct vfs *vfsp)
 	 * The corresponding zone_rele_ref() will be done when the vfs_t
 	 * is being free'd.
 	 */
-	vfsp->vfs_zone = curproc->p_zone;
-	zone_init_ref(&vfsp->vfs_implp->vi_zone_ref);
-	zone_hold_ref(vfsp->vfs_zone, &vfsp->vfs_implp->vi_zone_ref,
-	    ZONE_REF_VFS);
+	if (vfsp->vfs_implp->vi_zone_ref.zref_zone == NULL) {
+		vfs_mono_time(&vfsp->vfs_hrctime);
+		vfsp->vfs_zone = curproc->p_zone;
+		zone_init_ref(&vfsp->vfs_implp->vi_zone_ref);
+		zone_hold_ref(vfsp->vfs_zone, &vfsp->vfs_implp->vi_zone_ref,
+		    ZONE_REF_VFS);
+	} else {
+		/* Reinsert a retained mount without replacing its owner. */
+		ASSERT(!VFS_ON_LIST(vfsp));
+		ASSERT3P(vfsp->vfs_zone, ==,
+		    vfsp->vfs_implp->vi_zone_ref.zref_zone);
+	}
 
 	/*
 	 * Find the zone mounted into, and put this mount on its vfs list.

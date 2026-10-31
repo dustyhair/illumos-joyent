@@ -141,6 +141,125 @@ out:
 #undef NS_CHECK
 }
 
+/* Check the actual reference object, without assuming other mounts are idle. */
+static boolean_t
+ns_vfs_zone_ref_once(vfs_t *vfs)
+{
+	zone_t *zone = vfs->vfs_zone;
+	zone_ref_t *ref, *wanted = &vfs->vfs_implp->vi_zone_ref;
+	uint_t matches = 0;
+	uint64_t remaining;
+	boolean_t once;
+
+	mutex_enter(&zone->zone_lock);
+	remaining = (uint64_t)zone->zone_ref + 1;
+	for (ref = list_head(&zone->zone_ref_list); ref != NULL &&
+	    remaining-- != 0; ref = list_next(&zone->zone_ref_list, ref)) {
+		if (ref == wanted && ++matches == 2)
+			break;
+	}
+	once = ref == NULL && matches == 1 && wanted->zref_zone == zone;
+	mutex_exit(&zone->zone_lock);
+	return (once);
+}
+
+static void
+ns_reinsert(ktest_ctx_hdl_t *ctx)
+{
+	uchar_t *input;
+	size_t size;
+	lx_mntns_view_t *view = NULL;
+	vnode_t *root = NULL, *file = NULL, *check = NULL, *covered = NULL;
+	vfs_t *vfs;
+	zone_t *owner;
+	vattr_t attr = { 0 };
+	boolean_t detached, passed = B_FALSE;
+	int error, flags;
+	uint_t i;
+
+	ktest_get_input(ctx, &input, &size);
+	if (size < 2 || size > MAXPATHLEN || input[size - 1] != 0 ||
+	    strlen((char *)input) != size - 1 ||
+	    strncmp((char *)input, "/zones/lx-ns-kernel/", 20) != 0) {
+		KT_ERROR(ctx, "invalid private namespace fixture path");
+		return;
+	}
+#define	NS_REINSERT_CHECK(expr, why) do { \
+	if (!(expr)) { \
+		KT_FAIL(ctx, "%s", why); \
+		goto out; \
+	} \
+} while (0)
+	error = lx_mntns_view_create((char *)input, CRED(), CRED(), NULL,
+	    &view);
+	NS_REINSERT_CHECK(error == 0, "cannot create private view");
+	error = lx_mntns_view_tmpfs(view, "/pin", CRED());
+	NS_REINSERT_CHECK(error == 0, "cannot create private tmpfs");
+	error = lx_mntns_view_lookup(view, "/pin", CRED(), &root);
+	NS_REINSERT_CHECK(error == 0, "cannot find tmpfs root");
+	vfs = root->v_vfsp;
+	owner = vfs->vfs_zone;
+	VN_HOLD(covered = vfs->vfs_vnodecovered);
+	attr.va_type = VREG;
+	attr.va_mode = 0600;
+	attr.va_mask = AT_TYPE | AT_MODE;
+	error = VOP_CREATE(root, "retained", &attr, EXCL, VWRITE,
+	    &file, CRED(), 0, NULL, NULL);
+	NS_REINSERT_CHECK(error == 0, "cannot create retained file");
+	for (i = 0; i < 4; i++) {
+		NS_REINSERT_CHECK(ns_vfs_zone_ref_once(vfs),
+		    "mount does not own exactly one zone reference");
+		error = vn_vfswlock(covered);
+		NS_REINSERT_CHECK(error == 0, "cannot lock covered vnode");
+		vfs_lock_wait(vfs);
+		vfs_detach(vfs);
+		detached = vfs->vfs_vnodecovered == NULL &&
+		    (vfs->vfs_flag & VFS_DETACHED) != 0 &&
+		    vfs->vfs_zone == owner;
+		flags = MS_NOMNTTAB;
+		if (vfs->vfs_flag & VFS_RDONLY)
+			flags |= MS_RDONLY;
+		if ((vfs->vfs_flag & (VFS_NOSETUID | VFS_NODEVICES)) ==
+		    (VFS_NOSETUID | VFS_NODEVICES))
+			flags |= MS_NOSUID;
+		vfs_lock_wait(vfs);
+		vfs_add(covered, vfs, flags);
+		vfs_unlock(vfs);
+		/* Exchange the retained ownership hold for the splice hold. */
+		VFS_RELE(vfs);
+		vn_vfsunlock(covered);
+		NS_REINSERT_CHECK(detached,
+		    "detach lost native ownership state");
+		NS_REINSERT_CHECK(vfs->vfs_vnodecovered == covered &&
+		    !(vfs->vfs_flag & VFS_DETACHED) &&
+		    vfs->vfs_zone == owner && ns_vfs_zone_ref_once(vfs),
+		    "reattachment duplicated or replaced zone ownership");
+		error = lx_mntns_view_lookup(view, "/pin/retained", CRED(),
+		    &check);
+		NS_REINSERT_CHECK(error == 0 && check == file,
+		    "reattachment replaced the retained filesystem");
+		VN_RELE(check);
+		check = NULL;
+	}
+	passed = B_TRUE;
+out:
+	if (check != NULL)
+		VN_RELE(check);
+	if (file != NULL)
+		VN_RELE(file);
+	if (root != NULL)
+		VN_RELE(root);
+	if (covered != NULL)
+		VN_RELE(covered);
+	if (view != NULL && lx_mntns_view_destroy(view, CRED()) != 0) {
+		KT_ERROR(ctx, "reinsert view cleanup failed");
+		passed = B_FALSE;
+	}
+	if (passed)
+		KT_PASS(ctx);
+#undef NS_REINSERT_CHECK
+}
+
 static int
 ns_cover(const char *path, cred_t *cr, vfs_t **out)
 {
@@ -1367,6 +1486,8 @@ _init(void)
 		return (error);
 	if ((error = ktest_add_suite(km, "mount", &ks)) != 0 ||
 	    (error = ktest_add_test(ks, "views", ns_views,
+	    KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "reinsert", ns_reinsert,
 	    KTEST_FLAG_INPUT)) != 0 ||
 	    (error = ktest_add_test(ks, "snapshot", ns_snapshot,
 	    KTEST_FLAG_INPUT)) != 0 ||
