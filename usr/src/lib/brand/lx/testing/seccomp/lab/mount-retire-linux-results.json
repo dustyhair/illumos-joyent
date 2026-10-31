@@ -1,0 +1,13 @@
+{
+  "cases_passed": 4,
+  "scope": "last namespace membership release unlinks old graph synchronously, held FDs remain usable, copies preserve active graph",
+  "profile": "existing lxc-unshare; global policy unchanged",
+  "static_probe": "8f4911fb277a11f47472b45fea234c6f2c7adb12e4178d862146989ff7fdce1d",
+  "dynamic_probe": "a8b1c84d3fde99f22934b850eccf30f510aa091a931afe46ed406db819cdcb42",
+  "logs": {
+    "dynamic-0.log": "4786456c516e70d40c4bfa3a505d23ca829b7c0fb03bcec7dd9ee37703872e81",
+    "dynamic-65534.log": "25930e3a52522316cfcff245c8d57b9737b1e0f7558a6766711d3344495abbc5",
+    "static-0.log": "6e71ac8edbe62016f70fed531ed876256ef4f2286a3f2ce17c26302e6bd07bca",
+    "static-65534.log": "123bcce5054802dc30c32f8b6112c63b39587f5511a8e91ae27d75ec0af547fb"
+  }
+}
