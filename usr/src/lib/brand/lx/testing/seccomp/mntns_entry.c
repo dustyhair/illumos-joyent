@@ -102,6 +102,7 @@ int main(int argc, char **argv)
 {
     const char *mode = "combined", *cwd = "/test/mnt-entry/cwd";
     int drop = 0, linux_control = 0, expected = 0, filtered = 0, child = 0;
+    int repeat = 0;
     int i, status, rc;
     uid_t uid, before_uid;
     gid_t gid, before_gid;
@@ -117,6 +118,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--linux")) linux_control = 1;
         else if (!strcmp(argv[i], "--filter")) filtered = 1;
         else if (!strcmp(argv[i], "--child")) child = 1;
+        else if (!strcmp(argv[i], "--repeat")) repeat = 1;
         else if (!strcmp(argv[i], "--mode") && i + 1 < argc) mode = argv[++i];
         else if (!strcmp(argv[i], "--cwd") && i + 1 < argc) cwd = argv[++i];
         else if (!strcmp(argv[i], "--errno") && i + 1 < argc) expected = atoi(argv[++i]);
@@ -156,6 +158,13 @@ int main(int argc, char **argv)
         check(rc == 0, "namespace-entry");
         if (rc != 0) return 1;
         if (!strcmp(mode, "combined")) check(maps(uid, gid) == 0, "combined-maps");
+        if (repeat) {
+            uid_t parent_uid = getuid();
+            gid_t parent_gid = getgid();
+            check(unshare(flags) == 0, "nested-namespace-entry");
+            if (!strcmp(mode, "combined"))
+                check(maps(parent_uid, parent_gid) == 0, "nested-maps");
+        }
         if (strcmp(mode, "mount")) check(getuid() == 0 && getgid() == 0, "namespace-root-ids");
         if (!linux_control) filesystem(saved_cwd);
         check(prctl(PR_GET_SECCOMP, 0UL, 0UL, 0UL, 0UL) == (filtered ? 2 : 0), "filter-state");

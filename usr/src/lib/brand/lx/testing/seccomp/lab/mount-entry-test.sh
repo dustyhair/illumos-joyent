@@ -35,11 +35,12 @@ wait_stopped() {
     return 1
 }
 run_case() {
-    local variant=$1 uid=$2 mode=$3 want=$4 phase=$5 filter=${6:-0}
+    local variant=$1 uid=$2 mode=$3 want=$4 phase=$5 filter=${6:-0} repeat=${7:-0}
     local probe=/test/mntns_entry drop= extra= job pid log suite
     test "$variant" != dynamic || probe=/test/dynamic/mntns_entry
     test "$uid" = 0 || drop=--drop
     test "$filter" = 0 || extra=--filter
+    test "$repeat" = 0 || extra="$extra --repeat"
     log=/lab/mnt-entry-$phase-$variant-$uid-$mode-$filter.log
     echo "MNT_ENTRY_CASE_START phase=$phase variant=$variant uid=$uid mode=$mode errno=$want filter=$filter"
     zlogin -S lx-probe "$probe $drop $extra --mode $mode --errno $want" </dev/null > "$log" 2>&1 &
@@ -92,6 +93,13 @@ for variant in static dynamic; do
             if test "$mode" = mount && test "$uid" != 0; then want=1; fi
             run_case "$variant" "$uid" "$mode" "$want" enabled 1
         done
+    done
+done
+for variant in static dynamic; do
+    run_case "$variant" 0 mount 0 nested 0 1
+    for uid in 0 65534; do
+        run_case "$variant" "$uid" combined 0 nested 0 1
+        run_case "$variant" "$uid" user-first 0 nested 0 1
     done
 done
 zoneadm -z lx-probe halt
