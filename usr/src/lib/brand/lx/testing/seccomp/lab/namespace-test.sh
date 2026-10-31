@@ -41,6 +41,8 @@ mount -O -F tmpfs swap "$src/stacked"
 mounted+=("$src/stacked")
 printf '%s\n' visible > "$src/stacked/visible"
 modload /lab/lx_namespace_ktest
+/lab/ktest run -i /lab/namespace-source.bin lx_namespace:mount:reinsert
+/lab/ktest run -i /lab/namespace-source.bin lx_namespace:mount:reinsert
 /lab/ktest run -i /lab/namespace-source.bin lx_namespace:mount:views
 /lab/ktest run -i /lab/namespace-source.bin lx_namespace:mount:snapshot
 /lab/ktest run -i /lab/namespace-source.bin lx_namespace:mount:snapshot
