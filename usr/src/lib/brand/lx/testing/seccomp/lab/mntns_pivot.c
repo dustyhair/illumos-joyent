@@ -102,7 +102,7 @@ filter(void)
 int
 main(int argc, char **argv)
 {
-	int drop = 0, deny = 0, outsidefd, tempfd, fd;
+	int drop = 0, deny = 0, shared = 0, outsidefd, tempfd, fd;
 	uid_t uid;
 	gid_t gid;
 	char candidate[PATH_MAX], p[PATH_MAX], oldpath[PATH_MAX];
@@ -114,6 +114,8 @@ main(int argc, char **argv)
 	for (int i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "--drop") == 0)
 			drop = 1;
+		else if (strcmp(argv[i], "--lx-shared") == 0)
+			shared = 1;
 		else if (strcmp(argv[i], "--deny") == 0)
 			deny = 1;
 		else
@@ -184,6 +186,30 @@ main(int argc, char **argv)
 	check(contents("temporary", "temporary\n") &&
 	    contents(path("outside", p), "outside\n"),
 	    "invalid-pivots-leave-root-and-cwd-unchanged");
+	if (shared) {
+		int channel[2], status;
+		pid_t child;
+
+		if (pipe(channel) != 0 || (child = fork()) < 0)
+			return (2);
+		if (child == 0) {
+			char byte;
+
+			(void) close(channel[1]);
+			_exit(read(channel[0], &byte, 1) == 0 ? 0 : 2);
+		}
+		(void) close(channel[0]);
+		errno = 0;
+		check(syscall(SYS_pivot_root, candidate, "oldroot") == -1 &&
+		    errno == EOPNOTSUPP, "shared-view-explicitly-unsupported");
+		check(contents("temporary", "temporary\n") &&
+		    contents(path("outside", p), "outside\n"),
+		    "shared-rejection-preserves-root-and-cwd");
+		(void) close(channel[1]);
+		check(waitpid(child, &status, 0) == child &&
+		    WIFEXITED(status) && WEXITSTATUS(status) == 0,
+		    "shared-child-released");
+	}
 	outsidefd = open(base, O_PATH | O_DIRECTORY);
 	tempfd = open(candidate, O_PATH | O_DIRECTORY);
 	check(outsidefd >= 0 && tempfd >= 0, "save-root-descriptors");
