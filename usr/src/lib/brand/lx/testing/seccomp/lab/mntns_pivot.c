@@ -18,6 +18,7 @@
 #include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/statfs.h>
+#include <sys/statvfs.h>
 #include <sys/syscall.h>
 #include <sys/sysinfo.h>
 #include <sys/wait.h>
