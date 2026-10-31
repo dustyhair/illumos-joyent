@@ -130,7 +130,10 @@ done
 for suite in leaderless-pgrp pgrp-zone; do
     test -d "$lab/$suite"
     pfexec mkdir -p "$lab/mnt-root/lab/$suite"
-    pfexec cp -Rp "$lab/$suite/." "$lab/mnt-root/lab/$suite/"
+    # Portable modes/owners only: ZFS ACL preservation is not valid on UFS.
+    /opt/local/bin/tar --owner=0 --group=0 -C "$lab/$suite" \
+        -cf "$lab/$suite.payload.tar" .
+    (cd "$lab/mnt-root/lab/$suite"; pfexec tar xf "$lab/$suite.payload.tar")
 done
 pfexec cp "$lab/lx-root.tar" "$lab/mnt-root/lab/lx-root.tar"
 pfexec cp "$lab/enforcement-test.sh" "$lab/mnt-root/lab/enforcement-test.sh"
