@@ -119,7 +119,7 @@ for controller in mntns-budget-native mount-owner-test.sh \
     pid-nested-test.sh \
     queued-thread-test.sh queued-signal-abi-test.sh queued-zero-alloc.d \
     queued-signal-checkpoint.sh siginfo32-test.sh siginfo32-checkpoint.sh \
-    pgrp-checkpoint.sh \
+    pgrp-checkpoint.sh lwp-checkpoint.sh lwp-failure-test.sh \
     native_errno32 native_errno64 native_errno32.sha256 native_errno64.sha256 \
     bubblewrap-trace.sh; do
     test -f "$lab/$controller"
@@ -127,7 +127,7 @@ for controller in mntns-budget-native mount-owner-test.sh \
     pfexec chmod 0555 "$lab/mnt-root/lab/$controller"
 done
 # Private global-zone controllers and cross-zone fixtures for the PGID lab.
-for suite in leaderless-pgrp pgrp-zone; do
+for suite in leaderless-pgrp pgrp-zone lwp-native; do
     test -d "$lab/$suite"
     pfexec mkdir -p "$lab/mnt-root/lab/$suite"
     # Portable modes/owners only: ZFS ACL preservation is not valid on UFS.
