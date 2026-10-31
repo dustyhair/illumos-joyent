@@ -435,3 +435,29 @@ lx_pidns_lookup(lx_pidns_t *ns, pid_t number)
 		mutex_exit(&pidlock);
 	return (identity);
 }
+
+/* Process membership is held by its PID map through native zombie/reap. */
+lx_pidns_t *
+lx_pidns_map_namespace(lx_pidns_map_t *map)
+{
+	return (map == NULL ? NULL : map->pm_namespace);
+}
+
+lx_pidns_t *
+lx_pidns_active(proc_t *p)
+{
+	lx_proc_data_t *pd = ptolxproc(p);
+
+	return (pd == NULL ? NULL : lx_pidns_map_namespace(pd->l_pidns_map));
+}
+
+lx_pidns_t *
+lx_pidns_children(proc_t *p)
+{
+	lx_proc_data_t *pd = ptolxproc(p);
+
+	if (pd == NULL)
+		return (NULL);
+	return (pd->l_pidns_children != NULL ? pd->l_pidns_children :
+	    lx_pidns_map_namespace(pd->l_pidns_map));
+}

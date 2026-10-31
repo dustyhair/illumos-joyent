@@ -15,6 +15,7 @@ typedef struct lx_pidns lx_pidns_t;
 typedef struct lx_pidns_map lx_pidns_map_t;
 struct pid;
 struct zone;
+struct proc;
 
 /*
  * Private PID map backend; Linux namespace flags remain disabled.
@@ -41,6 +42,10 @@ extern int lx_pidns_create(cred_t *, lx_pidns_t *, uint_t, lx_pidns_t **);
 extern void lx_pidns_hold(lx_pidns_t *);
 extern void lx_pidns_rele(lx_pidns_t *);
 extern boolean_t lx_pidns_busy(void);
+/* Borrowed references, while holding p_lock or owning the live process. */
+extern lx_pidns_t *lx_pidns_map_namespace(lx_pidns_map_t *);
+extern lx_pidns_t *lx_pidns_active(struct proc *);
+extern lx_pidns_t *lx_pidns_children(struct proc *);
 extern void lx_pidns_shutdown(lx_pidns_t *);
 extern int lx_pidns_reserve(lx_pidns_t *, lx_pidns_map_t **);
 extern int lx_pidns_bind_native(lx_pidns_map_t *, struct zone *, struct pid *);

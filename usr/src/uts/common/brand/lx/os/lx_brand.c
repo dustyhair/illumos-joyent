@@ -356,6 +356,7 @@ lx_proc_exit(proc_t *p)
 	lx_proc_data_t *lxpd;
 	proc_t *cp;
 	lx_mntns_view_t *view;
+	lx_pidns_t *pidns;
 	boolean_t deathsig;
 
 	lx_clone_grp_exit(p, B_FALSE);
@@ -369,7 +370,11 @@ lx_proc_exit(proc_t *p)
 	view = lxpd->l_mntns;
 	lxpd->l_mntns = NULL;
 	deathsig = (lxpd->l_flags & LX_PROC_CHILD_DEATHSIG) != 0;
+	pidns = lx_pidns_map_namespace(lxpd->l_pidns_map);
 	mutex_exit(&p->p_lock);
+	/* PID1 exit gates reservations; cohort termination is pending. */
+	if (pidns != NULL && lx_pidns_map_id(lxpd->l_pidns_map, pidns) == 1)
+		lx_pidns_shutdown(pidns);
 	if (view != NULL)
 		lx_mntns_view_rele(view);
 	if (!deathsig)
@@ -654,6 +659,8 @@ lx_clearbrand(proc_t *p, boolean_t lwps_ok)
 	struct lx_seccomp_filter *filter;
 	lx_userns_t *memory;
 	lx_mntns_view_t *view;
+	lx_pidns_map_t *pidmap;
+	lx_pidns_t *children;
 
 	lx_clone_grp_exit(p, lwps_ok);
 	mutex_enter(&p->p_lock);
@@ -663,7 +670,14 @@ lx_clearbrand(proc_t *p, boolean_t lwps_ok)
 	ptolxproc(p)->l_userns_mmap = NULL;
 	view = ptolxproc(p)->l_mntns;
 	ptolxproc(p)->l_mntns = NULL;
+	pidmap = ptolxproc(p)->l_pidns_map;
+	ptolxproc(p)->l_pidns_map = NULL;
+	children = ptolxproc(p)->l_pidns_children;
+	ptolxproc(p)->l_pidns_children = NULL;
 	mutex_exit(&p->p_lock);
+	if (pidmap != NULL)
+		lx_pidns_map_rele(pidmap);
+	lx_pidns_rele(children);
 	lx_seccomp_rele(filter);
 	lx_userns_rele(memory);
 	if (view != NULL)
@@ -2073,6 +2087,17 @@ lx_copy_procdata(proc_t *cp, proc_t *pp)
 	VERIFY((ppd = pp->p_brand_data) != NULL);
 
 	bcopy(ppd, cpd, sizeof (lx_proc_data_t));
+	/* Copied PID pointers are borrowed; assign ownership below. */
+	cpd->l_pidns_map = NULL;
+	cpd->l_pidns_children = NULL;
+	if (ttolxlwp(curthread) != NULL &&
+	    ttolxlwp(curthread)->br_clone_pidns_map != NULL) {
+		cpd->l_pidns_map = ttolxlwp(curthread)->br_clone_pidns_map;
+		lx_pidns_map_hold(cpd->l_pidns_map);
+	} else if ((cpd->l_pidns_children = lx_pidns_children(pp)) != NULL) {
+		/* SIDL holds the target until its initial map is bound. */
+		lx_pidns_hold(cpd->l_pidns_children);
+	}
 	lx_seccomp_hold(cpd->l_seccomp);
 	if (cpd->l_userns_mmap != NULL)
 		lx_userns_hold(cpd->l_userns_mmap);

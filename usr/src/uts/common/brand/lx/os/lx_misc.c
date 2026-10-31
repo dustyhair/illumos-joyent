@@ -36,6 +36,7 @@
 #include <sys/sem.h>
 #include <sys/brand.h>
 #include <sys/lx_brand.h>
+#include <sys/lx_pidns.h>
 #include <sys/lx_userns.h>
 #include <sys/lx_mntns.h>
 #include <sys/lx_misc.h>
@@ -78,6 +79,12 @@ static const struct ctxop_template lx_ctxop_template = {
 void
 lx_setrval(klwp_t *lwp, int v1, int v2)
 {
+	proc_t *p = lwptoproc(lwp);
+	lx_pidns_map_t *map = ptolxproc(p)->l_pidns_map;
+
+	/* Fork cannot fail here; the child is not yet runnable. */
+	if (map != NULL && !lx_pidns_commit(map))
+		psignal(p, SIGKILL);
 	lwptoregs(lwp)->r_r0 = 0;
 }
 
@@ -192,6 +199,15 @@ lx_exec()
 	 */
 	if (curthread->t_tid != 1) {
 		lx_pid_reassign(curthread);
+		if (lwpd->br_pidns_map != NULL &&
+		    lwpd->br_pidns_map != pd->l_pidns_map) {
+			lx_pidns_map_t *old = lwpd->br_pidns_map;
+
+			VERIFY(pd->l_pidns_map != NULL);
+			lx_pidns_map_hold(pd->l_pidns_map);
+			lwpd->br_pidns_map = pd->l_pidns_map;
+			lx_pidns_map_rele(old);
+		}
 	}
 
 	/*
@@ -468,6 +484,10 @@ lx_freelwp(klwp_t *lwp)
 	VERIFY(lwpd->br_ptrace_cred == NULL);
 	VERIFY(lwpd->br_ptrace_accord == NULL);
 
+	if (lwpd->br_pidns_map != NULL)
+		lx_pidns_map_rele(lwpd->br_pidns_map);
+	if (lwpd->br_clone_pidns_map != NULL)
+		lx_pidns_map_rele(lwpd->br_clone_pidns_map);
 	if (lwpd->br_clone_cred != NULL)
 		crfree(lwpd->br_clone_cred);
 	if (lwpd->br_clone_mntns != NULL) {
@@ -480,6 +500,54 @@ lx_freelwp(klwp_t *lwp)
 	kmem_free(lwpd, sizeof (struct lx_lwp_data));
 }
 
+/* Prepare identities before native lwp_create takes p_lock. */
+static int
+lx_pidns_lwp_prepare(proc_t *p, lx_lwp_data_t *lwpd, struct lx_pid *lpid)
+{
+	lx_proc_data_t *pd = ptolxproc(p);
+	lx_pidns_map_t *map = NULL;
+	lx_pidns_t *ns;
+	struct pid *identity;
+	boolean_t install = B_FALSE;
+	int error;
+
+	if (p->p_lwpcnt == 0) {
+		if ((map = pd->l_pidns_map) != NULL) {
+			lx_pidns_map_hold(map);
+		} else {
+			if ((ns = pd->l_pidns_children) == NULL)
+				return (0);
+			if ((error = lx_pidns_reserve(ns, &map)) != 0)
+				return (error);
+			install = B_TRUE;
+		}
+		identity = p->p_pidp;
+	} else {
+		if ((ns = lx_pidns_active(p)) == NULL)
+			return (0);
+		if (lpid->lxp_pidp == NULL)
+			return (EOPNOTSUPP);
+		if ((error = lx_pidns_reserve(ns, &map)) != 0)
+			return (error);
+		identity = lpid->lxp_pidp;
+	}
+	if ((error = lx_pidns_bind_native(map, p->p_zone, identity)) != 0) {
+		lx_pidns_map_rele(map);
+		return (error);
+	}
+	if (install) {
+		/* Only a new SIDL process can install its initial map here. */
+		VERIFY(p != curproc && p->p_stat == SIDL);
+		pd->l_pidns_map = map;
+		lx_pidns_map_hold(map);
+		ns = pd->l_pidns_children;
+		pd->l_pidns_children = NULL;
+		lx_pidns_rele(ns);
+	}
+	lwpd->br_pidns_map = map;
+	return (0);
+}
+
 void *
 lx_lwpdata_alloc(proc_t *p)
 {
@@ -488,6 +556,7 @@ lx_lwpdata_alloc(proc_t *p)
 	cpuset_t *affmask;
 	pid_t newpid = 0;
 	struct pid *pidp = NULL;
+	int error;
 
 	VERIFY(MUTEX_NOT_HELD(&p->p_lock));
 
@@ -512,6 +581,20 @@ lx_lwpdata_alloc(proc_t *p)
 	lpidp->lxp_pidp = pidp;
 	lwpd->br_lpid = lpidp;
 	lwpd->br_affinitymask = affmask;
+	if ((error = lx_pidns_lwp_prepare(p, lwpd, lpidp)) != 0) {
+		lx_lwp_data_t *parent = curproc->p_brand == &lx_brand ?
+		    ttolxlwp(curthread) : NULL;
+
+		if (p != curproc && parent != NULL &&
+		    parent->br_clone_pidns_map != NULL)
+			parent->br_clone_pidns_error = error;
+		if (pidp != NULL)
+			(void) pid_rele(pidp);
+		cpuset_free(affmask);
+		kmem_free(lpidp, sizeof (*lpidp));
+		kmem_free(lwpd, sizeof (*lwpd));
+		return (NULL);
+	}
 	if (p != curproc && curproc->p_brand == &lx_brand)
 		lx_sigframes_clone(lwpd, ttolxlwp(curthread));
 
@@ -532,7 +615,10 @@ lx_lwpdata_free(void *lwpbd)
 	VERIFY(lwpd->br_affinitymask != NULL);
 	VERIFY(lwpd->br_clone_cred == NULL);
 	VERIFY(lwpd->br_clone_mntns == NULL);
+	VERIFY(lwpd->br_clone_pidns_map == NULL);
 
+	if (lwpd->br_pidns_map != NULL)
+		lx_pidns_map_rele(lwpd->br_pidns_map);
 	lx_sigframes_free(lwpd);
 	cpuset_free(lwpd->br_affinitymask);
 	if (lwpd->br_lpid->lxp_pidp != NULL) {
@@ -656,6 +742,18 @@ void
 lx_initlwp_post(klwp_t *lwp)
 {
 	lx_lwp_data_t *plwpd = ttolxlwp(curthread);
+	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
+	proc_t *p = lwptoproc(lwp);
+
+	if (lwpd->br_pidns_map != NULL &&
+	    lwpd->br_pidns_map != ptolxproc(p)->l_pidns_map) {
+		/* Post-init may drop p_lock after directory insertion. */
+		VERIFY(MUTEX_HELD(&p->p_lock));
+		mutex_exit(&p->p_lock);
+		if (!lx_pidns_commit(lwpd->br_pidns_map))
+			psignal(p, SIGKILL);
+		mutex_enter(&p->p_lock);
+	}
 	/*
 	 * If the parent LWP has a ptrace(2) tracer, the new LWP may
 	 * need to inherit that same tracer.

@@ -41,6 +41,7 @@
 #include <sys/sdt.h>
 #include <sys/lx_syscalls.h>
 #include <sys/lx_brand.h>
+#include <sys/lx_pidns.h>
 #include <sys/lx_impl.h>
 #include <sys/lx_userns.h>
 #include <sys/lx_mntns.h>
@@ -430,6 +431,12 @@ lx_syscall_enter(int entry)
 		}
 	}
 
+	if (syscall_num == 58 && lx_pidns_children(curproc) != NULL) {
+		ret = set_errno(EOPNOTSUPP);
+		lx_syscall_return(lwp, syscall_num, ret);
+		return (0);
+	}
+
 	if (lx_kernel_restricted(curproc) && syscall_num == 59) {
 		error = exec_common((const char *)args[0],
 		    (const char **)args[1], (const char **)args[2],
@@ -447,7 +454,8 @@ lx_syscall_enter(int entry)
 		return (0);
 	}
 
-	if ((lx_kernel_restricted(curproc) &&
+	if (((lx_kernel_restricted(curproc) ||
+	    lx_pidns_children(curproc) != NULL) &&
 	    (syscall_num == 56 || syscall_num == 57)) ||
 	    (syscall_num == 56 &&
 	    ((lx_userns_clone_enabled() &&

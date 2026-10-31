@@ -393,6 +393,11 @@ typedef struct lx_proc_data {
 
 	/* Mount-view reference; native root/cwd hold their own vnodes. */
 	struct lx_mntns_view *l_mntns;
+
+	/* Internal PID maps; Linux namespace entry remains disabled. */
+	struct lx_pidns_map *l_pidns_map;
+	/* NULL means the active map's namespace; SIDL may hold its target. */
+	struct lx_pidns *l_pidns_children;
 } lx_proc_data_t;
 
 #endif	/* _KERNEL */
@@ -645,6 +650,9 @@ struct lx_lwp_data {
 	struct cred *br_ptrace_cred; /* tracer credential captured at attach */
 	struct cred *br_clone_cred; /* kernel-owned pending namespace clone */
 	struct lx_mntns_state *br_clone_mntns; /* prepared child root/cwd */
+	struct lx_pidns_map *br_pidns_map; /* held task identity */
+	struct lx_pidns_map *br_clone_pidns_map; /* parent-owned fork state */
+	int br_clone_pidns_error;
 };
 
 /*

@@ -73,6 +73,7 @@ lx_kernel_restricted(proc_t *p)
 	lx_proc_data_t *pd = ptolxproc(p);
 
 	return (pd != NULL && (pd->l_seccomp != NULL || pd->l_mntns != NULL ||
+	    pd->l_pidns_map != NULL ||
 	    (pd->l_flags & LX_PROC_USERNS) != 0));
 }
 
