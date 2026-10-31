@@ -90,6 +90,7 @@ struct loinfo {
  * Flag values (for li_flag)
  */
 #define	LO_NOSUB	0x02	/* don't traverse sub-mounts */
+#define	LO_PRESERVE_FIFO	0x04	/* retain private FIFO mount identity */
 
 /*
  * lfsnodes are allocated as new real vfs's are encountered

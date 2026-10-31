@@ -295,6 +295,9 @@ makelonode(struct vnode *vp, struct loinfo *li, int flag)
 		lp->lo_vnode = nvp;
 		VN_SET_VFS_TYPE_DEV(nvp, vfsp, vp->v_type, vp->v_rdev);
 		nvp->v_flag |= (vp->v_flag & (VNOMOUNT|VNOMAP|VDIROPEN));
+		/* The private wrapper, not the backing pipe, is mountable. */
+		if ((li->li_flag & LO_PRESERVE_FIFO) && vp->v_type == VFIFO)
+			nvp->v_flag &= ~VNOMOUNT;
 		vn_setops(nvp, lo_vnodeops);
 		nvp->v_data = (caddr_t)lp;
 		lp->lo_vp = vp;

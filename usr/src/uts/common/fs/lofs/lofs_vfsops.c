@@ -328,6 +328,8 @@ lo_mount(struct vfs *vfsp, struct vnode *vp, struct mounta *uap,
 	li = kmem_zalloc(sizeof (struct loinfo), KM_SLEEP);
 	li->li_realvfs = realrootvp->v_vfsp;
 	li->li_mountvfs = vfsp;
+	if (pinned && (uap->flags & MS_NOMNTTAB))
+		li->li_flag |= LO_PRESERVE_FIFO;
 
 	/*
 	 * Set mount flags to be inherited by loopback vfs's
@@ -477,7 +479,8 @@ lo_root(struct vfs *vfsp, struct vnode **vpp)
 	 * version of the vnode. We don't save the specvp vnode in our
 	 * hashtable since that's exclusively for lnodes.
 	 */
-	if (IS_DEVVP(*vpp)) {
+	if (IS_DEVVP(*vpp) && ((*vpp)->v_type != VFIFO ||
+	    !(vtoli(vfsp)->li_flag & LO_PRESERVE_FIFO))) {
 		struct vnode *svp;
 
 		svp = specvp(*vpp, (*vpp)->v_rdev, (*vpp)->v_type, kcred);

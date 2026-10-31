@@ -80,7 +80,8 @@ lo_open(vnode_t **vpp, int flag, struct cred *cr, caller_context_t *ct)
 			 */
 			(vtol(*vpp))->lo_looping |= (vtol(oldvp))->lo_looping;
 		}
-		if (IS_DEVVP(*vpp)) {
+		if (IS_DEVVP(*vpp) && ((*vpp)->v_type != VFIFO ||
+		    !(vtoli(oldvp->v_vfsp)->li_flag & LO_PRESERVE_FIFO))) {
 			vnode_t *svp;
 
 			svp = specvp(*vpp, (*vpp)->v_rdev, (*vpp)->v_type, cr);
@@ -473,7 +474,8 @@ lo_lookup(
 	 */
 	if (vp->v_type != VDIR || nosub) {
 		*vpp = makelonode(vp, li, 0);
-		if (IS_DEVVP(*vpp)) {
+		if (IS_DEVVP(*vpp) && ((*vpp)->v_type != VFIFO ||
+		    !(li->li_flag & LO_PRESERVE_FIFO))) {
 			vnode_t *svp;
 
 			svp = specvp(*vpp, (*vpp)->v_rdev, (*vpp)->v_type, cr);
@@ -694,7 +696,8 @@ lo_create(
 	    ct, vsecp);
 	if (!error) {
 		*vpp = makelonode(vp, vtoli(dvp->v_vfsp), 0);
-		if (IS_DEVVP(*vpp)) {
+		if (IS_DEVVP(*vpp) && ((*vpp)->v_type != VFIFO ||
+		    !(vtoli(dvp->v_vfsp)->li_flag & LO_PRESERVE_FIFO))) {
 			vnode_t *svp;
 
 			svp = specvp(*vpp, (*vpp)->v_rdev, (*vpp)->v_type, cr);
