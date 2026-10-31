@@ -435,17 +435,30 @@ lx_mnt_private_mount(lx_mntns_view_t *view, const char *sourcep,
 {
 	char *source, *target, *type;
 	char byte;
+	uint_t propagation;
+	boolean_t change;
 	int error;
 
 	/* Old mount callers, including bwrap, still send the magic prefix. */
 	if ((flags & LX_MS_MGC_MSK) == LX_MS_MGC_VAL)
 		flags &= ~LX_MS_MGC_MSK;
 
-	if (!lx_mntns_entry_enabled() || !(flags & LX_MS_BIND) ||
-	    (flags & ~(LX_MS_BIND | LX_MS_REC | LX_MS_RDONLY | LX_MS_NOSUID |
-	    LX_MS_NODEV | LX_MS_NOEXEC | LX_MS_SILENT)) != 0)
+	propagation = flags & (LX_MS_PRIVATE | LX_MS_SLAVE);
+	change = !(flags & LX_MS_BIND) && propagation != 0;
+	if (!lx_mntns_entry_enabled())
 		return (lx_mntns_view_capable(view, CRED()) ?
 		    EOPNOTSUPP : EPERM);
+	if (change) {
+		if (propagation == (LX_MS_PRIVATE | LX_MS_SLAVE) ||
+		    (flags & ~(LX_MS_PRIVATE | LX_MS_SLAVE | LX_MS_REC |
+		    LX_MS_SILENT)) != 0)
+			return (EINVAL);
+	} else if (!(flags & LX_MS_BIND) ||
+	    (flags & ~(LX_MS_BIND | LX_MS_REC | LX_MS_RDONLY | LX_MS_NOSUID |
+	    LX_MS_NODEV | LX_MS_NOEXEC | LX_MS_SILENT)) != 0) {
+		return (lx_mntns_view_capable(view, CRED()) ?
+		    EOPNOTSUPP : EPERM);
+	}
 	source = kmem_alloc(MAXPATHLEN, KM_SLEEP);
 	target = kmem_alloc(MAXPATHLEN, KM_SLEEP);
 	type = kmem_alloc(MAXPATHLEN, KM_SLEEP);
@@ -465,6 +478,8 @@ lx_mnt_private_mount(lx_mntns_view_t *view, const char *sourcep,
 		goto out;
 	if (!lx_mntns_view_capable(view, CRED()))
 		error = EPERM;
+	else if (change)
+		error = lx_mntns_mount_private(view, target, CRED());
 	else if (sourcep == NULL)
 		error = EINVAL;
 	else

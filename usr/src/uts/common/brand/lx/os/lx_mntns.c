@@ -876,6 +876,33 @@ out:
 }
 
 /*
+ * Every allowed constructor creates private mounts: LOFS grafts use nosub,
+ * tmpfs is a new instance, and copies replay into distinct mount objects.
+ * Shared/unbindable creation is rejected. There is no peer or master link.
+ * Both PRIVATE and SLAVE therefore preserve the existing private state,
+ * recursively as well. Validate the authority and exact mountpoint anyway.
+ */
+int
+lx_mntns_mount_private(lx_mntns_view_t *view, const char *target, cred_t *actor)
+{
+	vnode_t *vp = NULL;
+	int error;
+
+	if (!lx_mntns_entry_enabled() ||
+	    !lx_mntns_view_capable(view, actor))
+		return (EPERM);
+	mutex_enter(&view->lv_lock);
+	error = lookupname((char *)target, UIO_SYSSPACE, FOLLOW, NULL, &vp);
+	if (error == 0 &&
+	    (!lx_mntns_owns(view, vp) || !(vp->v_flag & VROOT)))
+		error = EINVAL;
+	if (vp != NULL)
+		VN_RELE(vp);
+	mutex_exit(&view->lv_lock);
+	return (error);
+}
+
+/*
  * Public bind. Resolve both operands with the actor's root,
  * cwd and credentials, then pass held vnodes to domount. The kernel mount
  * credential must never do a second, more privileged pathname lookup.
