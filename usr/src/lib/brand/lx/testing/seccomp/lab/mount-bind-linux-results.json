@@ -1,0 +1,82 @@
+{
+  "source_commit": "b2c65db8fe59b4f08a2ee9b7ee1f3eaaa11e164b",
+  "brand_source_commit": "8e0c9fe67ee35ff27a14f32d6a1ac61b6be0c48c",
+  "remote_evidence": "codex-testbox:/var/tmp/lx-mnt-bind-controls",
+  "apparmor": "existing lxc-unshare via aa-exec; no global policy changes",
+  "static_sha256": "19a2efdabe4be564241640a3a02ef71d74ffa86cfd2cdc0fa5725f6045f4c61a",
+  "dynamic_sha256": "100ffa8c5cd3fd0d2141f61cb169797956c6340ca96ba8f1dbe88153ba3006bb",
+  "cases": [
+    {
+      "log": "dynamic-combined.log",
+      "sha256": "075ce838ec9237dc0d104886a21edd172992900c8580a4e6ba9f97a8c7eba4cc",
+      "result": "PASS"
+    },
+    {
+      "log": "dynamic-denied.log",
+      "sha256": "2bfcddd1224bacc2860dd57b3f2764853fbed86cae3d06b26884b2c271c4415a",
+      "result": "PASS"
+    },
+    {
+      "log": "dynamic-mount-denied.log",
+      "sha256": "82f9c8642ecbfddbedda7097a5c06ac7bed33d7d325dcd94d3f42f602c74c58d",
+      "result": "PASS"
+    },
+    {
+      "log": "dynamic-mount-only.log",
+      "sha256": "1c31b0bdb139896b00e1b6e1d33a96b3a3303634fc127be500132b512569ccff",
+      "result": "PASS"
+    },
+    {
+      "log": "dynamic-nobody-denied.log",
+      "sha256": "a4be7c0adaf68d3b813eb931be8afdd497bbdadb9ddeedcfc9746e567da7a137",
+      "result": "PASS"
+    },
+    {
+      "log": "dynamic-nobody.log",
+      "sha256": "7a81a6d2de6148423020c2c031bdd3a032528841ed3ebd74b865784ac0472008",
+      "result": "PASS"
+    },
+    {
+      "log": "static-combined.log",
+      "sha256": "de829397c1a5725cf45e5f10cebba4a254f532fc310e469b34267c8320d59da3",
+      "result": "PASS"
+    },
+    {
+      "log": "static-denied.log",
+      "sha256": "e4164f351e7b6b0c80fa7584e02fe9899151fcc52e5faa6f701a81ca8bcba664",
+      "result": "PASS"
+    },
+    {
+      "log": "static-fill-nobody.log",
+      "sha256": "97c7eca18a8964dbfd3fb0c3ce138ed59230633e2127d19bcf030429497eb1a6",
+      "result": "PASS"
+    },
+    {
+      "log": "static-fill-root.log",
+      "sha256": "cc0ecc0ab85362df712c6099c6d7935c8de80afab4b0c16e2a234a061a218e19",
+      "result": "PASS"
+    },
+    {
+      "log": "static-mount-denied.log",
+      "sha256": "127d48726b0cec66b65fe4bc3292eb8e855d02328a8663c455fd17ab5ad778b3",
+      "result": "PASS"
+    },
+    {
+      "log": "static-mount-only.log",
+      "sha256": "50f98733daa1dab0201b9b23316a861ae57e420696e9c3b59b66326c3f202e58",
+      "result": "PASS"
+    },
+    {
+      "log": "static-nobody-denied.log",
+      "sha256": "0b63e3c84b7721f1a6e6093e7164106721e05e69ce03c18ab4758189ffb19c0d",
+      "result": "PASS"
+    },
+    {
+      "log": "static-nobody.log",
+      "sha256": "4d5d6c820cd8b0964403057e0c56d1d7ddc200c9677e57811ed03fed3ae051e7",
+      "result": "PASS"
+    }
+  ],
+  "total_passed": 14,
+  "scope": "root/nobody, static/dynamic, combined or mount-only, effective SYS_ADMIN removed, foreign fd target rejection, initial ignored flags, user pointer validation, actor search permission, sibling isolation, mutated view copy, fork/exec, root+nobody4097-mount positive controls"
+}

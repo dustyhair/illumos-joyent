@@ -1248,3 +1248,59 @@ lab/mount-entry-linux-results.json for exact sources, hashes and evidence.
 The Codex 0.166.0 sandbox still requests clone 0x78020011 twice and receives
 EINVAL with all three experiments enabled. Public unshare acceptance is a
 checkpoint toward the full sandbox workflow, not Codex sandbox acceptance.
+## Experimental private bind syscall
+
+Private views now admit non-recursive MS_BIND while lx_mntns_experimental is
+enabled. Other mount operations retain the scoped authority/unsupported gate.
+Disabled operation and ordinary zone mount behavior remain unchanged.
+
+The source and target resolve through the actor's current root, cwd and
+credentials. LOFS receives held vnodes and the view's immutable native mount
+credential, so construction does not repeat pathname lookup with additional
+privileges. A target must belong to the same private view. A target fd retained
+from before namespace creation is rejected. Files and directories must match;
+root overmount remains unsupported pending process-root handoff.
+
+Initial per-mount flags are ignored as on Linux; a later read-only remount is
+still required. The optional type and data arguments are validated even though
+their contents do not affect bind. Existing source restrictions are preserved
+by the LOFS implementation and the backend's explicit noexec inheritance.
+The actor receives no native mount privilege.
+
+Every successful graft retains one mount record, including obscured mounts.
+Bind, tmpfs, snapshots and copies share a maximum of 4096 records per view.
+The count changes under the view lock, after successful publication or unmount.
+An unsuccessful mount consumes no record. The existing whole-view zone quota
+continues to charge retired views until cleanup completes.
+
+The Linux probe checks file and directory binds, relative and symlink targets,
+an fd opened inside the view, rejection of an older foreign target fd, held
+covered-file access, ignored initial flags, invalid arguments, actor pathname
+permissions, effective SYS_ADMIN removal, sibling isolation, copied mutated
+views and fork/exec. Twelve static/dynamic root/nobody cases and two 4097-mount
+positive controls passed under the existing lxc-unshare AppArmor profile.
+No global Linux policy changed. The lx limit cases instead require ENOSPC,
+unchanged target contents, and complete record/view/account retirement.
+
+VM90 was diagnostic and did not pass bind acceptance. Brand clean-builds passed in release and debug.
+Runtime uses the retained mixed platform. No physical host is changed.
+Recursive bind, read-only remount, tmpfs ownership, root rearrangement, private
+proc/devpts, mountinfo, mount descriptors, hierarchy rename handling and the
+remaining clone/PID/IPC/network support still stand between this checkpoint
+and the full Codex bubblewrap workflow.
+
+
+VM90 passed the full previous regression wrapper and all 70 public namespace
+entry cases, then failed the first static combined bind case with 14 assertions.
+Source/target lookup succeeded for ordinary files; reverse-name recovery failed
+with ENOENT. FBT showed the unspliced root cached as unspecified_mountpoint and
+its files using the same prefix. Directory recovery succeeded through dirtopath.
+The proc-fd cases also exposed namespace identity loss through displayed-name
+following. Neither the foreign-fd assertion nor the positive fd case is waived.
+The 4096-record exhaustion cases were not reached in lx. Linux14 controls passed.
+
+The failed probe and both completed trace runs released all views and account
+charges. All experimental switches were reset, the zone halted, pool export
+returned zero, filesystems synced and QEMU2092864 exited. See
+lab/mount-bind-results.json and lab/mount-bind-linux-results.json. This source is
+work in progress. The accepted preceding checkpoint remains c4fe111326.

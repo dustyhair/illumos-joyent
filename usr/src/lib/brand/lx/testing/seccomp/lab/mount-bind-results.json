@@ -1,0 +1,60 @@
+{
+  "vm": 90,
+  "source_commit": "b2c65db8fe59b4f08a2ee9b7ee1f3eaaa11e164b",
+  "brand_source_commit": "8e0c9fe67ee35ff27a14f32d6a1ac61b6be0c48c",
+  "accepted": false,
+  "full_prior_regressions_exit": 0,
+  "public_entry_cases_passed": 70,
+  "new_bind_cases_completed": 0,
+  "first_bind_case": "static combined UID0",
+  "new_bind_first_case_failures": 14,
+  "trace_findings": [
+    "actor source/target lookup succeeds for regular files",
+    "vnodetopath(private root, held file) returns ENOENT",
+    "private root v_path is unspecified_mountpoint; child file cache inherits the prefix",
+    "relative directory bind succeeds through dirtopath recovery",
+    "old proc fd is resolved through its displayed path in the current namespace; new private fd link text fails reverse recovery"
+  ],
+  "linux_controls_passed": 14,
+  "retained_limit_tests_run": false,
+  "full_bubblewrap_acceptance": false,
+  "idle_after_failed_case_and_traces": {
+    "process_idle": "PASS",
+    "zone_budget_idle": "PASS",
+    "views": 0
+  },
+  "cleanup": {
+    "seccomp": 0,
+    "userns": 0,
+    "mntns": 0,
+    "pool_export_exit": 0,
+    "synced_poweroff": true,
+    "qemu_pid_exited": 2092864
+  },
+  "artifacts": {
+    "brand_release": "5d048f432dbd75540ad8e11325dc6eb9e2aadd1b6fb837b6bcd21320a402ede6",
+    "brand_debug": "46140c76dad721a3811a0946d3ee444ad4859ab9402b25fa31901bb19bb251df",
+    "namespace_ktest": "cef32a9584137194a1f284497caaeb9753ac4de312c5f3c6877db1b5c114cd3a",
+    "root_tar": "ae83f009b1f58534ad5611b4a2edfdfd4ba06166f7de8e24695f566e520024d3",
+    "static_probe": "19a2efdabe4be564241640a3a02ef71d74ffa86cfd2cdc0fa5725f6045f4c61a",
+    "dynamic_probe": "100ffa8c5cd3fd0d2141f61cb169797956c6340ca96ba8f1dbe88153ba3006bb"
+  },
+  "build": "clean release/debug brand PASS; mixed retained release platform runtime",
+  "latest_accepted_checkpoint": "c4fe111326bca2aca6d27e83f0e8c5e12ef2d7e5",
+  "logs": {
+    "vm90-full.log": "e09b0c502790566dffb0c048303d5d43977d3db416738edbc0f13a446157b24f",
+    "vm90-regressions.log": "f710baa9e70189155db3f7ebf89d3709a8e97e816bef3a4d7f4ecd9157d12b40",
+    "vm90-entry-regressions.log": "5494dd5612fa28613a9fbba211a49b6f63145ad6dd6d931c492c1d058498c930",
+    "vm90-entry-public.log": "5cf4117abaec4c48b95acf6560a3bfa7ad7802d4cd50f6d1daf1f5ad92459c72",
+    "vm90-public.log": "e168080f2c9d496e273515f6b79d328d03eed5e3cf5750754653647cc54e0068",
+    "vm90-case.log": "1893224d0a717691b442e05e6cd893f23ded36aa6c3f66fcf57f45a0315bd222",
+    "vm90-trace.log": "e9799d0f866aa5bbad659e9a9e7cdfb1c5c49b9cfbcaf562c8583eee3b8ca7a3",
+    "vm90-cache-trace.log": "6f10c1503527970b611c0751a9d42d16aef1cb84653bd8e10b102e1fa9a98970"
+  },
+  "console_evidence": {
+    "name": "boot-90-private-bind-path-diagnostic.log",
+    "sha256": "89579e0a3b87a4ff8cae6868ba546ba62dbb8e3f4ae1a974631b27876b877280"
+  },
+  "physical_host_deployment": false,
+  "next_work": "forward target lookup with resolved path and held vnode; preserve exact fd target namespace identity, without readlink/pathname fallback or broad real-vnode equality"
+}
