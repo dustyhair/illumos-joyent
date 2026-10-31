@@ -102,8 +102,8 @@ lx_pid_remove_hash(pid_t pid, id_t tid)
 
 /*
  * Retiring a synthetic LWP PID must respect references held by PID mappings.
- * An allocated LWP ID has no native proc slot. Once its lx hash entry is
- * gone, mark it inactive so native lookup cannot treat slot zero as a task.
+ * Its native PID reservation is inactive and has no proc slot. Once its lx
+ * hash entry is gone, drop the owning reference instead of freeing it early.
  */
 static void
 lx_pid_retire(struct pid *pidp)
