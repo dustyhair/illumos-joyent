@@ -1176,3 +1176,75 @@ received EINVAL with both experiments enabled. Public namespace creation and
 tracked private mount operations remain unfinished. See
 lab/mount-owner-results.json and lab/mount-owner-linux-results.json for exact
 source, artifact, controls and evidence hashes.
+## Experimental public mount-namespace entry
+
+With lx_mntns_experimental enabled, amd64 unshare accepts CLONE_NEWNS alone
+or with CLONE_NEWUSER. Mount-only entry requires CAP_SYS_ADMIN in the caller's
+current user namespace. A combined request prepares the new user namespace
+first and checks authority there. The actor's native privileges remain
+unchanged for mount-only entry and reduced for user-namespace entry; private
+mount construction uses a separate kernel-only zone credential.
+
+The first private tree imports the held zone root and its visible mount
+instances using the zone's known global root-path prefix. It does not try to
+resolve a global path through the caller's zone root. Trailing slash handling
+preserves the native portal, proc, mntfs and device mount paths. A subsequent
+private copy uses the current view's recorded mounts and takes a new explicit
+owner credential.
+
+Entry holds the old root, cwd, view and credentials, then prepares all new
+references outside process locks. It revalidates membership, filesystem state,
+credentials and feature switches under p_lock/p_crlock before changing the
+process. Prepared root/cwd publication precedes an allocation-free credential
+exchange, so a failed combined request cannot leave only USERNS published.
+Old references are released outside the locks. Native-entry guard activation
+for a previously unguarded task is limited to its current amd64 unshare call.
+Remote unguarded attachment remains rejected.
+
+Both features remain disabled by default. The previous USERNS-only behavior
+and disabled-combination error codes are preserved. Entry currently requires
+one LWP, no vfork, no CLONE_FS sharing and an unchanged root boundary;
+the initial zone root or the current private view's canonical root is accepted.
+A different chroot remains rejected. Mount entry also rejects tracing. Other namespace flags remain unsupported.
+Private mount mutation still returns the explicit authority/unsupported errors
+from the owner checkpoint. Tracked operations, per-mount limits, descriptors,
+mountinfo, root rearrangement, rename handling and PID/IPC/network integration
+remain work toward the full bubblewrap workflow.
+
+The entry probe covers static/dynamic binaries, UID0/65534, mount-only,
+combined and user-first entry, dropped SYS_ADMIN, seccomp retention, zero
+mount/user quota rollback, inherited exec/cwd and native ABI rejection.
+The native controller inspects stopped membership, private root/cwd, owner
+capability and absence of native mount privilege after USERNS entry. It waits
+for process exit and verifies both mount and user namespace counts return to
+zero. The Linux controls use the existing lxc-unshare AppArmor profile and
+restore dumpability after their explicit UID drop. No system-wide AppArmor
+setting is changed.
+
+
+VM89 passed the full prior enforcement, user-namespace, owner, quota and
+process-lifetime drivers, followed by all 70 public entry cases. Ten cases
+copied an existing private namespace again. The root mount-only cases also
+forked a child with a different chroot and verified combined USER/MNT entry
+still fails with EPERM. All 34 Linux controls passed with the same final probes.
+Each public case waited for process exit and checked zero mount/user charges.
+The actor retained its seccomp filter and private view through fork/exec, and
+raw native entry received SIGSYS. USERNS entry granted no native SYS_MOUNT.
+
+The first nested run in VM88 exposed a root-identity error. VN_CMP does not
+compare vnodes with different vnode operation tables, so a valid private LOFS
+root failed the initial-zone-root test. Existing private views now require
+exact equality with their own canonical root. The initial zone boundary test
+is unchanged. VM89 covers both valid nested copies and the chroot rejection.
+
+The current brand and namespace tests clean-built in release and debug modes.
+Runtime used release on the retained mixed VM73 platform with VM85 proc/support;
+this does not establish acceptance of a complete rebuilt SmartOS platform.
+All three experimental flags were reset, active views reached zero, the zone
+halted, the pool exported and filesystems synced before QEMU exited. No physical
+host was changed. See lab/mount-entry-results.json and
+lab/mount-entry-linux-results.json for exact sources, hashes and evidence.
+
+The Codex 0.166.0 sandbox still requests clone 0x78020011 twice and receives
+EINVAL with all three experiments enabled. Public unshare acceptance is a
+checkpoint toward the full sandbox workflow, not Codex sandbox acceptance.

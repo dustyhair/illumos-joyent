@@ -1,0 +1,294 @@
+{
+  "source_commit": "db4298c35ff1f6bbe2ac47157d489b5cc8d795d2",
+  "static_sha256": "5493bca66c730819fe8fa8254513ac0c5ffa54c2983bed83930a0fcb0fbdfa16",
+  "dynamic_sha256": "3a5f29fe94238b729f3833c2cf6ea186d231f6ad0369a9c3318eabb2cff1c8ca",
+  "host": "codex-testbox Linux 7.0.0-38-generic Ubuntu",
+  "remote_evidence": "/var/tmp/lx-mnt-entry.0dNMa8",
+  "apparmor_profile": "existing lxc-unshare via aa-exec; global apparmor_restrict_unprivileged_userns remains1",
+  "uid_drop_dumpability": "PR_SET_DUMPABLE1 after explicit setuid65534, before namespace creation",
+  "controls": [
+    {
+      "variant": "static",
+      "uid": 0,
+      "mode": "mount",
+      "filtered": false,
+      "result": "PASS",
+      "log": "static-0-mount.log"
+    },
+    {
+      "variant": "static",
+      "uid": 0,
+      "mode": "combined",
+      "filtered": false,
+      "result": "PASS",
+      "log": "static-0-combined.log"
+    },
+    {
+      "variant": "static",
+      "uid": 0,
+      "mode": "user-first",
+      "filtered": false,
+      "result": "PASS",
+      "log": "static-0-user-first.log"
+    },
+    {
+      "variant": "static",
+      "uid": 0,
+      "mode": "drop-admin",
+      "filtered": false,
+      "result": "PASS",
+      "log": "static-0-drop-admin.log"
+    },
+    {
+      "variant": "static",
+      "uid": 0,
+      "mode": "mount",
+      "filtered": true,
+      "result": "PASS",
+      "log": "static-0-mount-filter.log"
+    },
+    {
+      "variant": "static",
+      "uid": 0,
+      "mode": "combined",
+      "filtered": true,
+      "result": "PASS",
+      "log": "static-0-combined-filter.log"
+    },
+    {
+      "variant": "static",
+      "uid": 65534,
+      "mode": "mount",
+      "filtered": false,
+      "result": "PASS",
+      "log": "static-65534-mount.log"
+    },
+    {
+      "variant": "static",
+      "uid": 65534,
+      "mode": "combined",
+      "filtered": false,
+      "result": "PASS",
+      "log": "static-65534-combined.log"
+    },
+    {
+      "variant": "static",
+      "uid": 65534,
+      "mode": "user-first",
+      "filtered": false,
+      "result": "PASS",
+      "log": "static-65534-user-first.log"
+    },
+    {
+      "variant": "static",
+      "uid": 65534,
+      "mode": "drop-admin",
+      "filtered": false,
+      "result": "PASS",
+      "log": "static-65534-drop-admin.log"
+    },
+    {
+      "variant": "static",
+      "uid": 65534,
+      "mode": "mount",
+      "filtered": true,
+      "result": "PASS",
+      "log": "static-65534-mount-filter.log"
+    },
+    {
+      "variant": "static",
+      "uid": 65534,
+      "mode": "combined",
+      "filtered": true,
+      "result": "PASS",
+      "log": "static-65534-combined-filter.log"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 0,
+      "mode": "mount",
+      "filtered": false,
+      "result": "PASS",
+      "log": "dynamic-0-mount.log"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 0,
+      "mode": "combined",
+      "filtered": false,
+      "result": "PASS",
+      "log": "dynamic-0-combined.log"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 0,
+      "mode": "user-first",
+      "filtered": false,
+      "result": "PASS",
+      "log": "dynamic-0-user-first.log"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 0,
+      "mode": "drop-admin",
+      "filtered": false,
+      "result": "PASS",
+      "log": "dynamic-0-drop-admin.log"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 0,
+      "mode": "mount",
+      "filtered": true,
+      "result": "PASS",
+      "log": "dynamic-0-mount-filter.log"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 0,
+      "mode": "combined",
+      "filtered": true,
+      "result": "PASS",
+      "log": "dynamic-0-combined-filter.log"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 65534,
+      "mode": "mount",
+      "filtered": false,
+      "result": "PASS",
+      "log": "dynamic-65534-mount.log"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 65534,
+      "mode": "combined",
+      "filtered": false,
+      "result": "PASS",
+      "log": "dynamic-65534-combined.log"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 65534,
+      "mode": "user-first",
+      "filtered": false,
+      "result": "PASS",
+      "log": "dynamic-65534-user-first.log"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 65534,
+      "mode": "drop-admin",
+      "filtered": false,
+      "result": "PASS",
+      "log": "dynamic-65534-drop-admin.log"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 65534,
+      "mode": "mount",
+      "filtered": true,
+      "result": "PASS",
+      "log": "dynamic-65534-mount-filter.log"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 65534,
+      "mode": "combined",
+      "filtered": true,
+      "result": "PASS",
+      "log": "dynamic-65534-combined-filter.log"
+    },
+    {
+      "variant": "static",
+      "uid": 0,
+      "mode": "mount",
+      "filtered": false,
+      "nested": true,
+      "result": "PASS",
+      "log": "static-0-mount-nested.log"
+    },
+    {
+      "variant": "static",
+      "uid": 0,
+      "mode": "combined",
+      "filtered": false,
+      "nested": true,
+      "result": "PASS",
+      "log": "static-0-combined-nested.log"
+    },
+    {
+      "variant": "static",
+      "uid": 65534,
+      "mode": "combined",
+      "filtered": false,
+      "nested": true,
+      "result": "PASS",
+      "log": "static-65534-combined-nested.log"
+    },
+    {
+      "variant": "static",
+      "uid": 0,
+      "mode": "user-first",
+      "filtered": false,
+      "nested": true,
+      "result": "PASS",
+      "log": "static-0-user-first-nested.log"
+    },
+    {
+      "variant": "static",
+      "uid": 65534,
+      "mode": "user-first",
+      "filtered": false,
+      "nested": true,
+      "result": "PASS",
+      "log": "static-65534-user-first-nested.log"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 0,
+      "mode": "mount",
+      "filtered": false,
+      "nested": true,
+      "result": "PASS",
+      "log": "dynamic-0-mount-nested.log"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 0,
+      "mode": "combined",
+      "filtered": false,
+      "nested": true,
+      "result": "PASS",
+      "log": "dynamic-0-combined-nested.log"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 65534,
+      "mode": "combined",
+      "filtered": false,
+      "nested": true,
+      "result": "PASS",
+      "log": "dynamic-65534-combined-nested.log"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 0,
+      "mode": "user-first",
+      "filtered": false,
+      "nested": true,
+      "result": "PASS",
+      "log": "dynamic-0-user-first-nested.log"
+    },
+    {
+      "variant": "dynamic",
+      "uid": 65534,
+      "mode": "user-first",
+      "filtered": false,
+      "nested": true,
+      "result": "PASS",
+      "log": "dynamic-65534-user-first-nested.log"
+    }
+  ],
+  "chroot_boundary_control": "root mount-only cases fork a chrooted child and require combined USERNS/MNT entry EPERM"
+}

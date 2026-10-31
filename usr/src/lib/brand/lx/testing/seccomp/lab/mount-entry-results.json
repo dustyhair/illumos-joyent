@@ -1,0 +1,56 @@
+{
+  "vm": 89,
+  "source_commit": "db4298c35ff1f6bbe2ac47157d489b5cc8d795d2",
+  "brand_source_commit": "2f4fd53f085bb988d76a8e9e1334a1a17def4685",
+  "full_regressions_exit": 0,
+  "public_cases_passed": 70,
+  "nested_cases_passed": 10,
+  "full_wrapper_accepted": true,
+  "linux_controls_passed": 34,
+  "chroot_boundary": "root mount-only probe forks a chrooted child; combined USER+MNT returns EPERM without root change",
+  "native_guard": "private process native int 0x91 receives SIGSYS; USERNS actor lacks native SYS_MOUNT",
+  "pool_export_exit": 0,
+  "synced_poweroff": true,
+  "qemu_pid_exited": 2077647,
+  "experimental_switches_at_exit": {
+    "seccomp": 0,
+    "userns": 0,
+    "mntns": 0
+  },
+  "views_at_exit": 0,
+  "cleanup_note": "final extra ktest command used bare name outside PATH and was not run; full controller had already passed process_idle and user budget idle after each case",
+  "codex_sandbox": {
+    "version": "0.166.0",
+    "status": "incomplete",
+    "clone_flags": "0x78020011",
+    "clone_results": [
+      -22,
+      -22
+    ],
+    "all_three_experimentals_enabled": true
+  },
+  "artifacts": {
+    "brand": "32d58787abdedc9870b975f49535b6af52d349e31707a8275da9a8b5f1225f96",
+    "ktest": "cef32a9584137194a1f284497caaeb9753ac4de312c5f3c6877db1b5c114cd3a",
+    "root_tar": "2d3b46ade5c2284604134f7f43ffb84aad71d681575d0f7c5683bc5542ebc924",
+    "static_probe": "5493bca66c730819fe8fa8254513ac0c5ffa54c2983bed83930a0fcb0fbdfa16",
+    "dynamic_probe": "3a5f29fe94238b729f3833c2cf6ea186d231f6ad0369a9c3318eabb2cff1c8ca"
+  },
+  "logs": {
+    "vm89-full.log": "f710baa9e70189155db3f7ebf89d3709a8e97e816bef3a4d7f4ecd9157d12b40",
+    "vm89-regressions.log": "5494dd5612fa28613a9fbba211a49b6f63145ad6dd6d931c492c1d058498c930",
+    "vm89-public.log": "fbe505fa828761614e830abbee8a6f9ef7252570d6a98f904f60554a6c2f527d",
+    "vm89-bwrap.log": "3e8d0c9606c82c509689f94b1db6b88e364b0c65cbe6cb533096d0e78a0b04f3"
+  },
+  "console_evidence": {
+    "name": "boot-89-public-mount-entry-acceptance.log",
+    "sha256": "819191d9da2fa7ebc182929e648deed48259b5ad31bdc68c7ed8c7b211b17996"
+  },
+  "build": "clean release+debug brand and namespace ktest passed; release runtime on retained mixed VM73 common/LOFS/ZFS/libraries and VM85 proc/support",
+  "production_host_changed": false,
+  "launcher": {
+    "commit": "670ad873f1036fe820680d5e07c21a0079ac5b44",
+    "path": "lx-sandbox/launch-lab",
+    "sha256": "ece2f8445e5745dd320cc1f837a51ca7dc206f9798292dfdb41f71ddffc16739"
+  }
+}
