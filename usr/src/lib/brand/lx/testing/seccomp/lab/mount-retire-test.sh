@@ -25,6 +25,12 @@ for variant in static dynamic; do
             cat "$log"
             grep -q '^MNX_PASS .*failures=0 ' "$log"
             ktest run lx_namespace:mount:process_idle
+            # Native dead threads retain t_cred until the batched reaper
+            # runs. Generate more than its default reaplimit of 16 exits;
+            # keep the existing zero-charge assertion and deadline intact.
+            for ((native_exit = 0; native_exit < 32; native_exit++)); do
+                /usr/bin/true
+            done
             ktest run lx_namespace:user:zone_budget_idle
             echo "MOUNT_RETIRE_CASE_PASS variant=$variant uid=$uid"
     done
