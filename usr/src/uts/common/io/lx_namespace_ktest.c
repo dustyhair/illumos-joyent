@@ -1707,8 +1707,9 @@ ns_pid_maps_hold(ktest_ctx_hdl_t *ctx)
 	cred_t *base = NULL, *scope = NULL, *weak = NULL;
 	proc_t *p = NULL;
 	kthread_t *t;
-	struct pid *identity = NULL;
-	pid_t worker, peer, mainpid;
+	struct pid *identity = NULL, *original = NULL;
+	pid_t worker, peer, mainpid, fresh;
+	boolean_t token_gone;
 	uint32_t maximum = 0, used, after;
 	boolean_t changed = B_FALSE, passed = B_FALSE;
 	int i;
@@ -1818,6 +1819,64 @@ ns_pid_maps_hold(ktest_ctx_hdl_t *ctx)
 	    "exhausted namespace budget allowed creation");
 	VERIFY0(lx_userns_pidns_budget_set(root, maximum));
 	changed = B_FALSE;
+	/* Model native LWP preparation before any lx task hash entry exists. */
+	PM_CHECK(lx_pidns_create(scope, NULL, 5, &temp) == 0 &&
+	    lx_pidns_reserve(temp, &pending) == 0,
+	    "cannot reserve native-binding init");
+	PM_CHECK((fresh = pid_allocate(curproc, 0, 0)) > 1,
+	    "cannot allocate unpublished native PID");
+	mutex_enter(&pidlock);
+	original = pid_find(fresh);
+	mutex_exit(&pidlock);
+	PM_CHECK(original != NULL, "native PID reservation disappeared");
+	identity = lx_pid_identity_hold(fresh, zone);
+	PM_CHECK(identity == NULL, "fresh native PID already has an lx task");
+	PM_CHECK(lx_pidns_bind_native(pending, global_zone, original) ==
+	    EXDEV &&
+	    lx_pidns_bind_native(pending, zone, original) == 0 &&
+	    ns_pid_map_absent(temp, 1) && lx_pidns_visible(temp, fresh) == 0 &&
+	    lx_pidns_reserve(temp, &extra) == EAGAIN && extra == NULL,
+	    "uncommitted native binding became visible or crossed zones");
+	lx_pidns_map_rele(pending);
+	pending = NULL;
+	PM_CHECK(lx_pidns_reserve(temp, &pending) == 0 &&
+	    lx_pidns_map_id(pending, temp) == 1 &&
+	    lx_pidns_bind_native(pending, zone, original) == 0 &&
+	    lx_pidns_commit(pending) && lx_pidns_visible(temp, fresh) == 1,
+	    "failed native construction made PID1 impossible to retry");
+	identity = lx_pidns_lookup(temp, 1);
+	PM_CHECK(identity == original, "native commit changed its identity");
+	lx_pid_identity_rele(identity);
+	identity = NULL;
+	lx_pidns_map_rele(pending);
+	pending = NULL;
+	PM_CHECK(lx_pidns_reserve(temp, &pending) == ENOMEM && pending == NULL,
+	    "committed PID1 could be replaced");
+	lx_pidns_rele(temp);
+	temp = NULL;
+	PM_CHECK(lx_pidns_create(scope, NULL, 5, &temp) == 0 &&
+	    lx_pidns_reserve(temp, &pending) == 0 &&
+	    lx_pidns_bind_native(pending, zone, original) == 0,
+	    "cannot bind shutdown-race init");
+	lx_pidns_shutdown(temp);
+	PM_CHECK(!lx_pidns_commit(pending) &&
+	    lx_pidns_visible(temp, fresh) == 1,
+	    "namespace death before commit did not report a doomed child");
+	identity = lx_pidns_lookup(temp, 1);
+	PM_CHECK(identity == original,
+	    "doomed child lost retained identity for ancestor wait");
+	lx_pid_identity_rele(identity);
+	identity = NULL;
+	lx_pidns_map_rele(pending);
+	pending = NULL;
+	lx_pidns_rele(temp);
+	temp = NULL;
+	mutex_enter(&pidlock);
+	PID_RELE(original);
+	original = NULL;
+	token_gone = pid_find(fresh) == NULL;
+	mutex_exit(&pidlock);
+	PM_CHECK(token_gone, "native binding retained the original PID token");
 	PM_CHECK(lx_pidns_create(scope, NULL, 5, &temp) == 0 &&
 	    lx_pidns_reserve(temp, &pending) == 0,
 	    "cannot reserve rollback init");
@@ -1871,6 +1930,11 @@ out:
 	if (extra != NULL)
 		lx_pidns_map_rele(extra);
 	lx_pidns_rele(temp);
+	if (original != NULL) {
+		mutex_enter(&pidlock);
+		PID_RELE(original);
+		mutex_exit(&pidlock);
+	}
 	for (i = LX_PIDNS_MAX_DEPTH - 1; i >= 0; i--)
 		lx_pidns_rele(chain[i]);
 	for (i = 2; i >= 0; i--) {
