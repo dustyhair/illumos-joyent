@@ -574,6 +574,7 @@ vfsimpl_setup(vfs_t *vfsp)
 	}
 
 	vfsp->vfs_implp = kmem_alloc(sizeof (vfs_impl_t), KM_SLEEP);
+	zone_init_ref(&vfsp->vfs_implp->vi_zone_ref);
 	/* Note that these are #define'd in vfs.h */
 	vfsp->vfs_vskap = NULL;
 	vfsp->vfs_fstypevsp = NULL;
@@ -3564,7 +3565,6 @@ vfs_list_add(struct vfs *vfsp)
 	if (vfsp->vfs_implp->vi_zone_ref.zref_zone == NULL) {
 		vfs_mono_time(&vfsp->vfs_hrctime);
 		vfsp->vfs_zone = curproc->p_zone;
-		zone_init_ref(&vfsp->vfs_implp->vi_zone_ref);
 		zone_hold_ref(vfsp->vfs_zone, &vfsp->vfs_implp->vi_zone_ref,
 		    ZONE_REF_VFS);
 	} else {
