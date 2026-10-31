@@ -310,8 +310,9 @@ lx_pidns_map_rele(lx_pidns_map_t *map)
 	if (map->pm_init && ns->pn_state != LX_PIDNS_DEAD)
 		ns->pn_state = map->pm_identity == NULL ?
 		    LX_PIDNS_NEW : LX_PIDNS_DEAD;
-	if (map->pm_identity != NULL)
+	if (map->pm_identity != NULL) {
 		PID_RELE(map->pm_identity);
+	}
 	if (!held)
 		mutex_exit(&pidlock);
 	size = sizeof (*map) + ns->pn_depth * sizeof (map->pm_slots[0]);
