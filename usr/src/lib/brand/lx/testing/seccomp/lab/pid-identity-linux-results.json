@@ -1,0 +1,28 @@
+{
+  "time": "2026-10-31T13:41:42.060373+00:00",
+  "cases_passed": 16,
+  "source_commit": "de0ccfc856",
+  "source": "c114500f3cf83bd2f1b075f7b7a8b96495579f4b0bc36b72dd84045b384815df",
+  "static_probe": "01381efe3f26ec016fadea74cb7af6c4f9c38f19a5c0a88ce7f7bfd1323db49d",
+  "dynamic_probe": "39363f684dcf5f23edd5971a25f4bd71deb70934a517e81d4442c34db2e73966",
+  "profile": "existing lxc-unshare; global policy unchanged",
+  "scope": "real pthread worker exit/nonleader exec; root/nobody; ordinary/userns-guarded parent; Linux process/thread IDs before/after exec. Native PID reference checks are lx ktests.",
+  "logs": {
+    "dynamic-0-0-exec.log": "ef131c987272ee6302cb130eb20b3eb2764818ac0cc90645bb43c673421b74cc",
+    "dynamic-0-0-exit.log": "104e4efaba19508987717b8b2b35e810314903b34cd5f403356d8c801376ff89",
+    "dynamic-0-1-exec.log": "3714ee7c509197f650d82ef131c2dd728e845e14706dafab7873ddd774006ee1",
+    "dynamic-0-1-exit.log": "33c2f782cbedcd53903023c8d2d24419406ade154ecb34dce4830630a4d9f8f6",
+    "dynamic-65534-0-exec.log": "92d0a9b42be4b6ed4e008994dcdd0e42b9fed34de91ef60355d25732d98248fd",
+    "dynamic-65534-0-exit.log": "b046ac73390346acc01423e0109769f93d80851af19178264bd9be142e9934b4",
+    "dynamic-65534-1-exec.log": "51fb94b3f7feb0afc0dd3bca1983ebd2f0a74f0ae04c76a10352dbb3e7e19ee4",
+    "dynamic-65534-1-exit.log": "51cf397b3810b6a086dab2cb4058784a9f3c3e071e9b76b1ec72c2404e79bdb4",
+    "static-0-0-exec.log": "39b14cfb8172177d2f226230cf4fd16ed85f7e6d046f398fb6374f652314919e",
+    "static-0-0-exit.log": "eb35bbcc7c635fab874e7ad778038848746f2a870a79e291ce017c530cbfe379",
+    "static-0-1-exec.log": "198fbb75d612576f00703527878a0ba7aacbfa401fc585e3d3708bff0064505b",
+    "static-0-1-exit.log": "7df78371822c386ca13bb99890bb6862e392d9fe9336640441b8a2077e795f5c",
+    "static-65534-0-exec.log": "cc5af3b6299c1c30d42852d79a15f4a56fda127ca64bc2b0b138c2d6b7a91f17",
+    "static-65534-0-exit.log": "77a3e542620604ce714b4239266a289e9b33fee5faa23da08d62ba34ecac4f6e",
+    "static-65534-1-exec.log": "950856f08cc3eade106967fda8e75ec4c747feb13cc0d1c7585aafbf2b8eea26",
+    "static-65534-1-exit.log": "3052d84759f46271f66a623bcde3dfe66b218268e36b87984c4bf6ca5399e5c0"
+  }
+}
