@@ -5,7 +5,7 @@ test -f /lab/offline-lx-guest
 bootparams | grep -q '^lx_lab=true$'
 test "$(zonename)" = global
 zonepath=$(zonecfg -z lx-probe info zonepath | awk '{print $2}')
-test "$(digest -a sha256 /lab/mntns_pivot_shared | awk '{print $NF}')" = 7d3111397eca00805951fc249cc439b15a496aa4c70095b1721956d20815ed8e
+test "$(digest -a sha256 /lab/mntns_pivot_shared | awk '{print $NF}')" = d9f08cdf3df0381788e8d1f428a71806000043e3f0d2b23cb50c151215d55f18
 cp /lab/mntns_pivot_shared "$zonepath/root/test/dynamic/mntns_pivot_shared"
 chmod 0555 "$zonepath/root/test/dynamic/mntns_pivot_shared"
 mkdir -p "$zonepath/root/test/mnt-pivot"
@@ -19,8 +19,8 @@ for variant in dynamic; do
     test "$variant" != dynamic || probe=/test/dynamic/mntns_pivot_shared
     for uid in 0 65534; do
         for mode in shared; do
-            options=--lx-shared
-            test "$uid" = 0 || options="--drop --lx-shared"
+            options="--lx-shared --bind-root"
+            test "$uid" = 0 || options="--drop --lx-shared --bind-root"
             test "$mode" != deny || options="$options --deny"
             log=/lab/mnt-pivot-guard-$variant-$uid-$mode.log
             echo "MOUNT_PIVOT_SHARED_CASE_START variant=$variant uid=$uid mode=$mode"
