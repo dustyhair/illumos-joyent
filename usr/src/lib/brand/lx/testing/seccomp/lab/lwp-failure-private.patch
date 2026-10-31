@@ -1,0 +1,197 @@
+--- a/usr/src/uts/common/os/lwp.c
++++ b/usr/src/uts/common/os/lwp.c
+@@ -75,0 +76,105 @@
++/* Private VM test overlay. Not part of the production genunix source. */
++#include <sys/ddi.h>
++#include <sys/sunddi.h>
++
++typedef struct lwp_fail_case {
++	proc_t *lf_proc;
++	volatile uint_t lf_start;
++	volatile uint_t lf_ready;
++	boolean_t lf_acquired;
++	boolean_t lf_injected;
++	int lf_error;
++	int (*lf_observe)(void *, void *);
++	void *lf_arg;
++} lwp_fail_case_t;
++
++static void
++lwp_fail_never(void)
++{
++	panic("private failed LWP was published");
++}
++
++static void
++lwp_fail_opponent(void *arg)
++{
++	lwp_fail_case_t *fc = arg;
++	proc_t *p = fc->lf_proc;
++	hrtime_t until = gethrtime() + 5 * NANOSEC;
++
++	/* Creation precedes lwp_create, so it cannot invert p_lock/pidlock. */
++	while (fc->lf_start == 0 && gethrtime() < until)
++		delay(1);
++	membar_consumer();
++	if (fc->lf_start == 1) {
++		until = gethrtime() + NANOSEC;
++		while (gethrtime() < until) {
++			if (mutex_tryenter(&pidlock)) {
++				membar_producer();
++				fc->lf_ready = 1;
++				while (gethrtime() < until) {
++					if (mutex_tryenter(&p->p_lock)) {
++						fc->lf_acquired = B_TRUE;
++						mutex_exit(&p->p_lock);
++						break;
++					}
++					drv_usecwait(10);
++				}
++				mutex_exit(&pidlock);
++				break;
++			}
++			drv_usecwait(10);
++		}
++	}
++	thread_exit();
++}
++
++static void
++lwp_fail_inject(lwp_fail_case_t *fc)
++{
++	hrtime_t until = gethrtime() + 2 * NANOSEC;
++
++	ASSERT(MUTEX_HELD(&fc->lf_proc->p_lock));
++	fc->lf_injected = B_TRUE;
++	membar_producer();
++	fc->lf_start = 1;
++	while (fc->lf_ready == 0 && gethrtime() < until)
++		drv_usecwait(10);
++	membar_consumer();
++}
++
++/* Caller holds /proc exclusion on an owned, stopped foreign fixture. */
++int
++lwp_failure_cleanup_lab(proc_t *p, int (*observe)(void *, void *), void *arg)
++{
++	lwp_fail_case_t fc = { 0 };
++	kthread_t *opponent;
++	kt_did_t did;
++	klwp_t *lwp;
++	char *lab;
++	int error;
++
++	if (ddi_prop_lookup_string(DDI_DEV_T_ANY, ddi_root_node(),
++	    DDI_PROP_DONTPASS, "lx_lab", &lab) != DDI_PROP_SUCCESS)
++		return (EPERM);
++	error = strcmp(lab, "true") == 0 ? 0 : EPERM;
++	ddi_prop_free(lab);
++	if (error != 0)
++		return (error);
++	fc.lf_proc = p;
++	fc.lf_observe = observe;
++	fc.lf_arg = arg;
++	opponent = thread_create(NULL, 0, lwp_fail_opponent, &fc, 0, &p0,
++	    TS_STOPPED, minclsyspri);
++	did = opponent->t_did;
++	setrun(opponent);
++	lwp = lwp_create(lwp_fail_never, (caddr_t)&fc, 0, p,
++	    TS_STOPPED, curthread->t_pri, &curthread->t_hold, NOCLASS, 0);
++	if (!fc.lf_injected)
++		fc.lf_start = 2;
++	thread_join(did);
++	if (lwp != NULL)
++		panic("private LWP failure injection missed");
++	return (fc.lf_injected && fc.lf_ready && fc.lf_acquired &&
++	    fc.lf_error == 0 ? 0 : EIO);
++}
++
+@@ -306,0 +412,5 @@
++	if (proc == lwp_fail_never && brand_data != NULL) {
++		lwp_fail_case_t *fc = (lwp_fail_case_t *)arg;
++
++		fc->lf_error = fc->lf_observe(brand_data, fc->lf_arg);
++	}
+@@ -307,0 +418,5 @@
++	if (proc == lwp_fail_never && brand_data != NULL) {
++		lwp_fail_inject((lwp_fail_case_t *)arg);
++		err = 1;
++		goto error;
++	}
+--- a/usr/src/uts/common/io/lx_namespace_ktest.c
++++ b/usr/src/uts/common/io/lx_namespace_ktest.c
+@@ -2188,0 +2189,71 @@
++extern int lwp_failure_cleanup_lab(proc_t *, int (*)(void *, void *), void *);
++
++/* Hold only the native identity, so no observer can mask a leaked map. */
++static int
++ns_lwp_prepared(void *data, void *arg)
++{
++	lx_lwp_data_t *ld = data;
++	struct pid **identity = arg;
++
++	if (ld->br_pidns_map == NULL || ld->br_lpid == NULL ||
++	    ld->br_lpid->lxp_pidp == NULL)
++		return (EINVAL);
++	mutex_enter(&pidlock);
++	*identity = ld->br_lpid->lxp_pidp;
++	PID_HOLD(*identity);
++	mutex_exit(&pidlock);
++	return (0);
++}
++
++static void
++ns_pid_lwp_failure(ktest_ctx_hdl_t *ctx)
++{
++	proc_t *p = NULL;
++	struct pid *identity = NULL, *prepared = NULL;
++	pid_t pid;
++	int error = EINVAL;
++	uint_t before;
++
++	mutex_enter(&ns_pid_lock);
++	if (!ns_process_pid(ctx, &pid) || ns_pid_process_zone == NULL ||
++	    pid != ns_pid_process_owner)
++		goto out;
++	identity = lx_pid_identity_hold(pid, ns_pid_process_zone);
++	if (identity == NULL)
++		goto out;
++	p = sprlock_zone(pid, ns_pid_process_zone->zone_id);
++	if (p == NULL)
++		goto out;
++	if (p->p_pidp != identity || p->p_brand != &lx_brand ||
++	    p->p_lwpcnt != 1 || p->p_tlist == NULL ||
++	    p->p_tlist->t_state != TS_STOPPED ||
++	    strcmp(PTOU(p)->u_comm, "pid_ownership") != 0 ||
++	    ptolxproc(p)->l_pidns_map == NULL ||
++	    (p->p_flag & (SEXITING | SEXITLWPS | SKILLED)) != 0)
++		goto out;
++	before = p->p_lwpcnt;
++	mutex_exit(&p->p_lock);
++	error = lwp_failure_cleanup_lab(p, ns_lwp_prepared, &prepared);
++	mutex_enter(&pidlock);
++	if (prepared == NULL || !prepared->pid_prinactive ||
++	    prepared->pid_ref != 1)
++		error = EIO;
++	if (prepared != NULL) {
++		PID_RELE(prepared);
++	}
++	mutex_exit(&pidlock);
++	mutex_enter(&p->p_lock);
++	if (p->p_lwpcnt != before)
++		error = EIO;
++out:
++	if (p != NULL)
++		sprunlock(p);
++	if (identity != NULL)
++		lx_pid_identity_rele(identity);
++	mutex_exit(&ns_pid_lock);
++	if (error == 0)
++		KT_PASS(ctx);
++	else
++		KT_FAIL(ctx, "failed-LWP cleanup/interleaving: %d", error);
++}
++
+@@ -3041,0 +3113,2 @@
++	    (error = ktest_add_test(ks, "lwp_failure", ns_pid_lwp_failure,
++	    KTEST_FLAG_INPUT)) != 0 ||

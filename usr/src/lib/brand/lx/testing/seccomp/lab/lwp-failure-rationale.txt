@@ -1,0 +1,65 @@
+Baseline a6cd4192c2733ae13ac80a141cb19fedda8f0f2b.
+Production fix 25e56214dddd5da7f90f87d9e51ecc4547ef5a38.
+
+The only b_lwpdata_free caller is lwp_create's error path. LX is the only
+in-tree brand that supplies this callback. The data is allocated before
+p_lock is acquired. Every goto error precedes b_initlwp and insertion into
+the process LWP list/directory/hash. On failure the brand data is still
+private to the creator. Task/project/zone LWP accounting and scheduling-class
+cleanup remain under p_lock. Release p_lock before discarding the private
+brand data, before the existing thread teardown.
+
+LX's final PID map release takes pidlock. Holding p_lock while invoking it
+inverts the native pidlock -> p_lock order. Ordinary lwp_exit already drops
+p_lock around brand cleanup. The new callback boundary follows that model.
+There is no new brand operation or structure field. brand.h changes only its
+contract comment. No PID allocator, namespace registry or worker is added.
+
+Caller lifetime: ordinary new-LWP callers operate on curproc, whose executing
+LWP keeps the process/brand alive; unpublished fork children are owned by the
+fork path; /proc agent creation holds /proc exclusion across lwp_create and
+already drops p_lock around this call. lwp_create itself already releases
+p_lock for stack/thread/data allocation and directory growth. This fix does
+not expose a published LWP or add another process-lifetime requirement.
+
+The failed delegate left draft files. Parent reviewed them and changed the
+private test before use. Creating the opponent inside lwp_fail_inject under
+p_lock would itself call thread_create, which acquires pidlock to publish the
+global thread. The parent creates the opponent before lwp_create instead.
+
+Private regression, not production machinery
+
+The lab-only genunix overlay accepts a stack-local case only through a private
+entry function guarded by the lx_lab=true boot property. Its failed entry-point
+marker cannot be passed by userland. A KTEST pins an exact stopped, sole-LWP
+pid_ownership fixture by native identity and sprlock_zone /proc exclusion.
+Its existing attached private PID namespace remains unpublished to Linux.
+
+The actual native lwp_create allocates LX brand data and a new uncommitted LWP
+PID map. Before p_lock the observer holds only the new native struct pid, not
+the map. This cannot mask a leaked map. After p_lock the injection wakes the
+already-created opponent. The opponent holds pidlock and tries p_lock for one
+second, then releases pidlock even on failure. Native error cleanup follows.
+With the old boundary it cannot acquire p_lock until its deadline expires.
+With the fix it can acquire p_lock while cleanup waits for pidlock. Failure is
+reported, never converted to a passing retry.
+
+The helper is joined before its stack case goes away. The test requires failed
+creation, successful opposing lock acquisition, unchanged published LWP count,
+and exactly one inactive native PID reference, the test observer's own hold.
+It releases that hold. Existing fixture controls then exercise fork/exec/exit,
+thread identity retirement, native reap and zero namespace/quota checks.
+Separate ordinary native32/64 and Linux static/dynamic controls create and
+join 256 threads each. Whole-run userspace deadlines preserve timed-out state.
+
+The overlay will be removed from native sources before production acceptance.
+Production genunix was clean-built separately and retained. VM127 overlay
+runtime does not by itself establish production-image acceptance. A separate
+boot of the production binary and original KTEST is required.
+
+Not addressed: future map acquisition vs final-release synchronization,
+namespace PGID/SID membership lifetimes, native exec namespace policy, or
+public PID/IPC/network namespaces. No full Codex/bubblewrap support is claimed.
+
+The retained patch has zero context for clean patch-artifact whitespace checks.
+Apply with git apply --unidiff-zero; original overlay commit is 5ed10ea9af.
