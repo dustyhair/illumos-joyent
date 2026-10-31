@@ -42,6 +42,7 @@ pfexec cp "$lab/chmod-gid-race-test.sh" "$lab/mnt-root/lab/chmod-gid-race-test.s
 pfexec chmod 0555 "$lab/mnt-root/lab/chmod-acl-test.sh" "$lab/mnt-root/lab/chmod-gid-race-test.sh"
 pfexec chmod 0555 "$lab/mnt-root/lab/chown-racer-native" "$lab/mnt-root/lab/chown-race-test.sh" "$lab/mnt-root/lab/chown-acl-test.sh" "$lab/mnt-root/lab/chmod-race-test.sh"
 pfexec cp "$ws/usr/src/uts/intel/lx_proc/obj64/lx_proc" "$lab/mnt-root/kernel/fs/amd64/lx_proc"
+pfexec cp "$ws/usr/src/uts/intel/lx_cgroup/obj64/lx_cgroup" "$lab/mnt-root/kernel/fs/amd64/lx_cgroup"
 pfexec cp "$ws/usr/src/uts/intel/zfs/obj64/zfs" "$lab/mnt-root/kernel/fs/amd64/zfs"
 pfexec mkdir -p "$lab/mnt-root/kernel/exec/amd64"
 pfexec cp "$ws/usr/src/uts/intel/elfexec/obj64/elfexec" "$lab/mnt-root/kernel/exec/amd64/elfexec"
@@ -110,6 +111,7 @@ for controller in mntns-budget-native mount-owner-test.sh \
     pid-identity-test.sh pid-identity-smoke-test.sh \
     pid-identity-full-test.sh \
     pid-maps-test.sh pid-maps-smoke-test.sh pid-maps-full-test.sh \
+    pid-process-test.sh pid-process-smoke-test.sh pid-process-full-test.sh \
     bubblewrap-trace.sh; do
     test -f "$lab/$controller"
     pfexec cp "$lab/$controller" "$lab/mnt-root/lab/$controller"
