@@ -161,6 +161,24 @@ main(int argc, char **argv)
 	errno = 0;
 	check(syscall(SYS_pivot_root, path("plain", p), "oldroot") == -1 &&
 	    errno == EINVAL, "new-root-must-be-mounted");
+	errno = 0;
+	check(syscall(SYS_pivot_root, candidate, (void *)1) == -1 &&
+	    errno == EFAULT, "bad-put-old-pointer");
+	errno = 0;
+	check(syscall(SYS_pivot_root, "temporary", "oldroot") == -1 &&
+	    errno == ENOTDIR, "new-root-must-be-directory");
+	errno = 0;
+	check(syscall(SYS_pivot_root, candidate, "temporary") == -1 &&
+	    errno == ENOTDIR, "put-old-must-be-directory");
+	errno = 0;
+	check(syscall(SYS_pivot_root, candidate, base) == -1 &&
+	    errno == EBUSY, "put-old-outside-new-root");
+	errno = 0;
+	check(syscall(SYS_pivot_root, candidate, "missing") == -1 &&
+	    errno == ENOENT, "put-old-must-exist");
+	check(contents("temporary", "temporary\n") &&
+	    contents(path("outside", p), "outside\n"),
+	    "invalid-pivots-leave-root-and-cwd-unchanged");
 	outsidefd = open(base, O_PATH | O_DIRECTORY);
 	tempfd = open(candidate, O_PATH | O_DIRECTORY);
 	check(outsidefd >= 0 && tempfd >= 0, "save-root-descriptors");
