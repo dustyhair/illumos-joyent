@@ -187,8 +187,22 @@ static void reap(struct child *c)
     }
 }
 
+/* zlogin can start us as a group leader. A child may safely setsid(). */
+static int isolated_child(void)
+{
+    pid_t child = fork(), result;
+    int status;
+    if (child < 0) { perror("bootstrap fork"); return 2; }
+    if (child == 0) return -1;
+    do { result = waitpid(child, &status, 0); } while (result < 0 && errno == EINTR);
+    if (result != child || !WIFEXITED(status)) return 2;
+    return WEXITSTATUS(status);
+}
+
 int main(void)
 {
+    int bootstrap = isolated_child();
+    if (bootstrap >= 0) return bootstrap;
     struct child *leader, *member, *liveparent, *liveself;
     struct child *deadparent, *deadself, *other, *target;
     struct result r;

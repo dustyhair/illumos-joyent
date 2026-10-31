@@ -100,6 +100,8 @@ caller(pid_t foreign)
 int
 main(int argc, char **argv)
 {
+    int bootstrap = isolated_child();
+    if (bootstrap >= 0) return bootstrap;
     char *end;
     long input;
     if (argc == 2 && strcmp(argv[1], "reference") == 0)
