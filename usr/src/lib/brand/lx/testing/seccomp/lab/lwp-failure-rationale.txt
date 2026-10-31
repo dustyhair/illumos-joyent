@@ -63,3 +63,9 @@ public PID/IPC/network namespaces. No full Codex/bubblewrap support is claimed.
 
 The retained patch has zero context for clean patch-artifact whitespace checks.
 Apply with git apply --unidiff-zero; original overlay commit is 5ed10ea9af.
+
+VM127 private helper startup failed: setrun alone leaves a newly created
+TS_STOPPED kernel thread stopped. Stacks show thread_join waiting on that
+helper. VM128 uses thread_lock, TS_ALLSTART, setrun_locked, thread_unlock.
+Production sources exclude both versions of the private helper. VM128 is
+pending; VM127 is not a successful kernel lock-boundary test.

@@ -1,6 +1,6 @@
 --- a/usr/src/uts/common/os/lwp.c
 +++ b/usr/src/uts/common/os/lwp.c
-@@ -75,0 +76,105 @@
+@@ -75,0 +76,108 @@
 +/* Private VM test overlay. Not part of the production genunix source. */
 +#include <sys/ddi.h>
 +#include <sys/sunddi.h>
@@ -94,7 +94,10 @@
 +	opponent = thread_create(NULL, 0, lwp_fail_opponent, &fc, 0, &p0,
 +	    TS_STOPPED, minclsyspri);
 +	did = opponent->t_did;
-+	setrun(opponent);
++	thread_lock(opponent);
++	opponent->t_schedflag |= TS_ALLSTART;
++	setrun_locked(opponent);
++	thread_unlock(opponent);
 +	lwp = lwp_create(lwp_fail_never, (caddr_t)&fc, 0, p,
 +	    TS_STOPPED, curthread->t_pri, &curthread->t_hold, NOCLASS, 0);
 +	if (!fc.lf_injected)
@@ -106,13 +109,13 @@
 +	    fc.lf_error == 0 ? 0 : EIO);
 +}
 +
-@@ -306,0 +412,5 @@
+@@ -306,0 +415,5 @@
 +	if (proc == lwp_fail_never && brand_data != NULL) {
 +		lwp_fail_case_t *fc = (lwp_fail_case_t *)arg;
 +
 +		fc->lf_error = fc->lf_observe(brand_data, fc->lf_arg);
 +	}
-@@ -307,0 +418,5 @@
+@@ -307,0 +421,5 @@
 +	if (proc == lwp_fail_never && brand_data != NULL) {
 +		lwp_fail_inject((lwp_fail_case_t *)arg);
 +		err = 1;
