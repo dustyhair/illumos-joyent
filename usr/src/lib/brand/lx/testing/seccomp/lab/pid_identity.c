@@ -60,7 +60,7 @@ worker(void *unused)
 	(void) unused;
 	(void) printf("PID_WORKER pid=%d tid=%ld mode=%s\n",
 	    getpid(), syscall(SYS_gettid), mode);
-	if (kill(getpid(), SIGSTOP))
+	if (raise(SIGSTOP))
 		_exit(3);
 	if (strcmp(mode, "exec") == 0) {
 		char *const args[] = { (char *)self, "image", NULL };
@@ -108,7 +108,7 @@ main(int argc, char **argv)
 retired:
 	(void) printf("PID_RETIRED pid=%d tid=%ld mode=%s\n",
 	    getpid(), syscall(SYS_gettid), mode);
-	if (getpid() != syscall(SYS_gettid) || kill(getpid(), SIGSTOP))
+	if (getpid() != syscall(SYS_gettid) || raise(SIGSTOP))
 		return (1);
 	(void) printf("PID_PASS\n");
 	return (0);
