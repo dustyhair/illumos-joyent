@@ -1,0 +1,25 @@
+{
+  "vm": 112,
+  "accepted": false,
+  "kernel": "46dad3e776",
+  "runtime": "79112b2782",
+  "result": "Initial worker exit hold/retire/release passes. Nonleader exec exposes stale cached br_pid: getpid2556/gettid2558 after image replacement. Fix967b47d094 updates br_pid at hash reassignment. No assertion relaxed. Remaining15smoke cases/full regressions not run.",
+  "cleanup": {
+    "idle": true,
+    "flags": [
+      0,
+      0,
+      0
+    ],
+    "views": 0,
+    "zone_stopped": true,
+    "pool_export": 0,
+    "explicit_sync_command": true,
+    "shutdown": "reboot -p, rebooting marker; no final filesystem sync banner",
+    "qemu_exited": 2941006
+  },
+  "console": {
+    "name": "boot-112-nonleader-exec-diagnostic.log",
+    "sha256": "656b13c8359c1f45e3ca2ea9243da0f3e51da2045c4720ca2f6c1c36726f8d4f"
+  }
+}

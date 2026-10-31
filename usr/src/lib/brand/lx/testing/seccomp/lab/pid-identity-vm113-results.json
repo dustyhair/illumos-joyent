@@ -1,0 +1,25 @@
+{
+  "vm": 113,
+  "full_acceptance": false,
+  "kernel": "967b47d094ad7ed63c0d86eb039df3c8c4780e7a",
+  "smoke_cases": 16,
+  "pid_checks": 48,
+  "idle_checks": 32,
+  "scope": "Exit and nonleader exec; root/nobody static/dynamic ordinary/userns-guarded; all process/thread IDs correct after exec. Full regressions deferred to VM114 after moving inactive reservation initialization from lx into native pid_allocate before native hash publication.",
+  "cleanup": {
+    "flags": [
+      0,
+      0,
+      0
+    ],
+    "views": 0,
+    "zone_stopped": true,
+    "pool_export": 0,
+    "filesystems_synced": true,
+    "qemu_exited": 2945339
+  },
+  "console": {
+    "name": "boot-113-pid-identity-smoke.log",
+    "sha256": "ed2c976c442c558658c65f25363f31867f9aab9ea8f43603d68b3e8573fbf621"
+  }
+}
