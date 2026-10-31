@@ -956,15 +956,18 @@ out:
 static int
 lx_mnt_private_umount(lx_mntns_view_t *view, const char *pathp, int flags)
 {
-	char *path = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+	char *path;
 	int error;
 
+	if (!lx_mntns_entry_enabled()) {
+		return (lx_mntns_view_capable(view, CRED()) ?
+		    EOPNOTSUPP : EPERM);
+	}
+	path = kmem_alloc(MAXPATHLEN, KM_SLEEP);
 	error = copyinstr(pathp, path, MAXPATHLEN, NULL);
 	if (error == 0) {
 		if (!lx_mntns_view_capable(view, CRED()))
 			error = EPERM;
-		else if (!lx_mntns_entry_enabled())
-			error = EOPNOTSUPP;
 		else if (flags == LX_MNT_DETACH)
 			error = lx_mntns_mount_detach(view, path, CRED());
 		else if (flags == 0 || flags == LX_MNT_FORCE)
