@@ -66,7 +66,7 @@ else
 fi
 zoneadm -z lx-probe boot
 trace=/lab/pid-cohort-exits.log
-dtrace -q -n 'BEGIN { printf("PID_COHORT_TRACE_READY\n"); }
+dtrace -x nolibs -q -n 'BEGIN { printf("PID_COHORT_TRACE_READY\n"); }
 fbt::proc_exit:entry /execname == "pid_ownership"/ {
     printf("PID_COHORT_EXIT pid=%d why=%d signal=%d\n", pid, arg0, arg1);
 }' </dev/null > "$trace" 2>&1 &
