@@ -3817,7 +3817,8 @@ fop_lookup(
 	}
 	if (ret == 0 && *vpp) {
 		VOPSTATS_UPDATE(*vpp, lookup);
-		if (deflags == NULL || !(*deflags & LOOKUP_JUMPED))
+		if (!(flags & LOOKUP_FOLLOWLINK) || deflags == NULL ||
+		    !(*deflags & LOOKUP_JUMPED))
 			vn_updatepath(dvp, *vpp, nm);
 	}
 

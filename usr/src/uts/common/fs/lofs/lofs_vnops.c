@@ -344,7 +344,8 @@ lo_lookup(
 	}
 
 	/* A process link already selected the target's exact mount instance. */
-	if (direntflags != NULL && (*direntflags & LOOKUP_JUMPED)) {
+	if ((flags & LOOKUP_FOLLOWLINK) && direntflags != NULL &&
+	    (*direntflags & LOOKUP_JUMPED)) {
 		*vpp = vp;
 		return (0);
 	}

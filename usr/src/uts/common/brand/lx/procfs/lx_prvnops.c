@@ -7007,7 +7007,7 @@ lxpr_lookup(vnode_t *dp, char *comp, vnode_t **vpp, pathname_t *pathp,
 		    link->lxpr_type == LXPR_PID_CURDIR ||
 		    link->lxpr_type == LXPR_PID_ROOTDIR ||
 		    link->lxpr_type == LXPR_PID_EXE) &&
-		    link->lxpr_realvp != NULL &&
+		    link->lxpr_realvp != NULL && (*vpp)->v_type == VLNK &&
 		    (view = lx_mntns_current()) != NULL) {
 			vnode_t *target = link->lxpr_realvp;
 
