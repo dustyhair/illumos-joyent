@@ -7,6 +7,7 @@
 #include <sys/atomic.h>
 #include <sys/brand.h>
 #include <sys/disp.h>
+#include <sys/dnlc.h>
 #include <sys/dtrace.h>
 #include <sys/errno.h>
 #include <sys/debug.h>
@@ -45,6 +46,12 @@ typedef struct lx_mntns_mount {
 	struct lx_mntns_mount *lm_next;
 } lx_mntns_mount_t;
 
+typedef struct lx_mntns_clone_mount {
+	vnode_t *lc_source;
+	refstr_t *lc_path;
+	struct lx_mntns_clone_mount *lc_next;
+} lx_mntns_clone_mount_t;
+
 /* The zone and each reserved view own a reference to this account. */
 struct lx_mntns_budget {
 	kmutex_t lb_lock;
@@ -72,6 +79,7 @@ static taskq_t *lx_mntns_taskq;
 static volatile uint_t lx_mntns_nviews;
 
 static int lx_mntns_destroy(lx_mntns_view_t *, cred_t *);
+static int lx_mntns_tree_fini(lx_mntns_view_t *, cred_t *);
 static void lx_mntns_reap(void *);
 
 lx_mntns_budget_t *
@@ -513,6 +521,22 @@ lx_mntns_pin(lx_mntns_mount_t *mount, cred_t *cr)
 	return (error);
 }
 
+static boolean_t
+lx_mntns_bindable(vtype_t type)
+{
+	switch (type) {
+	case VDIR:
+	case VREG:
+	case VCHR:
+	case VBLK:
+	case VFIFO:
+	case VSOCK:
+		return (B_TRUE);
+	default:
+		return (B_FALSE);
+	}
+}
+
 /* lv_lock serializes publication and keeps every graft in the private tree. */
 static int
 lx_mntns_bind_locked(lx_mntns_view_t *view, vnode_t *source,
@@ -527,7 +551,7 @@ lx_mntns_bind_locked(lx_mntns_view_t *view, vnode_t *source,
 		return (ENOSPC);
 	if (!lx_mntns_owns(view, covered) ||
 	    (copy ? (covered->v_type == VNON || covered->v_type == VBAD) :
-	    covered->v_type != source->v_type))
+	    ((covered->v_type == VDIR) != (source->v_type == VDIR))))
 		return (EINVAL);
 	mount = kmem_zalloc(sizeof (*mount), KM_SLEEP);
 	/* Keep noexec when binding a source from another view. */
@@ -559,7 +583,7 @@ lx_mntns_bind(lx_mntns_view_t *view, vnode_t *source,
 
 	if (path == NULL || path[0] != '/' || strcmp(path, "/") == 0 ||
 	    (copy ? (source->v_type == VNON || source->v_type == VBAD) :
-	    (source->v_type != VDIR && source->v_type != VREG)))
+	    !lx_mntns_bindable(source->v_type)))
 		return (EINVAL);
 	resolved = kmem_alloc(MAXPATHLEN, KM_SLEEP);
 	mutex_enter(&view->lv_lock);
@@ -658,14 +682,207 @@ lx_mntns_vnodetopath(vnode_t *vp, char *buffer, size_t size, cred_t *actor)
 	return (error);
 }
 
+/* Mount ancestry retains covered stacks as well as visible mounts. */
+static boolean_t
+lx_mntns_descendant(lx_mntns_view_t *view, vfs_t *vfs, vfs_t *ancestor)
+{
+	lx_mntns_mount_t *mount;
+	uint_t depth;
+
+	for (depth = 0; depth <= view->lv_nmounts; depth++) {
+		if (vfs == ancestor)
+			return (B_TRUE);
+		for (mount = view->lv_mounts; mount != NULL;
+		    mount = mount->lm_next) {
+			if (mount->lm_vfs == vfs)
+				break;
+		}
+		if (mount == NULL || vfs->vfs_vnodecovered == NULL)
+			return (B_FALSE);
+		vfs = vfs->vfs_vnodecovered->v_vfsp;
+	}
+	return (B_FALSE);
+}
+
 /*
- * Public non-recursive bind. Resolve both operands with the actor's root,
+ * Publish an already constructed private tree at one held target. Authority
+ * and target membership were checked by the caller. Preserve its prepared
+ * mount policy while exchanging the unspliced reference for a namespace one.
+ */
+static int
+lx_mntns_attach(vnode_t *covered, vfs_t *vfs)
+{
+	ulong_t saved, mask = VFS_RDONLY | VFS_NOSETUID | VFS_NODEVICES |
+	    VFS_NOMNTTAB;
+	int error, flags = MS_NOMNTTAB;
+
+	zone_hold(curzone);
+	mount_in_progress(curzone);
+	if ((error = vn_vfswlock(covered)) != 0)
+		goto out;
+	if (vn_mountedvfs(covered) != NULL || (covered->v_flag & VNOMOUNT)) {
+		error = (covered->v_flag & VNOMOUNT) ? EINVAL : EBUSY;
+		vn_vfsunlock(covered);
+		goto out;
+	}
+	vfs_lock_wait(vfs);
+	ASSERT(vfs->vfs_vnodecovered == NULL && vfs->vfs_zone == NULL);
+	saved = vfs->vfs_flag;
+	if (saved & VFS_RDONLY)
+		flags |= MS_RDONLY;
+	if ((saved & (VFS_NOSETUID | VFS_NODEVICES)) ==
+	    (VFS_NOSETUID | VFS_NODEVICES))
+		flags |= MS_NOSUID;
+	dnlc_purge_vp(covered);
+	vfs_add(covered, vfs, flags);
+	vfs->vfs_flag = (vfs->vfs_flag & ~mask) | (saved & mask);
+	vfs_unlock(vfs);
+	VFS_RELE(vfs);
+	vn_vfsunlock(covered);
+	error = 0;
+out:
+	mount_completed(curzone);
+	zone_rele(curzone);
+	return (error);
+}
+
+/* Prepare off-tree so a failed recursive copy publishes nothing. */
+static int
+lx_mntns_rbind_locked(lx_mntns_view_t *view, vnode_t *from,
+    vnode_t *covered, const char *destination, cred_t *actor)
+{
+	lx_mntns_clone_mount_t *list = NULL, *entry;
+	lx_mntns_mount_t *mount, *base = NULL, *tail;
+	lx_mntns_view_t *stage;
+	char *source, *full;
+	const char *name, *options;
+	size_t len;
+	uint_t count = 1;
+	int error;
+
+	ASSERT(MUTEX_HELD(&view->lv_lock));
+	if (!lx_mntns_owns(view, from))
+		return (EOPNOTSUPP);
+	source = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+	full = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+	stage = kmem_zalloc(sizeof (*stage), KM_SLEEP);
+	mutex_init(&stage->lv_lock, NULL, MUTEX_DEFAULT, NULL);
+	stage->lv_cred = view->lv_cred;
+	error = lx_mntns_path_locked(view, from, actor, source);
+	if (error != 0)
+		goto out;
+	len = strcmp(source, "/") == 0 ? 0 : strlen(source);
+	for (mount = view->lv_mounts; mount != NULL;
+	    mount = mount->lm_next) {
+		name = refstr_value(mount->lm_path);
+		if (strncmp(name, source, len) != 0 || name[len] != '/' ||
+		    name[len + 1] == '\0' || mount->lm_vfs == from->v_vfsp ||
+		    !lx_mntns_descendant(view, mount->lm_vfs, from->v_vfsp))
+			continue;
+		if (++count > LX_MNTNS_MAX_MOUNTS - view->lv_nmounts) {
+			error = ENOSPC;
+			goto out;
+		}
+		entry = kmem_zalloc(sizeof (*entry), KM_SLEEP);
+		VN_HOLD(entry->lc_source = mount->lm_root);
+		entry->lc_path = refstr_alloc(name + len);
+		entry->lc_next = list;
+		list = entry;
+	}
+	if (count > LX_MNTNS_MAX_MOUNTS - view->lv_nmounts) {
+		error = ENOSPC;
+		goto out;
+	}
+	if (strlen(destination) + curzone->zone_rootpathlen - 1 > MAXPATHLEN) {
+		error = ENAMETOOLONG;
+		goto out;
+	}
+	options = (from->v_vfsp->vfs_flag & VFS_NOEXEC) != 0 ?
+	    "nosub,noexec" : "nosub";
+	error = lx_mntns_mount("lx-private-recursive", destination, "lofs",
+	    options, MS_NOSPLICE, from, from, view->lv_cred, &stage->lv_vfs);
+	if (error != 0)
+		goto out;
+	vfs_lock_wait(stage->lv_vfs);
+	vfs_setmntpoint(stage->lv_vfs, destination, 0);
+	vfs_unlock(stage->lv_vfs);
+	if ((error = VFS_ROOT(stage->lv_vfs, &stage->lv_root)) != 0) {
+		VERIFY0(dounmount(stage->lv_vfs, 0, view->lv_cred));
+		VFS_RELE(stage->lv_vfs);
+		stage->lv_vfs = NULL;
+		goto out;
+	}
+	for (entry = list; entry != NULL; entry = entry->lc_next) {
+		error = lx_mntns_bind(stage, entry->lc_source,
+		    refstr_value(entry->lc_path), B_FALSE, B_TRUE,
+		    view->lv_cred);
+		if (error != 0)
+			goto out;
+	}
+	/* Allocate and validate all destination metadata before publication. */
+	for (mount = stage->lv_mounts; mount != NULL;
+	    mount = mount->lm_next) {
+		if (snprintf(full, MAXPATHLEN, "%s%s", destination,
+		    refstr_value(mount->lm_path)) >= MAXPATHLEN) {
+			error = ENAMETOOLONG;
+			goto out;
+		}
+		refstr_rele(mount->lm_path);
+		mount->lm_path = refstr_alloc(full);
+	}
+	base = kmem_zalloc(sizeof (*base), KM_SLEEP);
+	base->lm_vfs = stage->lv_vfs;
+	base->lm_root = stage->lv_root;
+	base->lm_path = refstr_alloc(destination);
+	if ((error = lx_mntns_attach(covered, stage->lv_vfs)) != 0)
+		goto out;
+	base->lm_next = view->lv_mounts;
+	if (stage->lv_mounts != NULL) {
+		for (tail = stage->lv_mounts; tail->lm_next != NULL;
+		    tail = tail->lm_next)
+			;
+		tail->lm_next = base;
+		view->lv_mounts = stage->lv_mounts;
+	} else {
+		view->lv_mounts = base;
+	}
+	view->lv_nmounts += count;
+	base = NULL;
+	stage->lv_root = NULL;
+	stage->lv_vfs = NULL;
+	stage->lv_mounts = NULL;
+	stage->lv_nmounts = 0;
+out:
+	while ((entry = list) != NULL) {
+		list = entry->lc_next;
+		VN_RELE(entry->lc_source);
+		refstr_rele(entry->lc_path);
+		kmem_free(entry, sizeof (*entry));
+	}
+	if (stage->lv_vfs != NULL) {
+		mutex_enter(&stage->lv_lock);
+		VERIFY0(lx_mntns_tree_fini(stage, view->lv_cred));
+		mutex_exit(&stage->lv_lock);
+	}
+	if (base != NULL) {
+		refstr_rele(base->lm_path);
+		kmem_free(base, sizeof (*base));
+	}
+	mutex_destroy(&stage->lv_lock);
+	kmem_free(stage, sizeof (*stage));
+	kmem_free(source, MAXPATHLEN);
+	kmem_free(full, MAXPATHLEN);
+	return (error);
+}
+
+/*
+ * Public bind. Resolve both operands with the actor's root,
  * cwd and credentials, then pass held vnodes to domount. The kernel mount
  * credential must never do a second, more privileged pathname lookup.
  */
 int
 lx_mntns_mount_bind(lx_mntns_view_t *view, const char *source,
-    const char *target, cred_t *actor)
+    const char *target, boolean_t recursive, cred_t *actor)
 {
 	vnode_t *from = NULL, *covered = NULL;
 	char *resolved;
@@ -679,7 +896,7 @@ lx_mntns_mount_bind(lx_mntns_view_t *view, const char *source,
 	error = lookupname((char *)source, UIO_SYSSPACE, FOLLOW, NULL, &from);
 	if (error != 0)
 		goto out;
-	if (from->v_type != VDIR && from->v_type != VREG) {
+	if (!lx_mntns_bindable(from->v_type)) {
 		error = EINVAL;
 		goto out;
 	}
@@ -691,7 +908,7 @@ lx_mntns_mount_bind(lx_mntns_view_t *view, const char *source,
 		error = EINVAL;
 		goto out;
 	}
-	if (from->v_type != covered->v_type) {
+	if ((from->v_type == VDIR) != (covered->v_type == VDIR)) {
 		error = ENOTDIR;
 		goto out;
 	}
@@ -701,9 +918,14 @@ lx_mntns_mount_bind(lx_mntns_view_t *view, const char *source,
 		goto out;
 	}
 	error = lx_mntns_path_locked(view, covered, actor, resolved);
-	if (error == 0)
-		error = lx_mntns_bind_locked(view, from, covered, resolved,
-		    B_FALSE, B_FALSE);
+	if (error == 0) {
+		if (recursive && from->v_type == VDIR)
+			error = lx_mntns_rbind_locked(view, from, covered,
+			    resolved, actor);
+		else
+			error = lx_mntns_bind_locked(view, from, covered,
+			    resolved, B_FALSE, B_FALSE);
+	}
 out:
 	if (covered != NULL)
 		VN_RELE(covered);
@@ -874,11 +1096,7 @@ lx_mntns_view_snapshot(const char *source, cred_t *cr, cred_t *owner,
 	return (error);
 }
 
-typedef struct lx_mntns_clone_mount {
-	vnode_t *lc_source;
-	refstr_t *lc_path;
-	struct lx_mntns_clone_mount *lc_next;
-} lx_mntns_clone_mount_t;
+
 
 /*
  * Copy the private tree without rediscovering its mounts through the global
@@ -1056,24 +1274,25 @@ out:
 	return (error);
 }
 
+/* Caller holds lv_lock; also used for unpublished subtree rollback. */
 static int
-lx_mntns_destroy(lx_mntns_view_t *view, cred_t *cr)
+lx_mntns_tree_fini(lx_mntns_view_t *view, cred_t *cr)
 {
 	lx_mntns_mount_t *mount;
 	vnode_t *covered;
 	int error;
 
-	mutex_enter(&view->lv_lock);
+	ASSERT(MUTEX_HELD(&view->lv_lock));
 	while ((mount = view->lv_mounts) != NULL) {
 		covered = mount->lm_vfs->vfs_vnodecovered;
 		if ((error = vn_vfswlock(covered)) != 0)
-			goto busy;
+			return (error);
 		VN_RELE(mount->lm_root);
 		mount->lm_root = NULL;
 		/* dounmount consumes the covered-vnode lock. */
 		if ((error = dounmount(mount->lm_vfs, 0, cr)) != 0) {
 			VERIFY0(VFS_ROOT(mount->lm_vfs, &mount->lm_root));
-			goto busy;
+			return (error);
 		}
 		view->lv_mounts = mount->lm_next;
 		VERIFY3U(view->lv_nmounts, >, 0);
@@ -1087,10 +1306,23 @@ lx_mntns_destroy(lx_mntns_view_t *view, cred_t *cr)
 	error = dounmount(view->lv_vfs, 0, cr);
 	if (error != 0) {
 		VERIFY0(VFS_ROOT(view->lv_vfs, &view->lv_root));
-		goto busy;
+		return (error);
 	}
 	VFS_RELE(view->lv_vfs);
+	view->lv_vfs = NULL;
+	return (0);
+}
+
+static int
+lx_mntns_destroy(lx_mntns_view_t *view, cred_t *cr)
+{
+	int error;
+
+	mutex_enter(&view->lv_lock);
+	error = lx_mntns_tree_fini(view, cr);
 	mutex_exit(&view->lv_lock);
+	if (error != 0)
+		return (error);
 	crfree(view->lv_cred);
 	crfree(view->lv_owner);
 	mutex_destroy(&view->lv_lock);
@@ -1098,9 +1330,6 @@ lx_mntns_destroy(lx_mntns_view_t *view, cred_t *cr)
 	kmem_free(view, sizeof (*view));
 	atomic_dec_uint(&lx_mntns_nviews);
 	return (0);
-busy:
-	mutex_exit(&view->lv_lock);
-	return (error);
 }
 
 int

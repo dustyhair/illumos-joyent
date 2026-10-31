@@ -437,7 +437,7 @@ lx_mnt_private_mount(lx_mntns_view_t *view, const char *sourcep,
 	int error;
 
 	if (!lx_mntns_entry_enabled() || !(flags & LX_MS_BIND) ||
-	    (flags & ~(LX_MS_BIND | LX_MS_RDONLY | LX_MS_NOSUID |
+	    (flags & ~(LX_MS_BIND | LX_MS_REC | LX_MS_RDONLY | LX_MS_NOSUID |
 	    LX_MS_NODEV | LX_MS_NOEXEC | LX_MS_SILENT)) != 0)
 		return (lx_mntns_view_capable(view, CRED()) ?
 		    EOPNOTSUPP : EPERM);
@@ -463,7 +463,8 @@ lx_mnt_private_mount(lx_mntns_view_t *view, const char *sourcep,
 	else if (sourcep == NULL)
 		error = EINVAL;
 	else
-		error = lx_mntns_mount_bind(view, source, target, CRED());
+		error = lx_mntns_mount_bind(view, source, target,
+		    (flags & LX_MS_REC) != 0, CRED());
 out:
 	kmem_free(type, MAXPATHLEN);
 	kmem_free(target, MAXPATHLEN);
