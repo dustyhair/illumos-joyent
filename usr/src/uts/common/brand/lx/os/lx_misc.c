@@ -502,6 +502,10 @@ lx_lwpdata_alloc(proc_t *p)
 			return (NULL);
 		}
 		pidp = pid_find(newpid);
+		/* A synthetic thread ID reserves a PID, not a proc slot. */
+		mutex_enter(&pidlock);
+		pidp->pid_prinactive = 1;
+		mutex_exit(&pidlock);
 	}
 
 	lwpd = kmem_zalloc(sizeof (struct lx_lwp_data), KM_SLEEP);

@@ -1518,6 +1518,15 @@ ns_pid_hold(ktest_ctx_hdl_t *ctx)
 	}
 	mutex_exit(&p->p_lock);
 	p = NULL;
+	mutex_enter(&pidlock);
+	passed = identity->pid_ref >= 2 && identity->pid_prinactive &&
+	    prfind_zone(number, ALL_ZONES) == NULL;
+	mutex_exit(&pidlock);
+	if (!passed) {
+		KT_FAIL(ctx, "synthetic thread ID became a native process");
+		goto out;
+	}
+	passed = B_FALSE;
 	foreign = lx_pid_identity_hold(number, global_zone);
 	if (foreign != NULL) {
 		lx_pid_identity_rele(foreign);
@@ -1550,7 +1559,8 @@ static void
 ns_pid_retired(ktest_ctx_hdl_t *ctx)
 {
 	struct pid *actual;
-	boolean_t retained;
+	boolean_t retained = B_FALSE;
+	uint_t attempt;
 
 	mutex_enter(&ns_pid_lock);
 	if (ns_pid_identity == NULL) {
@@ -1558,12 +1568,17 @@ ns_pid_retired(ktest_ctx_hdl_t *ctx)
 		KT_ERROR(ctx, "no held worker identity");
 		return;
 	}
-	mutex_enter(&pidlock);
-	actual = pid_find(ns_pid_number);
-	retained = actual == ns_pid_identity && actual->pid_ref == 1 &&
-	    actual->pid_prinactive &&
-	    prfind_zone(ns_pid_number, ALL_ZONES) == NULL;
-	mutex_exit(&pidlock);
+	for (attempt = 0; attempt < 100; attempt++) {
+		mutex_enter(&pidlock);
+		actual = pid_find(ns_pid_number);
+		retained = actual == ns_pid_identity && actual->pid_ref == 1 &&
+		    actual->pid_prinactive &&
+		    prfind_zone(ns_pid_number, ALL_ZONES) == NULL;
+		mutex_exit(&pidlock);
+		if (retained || actual == NULL)
+			break;
+		delay(MAX(1, hz / 10));
+	}
 	mutex_exit(&ns_pid_lock);
 	if (retained)
 		KT_PASS(ctx);
