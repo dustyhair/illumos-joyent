@@ -5,8 +5,8 @@ test -f /lab/offline-lx-guest
 bootparams | grep -q '^lx_lab=true$'
 test "$(zonename)" = global
 zonepath=$(zonecfg -z lx-probe info zonepath | awk '{print $2}')
-test "$(digest -a sha256 "$zonepath/root/test/mntns_entry" | awk '{print $NF}')" = 036287244b79bc088fd856437a0432ca2ce85da5cd59acff291ac694670c580d
-test "$(digest -a sha256 "$zonepath/root/test/dynamic/mntns_entry" | awk '{print $NF}')" = f0358b39c9beb4c12642997a7cb592925e055f80a58904d621a1d5a59b9fe28f
+test "$(digest -a sha256 "$zonepath/root/test/mntns_entry" | awk '{print $NF}')" = 5493bca66c730819fe8fa8254513ac0c5ffa54c2983bed83930a0fcb0fbdfa16
+test "$(digest -a sha256 "$zonepath/root/test/dynamic/mntns_entry" | awk '{print $NF}')" = 3a5f29fe94238b729f3833c2cf6ea186d231f6ad0369a9c3318eabb2cff1c8ca
 mkdir -p "$zonepath/root/test/mnt-entry/cwd"
 chmod 0755 "$zonepath/root/test/mnt-entry" "$zonepath/root/test/mnt-entry/cwd"
 flags() {

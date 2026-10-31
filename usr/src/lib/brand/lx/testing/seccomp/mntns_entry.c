@@ -181,6 +181,19 @@ int main(int argc, char **argv)
         }
         check(pid > 0 && waitpid(pid, &status, 0) == pid &&
             WIFEXITED(status) && WEXITSTATUS(status) == 0, "fork-exec-wait");
+        if (!strcmp(mode, "mount")) {
+            pid = fork();
+            if (pid == 0) {
+                if (chroot(saved_cwd) || chdir("/")) _exit(92);
+                errno = 0;
+                if (unshare(CLONE_NEWUSER | CLONE_NEWNS) != -1 || errno != EPERM)
+                    _exit(93);
+                if (!getcwd(after, sizeof(after)) || strcmp(after, "/")) _exit(94);
+                _exit(0);
+            }
+            check(pid > 0 && waitpid(pid, &status, 0) == pid &&
+                WIFEXITED(status) && WEXITSTATUS(status) == 0, "chroot-entry-denied");
+        }
         if (!linux_control) {
             pid = fork();
             if (pid == 0) {
