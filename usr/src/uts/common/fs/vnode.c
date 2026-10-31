@@ -1927,6 +1927,15 @@ top:
 	dvfsp = dvp->v_vfsp;
 
 	/*
+	 * Linux rmdir checks the parent's write policy before a mounted child.
+	 * The cwd-preserving removal mode is used only by the lx brand.
+	 */
+	if (allow_cwd && dvfsp != NULL && (dvfsp->vfs_flag & VFS_RDONLY)) {
+		error = EROFS;
+		goto out;
+	}
+
+	/*
 	 * If the named file is the root of a mounted filesystem, fail,
 	 * unless it's marked unlinkable.  In that case, unmount the
 	 * filesystem and proceed to unlink the covered vnode.  (If the

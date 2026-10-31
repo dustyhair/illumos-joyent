@@ -124,14 +124,26 @@ lx_isdir(int atfd, char *path)
 }
 
 /* Keep the cwd reference intact when Linux removes its current directory. */
-long
-lx_rmdir(char *path)
+static long
+lx_rmdir_common(int atfd, char *path)
 {
-	int error = vn_remove(path, UIO_USERSPACE, RMDIRECTORY_CWD);
+	vnode_t *startvp;
+	int error;
 
+	if ((error = fgetstartvp(atfd, path, &startvp)) != 0)
+		return (set_errno(error));
+	error = vn_removeat(startvp, path, UIO_USERSPACE, RMDIRECTORY_CWD);
+	if (startvp != NULL)
+		VN_RELE(startvp);
 	if (error == EEXIST)
 		error = ENOTEMPTY;
 	return (error == 0 ? 0 : set_errno(error));
+}
+
+long
+lx_rmdir(char *path)
+{
+	return (lx_rmdir_common(AT_FDCWD, path));
 }
 
 long
@@ -158,6 +170,9 @@ lx_unlinkat(int atfd, char *path, int flag)
 
 	if ((flag = ltos_at_flag(flag, AT_REMOVEDIR, B_TRUE)) < 0)
 		return (set_errno(EINVAL));
+
+	if (flag == AT_REMOVEDIR)
+		return (lx_rmdir_common(atfd, path));
 
 	err = unlinkat(atfd, path, flag);
 	if (err == EPERM && !(flag & AT_REMOVEDIR)) {

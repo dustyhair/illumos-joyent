@@ -792,7 +792,10 @@ typedef vattr_t		vattr32_t;
 /*
  * Flags for vnode operations.
  */
-/* RMDIRECTORY_CWD permits removal of the caller's current directory. */
+/*
+ * RMDIRECTORY_CWD preserves the cwd and checks readonly before a mounted child.
+ * This mode supplies Linux directory-removal semantics to the lx brand.
+ */
 enum rm		{ RMFILE, RMDIRECTORY, RMDIRECTORY_CWD };
 enum symfollow	{ NO_FOLLOW, FOLLOW };		/* follow symlinks (or not) */
 enum vcexcl	{ NONEXCL, EXCL };		/* (non)excl create */
