@@ -135,6 +135,7 @@ struct vattr;
  * b_lwpdata_alloc - Speculatively allocate data for use in b_initlwp
  * b_lwpdata_free - Free data from allocated by b_lwpdata_alloc if errors occur
  *                  during lwp creation before b_initlwp could be called.
+ *                  Called without p_lock held, like b_lwpdata_alloc.
  * b_initlwp_post - Complete lwp branding (can temporarily drop p->p_lock)
  * b_exit_with_sig - Instead of sending SIGCLD, exit with custom behavior
  * b_psig_to_proc - Custom additional behavior during psig

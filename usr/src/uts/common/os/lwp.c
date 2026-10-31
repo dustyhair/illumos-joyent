@@ -789,11 +789,16 @@ error:
 		if (cid != NOCLASS && bufp != NULL)
 			CL_FREE(cid, bufp);
 
+		mutex_exit(&p->p_lock);
+
+		/*
+		 * The LWP has not been branded or added to p_tlist/tidhash.
+		 * Free its speculative brand data without p_lock, just as
+		 * it was allocated: cleanup may acquire pidlock.
+		 */
 		if (brand_data != NULL) {
 			BROP(p)->b_lwpdata_free(brand_data);
 		}
-
-		mutex_exit(&p->p_lock);
 		t->t_state = TS_FREE;
 		thread_rele(t);
 
