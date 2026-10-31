@@ -28,6 +28,7 @@ pfexec cp "$lab/mnt-root/platform/i86pc/kernel/amd64/unix" "$lab/kernel-unix"
 digest -a sha256 "$lab/kernel-unix" | awk '{print $NF}' > "$lab/boot-unix.sha256"
 pfexec cp "$ws/usr/src/uts/intel/genunix/obj64/genunix" "$lab/mnt-root/kernel/amd64/genunix"
 pfexec cp "$ws/usr/src/uts/intel/lofs/obj64/lofs" "$lab/mnt-root/kernel/fs/amd64/lofs"
+pfexec cp "$ws/usr/src/uts/intel/tmpfs/obj64/tmpfs" "$lab/mnt-root/kernel/fs/amd64/tmpfs"
 pfexec cp "$ws/usr/src/uts/intel/lx_brand/obj64/lx_brand" "$lab/mnt-root/kernel/brand/amd64/lx_brand"
 pfexec cp "$ws/usr/src/uts/intel/tl/obj64/tl" "$lab/mnt-root/kernel/drv/amd64/tl"
 pfexec cp "$lab/stream-cred-native" "$lab/mnt-root/lab/stream-cred-native"
@@ -88,6 +89,21 @@ if test -f "$lab/userns-budget-native"; then
 fi
 pfexec cp "$lab/userns-entry-test.sh" "$lab/mnt-root/lab/userns-entry-test.sh"
 pfexec chmod 0555 "$lab/mnt-root/lab/userns-entry-test.sh"
+# Keep current mount controllers with the image instead of serial-uploading
+# them for every boot. Each controller verifies its fixture binary hashes.
+for controller in mntns-budget-native mount-owner-test.sh \
+    mount-entry-test.sh mount-entry-full-test.sh \
+    mount-bind-test.sh mount-bind-full-test.sh \
+    mount-recursive-test.sh mount-recursive-full-test.sh \
+    mount-private-test.sh mount-private-full-test.sh \
+    mount-tmpfs-test.sh mount-tmpfs-full-test.sh \
+    mount-statfs-test.sh mount-statfs-full-test.sh \
+    mount-freeze-test.sh mount-freeze-full-test.sh \
+    mount-detach-test.sh mount-detach-full-test.sh bubblewrap-trace.sh; do
+    test -f "$lab/$controller"
+    pfexec cp "$lab/$controller" "$lab/mnt-root/lab/$controller"
+    pfexec chmod 0555 "$lab/mnt-root/lab/$controller"
+done
 pfexec cp "$lab/lx-root.tar" "$lab/mnt-root/lab/lx-root.tar"
 pfexec cp "$lab/enforcement-test.sh" "$lab/mnt-root/lab/enforcement-test.sh"
 pfexec chmod 0555 "$lab/mnt-root/lab/enforcement-test.sh"
@@ -102,5 +118,5 @@ if test -f "$ws/usr/src/uts/intel/lx_namespace_ktest/obj64/lx_namespace_ktest"; 
     fi
 fi
 
-digest -a sha256 "$lab/mnt-root/platform/i86pc/kernel/amd64/unix" "$lab/mnt-root/kernel/amd64/genunix" "$lab/mnt-root/kernel/brand/amd64/lx_brand" "$lab/mnt-root/kernel/fs/amd64/lx_proc" "$lab/mnt-root/kernel/fs/amd64/lofs" "$lab/mnt-root/kernel/exec/amd64/elfexec" "$lab/lx-root/test/enforcement_probe"
+digest -a sha256 "$lab/mnt-root/platform/i86pc/kernel/amd64/unix" "$lab/mnt-root/kernel/amd64/genunix" "$lab/mnt-root/kernel/brand/amd64/lx_brand" "$lab/mnt-root/kernel/fs/amd64/lx_proc" "$lab/mnt-root/kernel/fs/amd64/lofs" "$lab/mnt-root/kernel/fs/amd64/tmpfs" "$lab/mnt-root/kernel/exec/amd64/elfexec" "$lab/lx-root/test/enforcement_probe"
 df -h "$lab/mnt-root"
