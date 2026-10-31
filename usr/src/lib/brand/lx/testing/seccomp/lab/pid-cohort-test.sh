@@ -22,7 +22,7 @@ cleanup() {
     test -z "$runner" || wait "$runner" || true
     test -z "$peer_runner" || wait "$peer_runner" || true
     if test -n "$tracer"; then
-        kill -INT "$tracer" 2>/dev/null || true
+        kill -TERM "$tracer" 2>/dev/null || true
         wait "$tracer" || true
     fi
     if test "$held" = 1; then
@@ -141,7 +141,7 @@ for variant in static dynamic; do
         done
     done
 done
-kill -INT "$tracer"
+kill -TERM "$tracer"
 wait "$tracer"
 tracer=
 printf '%s\n' 'lx_brand`lx_seccomp_experimental/W 0' \
