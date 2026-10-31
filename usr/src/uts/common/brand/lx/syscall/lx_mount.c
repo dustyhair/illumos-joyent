@@ -950,6 +950,7 @@ out:
 	return (rv == 0 ? rv : set_errno(rv));
 }
 
+#define	LX_MNT_FORCE	0x1
 #define	LX_MNT_DETACH	0x2
 
 static int
@@ -962,10 +963,14 @@ lx_mnt_private_umount(lx_mntns_view_t *view, const char *pathp, int flags)
 	if (error == 0) {
 		if (!lx_mntns_view_capable(view, CRED()))
 			error = EPERM;
+		else if (!lx_mntns_entry_enabled())
+			error = EOPNOTSUPP;
 		else if (flags == LX_MNT_DETACH)
 			error = lx_mntns_mount_detach(view, path, CRED());
+		else if (flags == 0 || flags == LX_MNT_FORCE)
+			error = EOPNOTSUPP;
 		else
-			error = flags == 0 ? EOPNOTSUPP : EINVAL;
+			error = EINVAL;
 	}
 	kmem_free(path, MAXPATHLEN);
 	return (error);
@@ -995,7 +1000,6 @@ lx_umount(char *path)
  * The Linux umount2() system call is identical to illumos but has a different
  * value for MNT_FORCE (the logical equivalent to MS_FORCE).
  */
-#define	LX_MNT_FORCE	0x1
 
 long
 lx_umount2(char *path, int flg)
