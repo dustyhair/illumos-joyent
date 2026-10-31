@@ -170,6 +170,7 @@
 #include <sys/brand.h>
 #include <sys/lx_userns.h>
 #include <sys/lx_mntns.h>
+#include <sys/lx_pidns.h>
 #include <sys/sdt.h>
 #include <sys/x86_archext.h>
 #include <sys/controlregs.h>
@@ -2785,7 +2786,7 @@ _fini(void)
 	 * Zones, immutable credentials and live/retired mount views keep the
 	 * brand loaded. A reaper may still be using the module after zone exit.
 	 */
-	if (brand_in_use(&lx_brand) || lx_mntns_busy())
+	if (brand_in_use(&lx_brand) || lx_mntns_busy() || lx_pidns_busy())
 		return (EBUSY);
 
 	lx_ptrace_fini();

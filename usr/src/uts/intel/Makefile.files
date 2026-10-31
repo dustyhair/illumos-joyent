@@ -344,6 +344,7 @@ LX_BRAND_OBJS  =		\
 	lx_personality.o	\
 	lx_pgrp.o		\
 	lx_pid.o		\
+	lx_pidns.o		\
 	lx_pipe.o		\
 	lx_poll.o		\
 	lx_prctl.o		\

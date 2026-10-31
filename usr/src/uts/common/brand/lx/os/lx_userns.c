@@ -19,6 +19,7 @@
 #include <sys/lx_misc.h>
 #include <sys/lx_brand.h>
 #include <sys/lx_mntns.h>
+#include <sys/lx_pidns.h>
 #include <sys/proc.h>
 #include <sys/machbrand.h>
 #include <sys/vnode.h>
@@ -37,6 +38,8 @@ struct lx_userns {
 	/* Only the initial namespace owns this zone-wide budget. */
 	uint32_t un_max;
 	uint32_t un_used;
+	uint32_t un_pidns_max;
+	uint32_t un_pidns_used;
 };
 
 static lx_userns_actor_t
@@ -59,6 +62,7 @@ lx_userns_root_create(void)
 	mutex_init(&ns->un_lock, NULL, MUTEX_DEFAULT, NULL);
 	ns->un_refs = 1;
 	ns->un_max = LX_USERNS_DEFAULT_MAX;
+	ns->un_pidns_max = LX_PIDNS_DEFAULT_MAX;
 	lx_userns_model_root(&ns->un_model);
 	return (ns);
 }
@@ -94,6 +98,55 @@ lx_userns_budget_get(lx_userns_t *ns, uint32_t *maximum, uint32_t *used)
 	mutex_exit(&root->un_lock);
 }
 
+/* PID namespaces have a separate zone-wide budget, charged before work. */
+int
+lx_userns_pidns_budget_set(lx_userns_t *ns, uint32_t maximum)
+{
+	if (ns->un_parent != NULL)
+		return (EINVAL);
+	mutex_enter(&ns->un_lock);
+	ns->un_pidns_max = maximum;
+	mutex_exit(&ns->un_lock);
+	return (0);
+}
+
+void
+lx_userns_pidns_budget_get(lx_userns_t *ns, uint32_t *maximum, uint32_t *used)
+{
+	lx_userns_t *root = lx_userns_budget_root(ns);
+
+	mutex_enter(&root->un_lock);
+	*maximum = root->un_pidns_max;
+	*used = root->un_pidns_used;
+	mutex_exit(&root->un_lock);
+}
+
+int
+lx_userns_pidns_charge(lx_userns_t *ns)
+{
+	lx_userns_t *root = lx_userns_budget_root(ns);
+	int error = 0;
+
+	mutex_enter(&root->un_lock);
+	if (root->un_pidns_used >= root->un_pidns_max)
+		error = ENOSPC;
+	else
+		root->un_pidns_used++;
+	mutex_exit(&root->un_lock);
+	return (error);
+}
+
+void
+lx_userns_pidns_uncharge(lx_userns_t *ns)
+{
+	lx_userns_t *root = lx_userns_budget_root(ns);
+
+	mutex_enter(&root->un_lock);
+	VERIFY3U(root->un_pidns_used, !=, 0);
+	root->un_pidns_used--;
+	mutex_exit(&root->un_lock);
+}
+
 static void
 lx_userns_uncharge(lx_userns_t *root)
 {
@@ -118,8 +171,10 @@ lx_userns_rele(lx_userns_t *ns)
 		lx_userns_t *root = parent != NULL ?
 		    lx_userns_budget_root(parent) : NULL;
 
-		if (parent == NULL)
+		if (parent == NULL) {
 			VERIFY0(ns->un_used);
+			VERIFY0(ns->un_pidns_used);
+		}
 		mutex_destroy(&ns->un_lock);
 		kmem_free(ns, sizeof (*ns));
 		if (root != NULL)
