@@ -1,0 +1,50 @@
+{
+  "vm": 98,
+  "accepted_checkpoint": false,
+  "source": "d95d28b3180d2a556642efeab3668bd54157fa3f",
+  "prior_cases_passed": {
+    "^MNT_ENTRY_CASE_PASS ": 70,
+    "^MOUNT_BIND_CASE_PASS ": 12,
+    "^MOUNT_BIND_FILL_PASS ": 2,
+    "^MOUNT_RECURSIVE_CASE_PASS ": 12,
+    "^MOUNT_PRIVATE_CASE_PASS ": 8,
+    "^MOUNT_TMPFS_CASE_PASS ": 12,
+    "^MOUNT_STATFS_CASE_PASS ": 4
+  },
+  "prior_full_regressions_exit": 0,
+  "new_cases_passed": 0,
+  "failure": "recursive bind root flags0x400 miss VFS_NOMNTTAB0x2, while private flags0xe have not recorded write exposure. Seal correctly returns NativeEOPNOTSUPP122 translated Linux95. Dependent assertions then cascade.",
+  "diagnosis": "NOSPLICE skips vfs_add where NOMNTTAB is normally set. Attach preserves saved mask and cleared newly set NOMNTTAB from vfs_add. Child spliced mount seal succeeds.",
+  "fix": "158131f976 sets VFS_NOMNTTAB on every successful private constructor before publication/attach",
+  "cleanup": {
+    "process_idle": "PASS",
+    "user_budget_idle": "PASS",
+    "views": 0,
+    "flags": [
+      0,
+      0,
+      0
+    ],
+    "zone_halted": true,
+    "pool_export_exit": 0,
+    "synced_shutdown": true,
+    "qemu_pid_exited": 2354909
+  },
+  "console": {
+    "name": "boot-98-readonly-private-marker-diagnostic.log",
+    "sha256": "f457a5754ba24f01f250265128e50e92b69be95933f0018841a050a7f7c973b3"
+  },
+  "logs": {
+    "vm98-full.log": "928d1be48e3f3fbe11f151e80aee7d0d6f023c54c506d879096f75e42cccc9d5",
+    "vm98-freeze.log": "26cd1ab83d53e50d797f182c93f152cce67a91a539a9709987c957e204c13e49",
+    "vm98-trace.log": "2558121d91f4cf000dabdbe778da085d084d44f082e8fab5a6e63d322f70a9a2",
+    "vm98-regressions.log": "5494dd5612fa28613a9fbba211a49b6f63145ad6dd6d931c492c1d058498c930",
+    "vm98-entry.log": "494e1fc87e4313cf2c77d7b4897342917da37bc4612e5e020ff9604ca53bd0ac",
+    "vm98-bind.log": "b2151f982830747622351923b8e5fdf203f1dde9bf8a14d5c990af289ee77bac",
+    "vm98-recursive.log": "f63e3e769569b101348cf02566ce59ecdea431199aa2174999fb27b20f341de6",
+    "vm98-private.log": "f966904673686e014c05fb581cc629bc9a9e2db6f27a0e60ad79e5fc440e3196",
+    "vm98-tmpfs.log": "84977b89be82c5ad303152e4239eb1e6847c7fc56151f7c402337721616e4e3d",
+    "vm98-statfs.log": "9df65632435e623de090203c05555377c5a5f6700fdf2d18a0faf4fa9e7ba8f6"
+  },
+  "physical_host_deployed": false
+}

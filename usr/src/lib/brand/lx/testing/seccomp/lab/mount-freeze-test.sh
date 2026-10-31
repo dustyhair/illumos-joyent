@@ -5,8 +5,8 @@ test -f /lab/offline-lx-guest
 bootparams | grep -q '^lx_lab=true$'
 test "$(zonename)" = global
 zonepath=$(zonecfg -z lx-probe info zonepath | awk '{print $2}')
-test "$(digest -a sha256 "$zonepath/root/test/mntns_freeze" | awk '{print $NF}')" = 6e1cd9c7dbfcf8c611e0ee6d76563f14b81d2d055d7d708481a3dfb1320707ea
-test "$(digest -a sha256 "$zonepath/root/test/dynamic/mntns_freeze" | awk '{print $NF}')" = b418b0ae9d0ca406154d7f5e40d57fea74b93f0ab0657399aeedcef8a5c011b3
+test "$(digest -a sha256 "$zonepath/root/test/mntns_freeze" | awk '{print $NF}')" = f72292225699621fef3d3753dee2413e30800a9ca169931cdf0822662c7e0cdb
+test "$(digest -a sha256 "$zonepath/root/test/dynamic/mntns_freeze" | awk '{print $NF}')" = c4991fdc3fee0e599a1d105239436679829182a0600a5e0724665a140a388b83
 mkdir -p "$zonepath/root/test/mnt-freeze"
 chmod 1777 "$zonepath/root/test/mnt-freeze"
 printf '%s\n' 'lx_brand`lx_seccomp_experimental/W 1' \

@@ -196,6 +196,10 @@ main(int argc, char **argv)
 	(void) snprintf(alias, sizeof (alias), "/proc/self/fd/%d", fd);
 	seal(alias, 0, "fresh-bind-seal-via-descriptor");
 	(void) close(fd);
+	if (failures != 0) {
+		(void) close(sourcefd);
+		goto out;
+	}
 	check(statfs(target, &stats) == 0 && (stats.f_flags & 0xf) == 0xf,
 	    "sealed-mount-flags");
 	check(statfs(path("target/subdir", p), &stats) == 0 &&
