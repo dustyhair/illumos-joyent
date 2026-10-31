@@ -106,7 +106,9 @@ static void private_check(void)
 int main(int argc, char **argv)
 {
     char source[PATH_MAX], target[PATH_MAX], p[PATH_MAX];
-    char data[64] = { 0 }, fdpath[64];
+    char data[64] = { 0 }, fdpath[64], linktext[PATH_MAX];
+    struct stat st;
+    ssize_t linklen;
     int i, drop = 0, linux_control = 0, child_mode = 0, mount_only = 0;
     int denied = 0, fill = 0, pipes[2], held, targetfd, status;
     uid_t uid;
@@ -182,7 +184,13 @@ int main(int argc, char **argv)
     path("target", target);
     if (!denied) {
         snprintf(fdpath, sizeof(fdpath), "/proc/self/fd/%d", targetfd);
+        check(lstat(fdpath, &st) == 0 && S_ISLNK(st.st_mode),
+            "foreign-fd-lstat");
         expect_mount(source, fdpath, MS_BIND, EINVAL, "foreign-fd-target");
+        check(symlink(fdpath, path("foreign-alias", p)) == 0,
+            "foreign-fd-alias-create");
+        expect_mount(source, path("foreign-alias", p), MS_BIND, EINVAL,
+            "foreign-fd-alias-target");
         close(targetfd);
         targetfd = open(path("fd-target", p), O_PATH);
         if (targetfd < 0) return 2;
@@ -205,8 +213,24 @@ int main(int argc, char **argv)
     check(read(held, data, sizeof(data) - 1) == 7 && !strcmp(data, "target\n"),
         "held-covered-file");
     check(contents(target, "source\n"), "bound-file-contents");
+    snprintf(fdpath, sizeof(fdpath), "/proc/self/fd/%d", held);
+    check(contents(fdpath, "target\n"), "open-covered-fd-object");
     check(chdir(base) == 0, "relative-cwd");
     expect_mount("dir-source", "dir-target", MS_BIND, 0, "relative-dir-bind");
+    snprintf(fdpath, sizeof(fdpath), "/proc/self/fd/%d", targetfd);
+    check(lstat(fdpath, &st) == 0 && S_ISLNK(st.st_mode), "private-fd-lstat");
+    check(stat(fdpath, &st) == 0 && S_ISREG(st.st_mode), "private-fd-stat");
+    linklen = readlink(fdpath, linktext, sizeof(linktext) - 1);
+    check(linklen > 0, "private-fd-readlink");
+    if (linklen > 0) {
+        linktext[linklen] = 0;
+        check(!strcmp(linktext, path("fd-target", p)), "private-fd-name");
+    }
+    check(symlink(fdpath, path("fd-alias", p)) == 0, "fd-alias-create");
+    expect_mount(source, path("fd-alias", p), MS_BIND, 0, "fd-alias-bind");
+    close(targetfd);
+    targetfd = open(path("fd-target", p), O_PATH);
+    check(targetfd >= 0, "reopen-mounted-fd-target");
     snprintf(fdpath, sizeof(fdpath), "/proc/self/fd/%d", targetfd);
     expect_mount(source, fdpath, MS_BIND, 0, "fd-bind");
     expect_mount(source, path("target-link", p), MS_BIND, 0, "symlink-bind");

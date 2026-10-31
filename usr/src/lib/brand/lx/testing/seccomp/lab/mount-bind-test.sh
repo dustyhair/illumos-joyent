@@ -5,8 +5,8 @@ test -f /lab/offline-lx-guest
 bootparams | grep -q '^lx_lab=true$'
 test "$(zonename)" = global
 zonepath=$(zonecfg -z lx-probe info zonepath | awk '{print $2}')
-test "$(digest -a sha256 "$zonepath/root/test/mntns_bind" | awk '{print $NF}')" = 19a2efdabe4be564241640a3a02ef71d74ffa86cfd2cdc0fa5725f6045f4c61a
-test "$(digest -a sha256 "$zonepath/root/test/dynamic/mntns_bind" | awk '{print $NF}')" = 100ffa8c5cd3fd0d2141f61cb169797956c6340ca96ba8f1dbe88153ba3006bb
+test "$(digest -a sha256 "$zonepath/root/test/mntns_bind" | awk '{print $NF}')" = f99feeb5fdd3d7cf34b41161100a2bcfdc3e7d57026cc08ae6f7271461ab8535
+test "$(digest -a sha256 "$zonepath/root/test/dynamic/mntns_bind" | awk '{print $NF}')" = 67f6f2b5b322cb2871750c74fc09d50642933a1da6433a3a6c7cc6c88434f6e8
 mkdir -p "$zonepath/root/test/mnt-bind/denied"
 chmod 1777 "$zonepath/root/test/mnt-bind"
 chmod 0700 "$zonepath/root/test/mnt-bind/denied"
