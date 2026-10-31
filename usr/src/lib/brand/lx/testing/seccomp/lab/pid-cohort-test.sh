@@ -14,12 +14,17 @@ peer=
 runner=
 peer_runner=
 held=0
+tracer=
 cleanup() {
     for target in "$descendant" "$child" "$pid" "$peer"; do
         test -z "$target" || kill -KILL "$target" 2>/dev/null || true
     done
     test -z "$runner" || wait "$runner" || true
     test -z "$peer_runner" || wait "$peer_runner" || true
+    if test -n "$tracer"; then
+        kill -INT "$tracer" 2>/dev/null || true
+        wait "$tracer" || true
+    fi
     if test "$held" = 1; then
         ktest run lx_namespace:pid:process_release >/lab/pid-cohort-cleanup.log 2>&1 || true
     fi
@@ -42,16 +47,31 @@ wait_stopped() {
     done
     return 1
 }
-wait_killed() {
+wait_runner() {
     local target=$1 status
     if wait "$target"; then status=0; else status=$?; fi
-    echo "PID_COHORT_RUNNER_STATUS=$status"
-    test "$status" = 137
+    echo "PID_COHORT_ZLOGIN_STATUS=$status"
+    # Native noninteractive zlogin returns WEXITSTATUS without WIFSIGNALED.
+    # Kernel exit probes below validate CLD_KILLED/SIGKILL independently.
+    test "$status" = 0
 }
 printf '%s\n' 'lx_brand`lx_seccomp_experimental/W 1' \
     'lx_brand`lx_userns_experimental/W 1' \
     'lx_brand`lx_mntns_experimental/W 1' | mdb -kw
+# The offline root needs its Linux reaper, without metadata/network startup.
+if ! zonecfg -z lx-probe info attr name=init-name | grep -q 'name: init-name'; then
+    zonecfg -z lx-probe 'add attr; set name=init-name; set type=string; set value=/sbin/init; end;'
+else
+    zonecfg -z lx-probe 'select attr name=init-name; set type=string; set value=/sbin/init; end;'
+fi
 zoneadm -z lx-probe boot
+trace=/lab/pid-cohort-exits.log
+dtrace -q -n 'BEGIN { printf("PID_COHORT_TRACE_READY\n"); }
+fbt::proc_exit:entry /execname == "pid_ownership"/ {
+    printf("PID_COHORT_EXIT pid=%d why=%d signal=%d\n", pid, arg0, arg1);
+}' </dev/null > "$trace" 2>&1 &
+tracer=$!
+wait_marker "$trace" '^PID_COHORT_TRACE_READY$'
 for variant in static dynamic; do
     probe=/test/pid_ownership
     test "$variant" != dynamic || probe=/test/dynamic/pid_ownership
@@ -88,17 +108,23 @@ for variant in static dynamic; do
             ktest run -i /lab/pid-cohort-target.bin lx_namespace:pid:process_child
             printf '%s\0' "$descendant" > /lab/pid-cohort-target.bin
             ktest run -i /lab/pid-cohort-target.bin lx_namespace:pid:process_descendant
+            killed_owner=$pid
+            killed_peer=$peer
             kill -KILL "$pid"
-            wait_killed "$runner"
+            wait_runner "$runner"
             runner=
             pid=
             ktest run lx_namespace:pid:process_dead
             wait_stopped "$peer"
             echo PID_COHORT_OUTSIDE_PEER_ALIVE
             kill -KILL "$peer"
-            wait_killed "$peer_runner"
+            wait_runner "$peer_runner"
             peer_runner=
             peer=
+            for killed in "$killed_owner" "$child" "$descendant" "$killed_peer"; do
+                wait_marker "$trace" "^PID_COHORT_EXIT pid=$killed why=2 signal=9$"
+                grep "^PID_COHORT_EXIT pid=$killed why=2 signal=9$" "$trace"
+            done
             ktest run lx_namespace:pid:process_release
             held=0
             child=
@@ -115,6 +141,9 @@ for variant in static dynamic; do
         done
     done
 done
+kill -INT "$tracer"
+wait "$tracer"
+tracer=
 printf '%s\n' 'lx_brand`lx_seccomp_experimental/W 0' \
     'lx_brand`lx_userns_experimental/W 0' \
     'lx_brand`lx_mntns_experimental/W 0' | mdb -kw
