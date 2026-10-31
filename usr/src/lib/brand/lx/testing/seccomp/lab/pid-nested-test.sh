@@ -55,12 +55,12 @@ zoneadm -z lx-probe boot
 for variant in static dynamic; do
     for clone in normal clone0; do
         for mode in normal kill-inner kill-outer; do
-            opts=()
-            test "$clone" != clone0 || opts+=(--clone0)
-            test "$mode" = normal || opts+=("--$mode")
+            opts=
+            test "$clone" != clone0 || opts="$opts --clone0"
+            test "$mode" = normal || opts="$opts --$mode"
             log=/lab/pid-nested-$variant-$clone-$mode.log
             echo "NEST_CASE_START $variant $clone $mode"
-            zlogin -S lx-probe "/test/nested/$variant/pid_nested ${opts[*]}" </dev/null > "$log" 2>&1 &
+            zlogin -S lx-probe "/test/nested/$variant/pid_nested $opts" </dev/null > "$log" 2>&1 &
             runner=$!
             controller=$$
             ( sleep 55; echo NEST_TIMEOUT >&2; kill -TERM "$controller" ) </dev/null &
