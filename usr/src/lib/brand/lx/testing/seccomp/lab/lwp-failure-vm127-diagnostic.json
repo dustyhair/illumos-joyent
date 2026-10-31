@@ -1,0 +1,12 @@
+{
+  "vm": 127,
+  "qemu_pid": 3505828,
+  "source": "4c9482ff69637d4ad22dd029d4cf4bd50b81754c",
+  "production_source": "25e56214dddd5da7f90f87d9e51ecc4547ef5a38",
+  "private_overlay_source": "5ed10ea9af",
+  "accepted": false,
+  "failure": "Private test opponent remained TS_STOPPED: setrun requires TS_ALLSTART. KTEST blocked joining helper; no lock-boundary conclusion.",
+  "cleanup": "Pool synced; disposable VM monitor quit required because private KTEST holds /proc exclusion.",
+  "next": "Fix helper startup, rebuild private image; repeat on fresh VM128. Production build is separate.",
+  "console_sha256": "570321dabb7976f8ea55b1e1391dedc54d30ff4129b2ef546f04ff2b919d3402"
+}
