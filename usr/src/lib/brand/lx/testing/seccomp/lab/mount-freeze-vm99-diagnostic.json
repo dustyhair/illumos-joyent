@@ -1,0 +1,53 @@
+{
+  "vm": 99,
+  "accepted_checkpoint": false,
+  "source": "66e3386ad7cba64f2ffbfb6d751d14517898e6a6",
+  "prior_cases_passed": {
+    "MNT_ENTRY_CASE_PASS": 70,
+    "MOUNT_BIND_CASE_PASS": 12,
+    "MOUNT_BIND_FILL_PASS": 2,
+    "MOUNT_RECURSIVE_CASE_PASS": 12,
+    "MOUNT_PRIVATE_CASE_PASS": 8,
+    "MOUNT_TMPFS_CASE_PASS": 12,
+    "MOUNT_STATFS_CASE_PASS": 4
+  },
+  "prior_full_regressions_exit": 0,
+  "readonly_matrix": {
+    "allow_four": "seal and other checks pass; mounted-child rmdir returns EBUSY16 rather than Linux EROFS30",
+    "deny_four": "PASS"
+  },
+  "diagnosis": "Native vn_removeat checks mounted-child VROOT before readonly parent. Existing cwd-preserving Linux removal mode is the scoped hook. Native RMDIRECTORY ordering remains unchanged.",
+  "fix_source": "746008cad0",
+  "build": "clean genunix+brand release/debug rebuild in progress, not runtime accepted",
+  "cleanup": {
+    "process_idle": "PASS",
+    "user_budget_idle": "PASS",
+    "views": 0,
+    "flags": [
+      0,
+      0,
+      0
+    ],
+    "zone_halted": true,
+    "pool_export_exit": 0,
+    "synced_shutdown": true,
+    "qemu_pid_exited": 2379935
+  },
+  "console": {
+    "name": "boot-99-readonly-rmdir-diagnostic.log",
+    "sha256": "27340c9f7741e0083892b19e856dd1d5711f5b1b8a9ed05b199c2e939d26dfd9"
+  },
+  "logs": {
+    "vm99-full.log": "928d1be48e3f3fbe11f151e80aee7d0d6f023c54c506d879096f75e42cccc9d5",
+    "vm99-diag.log": "c0cd38540c80d7d95af3a53c7035bb6eba035d959e8f14c782fe640ef333de1f",
+    "vm99-freeze.log": "7553118494d1077c7c90f1c9757bea7d5b8f78ae5c26db1f17439bfc0d7c6541",
+    "vm99-regressions.log": "5494dd5612fa28613a9fbba211a49b6f63145ad6dd6d931c492c1d058498c930",
+    "vm99-entry.log": "b3192b76560154805363b562815e6d4f8275e68a1a3472d91b05b70af8c4c8a3",
+    "vm99-bind.log": "e3292794ed7f99a1638497b9cbde8b1dad3ba415e210add8a633463d5feb454c",
+    "vm99-recursive.log": "86ddb80240fa940eb8a99332ef0d19868cb7afbe8e49f260c009cb5a1ec2a436",
+    "vm99-private.log": "545ee162d3d9d9c225ca925369920009afa2a03a6d314bd790ba118a6f4b6fee",
+    "vm99-tmpfs.log": "8ace9c564e78e8c7b255647751c925179f7ba14ae988e3bd59d8d829f42a89ab",
+    "vm99-statfs.log": "e2b67e1cfa803e34d0dd7032b54bd551cafbc8e85e7f622e58ef7e514c8ccdde"
+  },
+  "physical_host_deployed": false
+}

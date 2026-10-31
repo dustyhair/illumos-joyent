@@ -157,6 +157,7 @@ main(int argc, char **argv)
 	    mkdir(path("target", target), 0755) ||
 	    mkdir(path("late", p), 0755) || mkdir(path("mapped", p), 0755) ||
 	    mkdir(path("source/subdir", p), 0755) ||
+	    mkdir(path("source/empty", p), 0755) ||
 	    write_text(path("source/file", p), "source\n", 1) ||
 	    write_text(path("source/secret", p), "secret\n", 1) ||
 	    chmod(p, 0) || symlink("file", path("source/alias", p)) ||
@@ -242,6 +243,19 @@ main(int argc, char **argv)
 	expect_error(mkdir(path("target/newdir", p), 0755), EROFS, "readonly-mkdir");
 	errno = 0;
 	expect_error(rmdir(path("target/subdir", p)), EROFS, "readonly-rmdir");
+	errno = 0;
+	expect_error(rmdir(path("target/empty", p)), EROFS,
+	    "readonly-rmdir-empty");
+	fd = open(target, O_RDONLY | O_DIRECTORY);
+	check(fd >= 0, "readonly-parent-descriptor");
+	errno = 0;
+	expect_error(unlinkat(fd, "subdir", AT_REMOVEDIR), EROFS,
+	    "readonly-unlinkat-mounted-child");
+	errno = 0;
+	expect_error(unlinkat(fd, "empty", AT_REMOVEDIR), EROFS,
+	    "readonly-unlinkat-empty");
+	(void) close(fd);
+
 	errno = 0;
 	expect_error(symlink("x", path("target/newlink", p)), EROFS,
 	    "readonly-symlink");
