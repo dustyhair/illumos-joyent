@@ -782,6 +782,8 @@ typedef enum {
 	LXP_ZOMBOK	= 0x2	/* allow locking of zombies */
 } lx_pid_flag_t;
 
+extern struct pid *lx_pid_identity_hold(pid_t, zone_t *);
+extern void lx_pid_identity_rele(struct pid *);
 extern void lx_pid_assign(kthread_t *, struct lx_pid *);
 extern void lx_pid_reassign(kthread_t *);
 extern void lx_pid_rele(pid_t, id_t);

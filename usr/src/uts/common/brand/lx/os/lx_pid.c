@@ -101,6 +101,56 @@ lx_pid_remove_hash(pid_t pid, id_t tid)
 }
 
 /*
+ * Retiring a synthetic LWP PID must respect references held by PID mappings.
+ * An allocated LWP ID has no native proc slot. Once its lx hash entry is
+ * gone, mark it inactive so native lookup cannot treat slot zero as a task.
+ */
+static void
+lx_pid_retire(struct pid *pidp)
+{
+	mutex_enter(&pidlock);
+	pidp->pid_prinactive = 1;
+	PID_RELE(pidp);
+	mutex_exit(&pidlock);
+}
+
+/*
+ * Hold a global lx task identity, not a namespace-local numeric PID.
+ * The native PID object prevents reuse until its final reference is dropped.
+ * This does not keep a process or LWP alive and grants no lookup authority.
+ */
+struct pid *
+lx_pid_identity_hold(pid_t lpid, zone_t *zone)
+{
+	struct lx_pid *hp;
+	struct pid *identity = NULL;
+
+	ASSERT(zone != NULL);
+	mutex_enter(&pidlock);
+	mutex_enter(&hash_lock);
+	for (hp = ltos_pid_hash[LTOS_HASH(lpid)]; hp != NULL;
+	    hp = hp->lxp_ltos_next) {
+		if (hp->lxp_lpid == lpid && hp->lxp_procp->p_zone == zone) {
+			identity = hp->lxp_pidp != NULL ? hp->lxp_pidp :
+			    hp->lxp_procp->p_pidp;
+			PID_HOLD(identity);
+			break;
+		}
+	}
+	mutex_exit(&hash_lock);
+	mutex_exit(&pidlock);
+	return (identity);
+}
+
+void
+lx_pid_identity_rele(struct pid *identity)
+{
+	mutex_enter(&pidlock);
+	PID_RELE(identity);
+	mutex_exit(&pidlock);
+}
+
+/*
  * given a solaris pid/tid pair, create a linux pid
  */
 void
@@ -187,7 +237,7 @@ lx_pid_reassign(kthread_t *t)
 	mutex_exit(&hash_lock);
 
 	if (old_pidp)
-		(void) pid_rele(old_pidp);
+		lx_pid_retire(old_pidp);
 }
 
 /*
@@ -204,7 +254,7 @@ lx_pid_rele(pid_t pid, id_t tid)
 
 	if (lpidp) {
 		if (lpidp->lxp_pidp)
-			(void) pid_rele(lpidp->lxp_pidp);
+			lx_pid_retire(lpidp->lxp_pidp);
 
 		kmem_free(lpidp, sizeof (*lpidp));
 	}
