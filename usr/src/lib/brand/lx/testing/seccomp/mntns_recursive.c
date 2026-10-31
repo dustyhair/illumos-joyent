@@ -254,7 +254,8 @@ static void recursive(void)
     check(read(ready[0], &token, 1) == 1, "observer-ready");
     close(ready[0]);
     path("src", source);
-    bind_path(source, path("rec", target), MS_BIND | MS_REC, 0, "recursive-tree");
+    bind_path(source, path("rec", target),
+        0xc0ed0000UL | MS_BIND | MS_REC | MS_SILENT, 0, "recursive-tree");
     check(waitpid(child, &status, 0) == child && WIFEXITED(status) &&
         WEXITSTATUS(status) == 0, "atomic-observer");
     check(contents(path("rec/sub/file", p), "A\n"), "recursive-submount");

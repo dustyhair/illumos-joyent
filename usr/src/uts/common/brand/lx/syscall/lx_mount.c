@@ -40,6 +40,7 @@
  * preliminary processing that is done by the native user-level NFS mount code.
  */
 #define	LX_MS_MGC_VAL		0xC0ED0000
+#define	LX_MS_MGC_MSK		0xFFFF0000
 #define	LX_MS_RDONLY		0x00000001
 #define	LX_MS_NOSUID		0x00000002
 #define	LX_MS_NODEV		0x00000004
@@ -435,6 +436,10 @@ lx_mnt_private_mount(lx_mntns_view_t *view, const char *sourcep,
 	char *source, *target, *type;
 	char byte;
 	int error;
+
+	/* Old mount callers, including bwrap, still send the magic prefix. */
+	if ((flags & LX_MS_MGC_MSK) == LX_MS_MGC_VAL)
+		flags &= ~LX_MS_MGC_MSK;
 
 	if (!lx_mntns_entry_enabled() || !(flags & LX_MS_BIND) ||
 	    (flags & ~(LX_MS_BIND | LX_MS_REC | LX_MS_RDONLY | LX_MS_NOSUID |
