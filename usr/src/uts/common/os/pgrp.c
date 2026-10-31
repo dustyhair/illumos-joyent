@@ -53,14 +53,11 @@
  */
 
 static int
-pglinked(cp)
-	register proc_t *cp;
+pglinked(proc_t *cp, proc_t *pp)
 {
-	register proc_t *pp;
-
 	ASSERT(MUTEX_HELD(&pidlock));
 
-	if ((pp = cp->p_parent) != NULL &&
+	if (pp != NULL &&
 	    pp->p_pgidp != cp->p_pgidp &&
 	    pp->p_sessp == cp->p_sessp)
 		return (1);
@@ -129,7 +126,7 @@ pgjoin(p, pgp)
 		pgp->pid_pgtail = p;
 	} else 	{
 		ASSERT(pgp->pid_pgtail != NULL);
-		if (pglinked(p)) {
+		if (pglinked(p, p->p_parent)) {
 			p->p_ppglink = NULL;
 			p->p_pglink = pgp->pid_pglink;
 			pgp->pid_pglink->p_ppglink = p;
@@ -144,11 +141,11 @@ pgjoin(p, pgp)
 
 	if (pgp->pid_pglink == pgp->pid_pgtail) {
 		PID_HOLD(pgp);
-		if (pglinked(p))
+		if (pglinked(p, p->p_parent))
 			pgp->pid_pgorphaned = 0;
 		else
 			pgp->pid_pgorphaned = 1;
-	} else if (pgp->pid_pgorphaned && pglinked(p))
+	} else if (pgp->pid_pgorphaned && pglinked(p, p->p_parent))
 		pgp->pid_pgorphaned = 0;
 }
 
@@ -185,7 +182,7 @@ pgexit(prp)
 		PID_RELE(pgp);
 	} else if (pgp->pid_pgorphaned == 0) {
 		do {
-			if (pglinked(p)) {
+			if (pglinked(p, p->p_parent)) {
 				return;
 			}
 		} while ((p = p->p_pglink) != NULL);
@@ -199,10 +196,17 @@ pgexit(prp)
  */
 
 void
-pgdetach(pp)
-	proc_t *pp;
+pgdetach(proc_t *pp)
+{
+	pgdetach_reparent(pp, NULL);
+}
+
+/* Account for a same-session adopter before publishing new parent links. */
+void
+pgdetach_reparent(proc_t *pp, proc_t *reaper)
 {
 	int stopped;
+	boolean_t orphaned;
 	register proc_t *cp;
 	register proc_t *mp;
 	register struct pid *pgp;
@@ -210,14 +214,19 @@ pgdetach(pp)
 	ASSERT(MUTEX_HELD(&pidlock));
 
 	for (cp = pp->p_child; cp; cp = cp->p_sibling) {
-		if ((pgp = cp->p_pgidp)->pid_pgorphaned)
+		pgp = cp->p_pgidp;
+		orphaned = pgp->pid_pgorphaned;
+		if (orphaned && reaper == NULL)
 			continue;
 		stopped = 0;
 		mp = pgp->pid_pglink;
 		ASSERT(mp != NULL);
 		for (;;) {
-			if (mp != pp && mp->p_parent != pp && pglinked(mp))
+			if (mp != pp && pglinked(mp, mp->p_parent == pp ?
+			    reaper : mp->p_parent)) {
+				pgp->pid_pgorphaned = 0;
 				break;
+			}
 			if (!stopped && mp != curproc) {
 				mutex_enter(&mp->p_lock);
 				stopped = jobstopped(mp);
@@ -225,7 +234,7 @@ pgdetach(pp)
 			}
 			if ((mp = mp->p_pglink) == NULL) {
 				pgp->pid_pgorphaned = 1;
-				if (stopped) {
+				if (!orphaned && stopped) {
 					sigtopg(pgp, SIGHUP);
 					sigtopg(pgp, SIGCONT);
 				}

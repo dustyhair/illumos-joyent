@@ -37,7 +37,8 @@
 #include <sys/zone.h>
 #include <sys/pathname.h>
 
-#define	SUPPORTED_BRAND_VERSION BRAND_VER_1
+#define	MIN_BRAND_VERSION BRAND_VER_1
+#define	MAX_BRAND_VERSION BRAND_VER_2
 
 #if defined(__sparcv9)
 /* sparcv9 uses system wide brand interposition hooks */
@@ -94,8 +95,9 @@ brand_register(brand_t *brand)
 	if (brand == NULL)
 		return (EINVAL);
 
-	if (brand->b_version != SUPPORTED_BRAND_VERSION) {
-		if (brand->b_version < SUPPORTED_BRAND_VERSION) {
+	if (brand->b_version < MIN_BRAND_VERSION ||
+	    brand->b_version > MAX_BRAND_VERSION) {
+		if (brand->b_version < MIN_BRAND_VERSION) {
 			cmn_err(CE_WARN,
 			    "brand '%s' was built to run on older versions "
 			    "of Solaris.",

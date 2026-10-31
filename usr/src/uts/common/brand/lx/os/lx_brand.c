@@ -208,6 +208,7 @@ extern int zvol_name2minor(const char *, minor_t *);
 extern int zvol_create_minor(const char *);
 
 extern void lx_proc_exit(proc_t *);
+static proc_t *lx_reparent_children(proc_t *);
 extern int lx_sched_affinity(int, uintptr_t, int, uintptr_t, int64_t *);
 
 extern void lx_io_clear(lx_proc_data_t *);
@@ -321,7 +322,8 @@ struct brand_ops lx_brops = {
 	lx_userns_cred_free,		/* b_cred_free */
 	lx_userns_cred_perm,		/* b_cred_proc_perm */
 	lx_userns_cred_exec,		/* b_cred_exec */
-	lx_userns_cred_setattr		/* b_cred_vnode_setattr */
+	lx_userns_cred_setattr,		/* b_cred_vnode_setattr */
+	lx_reparent_children		/* b_reparent_children */
 };
 
 struct brand_mach_ops lx_mops = {
@@ -335,7 +337,7 @@ struct brand_mach_ops lx_mops = {
 };
 
 struct brand lx_brand = {
-	BRAND_VER_1,
+	BRAND_VER_2,
 	"lx",
 	&lx_brops,
 	&lx_mops,
@@ -349,6 +351,22 @@ static struct modlbrand modlbrand = {
 static struct modlinkage modlinkage = {
 	MODREV_1, (void *)&modlbrand, NULL
 };
+
+/* Linux adopts every orphan as a SIGCHLD child, including clone(0) tasks. */
+static proc_t *
+lx_reparent_children(proc_t *parent)
+{
+	proc_t *child;
+
+	ASSERT(MUTEX_HELD(&pidlock));
+	for (child = parent->p_child; child != NULL; child = child->p_sibling) {
+		mutex_enter(&child->p_lock);
+		if (child->p_brand == &lx_brand && ptolxproc(child) != NULL)
+			ptolxproc(child)->l_signal = stol_signo[SIGCHLD];
+		mutex_exit(&child->p_lock);
+	}
+	return (lx_pidns_child_reaper(parent));
+}
 
 void
 lx_proc_exit(proc_t *p)

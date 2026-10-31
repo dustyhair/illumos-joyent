@@ -677,6 +677,7 @@ extern void pgjoin(proc_t *, struct pid *);
 extern void pgcreate(proc_t *);
 extern void pgexit(proc_t *);
 extern void pgdetach(proc_t *);
+extern void pgdetach_reparent(proc_t *, proc_t *);
 extern int pgmembers(pid_t);
 
 extern	void	init_mstate(kthread_t *, int);

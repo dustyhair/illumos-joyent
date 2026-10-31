@@ -828,6 +828,7 @@ proc_exit(int why, int what)
 		struct proc	*initp = proc_init;
 		pid_t		zone_initpid = 1;
 		struct proc	*zoneinitp = NULL;
+		struct proc	*reaper = NULL;
 		boolean_t	setzonetop = B_FALSE;
 
 		if (!INGLOBALZONE(curproc)) {
@@ -843,7 +844,17 @@ proc_exit(int why, int what)
 			}
 		}
 
-		pgdetach(p);
+		/* Select an adopter; native code moves the children. */
+		if (PROC_IS_BRANDED(p) &&
+		    p->p_brand->b_version >= BRAND_VER_2 &&
+		    BROP(p)->b_reparent_children != NULL &&
+		    (reaper = BROP(p)->b_reparent_children(p)) != NULL) {
+			VERIFY(reaper != p && reaper->p_zone == p->p_zone);
+			initp = reaper;
+			zone_initpid = reaper->p_pid;
+			setzonetop = B_FALSE;
+		}
+		pgdetach_reparent(p, reaper);
 
 		do {
 			np = q->p_sibling;

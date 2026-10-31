@@ -49,6 +49,8 @@ extern lx_pidns_t *lx_pidns_children(struct proc *);
 extern void lx_pidns_shutdown(lx_pidns_t *);
 /* Signal the cohort from the exiting PID1, before native proc teardown. */
 extern void lx_pidns_init_exit(struct proc *);
+/* Borrow a surviving init for native reparenting, with pidlock held. */
+extern struct proc *lx_pidns_child_reaper(struct proc *);
 extern int lx_pidns_reserve(lx_pidns_t *, lx_pidns_map_t **);
 extern int lx_pidns_bind_native(lx_pidns_map_t *, struct zone *, struct pid *);
 extern boolean_t lx_pidns_commit(lx_pidns_map_t *);

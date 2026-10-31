@@ -209,6 +209,37 @@ lx_pidns_init_exit(proc_t *init)
 	mutex_exit(&pidlock);
 }
 
+/* Native reparenting retains ownership of the child lists and notifications. */
+proc_t *
+lx_pidns_child_reaper(proc_t *parent)
+{
+	lx_pidns_t *ns;
+	zoneid_t zoneid = parent->p_zone->zone_id;
+
+	ASSERT(MUTEX_HELD(&pidlock));
+	for (ns = lx_pidns_active(parent); ns != NULL; ns = ns->pn_parent) {
+		lx_pidns_slot_t key = { .ps_number = 1 }, *slot;
+		proc_t *init;
+		boolean_t alive;
+
+		if (ns->pn_state != LX_PIDNS_LIVE ||
+		    (slot = avl_find(&ns->pn_numbers, &key, NULL)) == NULL ||
+		    !slot->ps_map->pm_committed ||
+		    (init = prfind_zone(slot->ps_backing, zoneid)) == NULL ||
+		    init == parent)
+			continue;
+		mutex_enter(&init->p_lock);
+		alive = init->p_stat == SRUN &&
+		    !(init->p_flag & (SEXITING | SEXITLWPS)) &&
+		    init->p_brand == &lx_brand && ptolxproc(init) != NULL &&
+		    ptolxproc(init)->l_pidns_map == slot->ps_map;
+		mutex_exit(&init->p_lock);
+		if (alive)
+			return (init);
+	}
+	return (NULL);
+}
+
 int
 lx_pidns_reserve(lx_pidns_t *ns, lx_pidns_map_t **out)
 {

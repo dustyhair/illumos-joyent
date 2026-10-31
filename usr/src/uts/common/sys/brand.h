@@ -37,9 +37,11 @@ extern "C" {
 #include <sys/types.h>
 
 /*
- * All Brands supported by this kernel must use BRAND_VER_1.
+ * Version 2 appends the optional child-reaper operation. Version 1
+ * brands remain supported without accessing the appended field.
  */
 #define	BRAND_VER_1	1
+#define	BRAND_VER_2	2
 
 /*
  * sub-commands to brandsys.
@@ -156,6 +158,9 @@ struct vattr;
  * b_intp_parse_arg - Controls interpreter argument handling (allow 1 or all)
  * b_clearbrand - Perform any actions necessary when clearing the brand.
  * b_rpc_statd - Upcall to rpc.statd running within the zone
+ * b_reparent_children - Prepare child brand state and select an adopter;
+ *                       called under pidlock without p_lock. Return NULL for
+ *                       native policy or a live same-zone proc. Version 2.
  * b_acct_out - Output properly formatted accounting record
  * b_cred_free - Release immutable brand-specific credential data
  * b_cred_proc_perm - Return BRAND_CRED_DEFER for native policy, zero to
@@ -225,6 +230,7 @@ struct brand_ops {
 	    struct vnode *, const struct vattr *, int);
 	int	(*b_cred_vnode_setattr)(const struct cred *, struct vnode *,
 	    struct vattr *, const struct vattr *, uint_t);
+	struct proc *(*b_reparent_children)(struct proc *);
 };
 
 /*

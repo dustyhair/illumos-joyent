@@ -2095,7 +2095,8 @@ ns_pid_process_attach(ktest_ctx_hdl_t *ctx)
 	ld = t == NULL ? NULL : ttolxlwp(t);
 	PO_CHECK(p->p_brand == &lx_brand && p->p_lwpcnt == 1 &&
 	    t != NULL && t->t_state == TS_STOPPED &&
-	    strcmp(PTOU(p)->u_comm, "pid_ownership") == 0 &&
+	    (strcmp(PTOU(p)->u_comm, "pid_ownership") == 0 ||
+	    strcmp(PTOU(p)->u_comm, "pid_orphan") == 0) &&
 	    ld != NULL && ld->br_stack_mode == LX_STACK_MODE_BRAND &&
 	    ld->br_syscall_entry == BRAND_ENTRY_AMD64 &&
 	    ptolxproc(p)->l_ptrace == 0 && ptolxproc(p)->l_pidns_map == NULL &&
@@ -2193,7 +2194,8 @@ ns_pid_process_observe(ktest_ctx_hdl_t *ctx, uint_t kind)
 	    p->p_brand != &lx_brand || !lx_kernel_restricted(p) ||
 	    lx_pidns_active(p) != ns_pid_process_space ||
 	    ptolxproc(p)->l_pidns_children != NULL ||
-	    strcmp(PTOU(p)->u_comm, "pid_ownership") != 0) {
+	    (strcmp(PTOU(p)->u_comm, "pid_ownership") != 0 &&
+	    strcmp(PTOU(p)->u_comm, "pid_orphan") != 0)) {
 		KT_FAIL(ctx,
 		    "observed process did not inherit private bookkeeping");
 		goto out;
@@ -2311,23 +2313,26 @@ out:
 }
 
 static void
-ns_pid_process_zombie(ktest_ctx_hdl_t *ctx)
+ns_pid_process_zombie_check(ktest_ctx_hdl_t *ctx, boolean_t orphan)
 {
 	proc_t *p = NULL;
 	boolean_t passed = B_FALSE;
 	uint_t attempt;
+	lx_pidns_map_t *map;
+	pid_t target;
 
 	mutex_enter(&ns_pid_lock);
-	if (ns_pid_process_observer == NULL) {
+	map = orphan ? ns_pid_process_descendant_map : ns_pid_process_observer;
+	target = orphan ? ns_pid_process_descendant_pid : ns_pid_process_target;
+	if (map == NULL) {
 		KT_ERROR(ctx, "no child map held");
 		goto out;
 	}
 	for (attempt = 0; attempt < 100; attempt++) {
-		if (lx_lpid_lock(ns_pid_process_target, ns_pid_process_zone,
+		if (lx_lpid_lock(target, ns_pid_process_zone,
 		    LXP_ZOMBOK, &p, NULL) == 0) {
 			passed = p->p_stat == SZOMB &&
-			    ptolxproc(p)->l_pidns_map ==
-			    ns_pid_process_observer &&
+			    ptolxproc(p)->l_pidns_map == map &&
 			    lx_pidns_active(p) == ns_pid_process_space;
 			mutex_exit(&p->p_lock);
 			p = NULL;
@@ -2341,6 +2346,89 @@ ns_pid_process_zombie(ktest_ctx_hdl_t *ctx)
 	else
 		KT_FAIL(ctx,
 		    "child did not retain its PID map as a native zombie");
+out:
+	mutex_exit(&ns_pid_lock);
+}
+
+static void
+ns_pid_process_zombie(ktest_ctx_hdl_t *ctx)
+{
+	ns_pid_process_zombie_check(ctx, B_FALSE);
+}
+
+static void
+ns_pid_orphan_zombie(ktest_ctx_hdl_t *ctx)
+{
+	ns_pid_process_zombie_check(ctx, B_TRUE);
+}
+
+static void
+ns_pid_orphan_adopted(ktest_ctx_hdl_t *ctx)
+{
+	proc_t *owner, *orphan;
+	boolean_t passed = B_FALSE;
+
+	mutex_enter(&ns_pid_lock);
+	mutex_enter(&pidlock);
+	owner = prfind_zone(ns_pid_process_owner, ALL_ZONES);
+	orphan = prfind_zone(ns_pid_process_descendant_pid, ALL_ZONES);
+	if (owner != NULL && orphan != NULL &&
+	    ns_pid_process_descendant_map != NULL) {
+		mutex_enter(&orphan->p_lock);
+		passed = orphan->p_brand == &lx_brand &&
+		    ptolxproc(orphan) != NULL &&
+		    ptolxproc(orphan)->l_pidns_map ==
+		    ns_pid_process_descendant_map &&
+		    orphan->p_parent == owner &&
+		    orphan->p_ppid == owner->p_pid &&
+		    orphan->p_sessp == owner->p_sessp &&
+		    orphan->p_pgidp != owner->p_pgidp &&
+		    !orphan->p_pgidp->pid_pgorphaned &&
+		    orphan->p_tlist != NULL &&
+		    orphan->p_tlist->t_state == TS_STOPPED;
+		mutex_exit(&orphan->p_lock);
+	}
+	mutex_exit(&pidlock);
+	mutex_exit(&ns_pid_lock);
+	if (passed)
+		KT_PASS(ctx);
+	else
+		KT_FAIL(ctx,
+		    "stopped orphan lost its namespace init or group link");
+}
+
+static void
+ns_pid_orphan_retired(ktest_ctx_hdl_t *ctx)
+{
+	uint_t attempt;
+	boolean_t passed = B_FALSE;
+
+	mutex_enter(&ns_pid_lock);
+	if (ns_pid_process_descendant_map == NULL) {
+		KT_ERROR(ctx, "no observed orphan map");
+		goto out;
+	}
+	for (attempt = 0; attempt < 100; attempt++) {
+		struct pid *identity = lx_pidns_lookup(ns_pid_process_space, 3);
+
+		if (identity == NULL)
+			break;
+		mutex_enter(&pidlock);
+		passed = identity->pid_prinactive && identity->pid_ref == 2 &&
+		    identity->pid_id == ns_pid_process_descendant_pid &&
+		    prfind_zone(ns_pid_process_descendant_pid,
+		    ALL_ZONES) == NULL;
+		PID_RELE(identity);
+		mutex_exit(&pidlock);
+		if (passed)
+			break;
+		delay(MAX(1, hz / 10));
+	}
+	if (passed)
+		KT_PASS(ctx);
+	else
+		KT_FAIL(ctx,
+		    "adopted orphan was not reaped with held identity");
 out:
 	mutex_exit(&ns_pid_lock);
 }
@@ -2549,6 +2637,12 @@ _init(void)
 	    (error = ktest_add_test(ks, "process_dead", ns_pid_process_dead,
 	    0)) != 0 ||
 	    (error = ktest_add_test(ks, "process_zombie", ns_pid_process_zombie,
+	    0)) != 0 ||
+	    (error = ktest_add_test(ks, "orphan_adopted", ns_pid_orphan_adopted,
+	    0)) != 0 ||
+	    (error = ktest_add_test(ks, "orphan_zombie", ns_pid_orphan_zombie,
+	    0)) != 0 ||
+	    (error = ktest_add_test(ks, "orphan_retired", ns_pid_orphan_retired,
 	    0)) != 0 ||
 	    (error = ktest_add_test(ks, "process_retired",
 	    ns_pid_process_retired, 0)) != 0 ||
