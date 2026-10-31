@@ -233,6 +233,7 @@ lx_pid_reassign(kthread_t *t)
 	lpidp->lxp_spid = p->p_pid;
 	lpidp->lxp_stid = 1;
 	lx_pid_insert_hash(lpidp);
+	ttolxlwp(t)->br_pid = lpidp->lxp_lpid;
 
 	mutex_exit(&hash_lock);
 
