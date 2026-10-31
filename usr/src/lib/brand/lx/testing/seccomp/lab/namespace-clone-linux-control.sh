@@ -4,7 +4,7 @@ cd /var/tmp/lx-namespace-clone-controls
 for variant in static dynamic; do
     for uid in 0 65534; do
         for raw in libc raw; do
-            for mode in combined filter mount-only nested deny initial-mount; do
+            for mode in combined filter mount-only nested deny initial-mount badfs; do
                 options=()
                 test "$uid" = 0 || options+=(--drop)
                 test "$raw" = libc || options+=(--raw)
