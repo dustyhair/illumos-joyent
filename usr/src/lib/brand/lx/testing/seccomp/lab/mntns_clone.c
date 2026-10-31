@@ -131,7 +131,7 @@ int
 main(int argc, char **argv)
 {
 	int drop = 0, mountonly = 0, nested = 0, raw = 0, deny = 0;
-	int expect = 0, flags, status, fd;
+	int expect = 0, initial = 0, badfs = 0, flags, status, fd;
 	uid_t uid;
 	gid_t gid;
 	pid_t child;
@@ -145,6 +145,10 @@ main(int argc, char **argv)
 			drop = 1;
 		else if (strcmp(argv[i], "--mount-only") == 0)
 			mountonly = 1;
+		else if (strcmp(argv[i], "--initial-mount") == 0)
+			initial = mountonly = 1;
+		else if (strcmp(argv[i], "--badfs") == 0)
+			badfs = 1;
 		else if (strcmp(argv[i], "--nested") == 0)
 			nested = 1;
 		else if (strcmp(argv[i], "--raw") == 0)
@@ -165,13 +169,15 @@ main(int argc, char **argv)
 	    "self-mapping-dumpable");
 	uid = getuid();
 	gid = getgid();
-	if (mountonly || nested) {
+	if ((mountonly && !initial) || nested) {
 		CHECK(unshare(CLONE_NEWUSER | CLONE_NEWNS) == 0,
 		    "prepare-parent-namespace");
 		CHECK(maps(getpid(), uid, gid) == 0, "map-parent");
 		uid = getuid();
 		gid = getgid();
 	}
+	if (initial && uid != 0)
+		expect = EPERM;
 	if (ctx.filter)
 		CHECK(filtered() == 0, "install-parent-filter");
 	CHECK(getcwd(before, sizeof (before)) != NULL, "save-parent-cwd");
@@ -198,6 +204,10 @@ main(int argc, char **argv)
 	CHECK(pipe(ctx.ready) == 0 && pipe(ctx.release) == 0, "create-pipes");
 	CHECK((stack = malloc(65536)) != NULL, "allocate-child-stack");
 	flags = CLONE_NEWNS | SIGCHLD | (mountonly ? 0 : CLONE_NEWUSER);
+	if (badfs) {
+		flags |= CLONE_FS;
+		expect = EINVAL;
+	}
 	if (raw) {
 		child = syscall(SYS_clone, flags, NULL, NULL, NULL, 0);
 		if (child == 0)
