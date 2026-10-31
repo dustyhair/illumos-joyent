@@ -1,0 +1,40 @@
+VM123 accepted two-level private PID namespace init shutdown tests.
+
+KTEST and fixture source34a0df7f73b82cea3827189a06183240c7677811;
+controller69e7f8b5c40cc57bef03a0a59134d2873774de44. Production kernel
+remains accepted b85c474bce7e33ed0ec975736363e0cd874914eb. No public NEWPID
+entry or PID renumbering is enabled. Full Codex/bubblewrap is not accepted.
+
+Both12case matrices passed: static/dynamic,fork/clone0 leaves,inner normal
+exit,ancestor KILL of inner,ancestor KILL of outer. There were16immediate
+inner-drain checks with outer init/helper surviving,24outer-tree drain checks
+and24last-held-identity releases. Each tree includes a stopped live leaf and
+already-zombie adoptee. Existing native fork hooks install nested maps through
+for-children state without replacing published maps. Direct outside observer
+ESRCH checks run immediately after wait; KTEST verifies inactive held native
+identities in both namespace indices,DEAD reservation refusal and budget idle.
+Ownership24 andcohort8 baseline cases also passed with8outside survivors.
+
+The first controller failed before fixture launch because older guest Bash
+rejects an empty array with nounset. Raw failure is retained. A string-based
+controller fix was committed,serial uploaded,SHA256verified. No kernel changed.
+Both corrected matrices and64runtime artifact hashes passed. Parent review
+also braced conditional multi-statement PID_RELE macros and enabled the
+immediate LX observer checks. Reviewed exact fixtures passed36Linux controls.
+
+Only KTEST was cleanly rebuilt release/debug. Accepted VM122 production
+kernel,matched VM121Unix and surrounding modules were retained. Runtime was
+release; debug compile-only. Synthetic private KTEST owner credentials do
+not validate public user-namespace permission semantics.
+
+Final flags0,views0,PIDspaces0,zone installed/stopped,pool healthy,export0,
+poweroff sync complete,QEMU3354455 gone. No physical host changed.
+Raw boot-123-nested-pid1-drain-acceptance.log SHA256
+8ea97653c9028a5fd3cc417086c1e4b6365ebf7957ed8b334f2cb6aaf5acaa7d
+is retained locally and /build/workspaces/lx/log/ on the builder.
+
+The unused signal-origin brand-v3 proposal remains unmerged. Its audit found
+queued-thread signal authorization/resource defects for separate correction.
+Remaining PID1 signal policy,identity/PGID/SID/wait/siginfo/proc translation,
+IPC/network namespaces,pending-fork failure/unwind and complete newest Codex
+sandboxed workflows remain unaccepted. See pid-nested-results.json.
