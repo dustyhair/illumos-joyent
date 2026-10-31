@@ -229,6 +229,7 @@ pid_allocate(proc_t *prp, pid_t pid, int flags)
 		prp->p_lockp = &proc_lock[pid_getlockslot(pidp->pid_prslot)];
 	} else {
 		pidp->pid_prslot = 0;
+		pidp->pid_prinactive = 1;
 	}
 
 	mutex_exit(&pidlinklock);
