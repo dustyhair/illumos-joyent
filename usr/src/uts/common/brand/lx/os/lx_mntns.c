@@ -35,6 +35,9 @@ extern brand_t lx_brand;
 /* Public mount-namespace entry remains disabled outside disposable tests. */
 int lx_mntns_experimental = 0;
 
+/* Bound retained mount records, including mounts hidden by an overmount. */
+#define	LX_MNTNS_MAX_MOUNTS	4096
+
 typedef struct lx_mntns_mount {
 	vfs_t *lm_vfs;
 	vnode_t *lm_root;
@@ -61,6 +64,7 @@ struct lx_mntns_view {
 	vnode_t *lv_root;
 	vfs_t *lv_vfs;
 	lx_mntns_mount_t *lv_mounts;
+	uint_t lv_nmounts;
 };
 
 static kmutex_t lx_mntns_lock;
@@ -509,13 +513,47 @@ lx_mntns_pin(lx_mntns_mount_t *mount, cred_t *cr)
 	return (error);
 }
 
+/* lv_lock serializes publication and keeps every graft in the private tree. */
+static int
+lx_mntns_bind_locked(lx_mntns_view_t *view, vnode_t *source,
+    vnode_t *covered, const char *path, boolean_t readonly, boolean_t copy)
+{
+	lx_mntns_mount_t *mount;
+	const char *options;
+	int error;
+
+	ASSERT(MUTEX_HELD(&view->lv_lock));
+	if (view->lv_nmounts >= LX_MNTNS_MAX_MOUNTS)
+		return (ENOSPC);
+	if (!lx_mntns_owns(view, covered) ||
+	    (copy ? (covered->v_type == VNON || covered->v_type == VBAD) :
+	    covered->v_type != source->v_type))
+		return (EINVAL);
+	mount = kmem_zalloc(sizeof (*mount), KM_SLEEP);
+	/* Keep noexec when binding a source from another view. */
+	options = (source->v_vfsp->vfs_flag & VFS_NOEXEC) != 0 ?
+	    "nosub,noexec" : "nosub";
+	error = lx_mntns_mount("lx-private-bind", path, "lofs", options,
+	    readonly ? MS_RDONLY : 0, covered, source, view->lv_cred,
+	    &mount->lm_vfs);
+	if (error == 0)
+		error = lx_mntns_pin(mount, view->lv_cred);
+	if (error != 0) {
+		kmem_free(mount, sizeof (*mount));
+		return (error);
+	}
+	mount->lm_path = refstr_alloc(path);
+	mount->lm_next = view->lv_mounts;
+	view->lv_mounts = mount;
+	view->lv_nmounts++;
+	return (0);
+}
+
 static int
 lx_mntns_bind(lx_mntns_view_t *view, vnode_t *source,
     const char *path, boolean_t readonly, boolean_t copy, cred_t *cr)
 {
-	lx_mntns_mount_t *mount;
 	vnode_t *covered;
-	const char *options;
 	char *resolved;
 	int error;
 
@@ -523,38 +561,73 @@ lx_mntns_bind(lx_mntns_view_t *view, vnode_t *source,
 	    (copy ? (source->v_type == VNON || source->v_type == VBAD) :
 	    (source->v_type != VDIR && source->v_type != VREG)))
 		return (EINVAL);
-	mount = kmem_zalloc(sizeof (*mount), KM_SLEEP);
 	resolved = kmem_alloc(MAXPATHLEN, KM_SLEEP);
 	mutex_enter(&view->lv_lock);
 	if ((error = lx_mntns_lookup_path(view->lv_root, path, cr,
-	    &covered, resolved)) != 0)
-		goto out;
-	if (!lx_mntns_owns(view, covered) ||
-	    (copy ? (covered->v_type == VNON || covered->v_type == VBAD) :
-	    covered->v_type != source->v_type)) {
-		error = EINVAL;
-	} else {
-		/* Keep noexec when binding a source from another view. */
-		options = (source->v_vfsp->vfs_flag & VFS_NOEXEC) != 0 ?
-		    "nosub,noexec" : "nosub";
-		error = lx_mntns_mount("lx-private-bind", path, "lofs", options,
-		    readonly ? MS_RDONLY : 0, covered, source, cr,
-		    &mount->lm_vfs);
-		if (error == 0)
-			error = lx_mntns_pin(mount, cr);
+	    &covered, resolved)) == 0) {
+		error = lx_mntns_bind_locked(view, source, covered, resolved,
+		    readonly, copy);
+		VN_RELE(covered);
 	}
-	VN_RELE(covered);
-	if (error == 0) {
-		mount->lm_path = refstr_alloc(resolved);
-		mount->lm_next = view->lv_mounts;
-		view->lv_mounts = mount;
-		mount = NULL;
-	}
-out:
 	mutex_exit(&view->lv_lock);
 	kmem_free(resolved, MAXPATHLEN);
-	if (mount != NULL)
-		kmem_free(mount, sizeof (*mount));
+	return (error);
+}
+
+/*
+ * Public non-recursive bind. Resolve both operands with the actor's root,
+ * cwd and credentials, then pass held vnodes to domount. The kernel mount
+ * credential must never do a second, more privileged pathname lookup.
+ */
+int
+lx_mntns_mount_bind(lx_mntns_view_t *view, const char *source,
+    const char *target, cred_t *actor)
+{
+	vnode_t *from = NULL, *covered = NULL;
+	char *resolved;
+	int error;
+
+	if (!lx_mntns_entry_enabled() ||
+	    !lx_mntns_view_capable(view, actor))
+		return (EPERM);
+	resolved = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+	mutex_enter(&view->lv_lock);
+	error = lookupname((char *)source, UIO_SYSSPACE, FOLLOW, NULL, &from);
+	if (error != 0)
+		goto out;
+	if (from->v_type != VDIR && from->v_type != VREG) {
+		error = EINVAL;
+		goto out;
+	}
+	error = lookupname((char *)target, UIO_SYSSPACE, FOLLOW, NULL,
+	    &covered);
+	if (error != 0)
+		goto out;
+	if (!lx_mntns_owns(view, covered)) {
+		error = EINVAL;
+		goto out;
+	}
+	if (from->v_type != covered->v_type) {
+		error = ENOTDIR;
+		goto out;
+	}
+	/* Root overmount requires a separate process-root handoff. */
+	if (covered == view->lv_root) {
+		error = EOPNOTSUPP;
+		goto out;
+	}
+	error = vnodetopath(view->lv_root, covered, resolved, MAXPATHLEN,
+	    actor);
+	if (error == 0)
+		error = lx_mntns_bind_locked(view, from, covered, resolved,
+		    B_FALSE, B_FALSE);
+out:
+	if (covered != NULL)
+		VN_RELE(covered);
+	if (from != NULL)
+		VN_RELE(from);
+	mutex_exit(&view->lv_lock);
+	kmem_free(resolved, MAXPATHLEN);
 	return (error);
 }
 
@@ -605,7 +678,7 @@ lx_mntns_snapshot(vnode_t *root, const char *path, cred_t *cr, cred_t *owner,
 		if (strncmp(name, path, len) != 0 || name[len] != '/' ||
 		    name[len + 1] == '\0')
 			continue;
-		if (++count > 4096) {
+		if (++count > LX_MNTNS_MAX_MOUNTS) {
 			error = E2BIG;
 			break;
 		}
@@ -753,7 +826,7 @@ lx_mntns_view_clone(lx_mntns_view_t *source, cred_t *cr, cred_t *owner,
 	mutex_enter(&source->lv_lock);
 	for (mount = source->lv_mounts; mount != NULL;
 	    mount = mount->lm_next) {
-		if (++count > 4096) {
+		if (++count > LX_MNTNS_MAX_MOUNTS) {
 			error = E2BIG;
 			goto out;
 		}
@@ -868,6 +941,10 @@ lx_mntns_view_tmpfs(lx_mntns_view_t *view, const char *path, cred_t *cr)
 	mount = kmem_zalloc(sizeof (*mount), KM_SLEEP);
 	resolved = kmem_alloc(MAXPATHLEN, KM_SLEEP);
 	mutex_enter(&view->lv_lock);
+	if (view->lv_nmounts >= LX_MNTNS_MAX_MOUNTS) {
+		error = ENOSPC;
+		goto out;
+	}
 	if ((error = lx_mntns_lookup_path(view->lv_root, path, cr,
 	    &covered, resolved)) != 0)
 		goto out;
@@ -885,6 +962,7 @@ lx_mntns_view_tmpfs(lx_mntns_view_t *view, const char *path, cred_t *cr)
 		mount->lm_path = refstr_alloc(resolved);
 		mount->lm_next = view->lv_mounts;
 		view->lv_mounts = mount;
+		view->lv_nmounts++;
 		mount = NULL;
 	}
 out:
@@ -915,6 +993,8 @@ lx_mntns_destroy(lx_mntns_view_t *view, cred_t *cr)
 			goto busy;
 		}
 		view->lv_mounts = mount->lm_next;
+		VERIFY3U(view->lv_nmounts, >, 0);
+		view->lv_nmounts--;
 		VFS_RELE(mount->lm_vfs);
 		refstr_rele(mount->lm_path);
 		kmem_free(mount, sizeof (*mount));

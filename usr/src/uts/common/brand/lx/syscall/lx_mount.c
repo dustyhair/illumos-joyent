@@ -427,10 +427,55 @@ lx_mnt_legacy_check(void)
 	return (error);
 }
 
+/* Initial bind ignores type/data contents and per-mount policy flags. */
+static int
+lx_mnt_private_mount(lx_mntns_view_t *view, const char *sourcep,
+    const char *targetp, const char *fstypep, uint_t flags, const void *datap)
+{
+	char *source, *target, *type;
+	char byte;
+	int error;
+
+	if (!lx_mntns_entry_enabled() || !(flags & LX_MS_BIND) ||
+	    (flags & ~(LX_MS_BIND | LX_MS_RDONLY | LX_MS_NOSUID |
+	    LX_MS_NODEV | LX_MS_NOEXEC | LX_MS_SILENT)) != 0)
+		return (lx_mntns_view_capable(view, CRED()) ?
+		    EOPNOTSUPP : EPERM);
+	source = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+	target = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+	type = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+	/* Linux copies optional arguments even though bind ignores them. */
+	if (fstypep != NULL && (error = copyinstr(fstypep, type,
+	    MAXPATHLEN, NULL)) != 0)
+		goto out;
+	if (sourcep != NULL && (error = lx_mnt_copyin_arg(sourcep, source,
+	    MAXPATHLEN)) != 0)
+		goto out;
+	/* A readable first byte suffices for ignored Linux mount data. */
+	if (datap != NULL && copyin(datap, &byte, sizeof (byte)) != 0) {
+		error = EFAULT;
+		goto out;
+	}
+	if ((error = lx_mnt_copyin_arg(targetp, target, MAXPATHLEN)) != 0)
+		goto out;
+	if (!lx_mntns_view_capable(view, CRED()))
+		error = EPERM;
+	else if (sourcep == NULL)
+		error = EINVAL;
+	else
+		error = lx_mntns_mount_bind(view, source, target, CRED());
+out:
+	kmem_free(type, MAXPATHLEN);
+	kmem_free(target, MAXPATHLEN);
+	kmem_free(source, MAXPATHLEN);
+	return (error);
+}
+
 long
 lx_mount(const char *sourcep, const char *targetp, const char *fstypep,
     uint_t flags, const void *datap)
 {
+	lx_mntns_view_t	*view = lx_mntns_current();
 	char			fstype[16];
 	char			*source, *target, *options;
 	size_t			sourcel, targetl, optionsl;
@@ -441,8 +486,12 @@ lx_mount(const char *sourcep, const char *targetp, const char *fstypep,
 	int			uid = -1;
 	int			gid = -1;
 
-	if ((rv = lx_mnt_legacy_check()) != 0)
-		return (set_errno(rv));
+	if (view != NULL) {
+		rv = lx_mnt_private_mount(view, sourcep, targetp, fstypep,
+		    flags, datap);
+		lx_mntns_view_rele(view);
+		return (rv == 0 ? 0 : set_errno(rv));
+	}
 
 	if ((rv = lx_mnt_copyin_arg(fstypep, fstype, sizeof (fstype))) != 0) {
 		if (rv == ENAMETOOLONG)
