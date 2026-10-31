@@ -1,0 +1,16 @@
+{
+  "vm": 95,
+  "accepted_checkpoint": false,
+  "source": "b8394e4f59b37c9b6f7fd3b56955f7fdac963d71",
+  "stage": "native boot before controllers or lx tests",
+  "failure": "vfs_mountfs uses MS_SYSSPACE|MS_DATA with NULL data and zero length; new tmpfs argument validation rejects empty legacy call; /etc/svc/volatile cannot mount",
+  "pool_import": "boot noimport=true; no test driver started",
+  "shutdown": "ACPI powerdown attempted with no guest response; QEMU monitor quit used for stuck boot; not a synced guest shutdown",
+  "qemu_pid": 2268657,
+  "console": {
+    "name": "boot-95-tmpfs-boot-diagnostic.log",
+    "sha256": "e12d28282d78145b3b7349fbbc33b150e14330817b23521a3d42c82a1e0692f7"
+  },
+  "fix": "9a2165080e preserves empty legacy kernel argument blocks, validates nonempty ownership args",
+  "native_fix_build": "release/debug tmpfs update finished"
+}
