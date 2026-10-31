@@ -1,0 +1,112 @@
+Read-only source blobs from authoritative checkout; followed by relevant excerpts.
+c4c3d1c07bbd50f37041b570db10d58481721ed7  usr/src/uts/common/syscall/pgrpsys.c
+1c5eea3671dd96724dec02fd70d8c50b372fd807  usr/src/uts/common/os/pid.c
+7e505c73434ea30f6e3888ccb88fb7c5a72e3f1f  usr/src/uts/common/os/pgrp.c
+c6831ba87f3ff7cebb0c211bea98b252d3f14d8c  usr/src/uts/common/os/session.c
+fa841df9ff711b0d3871def9229637eedff3c42b  usr/src/uts/common/os/zone.c
+183e1f43334ce66885de7ee2ab02db634642b01c  usr/src/uts/common/os/fork.c
+5438549648fbe387cefeaa055637022906fd6f4c  usr/src/cmd/zlogin/zlogin.c
+cb8612339317af437827854d0019e4e7d5099533  usr/src/uts/intel/os/syscall.c
+
+	/*
+	 * We don't need to hold any of zsched's locks here; not only do we know
+	 * the process and zone aren't going away, we know its session isn't
+	 * changing either.
+	 *
+	 * By joining zsched's session here, we mimic the behavior in the
+	 * global zone of init's sid being the pid of sched.  We extend this
+	 * to all zlogin-like zone_enter()'ing processes as well.
+	 */
+	mutex_enter(&pidlock);
+	sp = zone->zone_zsched->p_sessp;
+	sess_hold(zone->zone_zsched);
+	mutex_enter(&pp->p_lock);
+	pgexit(pp);
+	sess_rele(pp->p_sessp, B_TRUE);
+	pp->p_sessp = sp;
+	pgjoin(pp, zone->zone_zsched->p_pidp);
+
+	/*
+	 * If any threads are scheduled to be placed on zone wait queue they
+	 * should abandon the idea since the wait queue is changing.
+	 * We need to be holding pidlock & p_lock to do this.
+	 */
+	closeall(P_FINFO(pp));
+
+	/*
+	 * We are this zone's "zsched" process.  As the zone isn't generally
+	 * visible yet we don't need to grab any locks before initializing its
+	 * zone_proc pointer.
+	 */
+	zone_hold(zone);  /* this hold is released by zone_destroy() */
+	zone->zone_zsched = pp;
+	mutex_enter(&pp->p_lock);
+	pp->p_zone = zone;
+	mutex_exit(&pp->p_lock);
+
+	/*
+	 * Disassociate process from its 'parent'; parent ourselves to init
+	 * (pid 1) and change other values as needed.
+	 */
+	sess_create();
+
+	mutex_enter(&pidlock);
+	proc_detach(pp);
+proc_t *
+pgfind_zone(pid_t pgid, zoneid_t zoneid)
+{
+	struct pid *pidp;
+
+	ASSERT(MUTEX_HELD(&pidlock));
+
+	mutex_enter(&pidlinklock);
+	pidp = pid_lookup(pgid);
+	mutex_exit(&pidlinklock);
+	if (pidp != NULL) {
+		proc_t *p = pidp->pid_pglink;
+
+		if (zoneid == ALL_ZONES || pgid == 0 || p == NULL ||
+		    p->p_zone->zone_id == zoneid)
+			return (p);
+	}
+	return (NULL);
+}
+
+/*
+ * return the head of the list of processes whose process group ID is 'pgid',
+ * or NULL, if no such process group
+ */
+proc_t *
+pgfind(pid_t pgid)
+{
+	zoneid_t zoneid;
+
+	if (INGLOBALZONE(curproc))
+		zoneid = ALL_ZONES;
+	else
+		zoneid = getzoneid();
+	return (pgfind_zone(pgid, zoneid));
+}
+
+			(void) bindtextdomain(TEXT_DOMAIN,
+			    "/.SUNWnative/usr/lib/locale");
+		else if (access("/native/usr/lib/locale", R_OK) == 0)
+			(void) bindtextdomain(TEXT_DOMAIN,
+			    "/native/usr/lib/locale");
+
+		if (!failsafe)
+			new_env = prep_env_noninteractive(user_cmd, new_env);
+
+		if (new_env == NULL) {
+			_exit(1);
+		}
+
+		/*
+		 * Move into a new process group; the zone_enter will have
+		 * placed us into zsched's session, and we want to be in
+		 * a unique process group.
+		 */
+		(void) setpgid(getpid(), getpid());
+
+		/*
+		 * The child needs to run as root to

@@ -83,8 +83,6 @@ lx_setpgid(pid_t pid, pid_t pgid)
 {
 	pid_t spid, spgid;
 	int tid;
-	int pg;
-	int ret;
 
 	if (pid < 0)
 		return (set_errno(ESRCH));
@@ -98,33 +96,21 @@ lx_setpgid(pid_t pid, pid_t pgid)
 		return (set_errno(ESRCH));
 	}
 
-	if (pgid == 0) {
+	/*
+	 * Process group IDs are native PID identities, except for init.
+	 * A populated group can outlive its leader, so do not require a
+	 * live task or translate a synthetic LWP ID here.  setpgrp() looks
+	 * up the group under pidlock and checks the zone and session.
+	 */
+	if (pgid == 0)
 		spgid = spid;
-	} else if (lx_lpid_to_spair(pgid, &spgid, &tid) < 0) {
-		return (set_errno(ESRCH));
-	}
+	else if (pgid == LX_INIT_PGID)
+		spgid = curzone->zone_proc_initpid;
+	else
+		spgid = pgid;
 
 	/* setpgid() */
-	ret = setpgrp(5, spid, spgid);
-
-	if (ret == EPERM) {
-		/*
-		 * On Linux, when calling setpgid with a desired pgid that is
-		 * equal to the current pgid of the process, no error is
-		 * emitted. This differs slightly from illumos which would
-		 * return EPERM. To emulate the Linux behavior, we check
-		 * specifically for matching pgids.
-		 */
-
-		/* getpgid() */
-		ttolwp(curthread)->lwp_errno = 0;
-		pg = setpgrp(4, spid, 0);
-		if (ttolwp(curthread)->lwp_errno == 0 && spgid == pg)
-			return (0);
-		return (set_errno(EPERM));
-	}
-
-	return (ret);
+	return (setpgrp(5, spid, spgid));
 }
 
 long

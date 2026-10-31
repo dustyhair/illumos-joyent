@@ -125,6 +125,12 @@ for controller in mntns-budget-native mount-owner-test.sh \
     pfexec cp "$lab/$controller" "$lab/mnt-root/lab/$controller"
     pfexec chmod 0555 "$lab/mnt-root/lab/$controller"
 done
+# Private global-zone controllers and cross-zone fixtures for the PGID lab.
+for suite in leaderless-pgrp pgrp-zone; do
+    test -d "$lab/$suite"
+    pfexec mkdir -p "$lab/mnt-root/lab/$suite"
+    pfexec cp -Rp "$lab/$suite/." "$lab/mnt-root/lab/$suite/"
+done
 pfexec cp "$lab/lx-root.tar" "$lab/mnt-root/lab/lx-root.tar"
 pfexec cp "$lab/enforcement-test.sh" "$lab/mnt-root/lab/enforcement-test.sh"
 pfexec chmod 0555 "$lab/mnt-root/lab/enforcement-test.sh"
