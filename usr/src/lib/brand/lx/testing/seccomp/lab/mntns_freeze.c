@@ -168,6 +168,10 @@ main(int argc, char **argv)
 		return (2);
 	if (linux_control && mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL))
 		return (2);
+	if (mount("tmpfs", path("source/subdir", p), "tmpfs",
+	    MS_NOSUID | MS_NODEV, "mode=0755") ||
+	    write_text(path("source/subdir/data", p), "child\n", 1))
+		return (2);
 	if (mount(source, target, NULL, MS_BIND | MS_REC, NULL))
 		return (2);
 	if (denied) {
@@ -181,7 +185,7 @@ main(int argc, char **argv)
 		    "denied-seal-leaves-writable");
 		goto out;
 	}
-	seal(path("source/subdir", p), EINVAL, "non-mountpoint");
+	seal(source, EINVAL, "non-mountpoint");
 	errno = 0;
 	expect_error(syscall(SYS_mount, (void *)1, target, NULL, seal_flags, NULL),
 	    EFAULT, "bad-ignored-source");
@@ -194,6 +198,12 @@ main(int argc, char **argv)
 	(void) close(fd);
 	check(statfs(target, &stats) == 0 && (stats.f_flags & 0xf) == 0xf,
 	    "sealed-mount-flags");
+	check(statfs(path("target/subdir", p), &stats) == 0 &&
+	    !(stats.f_flags & 1), "parent-seal-does-not-seal-child-mount");
+	seal(p, 0, "separate-child-seal");
+	errno = 0;
+	expect_error(open(path("target/subdir/data", p), O_WRONLY), EROFS,
+	    "child-seal-enforced");
 	check(write(sourcefd, "x", 1) == 1, "source-writer-unaffected");
 	(void) close(sourcefd);
 	check(contents(path("target/file", p), "xource\n"), "read-sealed-file");
