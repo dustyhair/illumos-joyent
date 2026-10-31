@@ -1,0 +1,17 @@
+{
+  "cases_passed": 8,
+  "scope": "lazy detach, held descriptors, self-parent roots, hidden stacks, active graph copies and capability denial",
+  "profile": "existing lxc-unshare; global policy unchanged",
+  "static_probe": "257d4ac11b749991247a6a27bfd860384e99723cb2069913240f18d652b9df7b",
+  "dynamic_probe": "538c044fecbbd8e5678ff9b24c8a3a6c0a3706cf60c296e9b68b849f8250e612",
+  "logs": {
+    "dynamic-0-allow.log": "e5cc2b0612f8e87cebe6594ab620f6253da941c0e83fbc2429bbcad2adf2ac19",
+    "dynamic-65534-allow.log": "236886af9875193c96f79dacb451cfe2cdfe3dc35b243e446fff9027ac54631b",
+    "static-0-allow.log": "44c5db98a78c3b8d8cfc20610f4684ff7a9eee1559253e17d1fb79209da3e832",
+    "static-65534-allow.log": "af1a77fd2b7d3f9cc32daef7e1f0ac0fd8c4fceb1285ff8e6784af9bc225456a",
+    "dynamic-0-deny.log": "7f2d2b7a26432b8fccbbe6e4292e704cfe05f3ddb67bd791c1b560bc9bd8a49a",
+    "dynamic-65534-deny.log": "668e2106ba3b2720913d80c49a56c7a51ed003e3fc8cf20867c99d9d43620f8b",
+    "static-0-deny.log": "2e024fc222493a8c0c8ea9dbdaec2c43e195e91767a3840eda1d6afe2c79bfa5",
+    "static-65534-deny.log": "428ba776c96b8a049c2f26e80008673b6cc35930adc2416bd5fe70f45cc3d911"
+  }
+}

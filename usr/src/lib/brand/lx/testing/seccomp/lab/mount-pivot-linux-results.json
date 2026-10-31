@@ -1,0 +1,17 @@
+{
+  "cases_passed": 8,
+  "scope": "two-stage bubblewrap root sequence including pivot_root(.,.), old cwd fd and lazy detach; Linux reference only, lx not implemented",
+  "profile": "existing lxc-unshare; global policy unchanged",
+  "static_probe": "e23380c8bb1989cb9530de0b1d6c4c7d90526ccda61882d0f08894373ce45c9d",
+  "dynamic_probe": "f0a435beecfc8af0cd86d8461127a61b7317b1147ead6f7ebe7b6381316f91ab",
+  "logs": {
+    "dynamic-0-allow.log": "0d17ec2d572a2dc16c9effdcd3168484d0af9b6b457200fc18b08afb6cdacd4b",
+    "dynamic-0-deny.log": "f5c6210247710c5522c3e5e4dae529f1ea98bbcf617f65969930430523c16431",
+    "dynamic-65534-allow.log": "b6b2959ee4c5110faacdbf52e944b1813ef4c66bca619ab807220553902b13b7",
+    "dynamic-65534-deny.log": "9d10b3fe0253e5423facc3e5e06172d4c0ed3762f49d767599310369890c34d3",
+    "static-0-allow.log": "2d0333fe96bf130283195c13f7a6e1ebd00cdd93fa41602b79f7084208deb296",
+    "static-0-deny.log": "cb4aec08019632c60fba0c1de56865b3601610b370e81cf93f085ff6da7044f6",
+    "static-65534-allow.log": "d801956e3b0307e54e6e732e62d9b801f222e1287763a9446618a9ccb577d276",
+    "static-65534-deny.log": "d38cd36cb84aab57a959713122c276d44caf9066131279f0bf02cce1330bf522"
+  }
+}
