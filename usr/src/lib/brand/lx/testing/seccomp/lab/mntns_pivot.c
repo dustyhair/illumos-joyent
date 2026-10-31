@@ -230,9 +230,13 @@ main(int argc, char **argv)
 	    "mode=0755") == 0 &&
 	    write_text("/newroot/final", "final\n", 1) == 0,
 	    "prepare-final-root");
-	if (bindroot)
+	if (bindroot) {
 		check(mount("/newroot", "/newroot", NULL,
 		    MS_BIND | MS_REC, NULL) == 0, "final-root-is-bind-mount");
+		check(mount(NULL, "/newroot", NULL,
+		    MS_BIND | MS_REMOUNT | MS_RDONLY, NULL) == 0,
+		    "final-bind-root-readonly");
+	}
 	check(mount(NULL, "/oldroot", NULL, MS_REC | MS_PRIVATE, NULL) == 0,
 	    "old-root-private");
 	check(umount2("/oldroot", MNT_DETACH) == 0, "detach-original-root");
@@ -249,6 +253,9 @@ main(int argc, char **argv)
 	check(umount2(".", MNT_DETACH) == 0, "detach-temporary-root-via-cwd");
 	check(chdir("/") == 0 && contents("/final", "final\n"),
 	    "final-root-visible");
+	if (bindroot)
+		check(statfs("/", &stats) == 0 && (stats.f_flags & ST_RDONLY),
+		    "final-bind-root-retains-readonly");
 	check(access("/temporary", F_OK) == -1 && errno == ENOENT,
 	    "temporary-root-hidden");
 	check(fchdir(outsidefd) == 0, "held-cwd-outside-new-root");
