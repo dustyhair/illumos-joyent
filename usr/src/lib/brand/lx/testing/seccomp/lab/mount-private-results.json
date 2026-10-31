@@ -1,0 +1,73 @@
+{
+  "vm": 94,
+  "accepted_checkpoint": true,
+  "full_codex_workflow_accepted": false,
+  "source_commit": "79ffb321aae723e0671b050abca1b527d7c02554",
+  "test_commit": "fe1258cf05d1f91fefbb91fb9a8d91a99d528423",
+  "prior_full_regressions_exit": 0,
+  "entry_cases_passed": 70,
+  "bind_fd_cases_passed": 12,
+  "mount_limit_cases_passed": 2,
+  "recursive_cases_passed": 12,
+  "atomic_recursive_observers_passed": 4,
+  "new_cases_passed": 8,
+  "private_peer_observers_passed": 4,
+  "linux_controls_passed": 8,
+  "cleanup": {
+    "driver_and_bwrap_trace_terminal": true,
+    "process_idle": "PASS",
+    "user_budget_idle": "PASS",
+    "views": 0,
+    "seccomp": 0,
+    "userns": 0,
+    "mntns": 0,
+    "pool_export_exit": 0,
+    "synced_poweroff": true,
+    "qemu_pid_exited": 2249461
+  },
+  "codex": {
+    "fixture_version": "0.166.0",
+    "all_experiments_enabled": true,
+    "clone_flags": "0x78020011",
+    "clone_results": [
+      -22,
+      -22
+    ],
+    "workflow": "incomplete"
+  },
+  "physical_host_deployed": false,
+  "build": "clean release/debug brand build finished without warnings/errors; kernel cstyle/diff clean; release runtime on retained mixed platform",
+  "coverage": [
+    "static/dynamic root/nobody allow/deny",
+    "PRIVATE and masterless SLAVE with recursive/SILENT variants",
+    "exact mountpoint, missing path and combined-type validation",
+    "ignored optional input validation",
+    "copied view mount changes do not propagate to peer",
+    "effective CAP_SYS_ADMIN removal and retained seccomp"
+  ],
+  "artifacts": {
+    "lofs": "e150c26a608daac065ab3214949993bba95ead2984e4c7f3d3c4cd47d8427175",
+    "brand": "04f859b8a600a64df5160fb02893ca62db9da54997131234e9ff97b3bde87bec",
+    "genunix_retained": "1b0a9800d58a82cc871d3b5341deb949252a37554cb56042195eb3114c822d51",
+    "proc_retained": "59bccb23ab35373244cb3f26eaf30d85862cd2dc80fc37f3ac7839aa2048874a",
+    "ktest": "cef32a9584137194a1f284497caaeb9753ac4de312c5f3c6877db1b5c114cd3a",
+    "root_tar": "f5d676916c79a0b3af7a642ca8e8312527286279f48010ab851d3208dac9ab8f",
+    "static_probe": "a2c6ae050dcdaf732650ad631af58c160d7f9ffa386b4d84bffb0b96466c2a8c",
+    "dynamic_probe": "138b998d3ec698e5f56f6f31c2b292552d33d5091ecf4d9ba74d0654ea0f1287",
+    "driver": "fab4da2f2688c2175574ba1b3cf4b13d9cb430802c50b4b23cbbd3245532f6ad",
+    "full_driver": "c9bac9c7ed9feb44854a1111b153f8e683a413628d349b0f2be4973e3cf8efe4"
+  },
+  "logs": {
+    "vm94-full.log": "b85c591d18b6eaedaad597530c45743cb08410533baed7c6f7f87d22624afe5c",
+    "vm94-private.log": "f26ca72de0c3bf88222d061c35aeabd70bb70fde877b124e6db1ca83829a51ba",
+    "vm94-regressions.log": "5494dd5612fa28613a9fbba211a49b6f63145ad6dd6d931c492c1d058498c930",
+    "vm94-entry.log": "2f7ce8bf49fb7de725c93c0cfe28baa2076def805d2a14e751256115ea26a072",
+    "vm94-bind.log": "9ce98ffe728e8db0b80e6f1e0f899d0707174164b1387705c0a54e72a34da992",
+    "vm94-recursive.log": "837126a4b594b3c9d4d4ec1571d83cc0c0db103c10e34f03f0454725301b3f0f",
+    "vm94-bwrap.log": "fd3618a03fbcaee6f7e4596d88bd50b103e44be1daea41f23ba9008dccacecd5"
+  },
+  "console_evidence": {
+    "name": "boot-94-private-slave-acceptance.log",
+    "sha256": "f15136e8703c4c98e7603d442d2a66cb62bb145cb49adeb2c137a38c30c2403c"
+  }
+}

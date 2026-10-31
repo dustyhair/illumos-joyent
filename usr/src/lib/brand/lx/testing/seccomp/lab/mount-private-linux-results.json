@@ -1,0 +1,14 @@
+{
+  "cases_passed": 8,
+  "profile": "existing lxc-unshare; global policy unchanged",
+  "logs": {
+    "dynamic-0-allow.log": "e91daee1aefa416994fc43b907ef0294ea0b7cc307343dc6d3a512c09e82688b",
+    "dynamic-0-deny.log": "231db2c540a583d79dca424e96274c8151549a57af22321eb32b5640e965fb10",
+    "dynamic-65534-allow.log": "9202bb1750ef230fdeaf72775e31389095e6dd20bf19f63e0f377a74318e369e",
+    "dynamic-65534-deny.log": "f44e44f4add4add3dfdc007e03c4c9b414170b914fee4d3e85f50979fda72330",
+    "static-0-allow.log": "6bb24c1674fc34117a59da6d640720e213c03c510ba450f37540a87e6b7dc1af",
+    "static-0-deny.log": "3e043dda88e523b3bba78297fa5c8612a303bfe764fb6d1325c758ae7c6db739",
+    "static-65534-allow.log": "7f246109beb5cd7b94489cac163fb81aedf81d70da497283a9e42d6581a6c9d7",
+    "static-65534-deny.log": "da9c0897d164633aa58807d1a10d3a8816341508dd23b9df8cc0bb5c786eb3b0"
+  }
+}
