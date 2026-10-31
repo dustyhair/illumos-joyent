@@ -33,6 +33,7 @@
 #include <sys/uio.h>
 #include <sys/cred.h>
 #include <sys/file.h>
+#include <sys/mman.h>
 #include <sys/pathname.h>
 #include <sys/debug.h>
 #include <sys/fs/lofs_node.h>
