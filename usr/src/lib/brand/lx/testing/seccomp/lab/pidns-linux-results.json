@@ -1,0 +1,34 @@
+{
+  "time": "2026-10-31T14:17:30.469560+00:00",
+  "source_commit": "b685efa94093457524e334d433a07bf983bc2236",
+  "cases_passed": 8,
+  "lx_acceptance": false,
+  "scope": "Linux behavioral reference only for future PID namespace implementation; lx CLONE_NEWPID remains disabled",
+  "profile": "existing lxc-unshare; global policy unchanged",
+  "source_sha256": "9d40cddbb350c90c0f27f8c2ed01e6efba321aed3a0ff45b2d6e7d2a50abe12b",
+  "controller_sha256": "a9b79a70599b3370bab260b6cb93eee949f27d2414a96182fb498bae5f526ed8",
+  "static_sha256": "7f49331f1e46b4c214ff7d96472671ddd307de0c0a795d9d2c223a087faf4751",
+  "dynamic_sha256": "46bf2add2c7bd6cc0de3d7d2cbfafb6da4a84a214b64e7cd9fe3101975701be6",
+  "coverage": [
+    "unshare changes namespace for children while parent retains its active PID",
+    "child PID1 and parent PID0",
+    "namespace-local getpid/gettid/session/group IDs",
+    "PID1 default signal protection and caught signal delivery",
+    "fork return IDs and waitid/WNOWAIT/waitpid IDs/status",
+    "pthread IDs",
+    "orphan adoption and reaping by namespace PID1",
+    "private proc mount self ID and hidden outer parent",
+    "PID1 exit removes remaining worker before outer wait completes",
+    "fork into dead namespace returns ENOMEM"
+  ],
+  "logs": {
+    "static-0-0.log": "29694925544384ef8cc1bbb28163b6e6d23ec3b31445f5c437ab362241f55e81",
+    "static-0-1.log": "4841929fa0ed6ef33c4bd6d17b5a97aa69005cefb8bf0e2825e625b507db9a05",
+    "static-65534-0.log": "45e0a55326244cec5fe257e9f41af194bd18af3d503ab8a9b99a43cf4da70a32",
+    "static-65534-1.log": "b9efdfb982fe34fda885fc555da2393bb717d9794b57fe46aa4f0e518418b343",
+    "dynamic-0-0.log": "29694925544384ef8cc1bbb28163b6e6d23ec3b31445f5c437ab362241f55e81",
+    "dynamic-0-1.log": "4841929fa0ed6ef33c4bd6d17b5a97aa69005cefb8bf0e2825e625b507db9a05",
+    "dynamic-65534-0.log": "45e0a55326244cec5fe257e9f41af194bd18af3d503ab8a9b99a43cf4da70a32",
+    "dynamic-65534-1.log": "b9efdfb982fe34fda885fc555da2393bb717d9794b57fe46aa4f0e518418b343"
+  }
+}
