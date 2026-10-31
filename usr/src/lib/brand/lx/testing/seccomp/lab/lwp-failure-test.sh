@@ -5,8 +5,8 @@ test -f /lab/offline-lx-guest
 bootparams | grep -q '^lx_lab=true$'
 test "$(zonename)" = global
 zonepath=$(zonecfg -z lx-probe info zonepath | awk '{print $2}')
-test "$(digest -a sha256 "$zonepath/root/test/pid_ownership" | awk '{print $NF}')" = aa39a6a2fbf7de39cf88db270e9968d380d53989332e5a3506e02cfd59b8c407
-test "$(digest -a sha256 "$zonepath/root/test/dynamic/pid_ownership" | awk '{print $NF}')" = c056475ffed988f3d2164770d921bf4bfb8084d6336650d199a0b3eac7a854a1
+test "$(digest -a sha256 "$zonepath/root/test/pid_ownership" | awk '{print $NF}')" = 4a40378f8c65c2457cc96f8468c9931fecbf781bdc428e2143635bc299b36e32
+test "$(digest -a sha256 "$zonepath/root/test/dynamic/pid_ownership" | awk '{print $NF}')" = 33ee0aa8d8132efe239cc1cf3c872cc01e2dc7d96852a1620f89bca6e404ca5d
 pid=
 child=
 runner=
