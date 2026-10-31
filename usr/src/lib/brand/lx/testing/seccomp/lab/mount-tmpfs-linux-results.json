@@ -1,0 +1,18 @@
+{
+  "cases_passed": 12,
+  "profile": "existing lxc-unshare; global AppArmor policy unchanged",
+  "logs": {
+    "dynamic-0-basic.log": "b3ac5bbc24bb5f508337fd9a4ee35d6ee47f9cea3898c8cfeb389fa93860f8d4",
+    "dynamic-0-deny.log": "d86e43e17d2bc8f8639de035cbfa0ac72e464fee33f1620361b008b49f61b402",
+    "dynamic-0-options.log": "f820c894ae4e6e2249d7b8b1307427389b8e92cf828b3f54cc8879b2da6c2fcc",
+    "dynamic-65534-basic.log": "85ba1216b9d1c8b4cdca8ce144b236fcdd0e401f7e2426efe332111594ba4476",
+    "dynamic-65534-deny.log": "5a09ad388ac0d27ad7875e13efed923819714fe7e4865e2f1fe37c203cb34528",
+    "dynamic-65534-options.log": "108037d7632b5fe0fb924cc79d16cbdbcf4b910f73b33079f06f7dccce2bb0a6",
+    "static-0-basic.log": "16e9b8f8a9aef8d7495d5c3a176b199f02d0f614e4a4ce574535c26054e2deb8",
+    "static-0-deny.log": "14e60a973c48dba29d064859833b7b648152aa3dd2790a6acf17d7923ced590e",
+    "static-0-options.log": "d7bbb5f18f1053fb17c09147a98dad583b2a7ed3e93467db3913504514a311e6",
+    "static-65534-basic.log": "94ddf3c06fac3fbe0cffc9ae97ea79c288d3afc4a79e746039bb665f8c7bdda8",
+    "static-65534-deny.log": "aefa95ec117014097bada16304783f032ab7eb2ee1766330a103d3b05ab4a20a",
+    "static-65534-options.log": "c539934657ee2a0736b524ce5ccfdf117a4e754c405d043a657464c815676dc9"
+  }
+}

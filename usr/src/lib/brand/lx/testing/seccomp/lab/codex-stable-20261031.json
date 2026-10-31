@@ -1,0 +1,5 @@
+{
+  "checked_utc": "2026-10-31T03:10:42.769870+00:00",
+  "source": "npm view @openai/codex dist-tags.latest --json on codex-testbox",
+  "version": "0.166.0"
+}

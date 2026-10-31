@@ -1,0 +1,99 @@
+{
+  "vm": 97,
+  "accepted_checkpoint": true,
+  "full_codex_workflow_accepted": false,
+  "source_commit": "e8d329392b61faba8c464b9cab6a4cc3515b1c4b",
+  "statfs_source": "2dd99fee02",
+  "tmpfs_source": "5bfffea291",
+  "tmpfs_percentage_source": "427c2bae92",
+  "tmpfs_boot_fix": "9a2165080e",
+  "prior_full_regressions_exit": 0,
+  "entry_cases_passed": 70,
+  "bind_cases_passed": 12,
+  "mount_record_limit_cases_passed": 2,
+  "recursive_cases_passed": 12,
+  "recursive_atomic_observers_passed": 4,
+  "private_cases_passed": 8,
+  "private_peer_observers_passed": 4,
+  "tmpfs_cases_passed": 12,
+  "tmpfs_peer_observers_passed": 4,
+  "tmpfs_size_cases_passed": 4,
+  "statfs_cases_passed": 4,
+  "linux_tmpfs_controls_passed": 12,
+  "linux_statfs_controls_passed": 4,
+  "cleanup": {
+    "driver_and_bwrap_trace_terminal": true,
+    "process_idle": "PASS",
+    "user_budget_idle": "PASS",
+    "views": 0,
+    "seccomp": 0,
+    "userns": 0,
+    "mntns": 0,
+    "pool_export_exit": 0,
+    "synced_poweroff": true,
+    "qemu_pid_exited": 2297539
+  },
+  "codex": {
+    "fixture_version": "0.166.0",
+    "all_experiments_enabled": true,
+    "clone_flags": "0x78020011",
+    "clone_results": [
+      -22,
+      -22
+    ],
+    "workflow": "incomplete",
+    "latest_registry_check": {
+      "checked_utc": "2026-10-31T03:10:42.769870+00:00",
+      "source": "npm view @openai/codex dist-tags.latest --json on codex-testbox",
+      "version": "0.166.0"
+    }
+  },
+  "physical_host_deployed": false,
+  "coverage": [
+    "static/dynamic root/nobody tmpfs basic/options/deny and filesystem statistics",
+    "kernel-only initial tmpfs root ownership before native normal publication",
+    "default mode1777 and explicit mode/UID/GID with namespace mapping",
+    "relative mount target, held private descriptor and foreign descriptor refusal",
+    "bad options and pointer faults leave target unchanged",
+    "size1M enforced after1044480 data bytes; metadata shares native quota",
+    "released pages, zero size unlimited, exact rounded percentage capacity",
+    "noexec script denied, CAP_SYS_ADMIN removal denies mount",
+    "new namespace shares existing tmpfs contents but hides later overmounts from peer",
+    "kernel statfs/fstatfs resolve actual vnode and retain mount restrictions",
+    "magic paths, old covered descriptor, pipe/socket statistics and errors",
+    "no-admin statistics and stacked filter evaluation before path lookup",
+    "no userspace emulation or native ABI allowance added for restricted processes"
+  ],
+  "build": "clean release/debug brand and tmpfs builds plus final updates pass; kernel cstyle/diff clean; release runtime with retained mixed platform; debug compile only",
+  "artifacts": {
+    "lofs": "e150c26a608daac065ab3214949993bba95ead2984e4c7f3d3c4cd47d8427175",
+    "brand": "2f3bce9cb8fc5ba2ead7352e2a59ea0d3e63cde32e6618ca569fb5c9b335808d",
+    "genunix_retained": "1b0a9800d58a82cc871d3b5341deb949252a37554cb56042195eb3114c822d51",
+    "proc_retained": "59bccb23ab35373244cb3f26eaf30d85862cd2dc80fc37f3ac7839aa2048874a",
+    "ktest": "cef32a9584137194a1f284497caaeb9753ac4de312c5f3c6877db1b5c114cd3a",
+    "root_tar": "4811ae5578b59dfcf342b2fff57a4dd14c74e9a26933a58bdbef8e7338cd296a",
+    "static_probe": "27f94f3b07d0ca4b5b587e38095eda15942384dea6e14734b43e4f10d6341208",
+    "dynamic_probe": "715f423562f9c9f6070d361f20b679e40c0d1e231138da12ff4c82d757294046",
+    "driver": "8ac956b24250d59de3a6df7ade82f3e4381506d12fd6ec87475a309a20667062",
+    "full_driver": "efd52f5bfceae7886bc1770fb4731ea1487f042c7a620ec8eb9eabe7da8cf38a",
+    "tmpfs": "35ea5925f4b02bda424ca48a2916f975d26bdecf2336ac6792b9f10d446d2823",
+    "tmpfs_static_probe": "68e276cfd687fc1b3e02e0ecdb82e23b0a3ec96327213454f328f2b61bc658a1",
+    "tmpfs_dynamic_probe": "d0057906a75d550ca4708cef57a8740dda52976e50e2295787cd195e18fd56ec",
+    "image_update_helper": "331811548b69ba48eeb37e26f191cca95b7873e5d8cce8ac54bcc9c14913ac16"
+  },
+  "logs": {
+    "vm97-full.log": "b0ae947ee2be2d3d9d4829e665d568c252049f0a0080d1f2a1c3f701a85d1c7f",
+    "vm97-tmpfs.log": "e651714cb771a12d619de7aaff8624587247c112c8289d87f3f6e6aa4daf207b",
+    "vm97-statfs.log": "6401e62aea0e350304ac0ff4c0d2c20e6f130af2521af5a25023f9918a0cdc47",
+    "vm97-regressions.log": "5494dd5612fa28613a9fbba211a49b6f63145ad6dd6d931c492c1d058498c930",
+    "vm97-entry.log": "3d4867b6847446ce719b827d3767537461891fcf6e07826a7b4c8c0743a4c50a",
+    "vm97-bind.log": "424bc754015e8042f7055ef17c5d770b158ebe6f1167aa9898d4d467e30b0857",
+    "vm97-recursive.log": "80ac2653aa4bca64ebec528bd7161454ac26b2a860ea77f7a4feb0b114a7b07f",
+    "vm97-private.log": "1afa4ce6f1a4c1afbe44a0eabf8929ba09a39fdf16997796b4ce9be9dfd756c4",
+    "vm97-bwrap.log": "c0ff6911bd6a079f5cf9aba8dfb07d5e41a7a261110937ff046f45183d6ee59c"
+  },
+  "console_evidence": {
+    "name": "boot-97-tmpfs-and-statfs-acceptance.log",
+    "sha256": "239fe2ae887ac3957ed8d7e7634017ae42c6bb4465b76b16e12572da1b78f70b"
+  }
+}

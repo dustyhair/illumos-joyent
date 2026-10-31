@@ -1,0 +1,10 @@
+{
+  "cases_passed": 4,
+  "profile": "existing lxc-unshare; global AppArmor policy unchanged",
+  "logs": {
+    "dynamic-0.log": "3b451f06b46c99ec1f6bab7b780ef4b01a3f345dfef97dd58044e37b643c2f83",
+    "dynamic-65534.log": "eb72faee5ccfc86f15fe2c28225ff21a0914f98aa7e8d7952baff1443b349632",
+    "static-0.log": "f5a52155f429423525f4603f83bb45e67ccaedbc3c9e72aa78fa51a16ad17e21",
+    "static-65534.log": "a31740cc41ac01e28e4a7779fea2e7bb7567d332fd8735ceb7ee4e976de28d19"
+  }
+}
