@@ -107,6 +107,8 @@ for controller in mntns-budget-native mount-owner-test.sh \
     mount-pivot-smoke-test.sh mount-pivot-shared-test.sh \
     mntns_pivot_shared namespace-clone-test.sh \
     namespace-clone-smoke-test.sh namespace-clone-full-test.sh \
+    pid-identity-test.sh pid-identity-smoke-test.sh \
+    pid-identity-full-test.sh \
     bubblewrap-trace.sh; do
     test -f "$lab/$controller"
     pfexec cp "$lab/$controller" "$lab/mnt-root/lab/$controller"
