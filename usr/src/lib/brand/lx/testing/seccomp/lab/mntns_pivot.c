@@ -235,7 +235,8 @@ main(int argc, char **argv)
 		check(mount("/newroot", "/newroot", NULL,
 		    MS_BIND | MS_REC, NULL) == 0, "final-root-is-bind-mount");
 		check(mount(NULL, "/newroot", NULL,
-		    MS_BIND | MS_REMOUNT | MS_RDONLY, NULL) == 0,
+		    MS_BIND | MS_REMOUNT | MS_RDONLY | MS_NOSUID | MS_NODEV,
+		    NULL) == 0,
 		    "final-bind-root-readonly");
 	}
 	check(mount(NULL, "/oldroot", NULL, MS_REC | MS_PRIVATE, NULL) == 0,
@@ -265,6 +266,9 @@ main(int argc, char **argv)
 	    "detached-cwd-unreachable");
 	check(chdir("/") == 0 && unshare(CLONE_NEWNS) == 0 &&
 	    contents("/final", "final\n"), "clone-final-active-root");
+	if (bindroot)
+		check(statfs("/", &stats) == 0 && (stats.f_flags & ST_RDONLY),
+		    "copied-bind-root-retains-readonly");
 	(void) close(tempfd);
 	(void) close(outsidefd);
 done:
