@@ -635,6 +635,11 @@ lx_kernel_fork(int nr, uintptr_t *args)
 		return (set_errno(EINVAL));
 	mutex_enter(&p->p_lock);
 	unsupported = pd->l_ptrace != 0;
+	if (!unsupported) {
+		/* Do not inherit stale user-emulation clone tracing state. */
+		lwpd->br_ptrace_clone_option = 0;
+		lwpd->br_ptrace_flags &= ~LX_PTF_INHERIT;
+	}
 	mutex_exit(&p->p_lock);
 	if (unsupported)
 		return (set_errno(EOPNOTSUPP));
