@@ -1,0 +1,112 @@
+{
+  "vm": 102,
+  "accepted_checkpoint": true,
+  "full_codex_workflow_accepted": false,
+  "runtime_source": "839b29ad3b64310a64795e9f01bc90dfb83a7d41",
+  "test_fixture_source": "d31e2a11fa",
+  "kernel_source": "2874990c0e",
+  "guard_fixes": [
+    "7cbea47c1b",
+    "15318bac97"
+  ],
+  "cases_passed": {
+    "MNT_ENTRY_CASE_PASS": 70,
+    "MOUNT_BIND_CASE_PASS": 12,
+    "MOUNT_BIND_FILL_PASS": 2,
+    "MOUNT_RECURSIVE_CASE_PASS": 12,
+    "MOUNT_PRIVATE_CASE_PASS": 8,
+    "MOUNT_TMPFS_CASE_PASS": 12,
+    "MOUNT_STATFS_CASE_PASS": 4,
+    "MOUNT_FREEZE_CASE_PASS": 8,
+    "MOUNT_DETACH_CASE_PASS": 8
+  },
+  "linux_detach_controls_passed": 8,
+  "lx_detach_smoke_cases_passed": 8,
+  "prior_full_regressions_exit": 0,
+  "scope": "private MNT_DETACH with retained native mounts and bounded records; normal private unmount, other flag combinations and original namespace-root detach unsupported",
+  "build": "clean release/debug genunix+brand and final clean brand builds passed with no warning/error; cstyle/diff clean; retained platform release runtime, debug compile only",
+  "cleanup": {
+    "process_idle_before_halt": "PASS for all8 full and all8 smoke cases",
+    "user_budget_idle_before_halt": "PASS for all8 full and all8 smoke cases",
+    "views": 0,
+    "flags": [
+      0,
+      0,
+      0
+    ],
+    "zone_halted_by_controller": true,
+    "pool_export_exit": 0,
+    "synced_shutdown": true,
+    "qemu_pid_exited": 2425505,
+    "post_halt_queries": "Redundant idle queries after zonehalt return missing-zone ERROR/FAIL; source1338/717 requires a live fixture zone. They do not measure retained-view leakage. Acceptance uses successful per-case checks before halt."
+  },
+  "remaining": [
+    "pivot_root and old-root reattachment with retained zone accounting",
+    "private proc and devpts",
+    "mount and namespace metadata",
+    "combined clone and PID/IPC/network namespace support",
+    "complete current Codex coding and PTY acceptance"
+  ],
+  "physical_host_deployed": false,
+  "artifacts": {
+    "lofs": "ec609542d41ae0b3a79178a39aab403b5fc9f3343bd8059b3c1360d9701a1236",
+    "brand": "5e6b4fca7fe7aecd064187780803bd00b8a61160994545c391bfb86290efa84e",
+    "genunix_retained": "1b0a9800d58a82cc871d3b5341deb949252a37554cb56042195eb3114c822d51",
+    "proc_retained": "59bccb23ab35373244cb3f26eaf30d85862cd2dc80fc37f3ac7839aa2048874a",
+    "ktest": "cef32a9584137194a1f284497caaeb9753ac4de312c5f3c6877db1b5c114cd3a",
+    "root_tar": "baf91feca0e84ddbdf7ba526faf12805db4c7d78f1a5ce3272080808840db31e",
+    "static_probe": "257d4ac11b749991247a6a27bfd860384e99723cb2069913240f18d652b9df7b",
+    "dynamic_probe": "538c044fecbbd8e5678ff9b24c8a3a6c0a3706cf60c296e9b68b849f8250e612",
+    "driver": "e25e153eb19af66fc88e39799d355bfc500966fee3f160efea0938760271a554",
+    "full_driver": "3889e8bbcf80335238cbaf0ea9261aa15d18efbe13fdc1edcc8837473c4375a6",
+    "tmpfs": "35ea5925f4b02bda424ca48a2916f975d26bdecf2336ac6792b9f10d446d2823",
+    "tmpfs_static_probe": "68e276cfd687fc1b3e02e0ecdb82e23b0a3ec96327213454f328f2b61bc658a1",
+    "tmpfs_dynamic_probe": "d0057906a75d550ca4708cef57a8740dda52976e50e2295787cd195e18fd56ec",
+    "image_update_helper": "19b8e50ffb508ab1900f8f7c961a737d9314226365a11e8bd748881b1b888ffe",
+    "genunix": "6c4f0c84c3ade7bc04422a7680b4397182bfd9baed176e3b8c9fdc882fd8ca15",
+    "smoke_driver": "4ddb036241de56c12a85dcd7b946e737be3cd95a6d4854b4db0b06f24d4bdab6"
+  },
+  "codex": {
+    "version": "0.166.0",
+    "combined_clone": "0x78020011",
+    "clone_results": [
+      -22,
+      -22
+    ],
+    "complete_workflow": false,
+    "last_trace_vm": 100
+  },
+  "coverage": [
+    "actor CAP_SYS_ADMIN and exact tracked-root validation",
+    "all covered-vnode locks acquired before graph mutation",
+    "recursive detach excludes an older mount tree hidden by the selected top mount",
+    "held file/directory references remain usable and writable, with correct statistics",
+    "detached root and child dotdot stay at the selected mount root",
+    "covered target reappears and detached child mount edges disappear",
+    "detached source/target and propagation rejected, including after namespace copy",
+    "namespace copy replays only active graph; old detached FDs stay usable",
+    "native zone ownership and VFS lifetime retained; charges retire with view",
+    "disabled experiment and unsupported force guards preserve existing regression assertions"
+  ],
+  "logs": {
+    "vm102-smoke.log": "35677af1f5b003aeb00bfdeecf243ddff6049d293cb3956cb0c786dc109cd163",
+    "vm102-smoke-public.log": "a1856abd21080efe824edbd5f9f2aff6b223316d15472bb0d6d063ad2655072d",
+    "vm102-smoke-guest.log": "f0bdcba02ec362c7cd0bc44a68890a66f2e49c03547f32918ed3ca124e1bdec5",
+    "vm102-smoke-backend.log": "ebd66a0ac01e88d350723718d7aec04738aadd35041eaeb060a8c262d621c717",
+    "vm102-smoke-fixture-a-backend.log": "b2ae54d34685a4207150efe6bf679abbfd3d834c4ebd019c3e3c1192d9782d9c",
+    "vm102-full.log": "48a0eac8d57360080fc34187f091d30d8f44759adfbc10100ed542c4be2b315c",
+    "vm102-detach.log": "dccd7575da92efd958a23aba9d0dd0873656adf677824ecdadb0157ccf2262ba",
+    "vm102-regressions.log": "5494dd5612fa28613a9fbba211a49b6f63145ad6dd6d931c492c1d058498c930",
+    "vm102-entry.log": "4656c1ce62b418b83249cb5b6d976cfee739b5616a6cd6b78561f0484c167f2e",
+    "vm102-bind.log": "eee05b7409865c3136e71dbe71a655fca2f0554e2f2eaf2b881c449bb1f43839",
+    "vm102-recursive.log": "008a023184831d9a788cd0ee9fdf96fde79073b42ee0755382375965b8d33ffd",
+    "vm102-private.log": "06c43b772ae97020ad2a7222f161bbfcd1adf6bcc9d290b84a4f872dbaccc73c",
+    "vm102-tmpfs.log": "4ab0d9f5710fb0ef22bda3b057b3dca9e459c7278200bce1fdea28a51ef3ae5a",
+    "vm102-statfs.log": "f49b6ec282ea6e4dcba2826eb81b9cfea759494fd57de6e53c551c9ba7af49da",
+    "vm102-freeze.log": "51eb4139aed1ab290f505852c2598293d44a60e2010266d71bed2400438eea23"
+  },
+  "console_evidence": {
+    "name": "boot-102-lazy-detach-acceptance.log",
+    "sha256": "0fc073dbc74eeda89dc717e08f48523f990d8cd4c76de90b860558528f9b48a8"
+  }
+}
