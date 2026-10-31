@@ -1,0 +1,35 @@
+VM122 accepted synchronous private PID namespace init drain and already-zombie adoption.
+
+Kernel source b85c474bce7e33ed0ec975736363e0cd874914eb; KTEST source
+afcb54d3979c552d476c32f20fad7cf74bdb81b6; final controllers
+5757f4236fb75ceabaf0d6f9102ff9c2fb62029a. Public CLONE_NEWPID remains
+rejected and Linux PID values remain global. Full Codex/bubblewrap is not accepted.
+
+Targeted plus full repeat passed 48 drain cases,16 cohorts,64 no-retry
+process_drained checks with inactive identities still held,64 already-zombie
+adoptions and64 native sigcld(NULL)/sigaddq(KM_NOSLEEP) allocation events.
+Ten wait invocations passed: native2 and LX8, covering normal WNOHANG,
+interruptible waits, exited status and Linux clone-child filtering.
+Forty-eight ownership cases and16 outside-cohort survivors passed.
+Full prior filesystem/user/80clone/16PIDidentity/16PIDmap/32live-orphan
+regressions also passed. See pid-drain-results.json for counts and hashes.
+
+The initial observer failed DTrace compilation before zombie cases because
+p_pid is a C macro. The corrected p_pidp->pid_id observer was committed,
+serial-uploaded and SHA256 verified; the kernel did not change. Raw failure
+is retained. Initial and corrected63artifact manifests are recorded.
+Release/debug genunix,brand,KTEST were rebuilt cleanly. Runtime used release
+modules, retained matched VM121 Unix and VM118 proc/cgroup plus surrounding
+platform modules. Debug was compile-only, not runtime acceptance.
+
+Final flags0, mountviews0,PIDspaces0,zone installed/stopped,pool healthy,
+export0,poweroff sync complete,QEMU3321210 gone. No physical host changed.
+Raw console boot-122-pid1-drain-acceptance.log SHA256
+b36b12d1cdf304ba11ca17d15c644205ddf65856ae49b6a05a76c50fc4bffb58
+is retained in the scratch lab and /build/workspaces/lx/log/ on the builder.
+
+Nested init drain and deterministic pending-fork unwind remain unvalidated.
+The USR1/USR2-only delivery draft was not integrated: PID1 still needs full
+signal-generation policy and authenticated namespace identity, alongside
+PID/PGID/SID/wait/siginfo/proc translation,IPC/network namespace support,
+and a fresh current Codex install with complete sandboxed workflows.
