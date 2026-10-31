@@ -42,6 +42,7 @@ struct lx_pidns {
 	avl_tree_t pn_numbers;
 	avl_tree_t pn_backing;
 	lx_pidns_state_t pn_state;
+	boolean_t pn_draining;	/* PID1 is synchronously reaping children */
 };
 
 struct lx_pidns_map {
@@ -190,6 +191,7 @@ lx_pidns_init_exit(proc_t *init)
 	    lx_pidns_map_id(ptolxproc(init)->l_pidns_map, ns) == 1);
 	mutex_enter(&pidlock);
 	ns->pn_state = LX_PIDNS_DEAD;
+	ns->pn_draining = B_TRUE;
 	for (slot = avl_first(&ns->pn_numbers); slot != NULL;
 	    slot = AVL_NEXT(&ns->pn_numbers, slot)) {
 		lx_pidns_map_t *map = slot->ps_map;
@@ -207,6 +209,13 @@ lx_pidns_init_exit(proc_t *init)
 		mutex_exit(&p->p_lock);
 	}
 	mutex_exit(&pidlock);
+
+	/* Native child links define completion, not retained identities. */
+	proc_exit_wait();
+	mutex_enter(&pidlock);
+	VERIFY(init->p_child == NULL);
+	ns->pn_draining = B_FALSE;
+	mutex_exit(&pidlock);
 }
 
 /* Native reparenting retains ownership of the child lists and notifications. */
@@ -222,15 +231,20 @@ lx_pidns_child_reaper(proc_t *parent)
 		proc_t *init;
 		boolean_t alive;
 
-		if (ns->pn_state != LX_PIDNS_LIVE ||
+		if ((ns->pn_state != LX_PIDNS_LIVE && !ns->pn_draining) ||
 		    (slot = avl_find(&ns->pn_numbers, &key, NULL)) == NULL ||
 		    !slot->ps_map->pm_committed ||
 		    (init = prfind_zone(slot->ps_backing, zoneid)) == NULL ||
 		    init == parent)
 			continue;
 		mutex_enter(&init->p_lock);
+		/*
+		 * A LIVE init may already be in exitlwps(), before it can mark
+		 * DEAD and drain. Keep its children rooted there across that
+		 * interval too. It cannot reach native reparenting until its
+		 * synchronous drain has completed.
+		 */
 		alive = init->p_stat == SRUN &&
-		    !(init->p_flag & (SEXITING | SEXITLWPS)) &&
 		    init->p_brand == &lx_brand && ptolxproc(init) != NULL &&
 		    ptolxproc(init)->l_pidns_map == slot->ps_map;
 		mutex_exit(&init->p_lock);

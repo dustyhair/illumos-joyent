@@ -1158,8 +1158,9 @@ winfo(proc_t *pp, k_siginfo_t *ip, int waitflag)
  * Look also for stopped children,
  * and pass back status from them.
  */
-int
-waitid(idtype_t idtype, id_t id, k_siginfo_t *ip, int options)
+static int
+waitid_common(idtype_t idtype, id_t id, k_siginfo_t *ip, int options,
+    boolean_t exiting)
 {
 	proc_t *cp, *pp;
 	int waitflag = !(options & WNOWAIT);
@@ -1212,7 +1213,8 @@ waitid(idtype_t idtype, id_t id, k_siginfo_t *ip, int options)
 		return (ECHILD);
 	}
 
-	if (PROC_IS_BRANDED(pp) && BROP(pp)->b_waitid_helper != NULL) {
+	if (!exiting && PROC_IS_BRANDED(pp) &&
+	    BROP(pp)->b_waitid_helper != NULL) {
 		have_brand_helper = B_TRUE;
 	}
 
@@ -1244,13 +1246,14 @@ waitid(idtype_t idtype, id_t id, k_siginfo_t *ip, int options)
 		 */
 		VERIFY(pp->p_child != NULL);
 		for (cp = pp->p_child_ns; cp != NULL; cp = cp->p_sibling_ns) {
-			if (idtype != P_PID && (cp->p_pidflag & CLDWAITPID))
+			if (!exiting && idtype != P_PID &&
+			    (cp->p_pidflag & CLDWAITPID))
 				continue;
 			if (idtype == P_PID && id != cp->p_pid)
 				continue;
 			if (idtype == P_PGID && id != cp->p_pgrp)
 				continue;
-			if (PROC_IS_BRANDED(pp)) {
+			if (!exiting && PROC_IS_BRANDED(pp)) {
 				if (BROP(pp)->b_wait_filter != NULL &&
 				    BROP(pp)->b_wait_filter(pp, cp) == B_FALSE)
 					continue;
@@ -1284,7 +1287,7 @@ waitid(idtype_t idtype, id_t id, k_siginfo_t *ip, int options)
 					freeproc(cp);
 				}
 				mutex_exit(&pidlock);
-				if (waitflag) {		/* accept SIGCLD */
+				if (waitflag && !exiting) { /* accept SIGCLD */
 					sigcld_delete(ip);
 					sigcld_repost();
 				}
@@ -1304,7 +1307,7 @@ waitid(idtype_t idtype, id_t id, k_siginfo_t *ip, int options)
 				continue;
 			if (idtype == P_PGID && id != cp->p_pgrp)
 				continue;
-			if (PROC_IS_BRANDED(pp)) {
+			if (!exiting && PROC_IS_BRANDED(pp)) {
 				if (BROP(pp)->b_wait_filter != NULL &&
 				    BROP(pp)->b_wait_filter(pp, cp) == B_FALSE)
 					continue;
@@ -1316,7 +1319,7 @@ waitid(idtype_t idtype, id_t id, k_siginfo_t *ip, int options)
 					break;
 				winfo(cp, ip, waitflag);
 				mutex_exit(&pidlock);
-				if (waitflag) {		/* accept SIGCLD */
+				if (waitflag && !exiting) { /* accept SIGCLD */
 					sigcld_delete(ip);
 					sigcld_repost();
 				}
@@ -1334,7 +1337,7 @@ waitid(idtype_t idtype, id_t id, k_siginfo_t *ip, int options)
 				mutex_exit(&cp->p_lock);
 				winfo(cp, ip, waitflag);
 				mutex_exit(&pidlock);
-				if (waitflag) {		/* accept SIGCLD */
+				if (waitflag && !exiting) { /* accept SIGCLD */
 					sigcld_delete(ip);
 					sigcld_repost();
 				}
@@ -1345,7 +1348,7 @@ waitid(idtype_t idtype, id_t id, k_siginfo_t *ip, int options)
 					break;
 				winfo(cp, ip, waitflag);
 				mutex_exit(&pidlock);
-				if (waitflag) {		/* accept SIGCLD */
+				if (waitflag && !exiting) { /* accept SIGCLD */
 					sigcld_delete(ip);
 					sigcld_repost();
 				}
@@ -1354,7 +1357,7 @@ waitid(idtype_t idtype, id_t id, k_siginfo_t *ip, int options)
 			case CLD_EXITED:
 			case CLD_DUMPED:
 			case CLD_KILLED:
-				if (idtype != P_PID &&
+				if (!exiting && idtype != P_PID &&
 				    (cp->p_pidflag & CLDWAITPID))
 					continue;
 				/*
@@ -1404,13 +1407,44 @@ no_real_children:
 		if (!brand_wants_wait && (found == proc_gone))
 			break;
 
-		if (!cv_wait_sig_swap(&pp->p_cv, &pidlock)) {
+		if (exiting) {
+			cv_wait(&pp->p_cv, &pidlock);
+		} else if (!cv_wait_sig_swap(&pp->p_cv, &pidlock)) {
 			mutex_exit(&pidlock);
 			return (EINTR);
 		}
 	}
 	mutex_exit(&pidlock);
 	return (ECHILD);
+}
+
+int
+waitid(idtype_t idtype, id_t id, k_siginfo_t *ip, int options)
+{
+	return (waitid_common(idtype, id, ip, options, B_FALSE));
+}
+
+/*
+ * Only for the last LWP in proc_exit's brand callback. Reap every native
+ * child, including children hidden from user waits by brand or fork flags.
+ * A pending fatal signal must not interrupt this wait. The caller must
+ * arrange for every child to terminate and keep orphan adoption rooted
+ * here until this returns. No new children may be created by this process.
+ */
+void
+proc_exit_wait(void)
+{
+	k_siginfo_t info;
+	int error;
+
+	ASSERT(curproc->p_flag & SEXITING);
+	ASSERT(curproc->p_lwpcnt == 1);
+	ASSERT(MUTEX_NOT_HELD(&pidlock));
+	ASSERT(MUTEX_NOT_HELD(&curproc->p_lock));
+	while ((error = waitid_common(P_ALL, 0, &info, WEXITED,
+	    B_TRUE)) == 0)
+		;
+	VERIFY3S(error, ==, ECHILD);
 }
 
 int

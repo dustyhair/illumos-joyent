@@ -626,6 +626,10 @@ lx_kernel_fork(int nr, uintptr_t *args)
 	VERIFY(lx_kernel_restricted(p) || lx_pidns_children(p) != NULL ||
 	    (nr == 56 &&
 	    (flags & (LX_CLONE_NEWUSER | LX_CLONE_NEWNS)) != 0));
+	pidns = lx_pidns_active(p);
+	if ((flags & LX_CLONE_PARENT) != 0 && pidns != NULL &&
+	    lx_pidns_map_id(pd->l_pidns_map, pidns) == 1)
+		return (set_errno(EINVAL));
 	if (nr == 56 && args[0] == flags &&
 	    (flags & LX_CLONE_THREAD) != 0) {
 		if (pd->l_pidns_children != NULL)

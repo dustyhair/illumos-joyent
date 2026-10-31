@@ -2729,7 +2729,8 @@ lx_native_exec(uint8_t osabi, const char **interp)
 {
 	if (osabi != ELFOSABI_SOLARIS)
 		return (B_FALSE);
-	if (lx_kernel_restricted(curproc))
+	if (lx_kernel_restricted(curproc) ||
+	    lx_pidns_children(curproc) != NULL)
 		return (-ENOEXEC);
 
 

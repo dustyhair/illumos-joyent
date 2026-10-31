@@ -1825,14 +1825,10 @@ post_sigcld(proc_t *cp, sigqueue_t *sqp)
 		cp->p_pidflag &= ~CLDPEND;
 		if (sqp == NULL) {
 			/*
-			 * This can only happen when the parent is init.
-			 * (See call to sigcld(q, NULL) in exit().)
-			 * Use KM_NOSLEEP to avoid deadlock. The child procs
-			 * initpid can be 1 for zlogin.
+			 * Reparenting may select a brand's surviving init.
+			 * Allocate without sleeping while native child lists
+			 * are protected by pidlock.
 			 */
-			ASSERT(pp->p_pidp->pid_id ==
-			    cp->p_zone->zone_proc_initpid ||
-			    pp->p_pidp->pid_id == 1);
 			winfo(cp, &info, 0);
 			sigaddq(pp, NULL, &info, KM_NOSLEEP);
 		} else {

@@ -2063,6 +2063,19 @@ ns_pid_process_drop(void)
 	ns_pid_process_owner = ns_pid_process_target = 0;
 }
 
+static boolean_t
+ns_pid_process_childless(pid_t pid, zone_t *zone)
+{
+	proc_t *p;
+	boolean_t childless;
+
+	mutex_enter(&pidlock);
+	p = prfind_zone(pid, zone->zone_id);
+	childless = p != NULL && p->p_child == NULL;
+	mutex_exit(&pidlock);
+	return (childless);
+}
+
 static void
 ns_pid_process_attach(ktest_ctx_hdl_t *ctx)
 {
@@ -2094,6 +2107,7 @@ ns_pid_process_attach(ktest_ctx_hdl_t *ctx)
 	    "cannot find stopped process fixture");
 	ld = t == NULL ? NULL : ttolxlwp(t);
 	PO_CHECK(p->p_brand == &lx_brand && p->p_lwpcnt == 1 &&
+	    !(p->p_flag & (SEXITING | SEXITLWPS | SHOLDFORK | SHOLDFORK1)) &&
 	    t != NULL && t->t_state == TS_STOPPED &&
 	    (strcmp(PTOU(p)->u_comm, "pid_ownership") == 0 ||
 	    strcmp(PTOU(p)->u_comm, "pid_orphan") == 0) &&
@@ -2107,6 +2121,8 @@ ns_pid_process_attach(ktest_ctx_hdl_t *ctx)
 	mutex_exit(&p->p_crlock);
 	mutex_exit(&p->p_lock);
 	p = NULL;
+	PO_CHECK(ns_pid_process_childless(pid, zone),
+	    "PID1 fixture must initially have no native children");
 	PO_CHECK(lx_userns_map_actor(base, ztolxzd(zone)->lxzd_userns,
 	    &actor) == 0 && lx_userns_child_create(&actor, &user) == 0,
 	    "cannot prepare immutable test namespace owner");
@@ -2305,6 +2321,52 @@ ns_pid_process_dead(ktest_ctx_hdl_t *ctx)
 		KT_PASS(ctx);
 	} else {
 		KT_FAIL(ctx, "PID1 did not kill the cohort and gate new tasks");
+	}
+out:
+	if (reserved != NULL)
+		lx_pidns_map_rele(reserved);
+	mutex_exit(&ns_pid_lock);
+}
+
+/* Run after ancestor wait; held maps must not defer native reap. */
+static void
+ns_pid_process_drained(ktest_ctx_hdl_t *ctx)
+{
+	boolean_t passed = B_FALSE;
+	lx_pidns_map_t *reserved = NULL;
+
+	mutex_enter(&ns_pid_lock);
+	if (ns_pid_process_observer == NULL ||
+	    ns_pid_process_descendant_map == NULL) {
+		KT_ERROR(ctx, "no observed cohort");
+		goto out;
+	}
+	{
+		struct pid *child = lx_pidns_lookup(ns_pid_process_space, 2);
+		struct pid *descendant =
+		    lx_pidns_lookup(ns_pid_process_space, 3);
+
+		mutex_enter(&pidlock);
+		passed = child != NULL && descendant != NULL &&
+		    child->pid_prinactive && descendant->pid_prinactive &&
+		    child->pid_ref == 2 && descendant->pid_ref == 2 &&
+		    prfind_zone(ns_pid_process_owner, ALL_ZONES) == NULL &&
+		    prfind_zone(ns_pid_process_target, ALL_ZONES) == NULL &&
+		    prfind_zone(ns_pid_process_descendant_pid,
+		    ALL_ZONES) == NULL;
+		if (child != NULL) {
+			PID_RELE(child);
+		}
+		if (descendant != NULL) {
+			PID_RELE(descendant);
+		}
+		mutex_exit(&pidlock);
+	}
+	if (passed && lx_pidns_reserve(ns_pid_process_space, &reserved) ==
+	    ENOMEM) {
+		KT_PASS(ctx);
+	} else {
+		KT_FAIL(ctx, "ancestor wait returned before cohort reap");
 	}
 out:
 	if (reserved != NULL)
@@ -2634,6 +2696,8 @@ _init(void)
 	    KTEST_FLAG_INPUT)) != 0 ||
 	    (error = ktest_add_test(ks, "process_descendant",
 	    ns_pid_process_descendant, KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "process_drained",
+	    ns_pid_process_drained, 0)) != 0 ||
 	    (error = ktest_add_test(ks, "process_dead", ns_pid_process_dead,
 	    0)) != 0 ||
 	    (error = ktest_add_test(ks, "process_zombie", ns_pid_process_zombie,

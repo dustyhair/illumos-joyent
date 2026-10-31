@@ -616,6 +616,7 @@ extern void setrun(kthread_t *);
 extern void setrun_locked(kthread_t *);
 extern void exit(int, int);
 extern int proc_exit(int, int);
+extern void proc_exit_wait(void);
 extern void proc_is_exiting(proc_t *);
 extern void relvm(void);
 extern void add_ns(proc_t *, proc_t *);
