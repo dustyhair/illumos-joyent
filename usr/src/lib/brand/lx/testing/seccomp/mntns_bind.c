@@ -108,17 +108,18 @@ int main(int argc, char **argv)
     char source[PATH_MAX], target[PATH_MAX], p[PATH_MAX];
     char data[64] = { 0 }, fdpath[64];
     int i, drop = 0, linux_control = 0, child_mode = 0, mount_only = 0;
-    int denied = 0, pipes[2], held, targetfd, status;
+    int denied = 0, fill = 0, pipes[2], held, targetfd, status;
     uid_t uid;
     gid_t gid;
     pid_t outside, exec_child;
     setvbuf(stdout, NULL, _IONBF, 0);
-    alarm(60);
+    alarm(180);
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--drop")) drop = 1;
         else if (!strcmp(argv[i], "--linux")) linux_control = 1;
         else if (!strcmp(argv[i], "--mount-only")) mount_only = 1;
         else if (!strcmp(argv[i], "--drop-admin")) denied = 1;
+        else if (!strcmp(argv[i], "--fill")) fill = 1;
         else if (!strcmp(argv[i], "--exec") && i + 1 < argc) {
             child_mode = 1;
             snprintf(base, sizeof(base), "%s", argv[++i]);
@@ -240,6 +241,32 @@ int main(int argc, char **argv)
     }
     check(exec_child > 0 && waitpid(exec_child, &status, 0) == exec_child &&
         WIFEXITED(status) && WEXITSTATUS(status) == 0, "fork-exec-inheritance");
+    if (fill) {
+        unsigned n;
+        int rv = 0;
+        check(mkdir(path("fill", p), 0755) == 0, "fill-directory");
+        for (n = 0; n < 4097; n++) {
+            snprintf(p, sizeof(p), "fill/%u", n);
+            path(p, target);
+            if (write_text(target, "uncovered\n", 1)) {
+                check(0, "fill-target");
+                break;
+            }
+            errno = 0;
+            rv = mount(source, target, NULL, MS_BIND, NULL);
+            if (rv != 0) break;
+        }
+        if (linux_control) {
+            check(n == 4097 && rv == 0, "linux-fill-control");
+        } else {
+            check(n > 0 && n <= 4096 && rv == -1 && errno == ENOSPC,
+                "mount-record-limit");
+            check(contents(target, "uncovered\n"), "limit-target-unchanged");
+            expect_mount(source, target, MS_BIND, ENOSPC,
+                "limit-remains-charged");
+        }
+        printf("MNB_FILL mounts=%u failures=%d\n", n, failures);
+    }
 finish:
     close(held);
     close(targetfd);
