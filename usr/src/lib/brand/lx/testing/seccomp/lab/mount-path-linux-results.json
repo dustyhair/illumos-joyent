@@ -1,0 +1,84 @@
+{
+  "source": "updated mntns_bind.c adds fd alias, stat/lstat, readlink and covered-object controls",
+  "static_sha256": "f99feeb5fdd3d7cf34b41161100a2bcfdc3e7d57026cc08ae6f7271461ab8535",
+  "dynamic_sha256": "67f6f2b5b322cb2871750c74fc09d50642933a1da6433a3a6c7cc6c88434f6e8",
+  "host": "codex-testbox Linux Ubuntu 7.0.0-38-generic",
+  "remote_evidence": "/var/tmp/lx-mnt-bind-controls",
+  "apparmor": "existing lxc-unshare via aa-exec; no global policy changes",
+  "total_passed": 14,
+  "cases": [
+    {
+      "log": "dynamic-combined.log",
+      "sha256": "2ec7d2415082ada93f8cd1683175b503471453eb4c0bb878200f029797f378fb",
+      "result": "PASS"
+    },
+    {
+      "log": "dynamic-denied.log",
+      "sha256": "b3105e5bff5d4ac556aa044d05e5ba955a5f748e7c11390d647e28a7c81c1a98",
+      "result": "PASS"
+    },
+    {
+      "log": "dynamic-mount-denied.log",
+      "sha256": "6fa62a6c2c223ed8d0329a19afaa09bbff1871567150f2a4f4980d0c9ac331c0",
+      "result": "PASS"
+    },
+    {
+      "log": "dynamic-mount-only.log",
+      "sha256": "21fc337a4185dbf83c6704bd96c0e0a6a59113749d86b41afb24b66bf28af43c",
+      "result": "PASS"
+    },
+    {
+      "log": "dynamic-nobody-denied.log",
+      "sha256": "b3bdb8744345a163bb84f74c99141b1bd0648af27f45f163a56e9ce59795ac3c",
+      "result": "PASS"
+    },
+    {
+      "log": "dynamic-nobody.log",
+      "sha256": "8bf21de6861e22f7854c8cf511e01e641842662fa3f0ccffa0024eb10c8af74c",
+      "result": "PASS"
+    },
+    {
+      "log": "static-combined.log",
+      "sha256": "6e8d67870e2f59d0193a367027ff0b201bd455d2ae7280bb0f74cfe12bd14d3f",
+      "result": "PASS"
+    },
+    {
+      "log": "static-denied.log",
+      "sha256": "349e209a9596f38fdb2d182c70a44c97c90a5afea7f9a98582185cab0cf7c937",
+      "result": "PASS"
+    },
+    {
+      "log": "static-fill-nobody.log",
+      "sha256": "46e1ab6df8ab52a9ffbc7bdf5d44c7689ef25c5a1d7c7a2938951a233b50a8bd",
+      "result": "PASS"
+    },
+    {
+      "log": "static-fill-root.log",
+      "sha256": "4353970318973e8b10003bf9488fde69ccb2a27aa54a08d250ea8acf4134d3e2",
+      "result": "PASS"
+    },
+    {
+      "log": "static-mount-denied.log",
+      "sha256": "4fab15740be28e0bc40ac40fa43040dc3b28e3b5ce0a9dc30bb819cbb4aad014",
+      "result": "PASS"
+    },
+    {
+      "log": "static-mount-only.log",
+      "sha256": "64c314d27b584dc945d4e8bca33f6e9e2c7482c02a12b77b4bd3d7253113d24f",
+      "result": "PASS"
+    },
+    {
+      "log": "static-nobody-denied.log",
+      "sha256": "406e4fd2678bc1035645f80d8444c23f1d3d8ea1e257b6940dc24dc1d3f30503",
+      "result": "PASS"
+    },
+    {
+      "log": "static-nobody.log",
+      "sha256": "0e4661fbb7b23311a73ce7a5c7a6e3e3d74f979dad4f46a297d7e22a57ec18cd",
+      "result": "PASS"
+    }
+  ],
+  "source_commit": "577c1e9fab71f2a285dc7e82f379f56a1638438d",
+  "brand_source_commit": "debfd24de91e028b3aa1ef6bde7f87f6ed38dbff",
+  "common_final_source_commit": "6818f600d1cf65ad70e37e1f4375988abec6de33"
+}

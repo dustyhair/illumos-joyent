@@ -1,0 +1,87 @@
+{
+  "vm": 91,
+  "accepted_checkpoint": true,
+  "full_codex_sandbox_accepted": false,
+  "source_commit": "6818f600d1cf65ad70e37e1f4375988abec6de33",
+  "brand_source_commit": "debfd24de91e028b3aa1ef6bde7f87f6ed38dbff",
+  "probe_source_commit": "577c1e9fab71f2a285dc7e82f379f56a1638438d",
+  "full_prior_regressions_exit": 0,
+  "entry_cases_passed": 70,
+  "bind_cases_passed": 12,
+  "mount_record_limit_cases_passed": 2,
+  "fill_new_mounts_before_ENOSPC": {
+    "root": 4067,
+    "nobody": 4067
+  },
+  "retained_mount_record_limit": 4096,
+  "linux_controls_passed": 14,
+  "coverage": [
+    "actor path permission and SYS_ADMIN drop",
+    "file and directory binds, relative and symlink targets",
+    "held original fd object remains usable after overmount",
+    "foreign fd target and alias rejected EINVAL",
+    "private fd target and alias retain exact mount identity",
+    "private fd readlink and stat/lstat",
+    "initial bind policy flags ignored; invalid optional user pointers rejected",
+    "mutated namespace copy and fork/exec retain mounts and seccomp",
+    "ENOSPC leaves target unchanged and charges retire after process exit"
+  ],
+  "final_idle": {
+    "process_idle": "PASS",
+    "user_budget_idle": "PASS",
+    "views": 0
+  },
+  "cleanup": {
+    "seccomp": 0,
+    "userns": 0,
+    "mntns": 0,
+    "zone_halted": true,
+    "pool_export_exit": 0,
+    "synced_poweroff": true,
+    "qemu_pid_exited": 2140206
+  },
+  "artifacts": {
+    "genunix_release": "1b0a9800d58a82cc871d3b5341deb949252a37554cb56042195eb3114c822d51",
+    "lofs_release": "bacda74802bb2bf5fe1ae473533b44f3cab0d0ad7c12cef4b7bf7ccfd9454a04",
+    "brand_release": "8f061fa0ec78a979f2cd8e60887bb89db23f9a2a0f8f1d711ff64dd4e3e42654",
+    "lx_proc_release": "59bccb23ab35373244cb3f26eaf30d85862cd2dc80fc37f3ac7839aa2048874a",
+    "namespace_ktest": "cef32a9584137194a1f284497caaeb9753ac4de312c5f3c6877db1b5c114cd3a",
+    "root_tar": "8c019f891b302ad945546c5402cd0bb7c8f992c37fa40ea24afb8e57877ba7f9",
+    "static_probe": "f99feeb5fdd3d7cf34b41161100a2bcfdc3e7d57026cc08ae6f7271461ab8535",
+    "dynamic_probe": "67f6f2b5b322cb2871750c74fc09d50642933a1da6433a3a6c7cc6c88434f6e8",
+    "bind_driver": "20533812165f51e5ebbf1d803de8ff21879125241f7da219d4bd37ece5f8d8bb",
+    "full_driver": "961ebfb03527ecd1305788f54c9baa1b6f4a00b68e098971ad43362ff73525be"
+  },
+  "build": "clean release/debug genunix, LOFS, brand, proc and ktest PASS; follow-up final genunix/LOFS/proc rebuild release/debug PASS",
+  "runtime": "release on retained mixed platform; unix, ZFS and other libraries retained",
+  "codex_sandbox": {
+    "fixture_version": "0.166.0",
+    "all_three_experiments": 1,
+    "clone_flags": "0x78020011",
+    "clone_results": [
+      -22,
+      -22
+    ],
+    "full_workflow": "incomplete"
+  },
+  "logs": {
+    "vm91-full.log": "b902d4f441b8fccf0efd24bfea5c9a0b3a611098d693fdc2d832536ae3027647",
+    "vm91-regressions.log": "f710baa9e70189155db3f7ebf89d3709a8e97e816bef3a4d7f4ecd9157d12b40",
+    "vm91-entry-regressions.log": "5494dd5612fa28613a9fbba211a49b6f63145ad6dd6d931c492c1d058498c930",
+    "vm91-entry-public.log": "c192ad4a25733201919a328638d87dc0f2780c67c1f964e5a4cd6d51568884ef",
+    "vm91-public.log": "bb72d2a395d384f80f3c9f545ec8eb96a565a631b171bf78a0e3606f10c69803",
+    "vm91-bwrap.log": "fafd384ee91667b09a610b650e3ed2f68a6dc03505800a9a72493b917cc0227c"
+  },
+  "console_evidence": {
+    "name": "boot-91-private-bind-path-acceptance.log",
+    "sha256": "5aaee29c9cdd0e051c47152be7ea01634c4339d4921a91c7abe907da6c6987c5"
+  },
+  "linux_evidence_builder": "/build/workspaces/lx/log/mount-path-linux-controls",
+  "launcher": {
+    "commit": "670ad873f1036fe820680d5e07c21a0079ac5b44",
+    "path": "lx-sandbox/launch-lab",
+    "sha256": "ece2f8445e5745dd320cc1f837a51ca7dc206f9798292dfdb41f71ddffc16739"
+  },
+  "production_host_changed": false,
+  "remaining": "device/recursive binds, read-only remount, tmpfs/root/proc/devpts/mountinfo, lazy detach, stable hierarchy, remaining clone/PID/IPC/network and full newest Codex/PTYS/platform acceptance"
+}

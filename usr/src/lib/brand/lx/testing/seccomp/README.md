@@ -1304,3 +1304,63 @@ charges. All experimental switches were reset, the zone halted, pool export
 returned zero, filesystems synced and QEMU2092864 exited. See
 lab/mount-bind-results.json and lab/mount-bind-linux-results.json. This source is
 work in progress. The accepted preceding checkpoint remains c4fe111326.
+## Private mount paths and held process links
+
+Common pathname lookup now conveys whether a link should be followed to a
+filesystem. A returned LOOKUP_JUMPED result identifies a held process-link
+object. VFS lookup does not replace its cached name, traverse a newer mount
+over it, or follow its contents again. LOFS passes the selected vnode through
+without wrapping it in the proc mount's identity.
+
+With the mount experiment enabled and a current private view, lx procfs uses
+this mechanism for its normal symlink proxies for fd/cwd/root/exe. It applies
+the same process access check as readlink, holds the target and releases the
+proxy. No-follow operations retain the link. The VNON pipe/socket proxies
+retain their existing open handling. Both the caller and filesystem must opt
+in; result bits are ignored without the lookup request. The change introduces
+no new vnode operation or structure member.
+
+Private mounts are unspliced and do not have a global path. Their cached root
+is unspecified_mountpoint, which makes the generic global reverse-name
+validation fail for files. The lx mount view now translates cached candidates
+through its recorded mount path and immutable VFS mountpoint prefix. It checks
+each candidate by forward lookup in the private root with actor credentials
+and requires the exact held vnode. A backing-vnode match, pathname text alone,
+a foreign mount instance or an obscured object is insufficient. Bind uses the
+held operands; the native mount credential does not select a replacement.
+Proc readlink uses this validated private name before generic reverse lookup.
+
+The existing bind assertions remain. Additional controls cover fd aliases,
+stat/lstat, private readlink display and reopening a covered file through an
+older fd. Twelve static/dynamic root/nobody/cap-drop cases and two Linux4097
+mount controls passed again under the existing lxc-unshare profile. No global
+Linux policy changed. VM91 passed the corresponding twelve bind cases and both lx limit cases.
+
+Source debfd24 implements the lookup and private-name changes, 577c1e9 updates
+functional probes, and 6818f600 scopes result processing and proxy types.
+A clean release/debug build passed for genunix, LOFS, brand, proc and namespace
+tests. Final follow-up module rebuilds also passed. No physical host deployment.
+Full bubblewrap clone, recursive mounts, readonly remount, tmpfs, root/proc/
+devpts setup, lazy detach and remaining namespaces still require work.
+
+
+VM91 passed the full prior regression wrapper, all 70 public entry cases,
+twelve bind cases and both retained-record exhaustion cases. Root and nobody
+could each add 4067 mounts before ENOSPC, after the copied view's existing
+records. Failed insertion left its target unchanged. All mount views and both
+namespace account charges returned to zero after each case. The flags were
+reset, the zone halted, the pool exported and filesystems synced before QEMU
+exited. No physical host was changed.
+
+The exact same expanded probe passed all fourteen Linux controls. These
+include fd aliases, stat/lstat, private readlink names and access through an
+older covered fd, in addition to the previous checks. Neither foreign-fd
+rejection nor positive fd behavior was waived to obtain the lx result.
+
+The current Codex fixture still asks for clone0x78020011 twice and receives
+EINVAL with all three experiments enabled. This checkpoint accepts plain
+private binds and held process-link resolution, not the complete sandbox.
+See lab/mount-path-results.json and lab/mount-path-linux-results.json for exact
+source, artifacts, controls and console evidence. The runtime still combines
+rebuilt release modules with retained platform components; a complete platform
+build and production-zone acceptance remain outstanding.
