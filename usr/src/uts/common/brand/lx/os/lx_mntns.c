@@ -1021,6 +1021,231 @@ lx_mntns_insert_ordered(lx_mntns_view_t *view, lx_mntns_mount_t *mount)
 }
 
 /*
+ * Switch the sole participant's root using native mount graph operations.
+ * All allocation, validation and fallible locking precedes publication.
+ * Shared views require a later, explicit membership/root handoff protocol.
+ */
+int
+lx_mntns_pivot(lx_mntns_view_t *view, const char *newpath,
+    const char *oldpath, cred_t *actor)
+{
+	lx_mntns_mount_t *mount, *promote = NULL, **link;
+	lx_mntns_mount_t **records = NULL;
+	refstr_t **names = NULL, *oldname = NULL;
+	lx_mntns_state_t state = { 0 };
+	vnode_t *newroot = NULL, *putold = NULL, *covered = NULL;
+	vnode_t *expected_root = NULL, *expected_cwd = NULL;
+	vfs_t *oldvfs, *newvfs;
+	char *newbase, *oldbase, *name;
+	const char *suffix, *path;
+	size_t prefix, count = 0, i, capacity = 0;
+	uint_t oldflags, neworder;
+	boolean_t covered_locked = B_FALSE, putold_locked = B_FALSE;
+	boolean_t old_locked = B_FALSE, new_locked = B_FALSE;
+	int error;
+
+	newbase = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+	oldbase = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+	name = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+	mutex_enter(&view->lv_lock);
+	/* Actor lookup must precede capability checks, as on Linux. */
+	if ((error = lookupname((char *)newpath, UIO_SYSSPACE, FOLLOW,
+	    NULL, &newroot)) != 0 ||
+	    (error = lookupname((char *)oldpath, UIO_SYSSPACE, FOLLOW,
+	    NULL, &putold)) != 0)
+		goto out;
+	if (newroot->v_type != VDIR || putold->v_type != VDIR) {
+		error = ENOTDIR;
+		goto out;
+	}
+	if (!lx_mntns_entry_enabled() ||
+	    !lx_mntns_view_capable(view, actor)) {
+		error = EPERM;
+		goto out;
+	}
+	if (view->lv_refs != 2) {
+		error = EOPNOTSUPP;
+		goto out;
+	}
+	oldvfs = view->lv_vfs;
+	newvfs = newroot->v_vfsp;
+	/* A plain directory is not a mounted new root. */
+	if (!(newroot->v_flag & VROOT)) {
+		error = EINVAL;
+		goto out;
+	}
+	if (newvfs == oldvfs || putold->v_vfsp == oldvfs) {
+		error = EBUSY;
+		goto out;
+	}
+	for (mount = view->lv_mounts; mount != NULL; mount = mount->lm_next) {
+		if (mount->lm_root == newroot &&
+		    mount->lm_vfs->vfs_vnodecovered != NULL) {
+			promote = mount;
+			break;
+		}
+	}
+	if (promote == NULL || !lx_mntns_owns(view, putold) ||
+	    !lx_mntns_descendant(view, newvfs, oldvfs) ||
+	    !lx_mntns_descendant(view, putold->v_vfsp, newvfs)) {
+		error = EINVAL;
+		goto out;
+	}
+	if ((error = lx_mntns_path_locked(view, newroot, actor,
+	    newbase)) != 0 ||
+	    (error = lx_mntns_path_locked(view, putold, actor, oldbase)) != 0)
+		goto out;
+	prefix = strlen(newbase);
+	if (strncmp(oldbase, newbase, prefix) != 0 ||
+	    (oldbase[prefix] != '\0' && oldbase[prefix] != '/')) {
+		error = EINVAL;
+		goto out;
+	}
+	suffix = oldbase + prefix;
+	oldname = refstr_alloc(*suffix == '\0' ? "/" : suffix);
+	capacity = view->lv_nmounts;
+	records = kmem_zalloc(capacity * sizeof (*records), KM_SLEEP);
+	names = kmem_zalloc(capacity * sizeof (*names), KM_SLEEP);
+	for (mount = view->lv_mounts; mount != NULL; mount = mount->lm_next) {
+		if (mount == promote || mount->lm_vfs->vfs_vnodecovered == NULL)
+			continue;
+		path = refstr_value(mount->lm_path);
+		if (lx_mntns_descendant(view, mount->lm_vfs, newvfs)) {
+			if (strncmp(path, newbase, prefix) != 0 ||
+			    (path[prefix] != '\0' && path[prefix] != '/')) {
+				error = EAGAIN;
+				goto out;
+			}
+			suffix = path + prefix;
+			(void) strlcpy(name, *suffix == '\0' ? "/" : suffix,
+			    MAXPATHLEN);
+		} else if (snprintf(name, MAXPATHLEN, "%s%s",
+		    strcmp(refstr_value(oldname), "/") == 0 ? "" :
+		    refstr_value(oldname), path) >= MAXPATHLEN) {
+			error = ENAMETOOLONG;
+			goto out;
+		}
+		records[count] = mount;
+		names[count++] = refstr_alloc(name);
+	}
+	mutex_enter(&curproc->p_lock);
+	if (PTOU(curproc)->u_rdir == view->lv_root &&
+	    ptolxproc(curproc)->l_mntns == view) {
+		VN_HOLD(expected_root = PTOU(curproc)->u_rdir);
+		VN_HOLD(expected_cwd = PTOU(curproc)->u_cdir);
+	}
+	mutex_exit(&curproc->p_lock);
+	if (expected_root == NULL) {
+		error = EOPNOTSUPP;
+		goto out;
+	}
+	lx_mntns_view_hold(state.lms_view = view);
+	VN_HOLD(state.lms_root = newroot);
+	VN_HOLD(state.lms_cwd = expected_cwd == expected_root ?
+	    newroot : expected_cwd);
+	VN_HOLD(covered = newvfs->vfs_vnodecovered);
+	zone_hold(curzone);
+	mount_in_progress(curzone);
+	if ((error = vn_vfswlock(covered)) != 0)
+		goto unlock;
+	covered_locked = B_TRUE;
+	if ((error = vn_vfswlock(putold)) != 0)
+		goto unlock;
+	putold_locked = B_TRUE;
+	if (putold->v_vfsmountedhere != NULL) {
+		error = EBUSY;
+		goto unlock;
+	}
+	vfs_lock_wait(oldvfs);
+	old_locked = B_TRUE;
+	vfs_lock_wait(newvfs);
+	new_locked = B_TRUE;
+	oldflags = oldvfs->vfs_flag;
+	mutex_enter(&curproc->p_lock);
+	if (view->lv_refs != 3)
+		error = EOPNOTSUPP;
+	else
+		error = lx_mntns_proc_swap(curproc, expected_root,
+		    expected_cwd, &state);
+	mutex_exit(&curproc->p_lock);
+	if (error != 0)
+		goto unlock;
+	/* No fallible operation remains after process publication. */
+	vfs_detach(newvfs);
+	new_locked = B_FALSE;
+	vfs_add(putold, oldvfs, MS_NOMNTTAB);
+	oldvfs->vfs_flag = oldflags & ~VFS_DETACHED;
+	vfs_unlock(oldvfs);
+	old_locked = B_FALSE;
+	VFS_RELE(oldvfs);
+	vfs_lock_wait(newvfs);
+	newvfs->vfs_flag &= ~VFS_DETACHED;
+	vfs_unlock(newvfs);
+	/* Keep the constructor prefix for validating cached vnode names. */
+	for (i = 0; i < count; i++) {
+		refstr_rele(records[i]->lm_path);
+		records[i]->lm_path = names[i];
+		names[i] = NULL;
+	}
+	for (link = &view->lv_mounts; *link != promote;
+	    link = &(*link)->lm_next)
+		continue;
+	*link = promote->lm_next;
+	neworder = promote->lm_order;
+	promote->lm_vfs = view->lv_vfs;
+	promote->lm_root = view->lv_root;
+	refstr_rele(promote->lm_path);
+	promote->lm_path = oldname;
+	oldname = NULL;
+	promote->lm_order = view->lv_root_order;
+	view->lv_vfs = newvfs;
+	/* Transfer the promoted record's root hold to the view. */
+	view->lv_root = newroot;
+	view->lv_root_order = neworder;
+	lx_mntns_insert_ordered(view, promote);
+	(void) dnlc_purge_vfsp(oldvfs, 0);
+	(void) dnlc_purge_vfsp(newvfs, 0);
+unlock:
+	if (new_locked)
+		vfs_unlock(newvfs);
+	if (old_locked)
+		vfs_unlock(oldvfs);
+	if (putold_locked)
+		vn_vfsunlock(putold);
+	if (covered_locked)
+		vn_vfsunlock(covered);
+	mount_completed(curzone);
+	zone_rele(curzone);
+out:
+	mutex_exit(&view->lv_lock);
+	lx_mntns_state_fini(&state);
+	if (expected_root != NULL)
+		VN_RELE(expected_root);
+	if (expected_cwd != NULL)
+		VN_RELE(expected_cwd);
+	if (covered != NULL)
+		VN_RELE(covered);
+	if (newroot != NULL)
+		VN_RELE(newroot);
+	if (putold != NULL)
+		VN_RELE(putold);
+	if (oldname != NULL)
+		refstr_rele(oldname);
+	for (i = 0; i < count; i++) {
+		if (names[i] != NULL)
+			refstr_rele(names[i]);
+	}
+	if (names != NULL)
+		kmem_free(names, capacity * sizeof (*names));
+	if (records != NULL)
+		kmem_free(records, capacity * sizeof (*records));
+	kmem_free(name, MAXPATHLEN);
+	kmem_free(oldbase, MAXPATHLEN);
+	kmem_free(newbase, MAXPATHLEN);
+	return (error);
+}
+
+/*
  * Namespace membership ends independently of filesystem vnode lifetime.
  * The final reference is released outside process locks. Unlink every graph
  * edge synchronously; native unmount and backing-source release stay deferred.

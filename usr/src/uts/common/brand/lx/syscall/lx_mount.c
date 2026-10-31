@@ -1026,3 +1026,27 @@ lx_umount2(char *path, int flg)
 
 	return (umount2(path, flags));
 }
+
+/* Restricted amd64 entry; no legacy or native mount authority is granted. */
+long
+lx_pivot_root(const char *newp, const char *oldp)
+{
+	lx_mntns_view_t *view;
+	char *newpath = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+	char *oldpath = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+	int error;
+
+	if ((error = lx_mnt_copyin_arg(newp, newpath, MAXPATHLEN)) != 0 ||
+	    (error = lx_mnt_copyin_arg(oldp, oldpath, MAXPATHLEN)) != 0)
+		goto out;
+	if ((view = lx_mntns_current()) == NULL)
+		error = EPERM;
+	else {
+		error = lx_mntns_pivot(view, newpath, oldpath, CRED());
+		lx_mntns_view_rele(view);
+	}
+out:
+	kmem_free(oldpath, MAXPATHLEN);
+	kmem_free(newpath, MAXPATHLEN);
+	return (error == 0 ? 0 : set_errno(error));
+}

@@ -1131,7 +1131,7 @@ lx_sysent_t lx_sysent64[] = {
 	{"munlockall",	lx_munlockall,		0,		0}, /* 152 */
 	{"vhangup",	lx_vhangup,		0,		0}, /* 153 */
 	{"modify_ldt",	lx_modify_ldt,		0,		3}, /* 154 */
-	{"pivot_root",	NULL,			NOSYS_KERNEL,	0}, /* 155 */
+	{"pivot_root",	lx_pivot_root,		0,		2}, /* 155 */
 	{"sysctl",	NULL,			0,		1}, /* 156 */
 	{"prctl",	lx_prctl,		0,		5}, /* 157 */
 	{"arch_prctl",	lx_arch_prctl,		0,		2}, /* 158 */

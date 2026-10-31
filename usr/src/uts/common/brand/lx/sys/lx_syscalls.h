@@ -271,6 +271,7 @@ extern long lx_tkill();
 extern long lx_umask();
 extern long lx_umount();
 extern long lx_umount2();
+extern long lx_pivot_root();
 extern long lx_uname();
 extern long lx_rmdir();
 extern long lx_unlink();
