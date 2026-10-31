@@ -138,7 +138,7 @@ lo_close(
 	int count,
 	offset_t offset,
 	struct cred *cr,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 #ifdef LODEBUG
 	lo_dprint(4, "lo_close vp %p realvp %p\n", vp, realvp(vp));
@@ -149,7 +149,7 @@ lo_close(
 
 static int
 lo_read(vnode_t *vp, struct uio *uiop, int ioflag, struct cred *cr,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 #ifdef LODEBUG
 	lo_dprint(4, "lo_read vp %p realvp %p\n", vp, realvp(vp));
@@ -160,7 +160,7 @@ lo_read(vnode_t *vp, struct uio *uiop, int ioflag, struct cred *cr,
 
 static int
 lo_write(vnode_t *vp, struct uio *uiop, int ioflag, struct cred *cr,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	int error;
 
@@ -203,7 +203,7 @@ lo_getattr(
 	struct vattr *vap,
 	int flags,
 	struct cred *cr,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	int error;
 
@@ -222,7 +222,7 @@ lo_setattr(
 	struct vattr *vap,
 	int flags,
 	struct cred *cr,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	int error;
 
@@ -241,7 +241,7 @@ lo_access(
 	int mode,
 	int flags,
 	struct cred *cr,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 #ifdef LODEBUG
 	lo_dprint(4, "lo_access vp %p realvp %p\n", vp, realvp(vp));
@@ -283,6 +283,15 @@ lo_fid(vnode_t *vp, struct fid *fidp, caller_context_t *ct)
 #endif
 	vp = realvp(vp);
 	return (VOP_FID(vp, fidp, ct));
+}
+
+/* Drop a dotdot parent hold on every direct lookup return path. */
+static int
+lo_lookup_finish(vnode_t *parent, int error)
+{
+	if (parent != NULL)
+		VN_RELE(parent);
+	return (error);
 }
 
 /*
@@ -359,14 +368,12 @@ lo_lookup(
 	if (nm[0] == '\0' && ! (flags & (CREATE_XATTR_DIR|LOOKUP_XATTR))) {
 		VN_HOLD(dvp);
 		*vpp = dvp;
-		if (parentvp != NULL)
-			VN_RELE(parentvp);
-		return (0);
+		return (lo_lookup_finish(parentvp, 0));
 	}
 
 	if (nm[0] == '.' && nm[1] == '.' && nm[2] == '\0') {
 		doingdotdot++;
-		/* A private unspliced root is also a boundary for direct VOPs. */
+		/* Direct VOPs must respect a private root boundary too. */
 		if ((li->li_flag & LO_PRIVATE) && (dvp->v_flag & VROOT)) {
 			boolean_t boundary;
 
@@ -377,14 +384,11 @@ lo_lookup(
 			if (boundary) {
 				error = VOP_ACCESS(dvp, VEXEC, 0, cr, ct);
 				if (error != 0)
-					if (parentvp != NULL)
-						VN_RELE(parentvp);
-					return (error);
+					return (lo_lookup_finish(parentvp,
+					    error));
 				VN_HOLD(dvp);
 				*vpp = dvp;
-				if (parentvp != NULL)
-					VN_RELE(parentvp);
-				return (0);
+				return (lo_lookup_finish(parentvp, 0));
 			}
 		}
 
@@ -405,9 +409,7 @@ lo_lookup(
 			parentvp = covered;
 			if (covered == NULL) {
 				*vpp = NULL;
-				if (parentvp != NULL)
-					VN_RELE(parentvp);
-				return (EIO);
+				return (lo_lookup_finish(parentvp, EIO));
 			}
 			realdvp = covered;
 		}
@@ -428,9 +430,7 @@ lo_lookup(
 	if ((flags & LOOKUP_FOLLOWLINK) && direntflags != NULL &&
 	    (*direntflags & LOOKUP_JUMPED)) {
 		*vpp = vp;
-		if (parentvp != NULL)
-			VN_RELE(parentvp);
-		return (0);
+		return (lo_lookup_finish(parentvp, 0));
 	}
 
 	/*
@@ -442,9 +442,7 @@ lo_lookup(
 		VN_HOLD(dvp);
 		VN_RELE(vp);
 		*vpp = dvp;
-		if (parentvp != NULL)
-			VN_RELE(parentvp);
-		return (0);
+		return (lo_lookup_finish(parentvp, 0));
 	}
 
 	if (doingdotdot) {
@@ -470,9 +468,7 @@ lo_lookup(
 				vn_vfsunlock(realdvp);
 				*vpp = makelonode(vp, li, 0);
 				(vtol(*vpp))->lo_looping |= LO_LOOPING;
-				if (parentvp != NULL)
-					VN_RELE(parentvp);
-				return (0);
+				return (lo_lookup_finish(parentvp, 0));
 			}
 			/*
 			 * When looping get the actual found vnode
@@ -501,9 +497,7 @@ lo_lookup(
 				 */
 				*vpp = tvp;
 				VN_RELE(vp);
-				if (parentvp != NULL)
-					VN_RELE(parentvp);
-				return (0);
+				return (lo_lookup_finish(parentvp, 0));
 			} else {
 				/*
 				 * We are returning from a covered
@@ -535,9 +529,7 @@ lo_lookup(
 					VN_HOLD(vp);
 					*vpp = makelonode(vp, li, 0);
 					(vtol(*vpp))->lo_looping |= LO_LOOPING;
-					if (parentvp != NULL)
-						VN_RELE(parentvp);
-					return (0);
+					return (lo_lookup_finish(parentvp, 0));
 				}
 			}
 		} else {
@@ -545,9 +537,7 @@ lo_lookup(
 			 * No frills just make the shadow node.
 			 */
 			*vpp = makelonode(vp, li, 0);
-			if (parentvp != NULL)
-				VN_RELE(parentvp);
-			return (0);
+			return (lo_lookup_finish(parentvp, 0));
 		}
 	}
 
@@ -577,9 +567,7 @@ lo_lookup(
 			else
 				*vpp = svp;
 		}
-		if (parentvp != NULL)
-			VN_RELE(parentvp);
-		return (error);
+		return (lo_lookup_finish(parentvp, error));
 	}
 
 	/*
@@ -758,9 +746,7 @@ out:
 	"lo_lookup dvp %x realdvp %x nm '%s' newvp %x real vp %x error %d\n",
 	    dvp, realvp(dvp), nm, *vpp, vp, error);
 #endif
-	if (parentvp != NULL)
-		VN_RELE(parentvp);
-	return (error);
+	return (lo_lookup_finish(parentvp, error));
 }
 
 /*ARGSUSED*/
@@ -1132,7 +1118,7 @@ lo_readlink(
 	vnode_t *vp,
 	struct uio *uiop,
 	struct cred *cr,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	vp = realvp(vp);
 	return (VOP_READLINK(vp, uiop, cr, ct));
@@ -1208,7 +1194,7 @@ lo_space(
 	int flag,
 	offset_t offset,
 	struct cred *cr,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	int error;
 
@@ -1230,7 +1216,7 @@ lo_getpage(
 	caddr_t addr,
 	enum seg_rw rw,
 	struct cred *cr,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	vp = realvp(vp);
 	return (VOP_GETPAGE(vp, off, len, prot, parr, psz, seg, addr, rw, cr,
@@ -1244,7 +1230,7 @@ lo_putpage(
 	size_t len,
 	int flags,
 	struct cred *cr,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	vp = realvp(vp);
 	return (VOP_PUTPAGE(vp, off, len, flags, cr, ct));
@@ -1261,7 +1247,7 @@ lo_map(
 	uchar_t maxprot,
 	uint_t flags,
 	struct cred *cr,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	int error;
 
@@ -1283,7 +1269,7 @@ lo_addmap(
 	uchar_t maxprot,
 	uint_t flags,
 	struct cred *cr,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	vp = realvp(vp);
 	return (VOP_ADDMAP(vp, off, as, addr, len, prot, maxprot, flags, cr,
@@ -1301,7 +1287,7 @@ lo_delmap(
 	uint_t maxprot,
 	uint_t flags,
 	struct cred *cr,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	vp = realvp(vp);
 	return (VOP_DELMAP(vp, off, as, addr, len, prot, maxprot, flags, cr,
@@ -1335,7 +1321,7 @@ lo_pathconf(
 	int cmd,
 	ulong_t *valp,
 	struct cred *cr,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	vp = realvp(vp);
 	return (VOP_PATHCONF(vp, cmd, valp, cr, ct));
@@ -1375,7 +1361,7 @@ lo_setsecattr(
 	vsecattr_t *secattr,
 	int flags,
 	struct cred *cr,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	int error;
 
@@ -1393,7 +1379,7 @@ lo_getsecattr(
 	vsecattr_t *secattr,
 	int flags,
 	struct cred *cr,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	vp = realvp(vp);
 	return (VOP_GETSECATTR(vp, secattr, flags, cr, ct));
