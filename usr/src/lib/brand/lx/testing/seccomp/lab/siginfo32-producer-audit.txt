@@ -1,0 +1,116 @@
+Audit against d1fd33400b6ecbe83e1ecc6f342dd348a4bb4309
+
+Decision
+Move the existing errno assignment in siginfo_kto32 immediately after the
+SI_NOINFO return. No producer change is needed against this exact HEAD.
+The suspected missing stack initialization is absent in the actual source:
+sigsendproc line 1943 zeroes info. git blame dates that zeroing, and sigqalloc's
+line 2522 zeroing, to the original imported source. See evidence/contracts.txt.
+Do not add redundant initialization or change fixture expectations.
+
+Producer matrix, paths relative to usr/src/uts
+Source / source storage and initialization / errno contract
+common/os/sig.c:1904 sigsendproc, unqueued / stack info bzero at 1943,
+  fields then assigned, sigaddq copies entire initialized compact info / zero.
+common/os/sig.c:1927 sigsendproc, queued / sigqalloc zeros sq_info at 2522
+  after taking either a free-list entry or new kmem_alloc entry / zero.
+  sigqhdralloc uses nonzeroing allocation, but no entry escapes via sigqalloc
+  before its per-allocation zero. sigqrel returns entries without clearing;
+  subsequent sigqalloc clears them. No stale errno survives reuse.
+common/syscall/sigqueue.c:101 kill, :119 sigqueue, :203 sigqueue32;
+common/syscall/sigsendset.c / initialized sigsend_t passed to sigsendproc /
+  no caller-supplied errno, zero above. sigqueue32 preserves int payload bits.
+common/syscall/lwpsys.c:114 lwp_kill / kmem_zalloc before p_lock / zero.
+common/brand/lx/syscall/lx_kill.c:107 thread kill / kmem_zalloc before target
+  lookup, SI_LWP fields assigned / zero. lx_kill uses sigsendproc above.
+common/brand/lx/syscall/lx_kill.c:277 legacy rt_sigqueueinfo helper /
+  complete copyin into kinfo, sends only code and value via sigsendproc /
+  zero, existing errno loss at this separate interface remains unchanged.
+common/brand/lx/syscall/lx_kill.c:341 rt_tgsigqueueinfo helper / kinfo bzero;
+  ILP32 explicit copy of errno/code/pid/uid/value; LP64 complete copyin;
+  kmem_zalloc queue before target locking, explicit errno assignment at 414 /
+  supplied errno, including 7. sigaddqa consumes it on success or discard;
+  error cleanup calls siginfofree. Caller retains no ownership after enqueue.
+common/os/timer.c:604 timer_create / kmem_zalloc queue before p_lock;
+  code/value/sender assigned, timer owns reusable queue / zero. timer_fire
+  submits it only when it_pending was zero. timer_signal destructor clears
+  pending under it_mutex, leaves initialized sq_info unchanged. Deletion
+  coordinates freeing pending queue. Reuse does not introduce new data.
+common/os/aio.c:1285,2395,2984,3292,3469 / each signal notification queue is
+  independently kmem_zalloc'ed, including native/32/large-file/list variants /
+  zero. Request structures may be reused, but each signal queue is new.
+  Completion submits the saved req/list signal queue with sigaddqa; abort
+  paths free it. No copy from an uninitialized request overwrites sq_info.
+common/syscall/signotify.c:45,159,176 / full native user copyin, or zeroed
+  siginfo_32tok result; then whole info copied over sigqalloc's cleared info /
+  user-supplied native errno, zero for user-code ILP32 due to existing reverse
+  loss. SN_SEND submits it, SN_CANCEL frees it through sigqsend. SI_MESGQ
+  user library notifications enter here, not a separate kernel stack producer.
+common/syscall/signotify.c:223 sigresend / kmem_zalloc, null info SI_NOINFO,
+  otherwise full native copyin or siginfo_32tok / initialized user data or zero.
+common/fs/proc/prcontrol.c:1647 pr_kill / stack bzero before SI_USER / zero.
+common/fs/proc/prcontrol.c:1514 pr_setsig / kernel queue allocated zeroed
+  outside p_lock, then full compact copy from caller-provided siginfo /
+  initialized user data. Native PCSSIG input is fully copied from user;
+  32-bit PCSSIG uses zeroed conversion. Legacy PIOCSSIG in prioctl.c:2194
+  likewise uses a complete user input or zeroed conversion. User memory can
+  contain arbitrary bits but this is not an uninitialized kernel stack read.
+common/os/sig.c:1450 current signal selection / copies queued info or zeroes
+  lwp_siginfo and sets SI_NOINFO. sigtimedwait.c:187 similarly synthesizes
+  zeroed SI_NOINFO when no queue is present / zero for fallback.
+
+Classification and conversion contracts
+SI_FROMUSER is code <= 0, not a statement about allocation or privilege.
+SI_USER=0, SI_LWP=-1, SI_QUEUE=-2, SI_TIMER=-3, SI_ASYNCIO=-4,
+SI_MESGQ=-5. SI_CANQUEUE is <= -2, while sigwillqueue explicitly accepts
+only the four known queue codes. Linux SI_QUEUE=-1 is translated by the
+library before this native conversion. SI_NOINFO=32767 returns before reading
+errno or any union member. This preserves its minimum signo/code output.
+Positive codes follow exactly the previous switch and errno copy behavior.
+Every newly read user-code errno is zero-initialized or comes from a complete
+user copy. Existing LP64 direct copying is not the safety justification.
+
+sigaddq is a copier, not a sanitizer: its kmem_alloc is followed by copying the
+full k_siginfo_t. Its callers must initialize fields it exposes. sigaddqa takes
+ownership and calls siginfofree on discard, duplicate coalescing or later
+consumption. Conversion is read-only with an independent zeroed destination.
+There is no new allocation, lock, callback, brand metadata or ownership change.
+Existing sigqalloc allocation under locks is unchanged by this patch.
+
+Caller matrix for changed generic function
+common/syscall/sigtimedwait.c:72 / ILP32 copyout from current queue or zeroed
+  SI_NOINFO; LP64 direct compact copy is unchanged. Zone sender sanitization
+  still runs after conversion, touches pid/uid/ctid/zoneid only.
+intel/os/sendsig.c:558 / native ILP32 caught delivery converts sip into local
+  si32, applies same zone sanitization, then copies to frame. Native LP64
+  delivery copies native info. Brand stack hooks may bypass this frame path;
+  when they decline, existing native fallback uses this conversion. No hook
+  or alternate signal engine changed.
+sparc/v9/os/v9dep.c:1378 / shared generic conversion in 32-bit frame output;
+  same initialized queue/lwp contract. SPARC runtime/build not performed.
+common/fs/proc/prsubr.c:1060,1065 and prioctl.c:1344,1349 / status snapshots
+  use lwp_siginfo or queued sq_info under existing process synchronization.
+common/os/exit.c:1474 / waitid32 converts winfo, a zeroed native child record;
+  positive CLD codes retain old behavior.
+common/exec/elf/elf.c:2736 / core kill-info conversion uses saved signal info,
+  or synthesized SI_NOINFO; no new positive-code behavior.
+
+Reverse conversion decision
+Actual siginfo_32tok callers are signotify copyin_siginfo, shared with
+sigresend, and /proc PCSSIG/PIOCSSIG. There is an analogous user errno loss
+there. VM124's LX ILP32 helper deliberately decodes its input explicitly and
+does not call it. Changing reverse conversion would alter input semantics of
+three additional native interfaces. Leave it for a separately tested fix;
+this output correction does not need it. Nothing claims round-trip preservation
+through those interfaces. User library stol_siginfo already copies errno.
+LX kernel caught delivery has separate frame construction in lx_ksignal.c;
+its errno handling is not changed or validated by this sigtimedwait correction.
+
+Scope
+Only common/os/sig.c is patched, in siginfo_kto32. sig.o belongs to
+GENUNIX_OBJS in common/Makefile.files:328. Rebuild clean release and debug
+genunix; no CORE Unix source/object, lx_brand, library, header or hook change
+is required. Previously rebuilt brand and BOTH user libraries must still be
+carried into VM125, with all parent artifact hash checks retained.
+UID16, arbitrary negative codes, positive-code policy and namespaces are
+outside this correction.
