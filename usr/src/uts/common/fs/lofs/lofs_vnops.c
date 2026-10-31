@@ -341,6 +341,7 @@ lo_lookup(
 	pathname_t *realpnp)
 {
 	vnode_t *vp = NULL, *tvp = NULL, *nonlovp;
+	vnode_t *parentvp = NULL;
 	int error, is_indirectloop;
 	vnode_t *realdvp = realvp(dvp);
 	struct loinfo *li = vtoli(dvp->v_vfsp);
@@ -358,17 +359,57 @@ lo_lookup(
 	if (nm[0] == '\0' && ! (flags & (CREATE_XATTR_DIR|LOOKUP_XATTR))) {
 		VN_HOLD(dvp);
 		*vpp = dvp;
+		if (parentvp != NULL)
+			VN_RELE(parentvp);
 		return (0);
 	}
 
 	if (nm[0] == '.' && nm[1] == '.' && nm[2] == '\0') {
 		doingdotdot++;
+		/* A private unspliced root is also a boundary for direct VOPs. */
+		if ((li->li_flag & LO_PRIVATE) && (dvp->v_flag & VROOT)) {
+			boolean_t boundary;
+
+			vfs_rlock_wait(dvp->v_vfsp);
+			boundary = dvp->v_vfsp->vfs_vnodecovered == NULL &&
+			    !(dvp->v_vfsp->vfs_flag & VFS_UNMOUNTED);
+			vfs_unlock(dvp->v_vfsp);
+			if (boundary) {
+				error = VOP_ACCESS(dvp, VEXEC, 0, cr, ct);
+				if (error != 0)
+					if (parentvp != NULL)
+						VN_RELE(parentvp);
+					return (error);
+				VN_HOLD(dvp);
+				*vpp = dvp;
+				if (parentvp != NULL)
+					VN_RELE(parentvp);
+				return (0);
+			}
+		}
+
 		/*
 		 * Handle ".." out of mounted filesystem
 		 */
 		while ((realdvp->v_flag & VROOT) && realdvp != rootdir) {
-			realdvp = realdvp->v_vfsp->vfs_vnodecovered;
-			ASSERT(realdvp != NULL);
+			vfs_t *vfs = realdvp->v_vfsp;
+			vnode_t *covered;
+
+			vfs_rlock_wait(vfs);
+			covered = vfs->vfs_vnodecovered;
+			if (covered != NULL)
+				VN_HOLD(covered);
+			vfs_unlock(vfs);
+			if (parentvp != NULL)
+				VN_RELE(parentvp);
+			parentvp = covered;
+			if (covered == NULL) {
+				*vpp = NULL;
+				if (parentvp != NULL)
+					VN_RELE(parentvp);
+				return (EIO);
+			}
+			realdvp = covered;
 		}
 	}
 
@@ -387,6 +428,8 @@ lo_lookup(
 	if ((flags & LOOKUP_FOLLOWLINK) && direntflags != NULL &&
 	    (*direntflags & LOOKUP_JUMPED)) {
 		*vpp = vp;
+		if (parentvp != NULL)
+			VN_RELE(parentvp);
 		return (0);
 	}
 
@@ -399,6 +442,8 @@ lo_lookup(
 		VN_HOLD(dvp);
 		VN_RELE(vp);
 		*vpp = dvp;
+		if (parentvp != NULL)
+			VN_RELE(parentvp);
 		return (0);
 	}
 
@@ -425,6 +470,8 @@ lo_lookup(
 				vn_vfsunlock(realdvp);
 				*vpp = makelonode(vp, li, 0);
 				(vtol(*vpp))->lo_looping |= LO_LOOPING;
+				if (parentvp != NULL)
+					VN_RELE(parentvp);
 				return (0);
 			}
 			/*
@@ -454,6 +501,8 @@ lo_lookup(
 				 */
 				*vpp = tvp;
 				VN_RELE(vp);
+				if (parentvp != NULL)
+					VN_RELE(parentvp);
 				return (0);
 			} else {
 				/*
@@ -486,6 +535,8 @@ lo_lookup(
 					VN_HOLD(vp);
 					*vpp = makelonode(vp, li, 0);
 					(vtol(*vpp))->lo_looping |= LO_LOOPING;
+					if (parentvp != NULL)
+						VN_RELE(parentvp);
 					return (0);
 				}
 			}
@@ -494,6 +545,8 @@ lo_lookup(
 			 * No frills just make the shadow node.
 			 */
 			*vpp = makelonode(vp, li, 0);
+			if (parentvp != NULL)
+				VN_RELE(parentvp);
 			return (0);
 		}
 	}
@@ -524,6 +577,8 @@ lo_lookup(
 			else
 				*vpp = svp;
 		}
+		if (parentvp != NULL)
+			VN_RELE(parentvp);
 		return (error);
 	}
 
@@ -703,6 +758,8 @@ out:
 	"lo_lookup dvp %x realdvp %x nm '%s' newvp %x real vp %x error %d\n",
 	    dvp, realvp(dvp), nm, *vpp, vp, error);
 #endif
+	if (parentvp != NULL)
+		VN_RELE(parentvp);
 	return (error);
 }
 
