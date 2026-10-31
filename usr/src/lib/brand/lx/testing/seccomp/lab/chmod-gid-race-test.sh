@@ -51,7 +51,9 @@ fbt:genunix:secpolicy_vnode_setattr:entry /pid == $target_pid/ {
     self->early_gid=((vattr_t *)arg3)->va_gid;
     self->eligible=((vattr_t *)arg3)->va_uid == 1001;
 }
-fbt:genunix:secpolicy_vnode_setattr:return /pid == $target_pid && self->eligible && arg1 == 0 && self->delays < 20/ {
+fbt:genunix:secpolicy_vnode_setattr:return /pid == $target_pid && self->eligible && arg1 == 0 && self->delays < 80 &&
+    ((self->early_gid == 1001 && !self->seen_clear) ||
+    (self->early_gid == 2000 && !self->seen_restore))/ {
     self->granted=1; self->delays++;
     printf("SCOPED_CHMOD_EARLY_GRANT delay=%u\n", self->delays);
     chill(2000000 + (self->delays % 7) * 1000000);
@@ -64,8 +66,8 @@ fbt:unix:brand_cred_vnode_setattr:return /pid == $target_pid && self->granted &&
 }
 fbt:zfs:zfs_setattr:return /pid == $target_pid && self->stale/ {
     printf("SCOPED_CHMOD_STALE_RETURN result=%d mode=%o\n",arg1,((znode_t *)self->zp)->z_mode);
-    if(arg1 == 0 && self->stale == 1 && (((znode_t *)self->zp)->z_mode & 02000) == 0) { printf("SCOPED_CHMOD_SGID_CLEARED\n"); }
-    else if(arg1 == 0 && self->stale == 2 && (((znode_t *)self->zp)->z_mode & 02000) != 0) { printf("SCOPED_CHMOD_SGID_RESTORED\n"); }
+    if(arg1 == 0 && self->stale == 1 && (((znode_t *)self->zp)->z_mode & 02000) == 0) { self->seen_clear=1; printf("SCOPED_CHMOD_SGID_CLEARED\n"); }
+    else if(arg1 == 0 && self->stale == 2 && (((znode_t *)self->zp)->z_mode & 02000) != 0) { self->seen_restore=1; printf("SCOPED_CHMOD_SGID_RESTORED\n"); }
     else { printf("SCOPED_CHMOD_STALE_VIOLATION\n"); exit(1); }
 }
 DSCRIPT
