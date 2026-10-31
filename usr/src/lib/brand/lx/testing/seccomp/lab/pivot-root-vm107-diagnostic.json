@@ -1,0 +1,14 @@
+{
+  "vm": 107,
+  "accepted": false,
+  "source": "e26f06551df62618da1eaead6b692ffe02c580dc",
+  "kernel": "69d9820977",
+  "failure": "First pivot probe2497 panics zone_status_get NULL0x9c via zone_find_by_path/vfs_list_add/vfs_add/lx_mntns_pivot+945",
+  "diagnosis": "Native domount with MS_NOSPLICE leaves mountpt unset, stored as VFS_NOMNTPT. That descriptive marker is not an absolute zone path and cannot be passed to native vfs_list_add on first publication.",
+  "cleanup": "panic reboot exited QEMU2762116; zone pool imported, not clean shutdown/export",
+  "console": {
+    "name": "boot-107-pivot-root-publication-diagnostic.log",
+    "sha256": "e51c05606eda566a144f01c58f6d54e3918fa049063f1af02111f644b3c2e17a"
+  },
+  "physical_host_deployed": false
+}

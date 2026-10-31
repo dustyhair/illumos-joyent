@@ -373,6 +373,8 @@ lx_mntns_create(vnode_t *source, cred_t *cr, cred_t *owner,
 	    &view->lv_vfs);
 	if (error != 0)
 		goto fail;
+	/* NOSPLICE supplies no mountpoint; later publication needs a path. */
+	vfs_setmntpoint(view->lv_vfs, "/", 0);
 	if ((error = VFS_ROOT(view->lv_vfs, &view->lv_root)) != 0) {
 		VERIFY0(dounmount(view->lv_vfs, 0, cr));
 		VFS_RELE(view->lv_vfs);
