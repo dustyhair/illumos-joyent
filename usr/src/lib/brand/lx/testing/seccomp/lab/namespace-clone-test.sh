@@ -31,17 +31,17 @@ for variant in static dynamic; do
             modes="combined filter mount-only nested deny initial-mount badfs"
             test "$phase" = enabled || modes=combined
             for mode in $modes; do
-                options=()
-                test "$uid" = 0 || options+=(--drop)
-                test "$entry" = libc || options+=(--raw)
-                test "$mode" = combined || options+=(--"$mode")
+                options=
+                test "$uid" = 0 || options="$options --drop"
+                test "$entry" = libc || options="$options --raw"
+                test "$mode" = combined || options="$options --$mode"
                 case "$phase" in
-                    disabled) options+=(--expect 22);;
-                    mount-zero|user-zero) options+=(--expect 28);;
+                    disabled) options="$options --expect 22";;
+                    mount-zero|user-zero) options="$options --expect 28";;
                 esac
                 log=/lab/nsclone-$phase-$variant-$uid-$entry-$mode.log
                 echo "NSCLONE_CASE_START phase=$phase variant=$variant uid=$uid entry=$entry mode=$mode"
-                if ! zlogin -S lx-probe "$probe ${options[*]}" </dev/null > "$log" 2>&1; then
+                if ! zlogin -S lx-probe "$probe $options" </dev/null > "$log" 2>&1; then
                     cat "$log"
                     exit 1
                 fi
