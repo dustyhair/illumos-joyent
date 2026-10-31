@@ -40,6 +40,7 @@ typedef struct lx_mntns_state {
 } lx_mntns_state_t;
 
 extern boolean_t lx_mntns_entry_enabled(void);
+extern boolean_t lx_mntns_proc_at_root(struct proc *);
 extern int lx_mntns_entry_prepare(cred_t *, vnode_t *, vnode_t *,
     lx_mntns_view_t *, lx_mntns_state_t *);
 extern int lx_mntns_state_prepare(lx_mntns_view_t *, const char *, cred_t *,

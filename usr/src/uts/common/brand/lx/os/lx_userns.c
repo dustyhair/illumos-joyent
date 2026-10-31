@@ -690,8 +690,12 @@ lx_userns_entry_check(proc_t *p)
 	if ((p->p_flag & SVFORK) != 0 ||
 	    lx_clone_grp_member(pd, LX_CLONE_FS))
 		return (EOPNOTSUPP);
-	if (root != NULL && !VN_CMP(root, p->p_zone->zone_rootvp))
+	if (pd->l_mntns != NULL) {
+		if (!lx_mntns_proc_at_root(p))
+			return (EPERM);
+	} else if (root != NULL && !VN_CMP(root, p->p_zone->zone_rootvp)) {
 		return (EPERM);
+	}
 	return (0);
 }
 

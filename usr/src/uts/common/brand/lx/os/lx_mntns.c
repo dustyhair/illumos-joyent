@@ -429,6 +429,17 @@ lx_mntns_state_fini(lx_mntns_state_t *state)
 	bzero(state, sizeof (*state));
 }
 
+/* A private view's canonical root is distinct from the zone's vnode. */
+boolean_t
+lx_mntns_proc_at_root(proc_t *p)
+{
+	lx_proc_data_t *pd = ptolxproc(p);
+
+	ASSERT(MUTEX_HELD(&p->p_lock));
+	return (pd != NULL && pd->l_mntns != NULL &&
+	    PTOU(p)->u_rdir == pd->l_mntns->lv_root);
+}
+
 /*
  * Publish prepared references without sleeping under p_lock. The caller
  * keeps the expected old vnodes held while preparing and revalidating the
