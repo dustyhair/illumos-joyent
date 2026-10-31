@@ -1,0 +1,40 @@
+VM125 accepted queued-thread signal and native ILP32 siginfo corrections.
+
+Brand and BOTH32/64userlibrary source d495b14001453f89e52c6736028fe75b18e1c078;
+genunix0b4a679fc130d2325fa5387bad6f55f6cef2d256;
+controllers789e5d11d02c33ef0af19a81110175ff0d3988a3.
+Public NEWPID remains rejected. Full Codex/bubblewrap is not accepted.
+
+Targeted and full runs passed native32/64 POSIX controls, each model/run128
+queue/kill pairs and257empty checks; unchanged Linuxi38625stages including
+errno7 and0xfedcba98; queued64 static/dynamic payload/authorization cases;
+and36totalSIGCONTsession cases. Signalzero loops32768total passed; targeted
+DTrace measured16438helperzero calls with0queue-sized allocations. Existing
+native permission engine is retained; supplied siginfo does not authorize.
+
+Full prior VFS/user/80clone/16PIDidentity/16PIDmap,48ownership,16cohort,
+24drain,32zombie+nativeSIGCLDqueueproof,32liveorphan,12nested and5ordinary-wait
+invocations passed.40no-retry held-identity drainchecks passed. See JSON.
+
+VM124 remains an explicitly failed diagnostic checkpoint. Its trace proved
+incoming/queued/converter errno7 became0 at siginfo_kto32. The VM125 fix moves
+that initialized field before SI_FROMUSER return. Exact-source audit confirms
+stack and new/reused queue info already zeroed; no redundant initialization,
+new hook,ABI,lock,allocation or ZFS format change. SI_NOINFO minimum output
+and existing positive-code behavior remain; reverse conversion is unchanged.
+The exact failing i386fixture was not relaxed and now passes twice.
+
+Clean release/debug brand,clean32/64userlibraries andcleanrelease/debuggenunix
+were built. Retained matched Unix,VM123KTEST,VM118proc/cgroup,LOFS/tmpfs and
+surrounding platform. Release runtime;debugcompileonly. Initial andfinal76
+artifact hashes match. Flags/views/PIDspaces0,zoneinstalled/stopped,poolhealthy,
+export0,poweroff sync complete,QEMU3435000gone. No physicalhostchange.
+Raw boot-125-queued-siginfo-acceptance.log SHA256
+239b7eba87d24fc50f65e784aac895eaaf183f4300ed111947b0b581a8da80a4
+is retained locally and /build/workspaces/lx/log/ on the builder.
+
+Leaderless process-group and foreign-zone tests are prepared but unintegrated.
+PID1 signal policy and coherent PID/PGID/SID/wait/proc semantics,IPC/network
+namespaces and complete newest Codex workflows remain. Existing arbitrary
+negative siginfo codes,UID16 conversion,reverse32 native input and special
+signal-union gaps are outside this acceptance. No SPARC or debug runtime claim.
