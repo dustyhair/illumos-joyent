@@ -126,20 +126,25 @@ main(int argc, char **argv)
 	if (prctl(PR_SET_DUMPABLE, 1UL, 0UL, 0UL, 0UL))
 		return (2);
 	(void) snprintf(base, sizeof (base), "/test/mnt-pivot/run.XXXXXX");
-	if (mkdtemp(base) == NULL || mkdir(path("candidate", candidate), 0755) ||
+	if (mkdtemp(base) == NULL ||
+	    mkdir(path("candidate", candidate), 0755) ||
 	    mkdir(path("plain", p), 0755) ||
 	    write_text(path("outside", p), "outside\n", 1))
 		return (2);
-	if (unshare(CLONE_NEWUSER | CLONE_NEWNS) || maps(uid, gid) || filter() ||
+	if (unshare(CLONE_NEWUSER | CLONE_NEWNS) ||
+	    maps(uid, gid) || filter() ||
 	    mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) ||
-	    mount("tmpfs", candidate, "tmpfs", MS_NOSUID | MS_NODEV, "mode=0755"))
+	    mount("tmpfs", candidate, "tmpfs", MS_NOSUID | MS_NODEV,
+	    "mode=0755"))
 		return (2);
-	if (chdir(candidate) || mkdir("oldroot", 0755) || mkdir("newroot", 0755) ||
+	if (chdir(candidate) || mkdir("oldroot", 0755) ||
+	    mkdir("newroot", 0755) ||
 	    write_text("temporary", "temporary\n", 1) ||
 	    mount("newroot", "newroot", NULL, MS_BIND | MS_REC, NULL))
 		return (2);
 	if (deny) {
-		struct __user_cap_header_struct h = { _LINUX_CAPABILITY_VERSION_3, 0 };
+		struct __user_cap_header_struct h = {
+		    _LINUX_CAPABILITY_VERSION_3, 0 };
 		struct __user_cap_data_struct caps[2];
 
 		if (syscall(SYS_capget, &h, caps) != 0)
@@ -194,7 +199,8 @@ main(int argc, char **argv)
 	    (int)sizeof (oldpath) && contents(oldpath, "outside\n"),
 	    "old-root-reachable");
 	check(mount("tmpfs", "/newroot", "tmpfs", MS_NOSUID | MS_NODEV,
-	    "mode=0755") == 0 && write_text("/newroot/final", "final\n", 1) == 0,
+	    "mode=0755") == 0 &&
+	    write_text("/newroot/final", "final\n", 1) == 0,
 	    "prepare-final-root");
 	check(mount(NULL, "/oldroot", NULL, MS_REC | MS_PRIVATE, NULL) == 0,
 	    "old-root-private");
