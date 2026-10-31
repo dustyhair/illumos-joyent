@@ -1,0 +1,22 @@
+{
+  "vm": 103,
+  "accepted_checkpoint": false,
+  "source": "509be7d7bb",
+  "kernel_source": "dfd70f3e75",
+  "qemu_pid": 2454696,
+  "stage": "Native boot before single-user shell or test drivers",
+  "failure": "ctfs_endpoint_ioctl+0x3d NULL-pointer page fault at address0x198 in init PID1",
+  "diagnosis": "vfsimpl_setup uses kmem_alloc and did not initialize vi_zone_ref. New vfs_list_add read zref_zone before first zone_init_ref and could skip fresh-owner assignment on allocator garbage.",
+  "fix": "0d4f087886 initializes vi_zone_ref at private-state allocation; first-publication branch then only acquires it",
+  "tests_started": false,
+  "lx_zone_started": false,
+  "pool_import_command_sent": false,
+  "noimport_boot_argument": true,
+  "clean_shutdown": false,
+  "panic_reboot_with_noreboot_qemu_exited": true,
+  "console": {
+    "name": "boot-103-reinsert-owner-init-diagnostic.log",
+    "sha256": "50384802974bdaed16304340941d137705d47154a91dc43dc4f8eb3a856284af"
+  },
+  "physical_host_deployed": false
+}
