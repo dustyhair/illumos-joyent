@@ -8,14 +8,14 @@ BEGIN
 fbt::sigcld:entry
 /execname == "pid_orphan" && arg1 == 0/
 {
-	self->zchild = ((proc_t *)arg0)->p_pid;
-	self->zparent = ((proc_t *)arg0)->p_parent->p_pid;
+	self->zchild = ((proc_t *)arg0)->p_pidp->pid_id;
+	self->zparent = ((proc_t *)arg0)->p_parent->p_pidp->pid_id;
 	printf("PID_ZOMBIE_SIGCLD_NULL child=%d parent=%d\n",
 	    self->zchild, self->zparent);
 }
 
 fbt::sigaddq:entry
-/self->zchild != 0 && ((proc_t *)arg0)->p_pid == self->zparent/
+/self->zchild != 0 && ((proc_t *)arg0)->p_pidp->pid_id == self->zparent/
 {
 	printf("PID_ZOMBIE_QUEUE_ALLOC child=%d parent=%d kmflag=%d\n",
 	    self->zchild, self->zparent, arg3);
