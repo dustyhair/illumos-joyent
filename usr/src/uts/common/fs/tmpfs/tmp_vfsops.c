@@ -48,6 +48,7 @@
 #include <vm/anon.h>
 #include <sys/model.h>
 #include <sys/policy.h>
+#include <sys/zone.h>
 
 #include <sys/fs/swapnode.h>
 #include <sys/fs/tmp.h>
@@ -244,9 +245,20 @@ tmp_mount(vfs_t *vfsp, vnode_t *mvp, struct mounta *uap, cred_t *cr)
 	boolean_t mode_arg = B_FALSE;
 	mode_t root_mode = 0777;
 	char *argstr;
+	tmpfs_mount_args_t *args = NULL;
 
 	if ((error = secpolicy_fs_mount(cr, mvp, vfsp)) != 0)
 		return (error);
+	if ((uap->flags & (MS_SYSSPACE | MS_DATA)) ==
+	    (MS_SYSSPACE | MS_DATA)) {
+		args = (void *)uap->dataptr;
+		if (uap->datalen != sizeof (*args) || args == NULL ||
+		    args->tma_version != TMPFS_MOUNT_ARGS_VERSION ||
+		    (uap->flags & MS_REMOUNT) ||
+		    !VALID_UID(args->tma_uid, curzone) ||
+		    !VALID_GID(args->tma_gid, curzone))
+			return (EINVAL);
+	}
 
 	if (mvp->v_type != VDIR)
 		return (ENOTDIR);
@@ -416,6 +428,10 @@ tmp_mount(vfs_t *vfsp, vnode_t *mvp, struct mounta *uap, cred_t *cr)
 		}
 		tp->tn_uid = rattr.va_uid;
 		tp->tn_gid = rattr.va_gid;
+	}
+	if (args != NULL) {
+		tp->tn_uid = args->tma_uid;
+		tp->tn_gid = args->tma_gid;
 	}
 
 	/*

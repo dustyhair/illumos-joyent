@@ -22,6 +22,9 @@
 #include <sys/brand.h>
 #include <sys/lx_brand.h>
 #include <sys/lx_mntns.h>
+#include <sys/lx_userns.h>
+#include <sys/zone.h>
+#include <sys/param.h>
 #include <sys/lx_syscalls.h>
 #include <sys/lx_autofs.h>
 
@@ -428,15 +431,124 @@ lx_mnt_legacy_check(void)
 	return (error);
 }
 
-/* Initial bind ignores type/data contents and per-mount policy flags. */
+/* Translate the tmpfs options whose native resource semantics we can retain. */
+static int
+lx_mnt_private_tmpfs(lx_mntns_view_t *view, const char *target, char *data,
+    uint_t flags)
+{
+	char options[256], *word, *next, *value, *end;
+	uint32_t uid = crgetuid(CRED()), gid = crgetgid(CRED());
+	u_longlong_t size, number;
+	pgcnt_t pages, freepages;
+	uint_t mode = 01777;
+	int error;
+
+	zone_get_physmem_data(curzone->zone_id, &pages, &freepages);
+	size = ptob((uint64_t)pages / 2);
+	for (word = data; word != NULL && *word != '\0'; word = next) {
+		next = strchr(word, ',');
+		if (next != NULL)
+			*next++ = '\0';
+		value = strchr(word, '=');
+		if (value == NULL || value[1] == '\0')
+			return (EINVAL);
+		*value++ = '\0';
+		if (!ISDIGIT(*value) || ddi_strtoull(value, &end,
+		    strcmp(word, "mode") == 0 ? 8 : 0, &number) != 0)
+			return (EINVAL);
+		if (strcmp(word, "size") == 0) {
+			uint_t shifts = 0;
+
+			if (*end == '%') {
+				if (end[1] != '\0' || pages == 0 ||
+				    number > UINT64_MAX / (uint64_t)pages)
+					return (EINVAL);
+				number = (uint64_t)pages * number / 100;
+				if (number > UINT64_MAX >> PAGESHIFT)
+					return (EINVAL);
+				number = ptob(number);
+			} else {
+				switch (*end) {
+				case '\0':
+					break;
+				case 'k': case 'K':
+					shifts = 10;
+					break;
+				case 'm': case 'M':
+					shifts = 20;
+					break;
+				case 'g': case 'G':
+					shifts = 30;
+					break;
+				case 't': case 'T':
+					shifts = 40;
+					break;
+				case 'p': case 'P':
+					shifts = 50;
+					break;
+				case 'e': case 'E':
+					shifts = 60;
+					break;
+				default:
+					return (EINVAL);
+				}
+				if ((shifts != 0 && end[1] != '\0') ||
+				    number > UINT64_MAX >> shifts)
+					return (EINVAL);
+				number <<= shifts;
+			}
+			if (number > UINT64_MAX - PAGEOFFSET)
+				return (EINVAL);
+			size = number;
+		} else {
+			if (*end != '\0' || number > UINT32_MAX)
+				return (EINVAL);
+			if (strcmp(word, "mode") == 0) {
+				mode = number & 07777;
+			} else if (strcmp(word, "uid") == 0) {
+				uid = lx_userns_id_backing(CRED(), 0, number);
+				if (uid == UINT32_MAX ||
+				    !VALID_UID(uid, curzone))
+					return (EINVAL);
+			} else if (strcmp(word, "gid") == 0) {
+				gid = lx_userns_id_backing(CRED(), 1, number);
+				if (gid == UINT32_MAX ||
+				    !VALID_GID(gid, curzone))
+					return (EINVAL);
+			} else if (strcmp(word, "nr_inodes") == 0) {
+				return (EOPNOTSUPP);
+			} else {
+				return (EINVAL);
+			}
+		}
+	}
+	(void) snprintf(options, sizeof (options), "mode=%o", mode);
+	if (size != 0) {
+		char limit[40];
+
+		(void) snprintf(limit, sizeof (limit), "size=%llu", size);
+		VERIFY0(lx_mnt_add_opt(limit, options, sizeof (options)));
+	}
+	/* Child user namespaces cannot create device-bearing filesystems. */
+	if ((flags & LX_MS_NODEV) || crgetbrand(CRED()) != NULL)
+		VERIFY0(lx_mnt_add_opt("nodevices", options, sizeof (options)));
+	if (flags & LX_MS_NOSUID)
+		VERIFY0(lx_mnt_add_opt("nosetuid", options, sizeof (options)));
+	if (flags & LX_MS_NOEXEC)
+		VERIFY0(lx_mnt_add_opt("noexec", options, sizeof (options)));
+	error = lx_mntns_mount_tmpfs(view, target, options, uid, gid, CRED());
+	return (error);
+}
+
+/* Bind and propagation changes ignore type/data contents after copying. */
 static int
 lx_mnt_private_mount(lx_mntns_view_t *view, const char *sourcep,
     const char *targetp, const char *fstypep, uint_t flags, const void *datap)
 {
-	char *source, *target, *type;
+	char *source, *target, *type, *options;
 	char byte;
 	uint_t propagation;
-	boolean_t change;
+	boolean_t change, bind;
 	int error;
 
 	/* Old mount callers, including bwrap, still send the magic prefix. */
@@ -444,7 +556,8 @@ lx_mnt_private_mount(lx_mntns_view_t *view, const char *sourcep,
 		flags &= ~LX_MS_MGC_MSK;
 
 	propagation = flags & (LX_MS_PRIVATE | LX_MS_SLAVE);
-	change = !(flags & LX_MS_BIND) && propagation != 0;
+	bind = (flags & LX_MS_BIND) != 0;
+	change = !bind && propagation != 0;
 	if (!lx_mntns_entry_enabled())
 		return (lx_mntns_view_capable(view, CRED()) ?
 		    EOPNOTSUPP : EPERM);
@@ -453,15 +566,18 @@ lx_mnt_private_mount(lx_mntns_view_t *view, const char *sourcep,
 		    (flags & ~(LX_MS_PRIVATE | LX_MS_SLAVE | LX_MS_REC |
 		    LX_MS_SILENT)) != 0)
 			return (EINVAL);
-	} else if (!(flags & LX_MS_BIND) ||
+	} else if (bind ?
 	    (flags & ~(LX_MS_BIND | LX_MS_REC | LX_MS_RDONLY | LX_MS_NOSUID |
-	    LX_MS_NODEV | LX_MS_NOEXEC | LX_MS_SILENT)) != 0) {
+	    LX_MS_NODEV | LX_MS_NOEXEC | LX_MS_SILENT)) != 0 :
+	    (flags & ~(LX_MS_NOSUID | LX_MS_NODEV | LX_MS_NOEXEC |
+	    LX_MS_SILENT)) != 0) {
 		return (lx_mntns_view_capable(view, CRED()) ?
 		    EOPNOTSUPP : EPERM);
 	}
 	source = kmem_alloc(MAXPATHLEN, KM_SLEEP);
 	target = kmem_alloc(MAXPATHLEN, KM_SLEEP);
 	type = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+	options = kmem_zalloc(MAX_MNTOPT_STR, KM_SLEEP);
 	/* Linux copies optional arguments even though bind ignores them. */
 	if (fstypep != NULL && (error = copyinstr(fstypep, type,
 	    MAXPATHLEN, NULL)) != 0)
@@ -474,18 +590,30 @@ lx_mnt_private_mount(lx_mntns_view_t *view, const char *sourcep,
 		error = EFAULT;
 		goto out;
 	}
+	if (!bind && !change && datap != NULL &&
+	    (error = lx_mnt_copyin_arg(datap, options, MAX_MNTOPT_STR)) != 0)
+		goto out;
 	if ((error = lx_mnt_copyin_arg(targetp, target, MAXPATHLEN)) != 0)
 		goto out;
 	if (!lx_mntns_view_capable(view, CRED()))
 		error = EPERM;
 	else if (change)
 		error = lx_mntns_mount_private(view, target, CRED());
-	else if (sourcep == NULL)
+	else if (!bind) {
+		if (fstypep == NULL)
+			error = EINVAL;
+		else if (strcmp(type, "tmpfs") != 0)
+			error = EOPNOTSUPP;
+		else
+			error = lx_mnt_private_tmpfs(view, target, options,
+			    flags);
+	} else if (sourcep == NULL)
 		error = EINVAL;
 	else
 		error = lx_mntns_mount_bind(view, source, target,
 		    (flags & LX_MS_REC) != 0, CRED());
 out:
+	kmem_free(options, MAX_MNTOPT_STR);
 	kmem_free(type, MAXPATHLEN);
 	kmem_free(target, MAXPATHLEN);
 	kmem_free(source, MAXPATHLEN);

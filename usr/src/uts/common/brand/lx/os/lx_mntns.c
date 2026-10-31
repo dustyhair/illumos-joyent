@@ -13,6 +13,7 @@
 #include <sys/debug.h>
 #include <sys/kmem.h>
 #include <sys/fs/lofs_info.h>
+#include <sys/fs/tmp.h>
 #include <sys/refstr.h>
 #include <sys/mount.h>
 #include <sys/pathname.h>
@@ -248,7 +249,7 @@ lx_mntns_view_rele(lx_mntns_view_t *view)
 static int
 lx_mntns_mount(const char *source, const char *path, const char *type,
     const char *options, int flags, vnode_t *covered, vnode_t *sourcevp,
-    cred_t *cr, vfs_t **out)
+    const tmpfs_mount_args_t *tmpfsargs, cred_t *cr, vfs_t **out)
 {
 	struct mounta args;
 	lofs_mount_args_t loargs;
@@ -270,6 +271,10 @@ lx_mntns_mount(const char *source, const char *path, const char *type,
 		args.flags |= MS_DATA;
 		args.dataptr = (char *)&loargs;
 		args.datalen = sizeof (loargs);
+	} else if (tmpfsargs != NULL) {
+		args.flags |= MS_DATA;
+		args.dataptr = (char *)tmpfsargs;
+		args.datalen = sizeof (*tmpfsargs);
 	}
 	*out = NULL;
 	error = domount((char *)type, &args, covered, cr, out);
@@ -344,7 +349,7 @@ lx_mntns_create(vnode_t *source, cred_t *cr, cred_t *owner,
 	/* Source is pinned; domount must not resolve its pathname again. */
 	error = lx_mntns_mount("lx-private-root", "/", "lofs",
 	    (source->v_vfsp->vfs_flag & VFS_NOEXEC) != 0 ?
-	    "nosub,noexec" : "nosub", MS_NOSPLICE, source, source, cr,
+	    "nosub,noexec" : "nosub", MS_NOSPLICE, source, source, NULL, cr,
 	    &view->lv_vfs);
 	if (error != 0)
 		goto fail;
@@ -558,7 +563,7 @@ lx_mntns_bind_locked(lx_mntns_view_t *view, vnode_t *source,
 	options = (source->v_vfsp->vfs_flag & VFS_NOEXEC) != 0 ?
 	    "nosub,noexec" : "nosub";
 	error = lx_mntns_mount("lx-private-bind", path, "lofs", options,
-	    readonly ? MS_RDONLY : 0, covered, source, view->lv_cred,
+	    readonly ? MS_RDONLY : 0, covered, source, NULL, view->lv_cred,
 	    &mount->lm_vfs);
 	if (error == 0)
 		error = lx_mntns_pin(mount, view->lv_cred);
@@ -800,7 +805,8 @@ lx_mntns_rbind_locked(lx_mntns_view_t *view, vnode_t *from,
 	options = (from->v_vfsp->vfs_flag & VFS_NOEXEC) != 0 ?
 	    "nosub,noexec" : "nosub";
 	error = lx_mntns_mount("lx-private-recursive", destination, "lofs",
-	    options, MS_NOSPLICE, from, from, view->lv_cred, &stage->lv_vfs);
+	    options, MS_NOSPLICE, from, from, NULL, view->lv_cred,
+	    &stage->lv_vfs);
 	if (error != 0)
 		goto out;
 	vfs_lock_wait(stage->lv_vfs);
@@ -958,6 +964,68 @@ out:
 		VN_RELE(covered);
 	if (from != NULL)
 		VN_RELE(from);
+	mutex_exit(&view->lv_lock);
+	kmem_free(resolved, MAXPATHLEN);
+	return (error);
+}
+
+/* Native tmpfs initializes ownership and mode before domount publishes it. */
+int
+lx_mntns_mount_tmpfs(lx_mntns_view_t *view, const char *target,
+    const char *options, uid_t uid, gid_t gid, cred_t *actor)
+{
+	tmpfs_mount_args_t args = { TMPFS_MOUNT_ARGS_VERSION, uid, gid };
+	lx_mntns_mount_t *mount = NULL;
+	vnode_t *covered = NULL;
+	char *resolved;
+	int error;
+
+	if (!lx_mntns_entry_enabled() ||
+	    !lx_mntns_view_capable(view, actor))
+		return (EPERM);
+	resolved = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+	mutex_enter(&view->lv_lock);
+	if (view->lv_nmounts >= LX_MNTNS_MAX_MOUNTS) {
+		error = ENOSPC;
+		goto out;
+	}
+	error = lookupname((char *)target, UIO_SYSSPACE, FOLLOW, NULL,
+	    &covered);
+	if (error != 0)
+		goto out;
+	if (!lx_mntns_owns(view, covered)) {
+		error = EINVAL;
+		goto out;
+	}
+	if (covered->v_type != VDIR) {
+		error = ENOTDIR;
+		goto out;
+	}
+	if (covered == view->lv_root) {
+		error = EOPNOTSUPP;
+		goto out;
+	}
+	if ((error = lx_mntns_path_locked(view, covered, actor, resolved)) != 0)
+		goto out;
+	mount = kmem_zalloc(sizeof (*mount), KM_SLEEP);
+	mount->lm_path = refstr_alloc(resolved);
+	error = lx_mntns_mount("swap", resolved, "tmpfs", options, 0, covered,
+	    NULL, &args, view->lv_cred, &mount->lm_vfs);
+	if (error == 0)
+		error = lx_mntns_pin(mount, view->lv_cred);
+	if (error == 0) {
+		mount->lm_next = view->lv_mounts;
+		view->lv_mounts = mount;
+		view->lv_nmounts++;
+		mount = NULL;
+	}
+out:
+	if (covered != NULL)
+		VN_RELE(covered);
+	if (mount != NULL) {
+		refstr_rele(mount->lm_path);
+		kmem_free(mount, sizeof (*mount));
+	}
 	mutex_exit(&view->lv_lock);
 	kmem_free(resolved, MAXPATHLEN);
 	return (error);
@@ -1281,7 +1349,7 @@ lx_mntns_view_tmpfs(lx_mntns_view_t *view, const char *path, cred_t *cr)
 		error = EINVAL;
 	} else {
 		error = lx_mntns_mount("swap", path, "tmpfs", "mode=0700",
-		    MS_NOSUID, covered, NULL, cr, &mount->lm_vfs);
+		    MS_NOSUID, covered, NULL, NULL, cr, &mount->lm_vfs);
 		if (error == 0)
 			error = lx_mntns_pin(mount, cr);
 	}

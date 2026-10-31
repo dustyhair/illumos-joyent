@@ -33,6 +33,16 @@
 extern "C" {
 #endif
 
+#ifdef _KERNEL
+/* Kernel constructors may supply root ownership before publication. */
+#define	TMPFS_MOUNT_ARGS_VERSION	1
+typedef struct tmpfs_mount_args {
+	uint32_t tma_version;
+	uid_t tma_uid;
+	gid_t tma_gid;
+} tmpfs_mount_args_t;
+#endif
+
 /*
  * tmpfs per-mount data structure.
  *
