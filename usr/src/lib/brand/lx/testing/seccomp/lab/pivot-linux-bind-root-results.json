@@ -1,0 +1,19 @@
+{
+  "time": "2026-10-31T11:17:22.424822+00:00",
+  "cases": 8,
+  "source_commit": "f8176c9ec6",
+  "source": "2b8518f5b8f8e49125f8bc2624c115dfa1b6f0e0f5718c0a031e9875cf17fc67",
+  "dynamic_probe": "724a1fe358e345ef59e591ea86a7527c1bfe634476a8717f12dd46357c86b057",
+  "mode": "--bind-root, preserves nosuid/nodev while sealing readonly, verifies readonly after final pivot and subsequent namespace copy; --lx-shared not used for Linux",
+  "profile": "existing lxc-unshare, global policy unchanged",
+  "logs": {
+    "dynamic-shared-0-allow.log": "4c9edc67af78fb6f8c9aa9dbb02a49453b51fff2b6d5350ef7c55589b436b3db",
+    "dynamic-shared-0-deny.log": "c3439abc6deb5a67d5277a2ed876238f0ec5a3dd4f26478da7ee627f290399e9",
+    "dynamic-shared-65534-allow.log": "6a99ec5aee28400bc55f0a856f7e10cc57ac458773c9b89df1fae41a8d24e51b",
+    "dynamic-shared-65534-deny.log": "8904065c7c98df57975e396a8a68b07fdcc6255b2cc74de2c6280643af7745d8",
+    "static-shared-0-allow.log": "37d9c6d0618dee2c0fcf13986d080e2acad9a7fedaeb2777d317f57aa8dcbcbb",
+    "static-shared-0-deny.log": "fd6aa0469d31a45f22d829516262d51cebe9d053b772ab066efa699f527f80bd",
+    "static-shared-65534-allow.log": "09d0077c6d59fd3b05c74df0258d269fa2fa6eef10655a212a155acacce6a113",
+    "static-shared-65534-deny.log": "6ec3e036ff57ca7206961bb29a6f26f9825df4dbf0b7d2ecdc4ecad51033480f"
+  }
+}
