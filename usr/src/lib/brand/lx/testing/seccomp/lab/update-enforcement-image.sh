@@ -112,6 +112,7 @@ for controller in mntns-budget-native mount-owner-test.sh \
     pid-identity-full-test.sh \
     pid-maps-test.sh pid-maps-smoke-test.sh pid-maps-full-test.sh \
     pid-process-test.sh pid-process-smoke-test.sh pid-process-full-test.sh \
+    pid-cohort-test.sh pid-cohort-smoke-test.sh pid-cohort-full-test.sh \
     bubblewrap-trace.sh; do
     test -f "$lab/$controller"
     pfexec cp "$lab/$controller" "$lab/mnt-root/lab/$controller"
