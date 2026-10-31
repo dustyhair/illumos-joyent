@@ -104,7 +104,10 @@ for controller in mntns-budget-native mount-owner-test.sh \
     mount-retire-test.sh mount-retire-full-test.sh \
     mount-retire-smoke-test.sh \
     mount-pivot-test.sh mount-pivot-full-test.sh \
-    mount-pivot-smoke-test.sh bubblewrap-trace.sh; do
+    mount-pivot-smoke-test.sh mount-pivot-shared-test.sh \
+    mntns_pivot_shared namespace-clone-test.sh \
+    namespace-clone-smoke-test.sh namespace-clone-full-test.sh \
+    bubblewrap-trace.sh; do
     test -f "$lab/$controller"
     pfexec cp "$lab/$controller" "$lab/mnt-root/lab/$controller"
     pfexec chmod 0555 "$lab/mnt-root/lab/$controller"
