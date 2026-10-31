@@ -2460,6 +2460,40 @@ ns_pid_orphan_adopted(ktest_ctx_hdl_t *ctx)
 }
 
 static void
+ns_pid_orphan_zombie_adopted(ktest_ctx_hdl_t *ctx)
+{
+	proc_t *owner, *orphan;
+	boolean_t passed = B_FALSE;
+
+	mutex_enter(&ns_pid_lock);
+	mutex_enter(&pidlock);
+	owner = prfind_zone(ns_pid_process_owner, ALL_ZONES);
+	orphan = prfind_zone(ns_pid_process_descendant_pid, ALL_ZONES);
+	if (owner != NULL && orphan != NULL &&
+	    ns_pid_process_descendant_map != NULL) {
+		mutex_enter(&orphan->p_lock);
+		passed = orphan->p_brand == &lx_brand &&
+		    ptolxproc(orphan) != NULL &&
+		    ptolxproc(orphan)->l_pidns_map ==
+		    ns_pid_process_descendant_map &&
+		    orphan->p_parent == owner &&
+		    orphan->p_ppid == owner->p_pid &&
+		    orphan->p_sessp == owner->p_sessp &&
+		    orphan->p_pgidp != owner->p_pgidp &&
+		    !orphan->p_pgidp->pid_pgorphaned &&
+		    orphan->p_stat == SZOMB;
+		mutex_exit(&orphan->p_lock);
+	}
+	mutex_exit(&pidlock);
+	mutex_exit(&ns_pid_lock);
+	if (passed)
+		KT_PASS(ctx);
+	else
+		KT_FAIL(ctx,
+		    "zombie orphan lost its namespace init or group link");
+}
+
+static void
 ns_pid_orphan_retired(ktest_ctx_hdl_t *ctx)
 {
 	uint_t attempt;
@@ -2704,6 +2738,8 @@ _init(void)
 	    0)) != 0 ||
 	    (error = ktest_add_test(ks, "orphan_adopted", ns_pid_orphan_adopted,
 	    0)) != 0 ||
+	    (error = ktest_add_test(ks, "orphan_zombie_adopted",
+	    ns_pid_orphan_zombie_adopted, 0)) != 0 ||
 	    (error = ktest_add_test(ks, "orphan_zombie", ns_pid_orphan_zombie,
 	    0)) != 0 ||
 	    (error = ktest_add_test(ks, "orphan_retired", ns_pid_orphan_retired,

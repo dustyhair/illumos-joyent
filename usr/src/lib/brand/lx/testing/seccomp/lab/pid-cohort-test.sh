@@ -15,21 +15,19 @@ runner=
 peer_runner=
 held=0
 tracer=
+watchdog=
 cleanup() {
-    for target in "$descendant" "$child" "$pid" "$peer"; do
-        test -z "$target" || kill -KILL "$target" 2>/dev/null || true
-    done
-    test -z "$runner" || wait "$runner" || true
-    test -z "$peer_runner" || wait "$peer_runner" || true
+    test -z "$watchdog" || kill -TERM "$watchdog" 2>/dev/null || true
+    # Failure retains held maps and stopped tasks for parent inspection.
+    # Never kill numeric PIDs recovered from an old log.
     if test -n "$tracer"; then
         kill -TERM "$tracer" 2>/dev/null || true
         wait "$tracer" || true
     fi
-    if test "$held" = 1; then
-        ktest run lx_namespace:pid:process_release >/lab/pid-cohort-cleanup.log 2>&1 || true
-    fi
+    test "$held" = 0 || echo "PID_COHORT_FAILURE_HELD_FIXTURE retained"
 }
 trap cleanup EXIT
+trap 'exit 124' TERM
 wait_marker() {
     local file=$1 marker=$2 i
     for i in {1..15}; do
@@ -90,6 +88,9 @@ for variant in static dynamic; do
             test "$guard" = 0 || options="$options --guard"
             zlogin -S lx-probe "$probe death $options" </dev/null > "$log" 2>&1 &
             runner=$!
+            controller=$$
+            ( sleep 55; echo PID_COHORT_TIMEOUT >&2; kill -TERM "$controller" ) </dev/null &
+            watchdog=$!
             wait_marker "$log" '^PID_PROCESS '
             pid=$(awk '/^PID_PROCESS / {sub("pid=", "", $2); print $2; exit}' "$log")
             wait_stopped "$pid"
@@ -110,18 +111,22 @@ for variant in static dynamic; do
             ktest run -i /lab/pid-cohort-target.bin lx_namespace:pid:process_descendant
             killed_owner=$pid
             killed_peer=$peer
+            killed_child=$child
+            killed_descendant=$descendant
             kill -KILL "$pid"
             wait_runner "$runner"
+            ktest run lx_namespace:pid:process_drained
             runner=
             pid=
-            ktest run lx_namespace:pid:process_dead
+            child=
+            descendant=
             wait_stopped "$peer"
             echo PID_COHORT_OUTSIDE_PEER_ALIVE
             kill -KILL "$peer"
             wait_runner "$peer_runner"
             peer_runner=
             peer=
-            for killed in "$killed_owner" "$child" "$descendant" "$killed_peer"; do
+            for killed in "$killed_owner" "$killed_child" "$killed_descendant" "$killed_peer"; do
                 wait_marker "$trace" "^PID_COHORT_EXIT pid=$killed why=2 signal=9$"
                 grep "^PID_COHORT_EXIT pid=$killed why=2 signal=9$" "$trace"
             done
@@ -137,6 +142,9 @@ for variant in static dynamic; do
                 /usr/bin/true
             done
             ktest run lx_namespace:user:zone_budget_idle
+            kill -TERM "$watchdog"
+            wait "$watchdog" || true
+            watchdog=
             echo "PID_COHORT_CASE_PASS variant=$variant uid=$uid guard=$guard"
         done
     done
