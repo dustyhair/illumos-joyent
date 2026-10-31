@@ -1,0 +1,39 @@
+{
+  "vm": 101,
+  "accepted_checkpoint": false,
+  "source": "ec3bc23fe5d6172cc4c7322f5b780b7dacd2eb39",
+  "new_detach_cases_reached": 0,
+  "prior_results": "Native boot, full enforcement, trusted backend snapshot and first process reject PASS. Trusted root process attach fails guard assertions before public mount tests.",
+  "failure": "Disabled-experiment private force umount returned EINVAL22 and detach returned EPERM1, existing fixture requires EOPNOTSUPP95.",
+  "fix": [
+    "7cbea47c1b preserves unsupported force and disabled-experiment errors",
+    "15318bac97 retains disabled guard before pathname lookup as before"
+  ],
+  "assertions_waived": false,
+  "cleanup": {
+    "orphan_stopped_pid": 2844,
+    "orphan_continued_and_exited": true,
+    "process_idle": "PASS",
+    "user_budget_idle": "PASS",
+    "views": 0,
+    "flags": [
+      0,
+      0,
+      0
+    ],
+    "zone_halted": true,
+    "pool_export_exit": 0,
+    "synced_shutdown": true,
+    "qemu_pid_exited": 2414342
+  },
+  "console": {
+    "name": "boot-101-detach-disabled-gate-diagnostic.log",
+    "sha256": "7defef284f3c65e149c422054617b5d73534073ca42b9d9164cf54ae70ef7e6f"
+  },
+  "logs": {
+    "vm101-regressions.log": "6c2524b1820ce829a1f8887da5f0dd28ecb1b11bc13274c9b6cb68dda7fa991c",
+    "vm101-attach.log": "14bf1e10deebf34e33ced541bd707568b661801acc43cdf27cf8cbdd6243b1bf",
+    "vm101-result.log": "14ddf607b83f43fa5e3484e80a6573d95df83f71d32305e60750e8f5fd7ef478"
+  },
+  "physical_host_deployed": false
+}
