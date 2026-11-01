@@ -81,7 +81,15 @@ lx_kernel_restricted(proc_t *p)
 void
 lx_seccomp_enter(klwp_t *lwp, int entry)
 {
-	if (lx_kernel_restricted(lwptoproc(lwp)) &&
+	proc_t *p = lwptoproc(lwp);
+
+	/*
+	 * A /proc agent is created by the kernel and executes native system
+	 * calls on behalf of its authorized controller.  It is not an ordinary
+	 * Linux LWP and cannot be selected by process-controlled state.  Keep
+	 * the native-entry prohibition for every other LWP in the process.
+	 */
+	if (lx_kernel_restricted(p) && curthread != p->p_agenttp &&
 	    (entry != BRAND_ENTRY_AMD64 ||
 	    lwptolxlwp(lwp)->br_stack_mode != LX_STACK_MODE_BRAND))
 		exit(CLD_KILLED, SIGSYS);
