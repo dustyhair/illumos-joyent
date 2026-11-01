@@ -452,19 +452,20 @@ lx_pidns_map_rele(lx_pidns_map_t *map)
 	 * zero while its releaser waits for pidlock.
 	 */
 	for (;;) {
-		VERIFY3U((refs = map->pm_refs), !=, 0);
-		if (refs == 1)
+		for (;;) {
+			VERIFY3U((refs = map->pm_refs), !=, 0);
+			if (refs == 1)
+				break;
+			if (atomic_cas_uint(&map->pm_refs, refs,
+			    refs - 1) == refs)
+				return;
+		}
+		if (!held)
+			mutex_enter(&pidlock);
+		if (atomic_cas_uint(&map->pm_refs, 1, 0) == 1)
 			break;
-		if (atomic_cas_uint(&map->pm_refs, refs, refs - 1) == refs)
-			return;
-	}
-	if (!held)
-		mutex_enter(&pidlock);
-	if (atomic_cas_uint(&map->pm_refs, 1, 0) != 1) {
 		if (!held)
 			mutex_exit(&pidlock);
-		lx_pidns_map_rele(map);
-		return;
 	}
 	for (i = 0; i < map->pm_count; i++) {
 		lx_pidns_slot_t *slot = &map->pm_slots[i];
