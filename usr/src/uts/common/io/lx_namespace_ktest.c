@@ -2355,12 +2355,11 @@ ns_lwp_track(ktest_ctx_hdl_t *ctx, boolean_t worker)
 			reason = 11;
 			goto out;
 		}
-		if (ttolxlwp(t)->br_lpid != NULL ||
-		    ttolxlwp(t)->br_pid != number) {
+		if (ttolxlwp(t)->br_lpid == NULL) {
 			reason = 12;
 			goto out;
 		}
-		if (identity == p->p_pidp) {
+		if (ttolxlwp(t)->br_lpid->lxp_pidp != identity) {
 			reason = 13;
 			goto out;
 		}
