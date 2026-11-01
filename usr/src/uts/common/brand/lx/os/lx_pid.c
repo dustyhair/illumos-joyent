@@ -166,9 +166,13 @@ lx_pid_assign(kthread_t *t, struct lx_pid *lpidp)
 	 * equal to 1. Since lx_initlwp is being called against an lwp that
 	 * already exists, an additional pid allocation is not necessary.
 	 *
-	 * We check for this by testing br_ppid == 0.
+	 * A native caller has no LX parent identity, so br_ppid will also be
+	 * zero when it creates a new LWP in an existing LX process (for
+	 * example, a /proc agent).  In that case t is not the calling thread
+	 * and the new LWP must keep its allocated identity.
 	 */
-	if (p->p_lwpcnt > 0 && lwpd->br_ppid != 0) {
+	if (p->p_lwpcnt > 0 &&
+	    (lwpd->br_ppid != 0 || t != curthread)) {
 		/*
 		 * Assign allocated pid to any thread other than the first.
 		 * The lpid and pidp fields should be populated.
