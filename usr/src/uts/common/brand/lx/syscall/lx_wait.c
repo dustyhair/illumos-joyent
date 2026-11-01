@@ -166,6 +166,16 @@ lx_wstat(int code, int status)
 	return (stat);
 }
 
+static void
+lx_wait_pidmap_rele(lx_lwp_data_t *lwpd)
+{
+	lx_pidns_map_t *map = lwpd->br_waitid_pidmap;
+
+	lwpd->br_waitid_pidmap = NULL;
+	if (map != NULL)
+		lx_pidns_map_rele(map);
+}
+
 static int
 lx_call_waitid(idtype_t idtype, id_t id, k_siginfo_t *sip, int native_options,
     int extra_options)
@@ -186,6 +196,7 @@ lx_call_waitid(idtype_t idtype, id_t id, k_siginfo_t *sip, int native_options,
 	 * through lx_waitid_helper, and stash the Linux-specific
 	 * extra waitid() flags.
 	 */
+	VERIFY(lwpd->br_waitid_pidmap == NULL);
 	lwpd->br_waitid_emulate = B_TRUE;
 	lwpd->br_waitid_flags = extra_options;
 
@@ -199,6 +210,8 @@ lx_call_waitid(idtype_t idtype, id_t id, k_siginfo_t *sip, int native_options,
 
 	lwpd->br_waitid_emulate = B_FALSE;
 	lwpd->br_waitid_flags = 0;
+	if (error != 0)
+		lx_wait_pidmap_rele(lwpd);
 
 	return (error);
 }
@@ -210,6 +223,7 @@ lx_wait4(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4)
 	idtype_t idtype;
 	id_t id;
 	int status = 0;
+	pid_t result;
 	pid_t pid = (pid_t)p1;
 	int error;
 	int native_options, extra_options;
@@ -297,8 +311,12 @@ lx_wait4(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4)
 	 * If the WNOHANG flag was specified and no child was found return 0.
 	 */
 	if ((native_options & WNOHANG) && info.si_pid == 0) {
+		lx_wait_pidmap_rele(ttolxlwp(curthread));
 		return (0);
 	}
+	result = ns == NULL ? info.si_pid :
+	    lx_pidns_visible(ns, info.si_pid);
+	lx_wait_pidmap_rele(ttolxlwp(curthread));
 
 	status = lx_wstat(info.si_code, info.si_status);
 
@@ -322,8 +340,7 @@ lx_wait4(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4)
 		}
 	}
 
-	return (ns == NULL ? info.si_pid :
-	    lx_pidns_visible(ns, info.si_pid));
+	return (result);
 }
 
 long
@@ -336,6 +353,7 @@ long
 lx_waitid(uintptr_t idtype, uintptr_t id, uintptr_t infop, uintptr_t opt)
 {
 	int error;
+	int copy_error;
 	int native_options, extra_options;
 	k_siginfo_t info = { 0 };
 	lx_pidns_t *ns = lx_pidns_active(curproc);
@@ -375,14 +393,17 @@ lx_waitid(uintptr_t idtype, uintptr_t id, uintptr_t infop, uintptr_t opt)
 	 * If the WNOHANG flag was specified and no child was found return 0.
 	 */
 	if ((native_options & WNOHANG) && info.si_pid == 0) {
+		lx_wait_pidmap_rele(ttolxlwp(curthread));
 		return (0);
 	}
 #if defined(_SYSCALL32_IMPL)
 	if (get_udatamodel() != DATAMODEL_NATIVE) {
-		return (stol_ksiginfo32_copyout(&info, (void *)infop));
+		copy_error = stol_ksiginfo32_copyout(&info, (void *)infop);
 	} else
 #endif
 	{
-		return (stol_ksiginfo_copyout(&info, (void *)infop));
+		copy_error = stol_ksiginfo_copyout(&info, (void *)infop);
 	}
+	lx_wait_pidmap_rele(ttolxlwp(curthread));
+	return (copy_error);
 }

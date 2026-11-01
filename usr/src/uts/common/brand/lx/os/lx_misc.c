@@ -1045,6 +1045,8 @@ boolean_t
 lx_wait_filter(proc_t *pp, proc_t *cp)
 {
 	lx_lwp_data_t *lwpd = ttolxlwp(curthread);
+	lx_proc_data_t *pd;
+	lx_pidns_map_t *map = NULL, *old;
 	int flags = lwpd->br_waitid_flags;
 	boolean_t ret;
 
@@ -1053,10 +1055,10 @@ lx_wait_filter(proc_t *pp, proc_t *cp)
 	}
 
 	mutex_enter(&cp->p_lock);
+	pd = ptolxproc(cp);
 	if (flags & LX_WALL) {
 		ret = B_TRUE;
 	} else {
-		lx_proc_data_t *pd = ptolxproc(cp);
 		boolean_t is_sigchld = B_TRUE;
 		boolean_t match_wclone = B_FALSE;
 
@@ -1072,6 +1074,16 @@ lx_wait_filter(proc_t *pp, proc_t *cp)
 		}
 
 		ret = (match_wclone ^ is_sigchld) ? B_TRUE : B_FALSE;
+	}
+	if (ret && pd != NULL)
+		map = pd->l_pidns_map;
+	if (ret && map != lwpd->br_waitid_pidmap) {
+		if (map != NULL)
+			lx_pidns_map_hold(map);
+		old = lwpd->br_waitid_pidmap;
+		lwpd->br_waitid_pidmap = map;
+		if (old != NULL)
+			lx_pidns_map_rele(old);
 	}
 	mutex_exit(&cp->p_lock);
 

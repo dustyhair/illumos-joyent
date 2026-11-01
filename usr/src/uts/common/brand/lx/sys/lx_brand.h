@@ -567,6 +567,7 @@ struct lx_lwp_data {
 
 	boolean_t br_waitid_emulate;
 	int br_waitid_flags;
+	struct lx_pidns_map *br_waitid_pidmap;
 
 	lx_ptrace_flags_t br_ptrace_flags; /* ptrace flags for this LWP */
 	lx_ptrace_options_t br_ptrace_options; /* PTRACE_SETOPTIONS options */
