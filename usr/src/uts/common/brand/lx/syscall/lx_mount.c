@@ -550,7 +550,7 @@ lx_mnt_private_mount(lx_mntns_view_t *view, const char *sourcep,
 	char *source, *target, *type, *options;
 	char byte;
 	uint_t propagation;
-	boolean_t change, bind, readonly;
+	boolean_t change, bind, remount;
 	int error;
 
 	/* Old mount callers, including bwrap, still send the magic prefix. */
@@ -559,14 +559,13 @@ lx_mnt_private_mount(lx_mntns_view_t *view, const char *sourcep,
 
 	propagation = flags & (LX_MS_PRIVATE | LX_MS_SLAVE);
 	bind = (flags & LX_MS_BIND) != 0;
-	readonly = bind && (flags & LX_MS_REMOUNT) != 0;
+	remount = bind && (flags & LX_MS_REMOUNT) != 0;
 	change = !bind && propagation != 0;
 	if (!lx_mntns_entry_enabled())
 		return (lx_mntns_view_capable(view, CRED()) ?
 		    EOPNOTSUPP : EPERM);
-	if (readonly) {
-		if (!(flags & LX_MS_RDONLY) ||
-		    (flags & ~(LX_MS_BIND | LX_MS_REMOUNT | LX_MS_RDONLY |
+	if (remount) {
+		if ((flags & ~(LX_MS_BIND | LX_MS_REMOUNT | LX_MS_RDONLY |
 		    LX_MS_NOSUID | LX_MS_NODEV | LX_MS_NOEXEC | LX_MS_SILENT |
 		    LX_MS_RELATIME)) != 0)
 			return (lx_mntns_view_capable(view, CRED()) ?
@@ -609,9 +608,11 @@ lx_mnt_private_mount(lx_mntns_view_t *view, const char *sourcep,
 		error = EPERM;
 	else if (change)
 		error = lx_mntns_mount_private(view, target, CRED());
-	else if (readonly) {
-		uint_t policy = VFS_RDONLY;
+	else if (remount) {
+		uint_t policy = 0;
 
+		if (flags & LX_MS_RDONLY)
+			policy |= VFS_RDONLY;
 		if (flags & LX_MS_NOSUID)
 			policy |= VFS_NOSETUID;
 		if (flags & LX_MS_NODEV)
@@ -643,13 +644,22 @@ lx_mnt_private_mount(lx_mntns_view_t *view, const char *sourcep,
 				goto out;
 			error = lx_mntns_mount_proc(view, target, options,
 			    sflags, CRED());
+		} else if (strcmp(type, "devpts") == 0) {
+			/*
+			 * An lx zone cannot create a private devpts instance.
+			 * Bubblewrap keeps the original tree at /oldroot during
+			 * construction, so graft the zone's existing pts
+			 * filesystem into the otherwise private device tree.
+			 */
+			error = lx_mntns_mount_bind(view, "/oldroot/dev/pts",
+			    target, B_FALSE, B_TRUE, CRED());
 		} else
 			error = EOPNOTSUPP;
 	} else if (sourcep == NULL)
 		error = EINVAL;
 	else
 		error = lx_mntns_mount_bind(view, source, target,
-		    (flags & LX_MS_REC) != 0, CRED());
+		    (flags & LX_MS_REC) != 0, B_FALSE, CRED());
 out:
 	kmem_free(options, MAX_MNTOPT_STR);
 	kmem_free(type, MAXPATHLEN);

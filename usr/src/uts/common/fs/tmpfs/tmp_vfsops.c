@@ -65,6 +65,52 @@ static int tmpfsfstype;
  */
 static uint32_t	tmpfs_mountcount;
 
+/* One-way policy tightening for kernel-owned private tmpfs instances. */
+static int
+tmp_private_freeze(vfs_t *vfsp, struct mounta *uap)
+{
+	tmpfs_freeze_args_t *args = (void *)uap->dataptr;
+	struct tmount *tm = VFSTOTM(vfsp);
+	uint_t mask = VFS_RDONLY | VFS_NOSETUID | VFS_NODEVICES | VFS_NOEXEC;
+	int error = 0;
+
+	if ((uap->flags & (MS_SYSSPACE | MS_DATA | MS_REMOUNT)) !=
+	    (MS_SYSSPACE | MS_DATA | MS_REMOUNT) ||
+	    uap->datalen != sizeof (*args) || args == NULL ||
+	    args->tfa_version != TMPFS_FREEZE_ARGS_VERSION)
+		return (EINVAL);
+	if ((args->tfa_flags & ~mask) != 0)
+		return (EINVAL);
+	if (tm == NULL || !(vfsp->vfs_flag & VFS_NOMNTTAB))
+		return (EOPNOTSUPP);
+	mutex_enter(&tm->tm_contents);
+	if (!(tm->tm_flags & TM_PRIVATE)) {
+		error = EOPNOTSUPP;
+	} else if ((args->tfa_flags & VFS_RDONLY) &&
+	    (tm->tm_flags & TM_WMAP) &&
+	    !(vfsp->vfs_flag & VFS_RDONLY)) {
+		error = EOPNOTSUPP;
+	} else if ((vfsp->vfs_flag & args->tfa_flags) !=
+	    (vfsp->vfs_flag & mask)) {
+		/* A private policy restriction cannot be removed. */
+		error = EOPNOTSUPP;
+	} else {
+		vfsp->vfs_flag |= args->tfa_flags;
+	}
+	mutex_exit(&tm->tm_contents);
+	if (error == 0) {
+		if (args->tfa_flags & VFS_RDONLY)
+			vfs_setmntopt(vfsp, MNTOPT_RO, NULL, 0);
+		if (args->tfa_flags & VFS_NOSETUID)
+			vfs_setmntopt(vfsp, MNTOPT_NOSETUID, NULL, 0);
+		if (args->tfa_flags & VFS_NODEVICES)
+			vfs_setmntopt(vfsp, MNTOPT_NODEVICES, NULL, 0);
+		if (args->tfa_flags & VFS_NOEXEC)
+			vfs_setmntopt(vfsp, MNTOPT_NOEXEC, NULL, 0);
+	}
+	return (error);
+}
+
 /*
  * tmpfs vfs operations.
  */
@@ -249,6 +295,9 @@ tmp_mount(vfs_t *vfsp, vnode_t *mvp, struct mounta *uap, cred_t *cr)
 
 	if ((error = secpolicy_fs_mount(cr, mvp, vfsp)) != 0)
 		return (error);
+	if ((uap->flags & (MS_SYSSPACE | MS_DATA | MS_REMOUNT)) ==
+	    (MS_SYSSPACE | MS_DATA | MS_REMOUNT))
+		return (tmp_private_freeze(vfsp, uap));
 	if ((uap->flags & (MS_SYSSPACE | MS_DATA)) ==
 	    (MS_SYSSPACE | MS_DATA) &&
 	    (uap->dataptr != NULL || uap->datalen != 0)) {
@@ -256,6 +305,7 @@ tmp_mount(vfs_t *vfsp, vnode_t *mvp, struct mounta *uap, cred_t *cr)
 		if (uap->datalen != sizeof (*args) || args == NULL ||
 		    args->tma_version != TMPFS_MOUNT_ARGS_VERSION ||
 		    (uap->flags & MS_REMOUNT) ||
+		    (args->tma_flags & ~TMPFS_MOUNT_PRIVATE) != 0 ||
 		    !VALID_UID(args->tma_uid, curzone) ||
 		    !VALID_GID(args->tma_gid, curzone))
 			return (EINVAL);
@@ -365,6 +415,8 @@ tmp_mount(vfs_t *vfsp, vnode_t *mvp, struct mounta *uap, cred_t *cr)
 
 	tm->tm_vfsp = vfsp;
 	tm->tm_anonmax = anonmax;
+	if (args != NULL && (args->tma_flags & TMPFS_MOUNT_PRIVATE))
+		tm->tm_flags |= TM_PRIVATE;
 
 	vfsp->vfs_data = (caddr_t)tm;
 	vfsp->vfs_fstype = tmpfsfstype;

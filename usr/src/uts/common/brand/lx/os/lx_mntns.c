@@ -584,7 +584,8 @@ lx_mntns_bindable(vtype_t type)
 /* lv_lock serializes publication and keeps every graft in the private tree. */
 static int
 lx_mntns_bind_locked(lx_mntns_view_t *view, vnode_t *source,
-    vnode_t *covered, const char *path, boolean_t readonly, boolean_t copy)
+    vnode_t *covered, const char *path, boolean_t readonly, boolean_t copy,
+    boolean_t ptmxalias)
 {
 	lx_mntns_mount_t *mount;
 	const char *options;
@@ -599,8 +600,12 @@ lx_mntns_bind_locked(lx_mntns_view_t *view, vnode_t *source,
 		return (EINVAL);
 	mount = kmem_zalloc(sizeof (*mount), KM_SLEEP);
 	/* Keep noexec when binding a source from another view. */
-	options = (source->v_vfsp->vfs_flag & VFS_NOEXEC) != 0 ?
-	    "nosub,noexec" : "nosub";
+	if (ptmxalias)
+		options = (source->v_vfsp->vfs_flag & VFS_NOEXEC) != 0 ?
+		    "nosub,noexec,ptmxalias" : "nosub,ptmxalias";
+	else
+		options = (source->v_vfsp->vfs_flag & VFS_NOEXEC) != 0 ?
+		    "nosub,noexec" : "nosub";
 	error = lx_mntns_mount("lx-private-bind", path, "lofs", options,
 	    readonly ? MS_RDONLY : 0, covered, source, NULL, view->lv_cred,
 	    &mount->lm_vfs);
@@ -635,7 +640,7 @@ lx_mntns_bind(lx_mntns_view_t *view, vnode_t *source,
 	if ((error = lx_mntns_lookup_path(view->lv_root, path, cr,
 	    &covered, resolved)) == 0) {
 		error = lx_mntns_bind_locked(view, source, covered, resolved,
-		    readonly, copy);
+		    readonly, copy, B_FALSE);
 		VN_RELE(covered);
 	}
 	mutex_exit(&view->lv_lock);
@@ -957,17 +962,22 @@ lx_mntns_mount_private(lx_mntns_view_t *view, const char *target, cred_t *actor)
 	return (error);
 }
 
-/* Seal a tracked private LOFS constructor, without changing its source. */
+/* Seal a tracked private constructor, without changing its source. */
 int
 lx_mntns_mount_readonly(lx_mntns_view_t *view, const char *target,
     uint_t restrictions, cred_t *actor)
 {
-	lofs_freeze_args_t args = { LOFS_FREEZE_ARGS_VERSION, restrictions };
+	lofs_freeze_args_t loargs = {
+		LOFS_FREEZE_ARGS_VERSION, restrictions
+	};
+	tmpfs_freeze_args_t tmpargs = {
+		TMPFS_FREEZE_ARGS_VERSION, restrictions
+	};
 	struct mounta ma = { 0 };
 	lx_mntns_mount_t *mount;
 	vnode_t *vp = NULL;
 	vfs_t *vfs = NULL;
-	boolean_t lofs;
+	boolean_t lofs, tmpfs;
 	int error;
 
 	if (!lx_mntns_entry_enabled() ||
@@ -991,17 +1001,19 @@ lx_mntns_mount_readonly(lx_mntns_view_t *view, const char *target,
 	}
 	RLOCK_VFSSW();
 	lofs = strcmp(vfssw[vfs->vfs_fstype].vsw_name, "lofs") == 0;
+	tmpfs = strcmp(vfssw[vfs->vfs_fstype].vsw_name, "tmpfs") == 0;
 	RUNLOCK_VFSSW();
-	if (!lofs || (vp->v_type != VDIR && vp->v_type != VREG)) {
+	if ((!lofs && !tmpfs) || (lofs && !lx_mntns_bindable(vp->v_type)) ||
+	    (tmpfs && vp->v_type != VDIR)) {
 		error = EOPNOTSUPP;
 		goto out;
 	}
 	ma.spec = "lx-private-freeze";
 	ma.dir = (char *)target;
-	ma.fstype = "lofs";
+	ma.fstype = lofs ? "lofs" : "tmpfs";
 	ma.flags = MS_SYSSPACE | MS_DATA | MS_REMOUNT;
-	ma.dataptr = (char *)&args;
-	ma.datalen = sizeof (args);
+	ma.dataptr = lofs ? (char *)&loargs : (char *)&tmpargs;
+	ma.datalen = lofs ? sizeof (loargs) : sizeof (tmpargs);
 	zone_hold(curzone);
 	mount_in_progress(curzone);
 	vfs_lock_wait(vfs);
@@ -1510,7 +1522,8 @@ out:
  */
 int
 lx_mntns_mount_bind(lx_mntns_view_t *view, const char *source,
-    const char *target, boolean_t recursive, cred_t *actor)
+    const char *target, boolean_t recursive, boolean_t ptmxalias,
+    cred_t *actor)
 {
 	vnode_t *from = NULL, *covered = NULL;
 	char *resolved;
@@ -1556,7 +1569,7 @@ lx_mntns_mount_bind(lx_mntns_view_t *view, const char *source,
 			    resolved, actor);
 		else
 			error = lx_mntns_bind_locked(view, from, covered,
-			    resolved, B_FALSE, B_FALSE);
+			    resolved, B_FALSE, B_FALSE, ptmxalias);
 	}
 out:
 	if (covered != NULL)
@@ -1573,7 +1586,9 @@ int
 lx_mntns_mount_tmpfs(lx_mntns_view_t *view, const char *target,
     const char *options, uid_t uid, gid_t gid, cred_t *actor)
 {
-	tmpfs_mount_args_t args = { TMPFS_MOUNT_ARGS_VERSION, uid, gid };
+	tmpfs_mount_args_t args = {
+		TMPFS_MOUNT_ARGS_VERSION, uid, gid, TMPFS_MOUNT_PRIVATE
+	};
 	lx_mntns_mount_t *mount = NULL;
 	vnode_t *covered = NULL;
 	char *resolved;
@@ -1700,6 +1715,30 @@ lx_mntns_view_bind(lx_mntns_view_t *view, vnode_t *source,
     const char *path, boolean_t readonly, cred_t *cr)
 {
 	return (lx_mntns_bind(view, source, path, readonly, B_FALSE, cr));
+}
+
+/*
+ * Private mounts are intentionally absent from the native zone mount list.
+ * Export their namespace-relative paths for Linux /proc/self/mountinfo.
+ * The callback runs under the view lock, so every VFS and path remains stable.
+ */
+void
+lx_mntns_mountinfo_walk(lx_mntns_view_t *view, lx_mntns_mountinfo_f emit,
+    void *arg)
+{
+	lx_mntns_mount_t *mount;
+	uint_t rootid;
+
+	mutex_enter(&view->lv_lock);
+	rootid = 10000 + view->lv_root_order;
+	emit(arg, view->lv_vfs, "/", rootid, 0);
+	for (mount = view->lv_mounts; mount != NULL; mount = mount->lm_next) {
+		if (mount->lm_vfs->vfs_vnodecovered == NULL)
+			continue;
+		emit(arg, mount->lm_vfs, refstr_value(mount->lm_path),
+		    10000 + mount->lm_order, rootid);
+	}
+	mutex_exit(&view->lv_lock);
 }
 
 /* A held VFS identifies the mount instance; it does not prevent unmount. */
@@ -1993,6 +2032,10 @@ lx_mntns_view_lookup(lx_mntns_view_t *view, const char *path, cred_t *cr,
 int
 lx_mntns_view_tmpfs(lx_mntns_view_t *view, const char *path, cred_t *cr)
 {
+	tmpfs_mount_args_t args = {
+		TMPFS_MOUNT_ARGS_VERSION, crgetuid(cr), crgetgid(cr),
+		TMPFS_MOUNT_PRIVATE
+	};
 	lx_mntns_mount_t *mount;
 	vnode_t *covered;
 	char *resolved;
@@ -2015,7 +2058,7 @@ lx_mntns_view_tmpfs(lx_mntns_view_t *view, const char *path, cred_t *cr)
 		error = EINVAL;
 	} else {
 		error = lx_mntns_mount("swap", path, "tmpfs", "mode=0700",
-		    MS_NOSUID, covered, NULL, NULL, cr, &mount->lm_vfs);
+		    MS_NOSUID, covered, NULL, &args, cr, &mount->lm_vfs);
 		if (error == 0)
 			error = lx_mntns_pin(mount, cr);
 	}

@@ -149,6 +149,7 @@
 #include <sys/lx_impl.h>
 #include <sys/machbrand.h>
 #include <sys/lx_syscalls.h>
+#include <lx_syscall.h>
 #include <sys/lx_misc.h>
 #include <sys/lx_futex.h>
 #include <sys/lx_brand.h>
@@ -2123,6 +2124,10 @@ lx_copy_procdata(proc_t *cp, proc_t *pp)
 	VERIFY((ppd = pp->p_brand_data) != NULL);
 
 	bcopy(ppd, cpd, sizeof (lx_proc_data_t));
+	if (ttolxlwp(curthread) != NULL &&
+	    ttolxlwp(curthread)->br_syscall_num == 56 &&
+	    (ttolxlwp(curthread)->br_syscall_args[0] & LX_CLONE_NEWIPC) != 0)
+		cpd->l_flags |= LX_PROC_IPCNS;
 	/* Copied PID pointers are borrowed; assign ownership below. */
 	cpd->l_pidns_map = NULL;
 	cpd->l_pidns_pgid = NULL;

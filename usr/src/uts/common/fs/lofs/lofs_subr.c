@@ -295,6 +295,14 @@ makelonode(struct vnode *vp, struct loinfo *li, int flag)
 		lp->lo_vnode = nvp;
 		VN_SET_VFS_TYPE_DEV(nvp, vfsp, vp->v_type, vp->v_rdev);
 		nvp->v_flag |= (vp->v_flag & (VNOMOUNT|VNOMAP|VDIROPEN));
+		/*
+		 * A private nosub bind exposes a covered mountpoint as an
+		 * ordinary directory. Do not carry the hidden filesystem root's
+		 * mount prohibition into that directory shadow.
+		 */
+		if ((li->li_flag & (LO_PRIVATE | LO_NOSUB)) ==
+		    (LO_PRIVATE | LO_NOSUB) && vp->v_type == VDIR)
+			nvp->v_flag &= ~VNOMOUNT;
 		/* The private wrapper, not the backing pipe, is mountable. */
 		if ((li->li_flag & LO_PRESERVE_FIFO) && vp->v_type == VFIFO)
 			nvp->v_flag &= ~VNOMOUNT;

@@ -29,6 +29,7 @@
 
 /* Only the disposable lab enables entry while namespace support develops. */
 int lx_userns_experimental = 0;
+int lx_ipcns_experimental = 0;
 
 struct lx_userns {
 	uint_t un_refs;
@@ -779,6 +780,46 @@ lx_userns_clone_enabled(void)
 	return (lx_userns_experimental != 0);
 }
 
+boolean_t
+lx_ipcns_entry_enabled(void)
+{
+	return (lx_ipcns_experimental != 0);
+}
+
+/*
+ * The first public IPC namespace is deliberately restricted and empty: it
+ * cannot reach the zone's System V IPC objects and it does not yet create
+ * private objects of its own.  Keep every Linux SysV IPC entry on the kernel
+ * side so the native emulation library cannot escape that boundary.
+ */
+boolean_t
+lx_ipcns_isolated_syscall(int syscall_num)
+{
+	if ((ptolxproc(curproc)->l_flags & LX_PROC_IPCNS) == 0)
+		return (B_FALSE);
+
+	if (get_udatamodel() != DATAMODEL_NATIVE)
+		return (syscall_num == 117);	/* ipc(2) */
+
+	switch (syscall_num) {
+	case 29:	/* shmget */
+	case 30:	/* shmat */
+	case 31:	/* shmctl */
+	case 64:	/* semget */
+	case 65:	/* semop */
+	case 66:	/* semctl */
+	case 67:	/* shmdt */
+	case 68:	/* msgget */
+	case 69:	/* msgsnd */
+	case 70:	/* msgrcv */
+	case 71:	/* msgctl */
+	case 220:	/* semtimedop */
+		return (B_TRUE);
+	default:
+		return (B_FALSE);
+	}
+}
+
 /* Reserve both namespaces before native fork can publish a child. */
 int
 lx_namespace_clone_prepare(uint_t flags, cred_t **result,
@@ -888,6 +929,7 @@ lx_namespace_unshare(uintptr_t flags)
 	boolean_t user = (flags & LX_CLONE_NEWUSER) != 0;
 	boolean_t mount = (flags & LX_CLONE_NEWNS) != 0;
 	boolean_t pid = (flags & LX_CLONE_NEWPID) != 0;
+	boolean_t ipc = (flags & LX_CLONE_NEWIPC) != 0;
 	cred_t *source = NULL, *base = NULL, *scoped = NULL;
 	cred_t *old_process = NULL, *old_task = NULL;
 	vnode_t *root = NULL, *cwd = NULL;
@@ -896,15 +938,18 @@ lx_namespace_unshare(uintptr_t flags)
 	lx_mntns_state_t state = { 0 };
 	int error;
 
-	if ((!user && !mount && !pid) || (user && !lx_userns_experimental))
+	if ((!user && !mount && !pid && !ipc) ||
+	    (user && !lx_userns_experimental))
 		return (set_errno(EPERM));
+	if (ipc && !lx_ipcns_entry_enabled())
+		return (set_errno((user || mount || pid) ? EINVAL : EPERM));
 	if (pid && !lx_pidns_entry_enabled())
 		return (set_errno((user || mount) ? EINVAL : EPERM));
 	/* Retain the previous unsupported-combination error while disabled. */
 	if (mount && !lx_mntns_entry_enabled())
 		return (set_errno(user ? EINVAL : EPERM));
 	if ((flags & ~(LX_CLONE_NEWUSER | LX_CLONE_NEWNS | LX_CLONE_NEWPID |
-	    LX_CLONE_FS)) != 0)
+	    LX_CLONE_NEWIPC | LX_CLONE_FS)) != 0)
 		return (set_errno(EINVAL));
 	if (get_udatamodel() != DATAMODEL_NATIVE ||
 	    lwpd->br_syscall_entry != BRAND_ENTRY_AMD64 ||
@@ -956,7 +1001,8 @@ lx_namespace_unshare(uintptr_t flags)
 		error = EAGAIN;
 	if (error == 0 && ((user && !lx_userns_experimental) ||
 	    (mount && !lx_mntns_entry_enabled()) ||
-	    (pid && !lx_pidns_entry_enabled())))
+	    (pid && !lx_pidns_entry_enabled()) ||
+	    (ipc && !lx_ipcns_entry_enabled())))
 		error = EPERM;
 	if (error == 0 && mount)
 		error = lx_mntns_proc_swap(p, root, cwd, &state);
@@ -974,6 +1020,8 @@ lx_namespace_unshare(uintptr_t flags)
 		pd->l_pidns_children = pidstate;
 		pidstate = NULL;
 	}
+	if (error == 0 && ipc)
+		pd->l_flags |= LX_PROC_IPCNS;
 	mutex_exit(&p->p_crlock);
 	mutex_exit(&p->p_lock);
 	if (old_process != NULL)

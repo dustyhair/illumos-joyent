@@ -275,7 +275,8 @@ typedef enum lx_proc_flags {
 	/* internal flags */
 	LX_PROC_CHILD_DEATHSIG	= 0x04,
 	LX_PROC_NO_DUMP		= 0x08,	/* for lx_prctl LX_PR_[GS]ET_DUMPABLE */
-	LX_PROC_USERNS		= 0x10	/* irreversible namespace guard */
+	LX_PROC_USERNS		= 0x10,	/* irreversible namespace guard */
+	LX_PROC_IPCNS		= 0x20	/* restricted empty IPC namespace */
 } lx_proc_flags_t;
 
 #define	LX_PROC_ALL	(LX_PROC_INSTALL_MODE | LX_PROC_STRICT_MODE)

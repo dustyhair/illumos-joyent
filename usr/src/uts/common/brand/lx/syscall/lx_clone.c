@@ -622,7 +622,7 @@ lx_kernel_fork(int nr, uintptr_t *args)
 	uint_t flags = nr == 57 ? LX_SIGCHLD : args[0];
 	lx_lwp_data_t *lwpd = ttolxlwp(curthread);
 	uint_t allowed = LX_CSIGNAL | LX_CLONE_NEWUSER | LX_CLONE_NEWNS |
-	    LX_CLONE_NEWPID |
+	    LX_CLONE_NEWPID | LX_CLONE_NEWIPC |
 	    LX_CLONE_PARENT_SETTID |
 	    LX_CLONE_CHILD_SETTID | LX_CLONE_CHILD_CLEARTID;
 	pid_t pid = -1;
@@ -633,7 +633,13 @@ lx_kernel_fork(int nr, uintptr_t *args)
 	VERIFY(lx_kernel_restricted(p) || lx_pidns_children(p) != NULL ||
 	    (nr == 56 &&
 	    (flags & (LX_CLONE_NEWUSER | LX_CLONE_NEWNS |
-	    LX_CLONE_NEWPID)) != 0));
+	    LX_CLONE_NEWPID | LX_CLONE_NEWIPC)) != 0));
+	if ((flags & LX_CLONE_NEWIPC) != 0 && !lx_ipcns_entry_enabled())
+		return (set_errno(EINVAL));
+	if (nr == 56 && (flags & LX_CLONE_NEWIPC) != 0 &&
+	    (flags & (LX_CLONE_NEWUSER | LX_CLONE_NEWNS |
+	    LX_CLONE_NEWPID)) == 0 && !lx_kernel_restricted(p))
+		return (set_errno(EOPNOTSUPP));
 	if ((flags & LX_CLONE_NEWPID) != 0 && !lx_pidns_entry_enabled())
 		return (set_errno(EINVAL));
 	pidns = lx_pidns_active(p);
@@ -749,10 +755,12 @@ lx_kernel_fork_child(klwp_t *parent, klwp_t *child)
 	lx_lwp_data_t *dst = lwptolxlwp(child);
 	proc_t *cp = lwptoproc(child);
 	uint_t flags;
+	boolean_t ipcclone = src->br_syscall_num == 56 &&
+	    (src->br_syscall_args[0] & LX_CLONE_NEWIPC) != 0;
 
 	if ((!lx_kernel_restricted(lwptoproc(parent)) &&
 	    src->br_clone_cred == NULL && src->br_clone_mntns == NULL &&
-	    src->br_clone_pidns_map == NULL) ||
+	    src->br_clone_pidns_map == NULL && !ipcclone) ||
 	    src->br_stack_mode != LX_STACK_MODE_BRAND ||
 	    (src->br_syscall_num != 56 && src->br_syscall_num != 57))
 		return;
@@ -767,7 +775,8 @@ lx_kernel_fork_child(klwp_t *parent, klwp_t *child)
 		    PTOU(pp)->u_cdir, src->br_clone_mntns));
 		mutex_exit(&cp->p_lock);
 	}
-	VERIFY(lx_kernel_restricted(cp));
+	VERIFY(lx_kernel_restricted(cp) ||
+	    (ptolxproc(cp)->l_flags & LX_PROC_IPCNS) != 0);
 	flags = src->br_syscall_num == 57 ? LX_SIGCHLD :
 	    src->br_syscall_args[0];
 	dst->br_lx_fsbase = src->br_lx_fsbase;

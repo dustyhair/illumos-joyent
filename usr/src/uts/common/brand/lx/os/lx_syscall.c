@@ -418,6 +418,12 @@ lx_syscall_enter(int entry)
 		return (0);
 	}
 
+	if (lx_ipcns_isolated_syscall(syscall_num)) {
+		ret = set_errno(ENOSYS);
+		lx_syscall_return(lwp, syscall_num, ret);
+		return (0);
+	}
+
 	if ((ptolxproc(curproc)->l_flags & LX_PROC_USERNS) != 0) {
 		if (lx_userns_id_syscall(syscall_num, args, &ret)) {
 			lx_syscall_return(lwp, syscall_num, ret);
@@ -468,7 +474,9 @@ lx_syscall_enter(int entry)
 	    (syscall_num == 56 &&
 	    ((lx_userns_clone_enabled() &&
 	    (args[0] & LX_CLONE_NEWUSER) != 0) ||
-	    (lx_mntns_entry_enabled() && (args[0] & LX_CLONE_NEWNS) != 0)))) {
+	    (lx_mntns_entry_enabled() && (args[0] & LX_CLONE_NEWNS) != 0) ||
+	    (lx_ipcns_entry_enabled() &&
+	    (args[0] & LX_CLONE_NEWIPC) != 0)))) {
 		ret = lx_kernel_fork(syscall_num, args);
 		lx_syscall_return(lwp, syscall_num, ret);
 		return (0);

@@ -85,6 +85,7 @@ struct loinfo {
  */
 #define	MNTOPT_LOFS_NOSUB	"nosub"
 #define	MNTOPT_LOFS_SUB		"sub"
+#define	MNTOPT_LOFS_PTMXALIAS	"ptmxalias"
 
 /*
  * Flag values (for li_flag)
@@ -93,6 +94,8 @@ struct loinfo {
 #define	LO_PRESERVE_FIFO	0x04	/* retain private FIFO mount identity */
 #define	LO_PRIVATE	0x08	/* pinned, non-mnttab kernel construction */
 #define	LO_PRIVATE_USED	0x10	/* write access granted or mutation begun */
+#define	LO_PRIVATE_WMAP	0x20	/* writable shared mapping may still exist */
+#define	LO_PTMX_ALIAS	0x40	/* private devpts root aliases sibling ptmx */
 
 /*
  * lfsnodes are allocated as new real vfs's are encountered
@@ -121,7 +124,7 @@ typedef struct lofs_mount_args {
 	struct vnode *lma_source;
 } lofs_mount_args_t;
 
-/* One-way policy tightening before a private construction is used. */
+/* One-way policy tightening; readonly rejects possible writable mappings. */
 #define	LOFS_FREEZE_ARGS_VERSION	1
 typedef struct lofs_freeze_args {
 	uint_t lfa_version;

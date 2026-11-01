@@ -136,6 +136,7 @@ static int lxpr_doaccess(lxpr_node_t *, boolean_t, int, int, cred_t *,
 static vnode_t *lxpr_lookup_procdir(vnode_t *, char *);
 static vnode_t *lxpr_lookup_piddir(vnode_t *, char *);
 static vnode_t *lxpr_lookup_not_a_dir(vnode_t *, char *);
+static vnode_t *lxpr_lookup_emptydir(vnode_t *, char *);
 static vnode_t *lxpr_lookup_fddir(vnode_t *, char *);
 static vnode_t *lxpr_lookup_fdinfodir(vnode_t *, char *);
 static vnode_t *lxpr_lookup_netdir(vnode_t *, char *);
@@ -154,6 +155,7 @@ static vnode_t *lxpr_lookup_task_tid_dir(vnode_t *, char *);
 static int lxpr_readdir_procdir(lxpr_node_t *, uio_t *, int *);
 static int lxpr_readdir_piddir(lxpr_node_t *, uio_t *, int *);
 static int lxpr_readdir_not_a_dir(lxpr_node_t *, uio_t *, int *);
+static int lxpr_readdir_emptydir(lxpr_node_t *, uio_t *, int *);
 static int lxpr_readdir_fddir(lxpr_node_t *, uio_t *, int *);
 static int lxpr_readdir_fdinfodir(lxpr_node_t *, uio_t *, int *);
 static int lxpr_readdir_netdir(lxpr_node_t *, uio_t *, int *);
@@ -448,7 +450,8 @@ static lxpr_dirent_t piddir[] = {
 	{ LXPR_PID_FDDIR,	"fd" },
 	{ LXPR_PID_FDINFODIR,	"fdinfo" },
 	{ LXPR_PID_UIDMAP,	"uid_map" },
-	{ LXPR_PID_SETGROUPS,	"setgroups" }
+	{ LXPR_PID_SETGROUPS,	"setgroups" },
+	{ LXPR_PID_NSDIR,	"ns" }
 };
 
 #define	PIDDIRFILES	(sizeof (piddir) / sizeof (piddir[0]))
@@ -1100,6 +1103,7 @@ static void (*lxpr_read_function[])() = {
 	lxpr_read_version,		/* /proc/version	*/
 	lxpr_read_vmstat,		/* /proc/vmstat		*/
 	lxpr_read_invalid,		/* /proc/<pid>/setgroups */
+	lxpr_read_isdir,		/* /proc/<pid>/ns	*/
 
 };
 
@@ -1284,6 +1288,7 @@ static vnode_t *(*lxpr_lookup_function[])() = {
 	lxpr_lookup_not_a_dir,		/* /proc/version	*/
 	lxpr_lookup_not_a_dir,		/* /proc/vmstat		*/
 	lxpr_lookup_not_a_dir,		/* setgroups */
+	lxpr_lookup_emptydir,		/* /proc/<pid>/ns */
 
 };
 
@@ -1468,6 +1473,7 @@ static int (*lxpr_readdir_function[])() = {
 	lxpr_readdir_not_a_dir,		/* /proc/version	*/
 	lxpr_readdir_not_a_dir,		/* /proc/vmstat		*/
 	lxpr_readdir_not_a_dir,		/* setgroups */
+	lxpr_readdir_emptydir,		/* /proc/<pid>/ns */
 
 };
 
@@ -2630,6 +2636,23 @@ lxpr_get_mountid(zone_t *zone, vfs_t *match_vfsp)
 	return (0);
 }
 
+static void
+lxpr_emit_private_mountinfo(void *arg, vfs_t *vfsp, const char *path,
+    uint_t id, uint_t parent)
+{
+	lxpr_uiobuf_t *uiobuf = arg;
+	const char *fstype;
+	const char *rwflag;
+
+	RLOCK_VFSSW();
+	fstype = vfssw[vfsp->vfs_fstype].vsw_name;
+	RUNLOCK_VFSSW();
+	rwflag = ((vfsp->vfs_flag & VFS_RDONLY) == 0) ? "rw" : "ro";
+	lxpr_uiobuf_printf(uiobuf, "%u %u %d:%d / %s %s - %s none %s\n",
+	    id, parent, getmajor(vfsp->vfs_dev), getminor(vfsp->vfs_dev),
+	    path, rwflag, fstype, rwflag);
+}
+
 /*
  * lxpr_read_pid_mountinfo(): information about process mount points.
  */
@@ -2708,6 +2731,16 @@ nextp:
 
 	list_destroy(mounts);
 	kmem_free(mounts, sizeof (list_t));
+
+	if (lxpnp->lxpr_pid == curproc->p_pid) {
+		lx_mntns_view_t *view = lx_mntns_current();
+
+		if (view != NULL) {
+			lx_mntns_mountinfo_walk(view,
+			    lxpr_emit_private_mountinfo, uiobuf);
+			lx_mntns_view_rele(view);
+		}
+	}
 }
 
 /*
@@ -6945,6 +6978,13 @@ lxpr_lookup_not_a_dir(vnode_t *dp, char *comp)
 	return (NULL);
 }
 
+static vnode_t *
+lxpr_lookup_emptydir(vnode_t *dp, char *comp)
+{
+	ASSERT(VTOLXP(dp)->lxpr_type == LXPR_PID_NSDIR);
+	return (NULL);
+}
+
 /*
  * lxpr_lookup(): Vnode operation for VOP_LOOKUP()
  */
@@ -7513,6 +7553,13 @@ lxpr_readdir_common(lxpr_node_t *lxpnp, uio_t *uiop, int *eofp,
 		    (uiop->uio_offset >= ((dirtablen+2) * LXPR_SDSIZE)) ? 1 : 0;
 	}
 	return (0);
+}
+
+static int
+lxpr_readdir_emptydir(lxpr_node_t *lxpnp, uio_t *uiop, int *eofp)
+{
+	ASSERT(lxpnp->lxpr_type == LXPR_PID_NSDIR);
+	return (lxpr_readdir_common(lxpnp, uiop, eofp, NULL, 0));
 }
 
 

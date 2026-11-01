@@ -1,0 +1,10 @@
+#!/bin/sh
+# Codex launcher for the illumos lx-brand sandbox with zone-shared networking.
+set -eu
+
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export CODEX_LX_SHARED_NETWORK=1
+export CODEX_LX_REAL_BWRAP="$here/vendor/codex-resources/bwrap.real"
+
+exec "$here/vendor/bin/codex" \
+	-c sandbox_workspace_write.network_access=true "$@"

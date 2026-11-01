@@ -35,12 +35,20 @@ extern "C" {
 
 #ifdef _KERNEL
 /* Kernel constructors may supply root ownership before publication. */
-#define	TMPFS_MOUNT_ARGS_VERSION	1
+#define	TMPFS_MOUNT_ARGS_VERSION	2
+#define	TMPFS_MOUNT_PRIVATE		0x1
 typedef struct tmpfs_mount_args {
 	uint32_t tma_version;
 	uid_t tma_uid;
 	gid_t tma_gid;
+	uint32_t tma_flags;
 } tmpfs_mount_args_t;
+
+#define	TMPFS_FREEZE_ARGS_VERSION	1
+typedef struct tmpfs_freeze_args {
+	uint32_t tfa_version;
+	uint32_t tfa_flags;
+} tmpfs_freeze_args_t;
 #endif
 
 /*
@@ -59,9 +67,13 @@ struct tmount {
 	size_t		tm_allocmem;	/* bytes alloced from tmp_kmem_ funcs */
 	dev_t		tm_dev;		/* unique dev # of mounted `device' */
 	uint_t		tm_gen;		/* pseudo generation number for files */
+	uint_t		tm_flags;	/* private-mount policy state */
 	kmutex_t	tm_contents;	/* lock for tmount structure */
 	kmutex_t	tm_renamelck;	/* rename lock for this mount */
 };
+
+#define	TM_PRIVATE	0x1	/* kernel-owned private namespace mount */
+#define	TM_WMAP		0x2	/* writable shared mapping may exist */
 
 /*
  * File system independent to tmpfs conversion macros

@@ -73,6 +73,33 @@ lo_private_write(vnode_t *vp)
 	return (error);
 }
 
+/*
+ * A writable shared mapping can dirty the backing vnode without another LOFS
+ * operation. Record the possibility before calling the backing filesystem so
+ * a concurrent readonly transition cannot pass it. The mark is deliberately
+ * permanent: tracking mapping teardown is outside the private-mount contract,
+ * and a false positive is safer than admitting a writable mapping after seal.
+ */
+static int
+lo_private_wmap(vnode_t *vp)
+{
+	struct loinfo *li;
+	int error = 0;
+
+	if (!vn_matchops(vp, lo_vnodeops))
+		return (0);
+	li = vtoli(vp->v_vfsp);
+	if (!(li->li_flag & LO_PRIVATE))
+		return (0);
+	mutex_enter(&li->li_lfslock);
+	if (vp->v_vfsp->vfs_flag & VFS_RDONLY)
+		error = EROFS;
+	else
+		li->li_flag |= LO_PRIVATE_USED | LO_PRIVATE_WMAP;
+	mutex_exit(&li->li_lfslock);
+	return (error);
+}
+
 static int
 lo_open(vnode_t **vpp, int flag, struct cred *cr, caller_context_t *ct)
 {
@@ -351,6 +378,7 @@ lo_lookup(
 {
 	vnode_t *vp = NULL, *tvp = NULL, *nonlovp;
 	vnode_t *parentvp = NULL;
+	vnode_t *aliasdir = NULL;
 	int error, is_indirectloop;
 	vnode_t *realdvp = realvp(dvp);
 	struct loinfo *li = vtoli(dvp->v_vfsp);
@@ -423,7 +451,26 @@ lo_lookup(
 	if (error = VOP_LOOKUP(realdvp, nm, &vp, pnp, flags, rdir, cr,
 	    ct, direntflags, realpnp)) {
 		vp = NULL;
-		goto out;
+		/*
+		 * Linux devpts exposes ptmx at each instance root.  An lx zone
+		 * has one devfs tree, so this graft can explicitly alias its
+		 * source directory's sibling ptmx vnode.
+		 */
+		if (error != ENOENT || !(li->li_flag & LO_PTMX_ALIAS) ||
+		    dvp != li->li_rootvp || strcmp(nm, "ptmx") != 0 ||
+		    (flags & (CREATE_XATTR_DIR | LOOKUP_XATTR)) != 0)
+			goto out;
+		if ((error = VOP_LOOKUP(realdvp, "..", &aliasdir, NULL, 0,
+		    NULL, cr, ct, NULL, NULL)) != 0)
+			goto out;
+		error = VOP_LOOKUP(aliasdir, "ptmx", &vp, NULL, 0, NULL, cr,
+		    ct, NULL, NULL);
+		VN_RELE(aliasdir);
+		aliasdir = NULL;
+		if (error != 0) {
+			vp = NULL;
+			goto out;
+		}
 	}
 
 	/* A process link already selected the target's exact mount instance. */
@@ -1252,7 +1299,7 @@ lo_map(
 	int error;
 
 	if (vp->v_type == VREG && (flags & MAP_SHARED) &&
-	    (maxprot & PROT_WRITE) && (error = lo_private_write(vp)) != 0)
+	    (maxprot & PROT_WRITE) && (error = lo_private_wmap(vp)) != 0)
 		return (error);
 	vp = realvp(vp);
 	return (VOP_MAP(vp, off, as, addrp, len, prot, maxprot, flags, cr, ct));
@@ -1271,6 +1318,11 @@ lo_addmap(
 	struct cred *cr,
     caller_context_t *ct)
 {
+	int error;
+
+	if (vp->v_type == VREG && (flags & MAP_SHARED) &&
+	    (maxprot & PROT_WRITE) && (error = lo_private_wmap(vp)) != 0)
+		return (error);
 	vp = realvp(vp);
 	return (VOP_ADDMAP(vp, off, as, addr, len, prot, maxprot, flags, cr,
 	    ct));

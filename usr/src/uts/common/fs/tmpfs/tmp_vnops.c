@@ -77,10 +77,34 @@ static int	tmp_getapage(struct vnode *, u_offset_t, size_t, uint_t *,
 static int 	tmp_putapage(struct vnode *, page_t *, u_offset_t *, size_t *,
 	int, struct cred *);
 
+static int
+tmp_readonly(vnode_t *vp)
+{
+	return ((vp->v_vfsp->vfs_flag & VFS_RDONLY) != 0 ? EROFS : 0);
+}
+
+/* Fence writable shared mappings against a later private read-only seal. */
+static int
+tmp_wmap(vnode_t *vp)
+{
+	struct tmount *tm = VTOTM(vp);
+	int error = 0;
+
+	mutex_enter(&tm->tm_contents);
+	if (vp->v_vfsp->vfs_flag & VFS_RDONLY)
+		error = EROFS;
+	else if (tm->tm_flags & TM_PRIVATE)
+		tm->tm_flags |= TM_WMAP;
+	mutex_exit(&tm->tm_contents);
+	return (error);
+}
+
 /* ARGSUSED1 */
 static int
 tmp_open(struct vnode **vpp, int flag, struct cred *cred, caller_context_t *ct)
 {
+	if ((flag & FWRITE) && tmp_readonly(*vpp) != 0)
+		return (EROFS);
 	/*
 	 * swapon to a tmpfs file is not supported so access
 	 * is denied on open if VISSWAP is set.
@@ -619,6 +643,9 @@ tmp_write(struct vnode *vp, struct uio *uiop, int ioflag, struct cred *cred,
 	struct tmount *tm = (struct tmount *)VTOTM(vp);
 	int error;
 
+	if (tmp_readonly(vp) != 0)
+		return (EROFS);
+
 	/* If the filesystem was umounted by force, return immediately. */
 	if (vp->v_vfsp->vfs_flag & VFS_UNMOUNTED)
 		return (EIO);
@@ -742,6 +769,9 @@ tmp_setattr(
 	struct vattr *get;
 	long mask;
 
+	if (tmp_readonly(vp) != 0)
+		return (EROFS);
+
 	/*
 	 * Cannot set these attributes
 	 */
@@ -823,6 +853,9 @@ tmp_access(
 {
 	struct tmpnode *tp = (struct tmpnode *)VTOTN(vp);
 	int error;
+
+	if ((mode & VWRITE) && tmp_readonly(vp) != 0)
+		return (EROFS);
 
 	mutex_enter(&tp->tn_tlock);
 	error = tmp_taccess(tp, mode, cred);
@@ -1032,6 +1065,9 @@ again:
 		 */
 		if (exclusive == EXCL)
 			error = EEXIST;
+		else if ((dvp->v_vfsp->vfs_flag & VFS_RDONLY) &&
+		    ((mode & VWRITE) != 0 || (vap->va_mask & AT_SIZE) != 0))
+			error = EROFS;
 		else if ((oldtp->tn_type == VDIR) && (mode & VWRITE))
 			error = EISDIR;
 		else {
@@ -1072,6 +1108,8 @@ again:
 
 	if (error != ENOENT)
 		return (error);
+	if (tmp_readonly(dvp) != 0)
+		return (EROFS);
 
 	rw_enter(&parent->tn_rwlock, RW_WRITER);
 	error = tdirenter(tm, parent, nm, DE_CREATE,
@@ -1127,6 +1165,9 @@ tmp_remove(
 	int error;
 	struct tmpnode *tp = NULL;
 
+	if (tmp_readonly(dvp) != 0)
+		return (EROFS);
+
 	error = tdirlookup(parent, nm, &tp, cred);
 	if (error)
 		return (error);
@@ -1164,6 +1205,9 @@ tmp_link(
 	int error;
 	struct tmpnode *found = NULL;
 	struct vnode *realvp;
+
+	if (tmp_readonly(dvp) != 0)
+		return (EROFS);
 
 	if (VOP_REALVP(srcvp, &realvp, ct) == 0)
 		srcvp = realvp;
@@ -1221,6 +1265,9 @@ tmp_rename(
 	int error;
 	int samedir = 0;	/* set if odvp == ndvp */
 	struct vnode *realvp;
+
+	if (tmp_readonly(odvp) != 0 || tmp_readonly(ndvp) != 0)
+		return (EROFS);
 
 	if (VOP_REALVP(ndvp, &realvp, ct) == 0)
 		ndvp = realvp;
@@ -1364,6 +1411,9 @@ tmp_mkdir(
 	struct tmount *tm = (struct tmount *)VTOTM(dvp);
 	int error;
 
+	if (tmp_readonly(dvp) != 0)
+		return (EROFS);
+
 	/* no new dirs allowed in xattr dirs */
 	if (parent->tn_flags & ISXATTR)
 		return (EINVAL);
@@ -1413,6 +1463,9 @@ tmp_rmdir(
 	struct tmpnode *self = NULL;
 	struct vnode *vp;
 	int error = 0;
+
+	if (tmp_readonly(dvp) != 0)
+		return (EROFS);
 
 	/*
 	 * Return error when removing . and ..
@@ -1614,6 +1667,9 @@ tmp_symlink(
 	char *cp = NULL;
 	int error;
 	size_t len;
+
+	if (tmp_readonly(dvp) != 0)
+		return (EROFS);
 
 	/* no symlinks allowed to files in xattr dirs */
 	if (parent->tn_flags & ISXATTR)
@@ -2257,6 +2313,9 @@ tmp_map(
 
 	if (vp->v_type != VREG)
 		return (ENODEV);
+	if ((flags & MAP_SHARED) && (maxprot & PROT_WRITE) &&
+	    (error = tmp_wmap(vp)) != 0)
+		return (error);
 
 	/*
 	 * Don't allow mapping to locked file
@@ -2396,6 +2455,9 @@ tmp_space(
 	caller_context_t *ct)
 {
 	int error;
+
+	if (tmp_readonly(vp) != 0)
+		return (EROFS);
 
 	if (cmd != F_FREESP)
 		return (EINVAL);

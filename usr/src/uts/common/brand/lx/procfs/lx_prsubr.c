@@ -667,6 +667,7 @@ lxpr_getnode(vnode_t *dp, lxpr_nodetype_t type, proc_t *p, int desc)
 	case LXPR_PID_TID_FDDIR:
 	case LXPR_PID_FDINFODIR:
 	case LXPR_PID_TID_FDINFODIR:
+	case LXPR_PID_NSDIR:
 		ASSERT(p != NULL);
 		vp->v_type = VDIR;
 		lxpnp->lxpr_mode = 0500;	/* read-search by owner only */

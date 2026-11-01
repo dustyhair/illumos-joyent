@@ -27,6 +27,8 @@ struct proc;
  */
 typedef struct lx_mntns_view lx_mntns_view_t;
 typedef struct lx_mntns_budget lx_mntns_budget_t;
+typedef void (*lx_mntns_mountinfo_f)(void *, vfs_t *, const char *, uint_t,
+    uint_t);
 
 extern lx_mntns_budget_t *lx_mntns_budget_create(uint32_t);
 extern void lx_mntns_budget_rele(lx_mntns_budget_t *);
@@ -75,11 +77,13 @@ extern int lx_mntns_mount_tmpfs(lx_mntns_view_t *, const char *, const char *,
 extern int lx_mntns_mount_proc(lx_mntns_view_t *, const char *, const char *,
     int, cred_t *);
 extern int lx_mntns_mount_bind(lx_mntns_view_t *, const char *,
-    const char *, boolean_t, cred_t *);
+    const char *, boolean_t, boolean_t, cred_t *);
 extern int lx_mntns_view_bind(lx_mntns_view_t *, vnode_t *, const char *,
     boolean_t, cred_t *);
 extern int lx_mntns_view_lookup(lx_mntns_view_t *, const char *, cred_t *,
     vnode_t **);
+extern void lx_mntns_mountinfo_walk(lx_mntns_view_t *,
+    lx_mntns_mountinfo_f, void *);
 extern int lx_mntns_view_tmpfs(lx_mntns_view_t *, const char *, cred_t *);
 extern int lx_mntns_view_destroy(lx_mntns_view_t *, cred_t *);
 

@@ -84,6 +84,8 @@ static mntopt_t mntopts[] = {
 		(void *)0 },
 	{ MNTOPT_LOFS_NOSUB,	nosub_cancel,	NULL,		0,
 		(void *)0 },
+	{ MNTOPT_LOFS_PTMXALIAS, NULL,		NULL,		0,
+		(void *)0 },
 };
 
 static mntopts_t lofs_mntopts = {
@@ -151,11 +153,13 @@ vfsops_t *lo_vfsops;
  */
 /*ARGSUSED*/
 /*
- * A fresh private tree can be sealed before exposure to file operations.
- * After use, dynamic readonly transitions need mapping/writer lifetime
- * tracking. Refuse those explicitly instead of accepting an unsafe remount.
- * The caller holds the VFS lock. li_lfslock serializes first use and seals
- * both current and future derived VFS policy without holding a mutex over IO.
+ * Tightening nosuid, nodev and noexec is safe after first use. Writes through
+ * existing file descriptors are fenced by lo_private_write(). A writable
+ * shared mapping could bypass that fence, so conservatively reject readonly
+ * after any such mapping has been requested. Policy is one-way: no
+ * restriction may be cleared. The caller holds the VFS lock. li_lfslock
+ * serializes mapping admission and updates both current and future derived
+ * VFS policy without holding a mutex over IO.
  */
 static int
 lo_private_freeze(vfs_t *vfsp, struct mounta *uap)
@@ -172,12 +176,15 @@ lo_private_freeze(vfs_t *vfsp, struct mounta *uap)
 		return (EINVAL);
 	if (!(li->li_flag & LO_PRIVATE) || !(vfsp->vfs_flag & VFS_NOMNTTAB))
 		return (EOPNOTSUPP);
-	if (!(args->lfa_flags & VFS_RDONLY) || (args->lfa_flags & ~mask) != 0)
+	if ((args->lfa_flags & ~mask) != 0)
 		return (EINVAL);
 	mutex_enter(&li->li_lfslock);
-	if ((li->li_flag & LO_PRIVATE_USED) && !(vfsp->vfs_flag & VFS_RDONLY)) {
+	if ((args->lfa_flags & VFS_RDONLY) &&
+	    (li->li_flag & LO_PRIVATE_WMAP) &&
+	    !(vfsp->vfs_flag & VFS_RDONLY)) {
 		error = EOPNOTSUPP;
-	} else if ((vfsp->vfs_flag & mask & ~args->lfa_flags) != 0) {
+	} else if ((vfsp->vfs_flag & VFS_RDONLY) != 0 &&
+	    (args->lfa_flags & VFS_RDONLY) == 0) {
 		error = EOPNOTSUPP;
 	} else {
 		li->li_mflag |= args->lfa_flags;
@@ -187,7 +194,8 @@ lo_private_freeze(vfs_t *vfsp, struct mounta *uap)
 	}
 	mutex_exit(&li->li_lfslock);
 	if (error == 0) {
-		vfs_setmntopt(vfsp, MNTOPT_RO, NULL, 0);
+		if (args->lfa_flags & VFS_RDONLY)
+			vfs_setmntopt(vfsp, MNTOPT_RO, NULL, 0);
 		if (args->lfa_flags & VFS_NOSETUID)
 			vfs_setmntopt(vfsp, MNTOPT_NOSETUID, NULL, 0);
 		if (args->lfa_flags & VFS_NODEVICES)
@@ -453,6 +461,10 @@ lo_mount(struct vfs *vfsp, struct vnode *vp, struct mounta *uap,
 
 	if (vfs_optionisset(vfsp, MNTOPT_LOFS_NOSUB, NULL)) {
 		li->li_flag |= LO_NOSUB;
+	}
+	if ((li->li_flag & LO_PRIVATE) &&
+	    vfs_optionisset(vfsp, MNTOPT_LOFS_PTMXALIAS, NULL)) {
+		li->li_flag |= LO_PTMX_ALIAS;
 	}
 
 	/*

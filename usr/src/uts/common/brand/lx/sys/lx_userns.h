@@ -23,6 +23,8 @@ typedef struct lx_userns_cred {
 
 extern long lx_namespace_unshare(uintptr_t);
 extern boolean_t lx_userns_clone_enabled(void);
+extern boolean_t lx_ipcns_entry_enabled(void);
+extern boolean_t lx_ipcns_isolated_syscall(int);
 struct lx_mntns_state;
 extern int lx_namespace_clone_prepare(uint_t, cred_t **,
     struct lx_mntns_state **);

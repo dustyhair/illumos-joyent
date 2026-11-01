@@ -159,6 +159,36 @@ lx_open_postprocess(int fd, int fmode)
 	return (error);
 }
 
+/*
+ * Linux O_PATH resolves a pathname without opening the object or checking its
+ * final-component permissions.  Build that path-only descriptor directly,
+ * retaining the usual pathname traversal and O_DIRECTORY checks.
+ */
+static long
+lx_open_path_at(int atfd, char *path, int fmode)
+{
+	file_t *fp;
+	vnode_t *vp;
+	int fd, error;
+	int flag = (fmode & LX_O_NOFOLLOW) != 0 ? AT_SYMLINK_NOFOLLOW : 0;
+
+	if ((error = lx_vp_at(atfd, path, &vp, flag)) != 0)
+		return (set_errno(error));
+	if ((fmode & LX_O_DIRECTORY) != 0 && vp->v_type != VDIR) {
+		VN_RELE(vp);
+		return (set_errno(ENOTDIR));
+	}
+	if ((error = falloc(vp, __FLXPATH, &fp, &fd)) != 0) {
+		VN_RELE(vp);
+		return (set_errno(error));
+	}
+	mutex_exit(&fp->f_tlock);
+	setf(fd, fp);
+	if ((fmode & LX_O_CLOEXEC) != 0)
+		f_setfd_or(fd, FD_CLOEXEC);
+	return (fd);
+}
+
 long
 lx_openat(int atfd, char *path, int fmode, int cmode)
 {
@@ -167,6 +197,8 @@ lx_openat(int atfd, char *path, int fmode, int cmode)
 
 	if (atfd == LX_AT_FDCWD)
 		atfd = AT_FDCWD;
+	if ((fmode & LX_O_PATH) != 0)
+		return (lx_open_path_at(atfd, path, fmode));
 
 	flags = ltos_open_flags(fmode);
 
