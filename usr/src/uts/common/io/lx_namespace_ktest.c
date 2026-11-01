@@ -2,6 +2,8 @@
  * CDDL version 1.0, http://www.illumos.org/license/CDDL.
  */
 #include <sys/ktest.h>
+#include <sys/ddi.h>
+#include <sys/sunddi.h>
 #include <sys/kmem.h>
 #include <sys/cred_impl.h>
 #include <sys/priv_impl.h>
@@ -2186,6 +2188,281 @@ out:
 #undef PO_CHECK
 }
 
+extern int lwp_failure_cleanup_lab(proc_t *, int (*)(void *, void *), void *);
+
+typedef struct ns_lwp_identity {
+	struct pid *nli_identity;
+	pid_t nli_number;
+} ns_lwp_identity_t;
+
+/* Hold only the native identity, so no observer can mask a leaked map. */
+static int
+ns_lwp_prepared(void *data, void *arg)
+{
+	lx_lwp_data_t *ld = data;
+	ns_lwp_identity_t *observed = arg;
+
+	if (ld->br_pidns_map == NULL || ld->br_lpid == NULL ||
+	    ld->br_lpid->lxp_pidp == NULL)
+		return (EINVAL);
+	mutex_enter(&pidlock);
+	observed->nli_identity = ld->br_lpid->lxp_pidp;
+	observed->nli_number = observed->nli_identity->pid_id;
+	PID_HOLD(observed->nli_identity);
+	mutex_exit(&pidlock);
+	return (0);
+}
+
+static void
+ns_pid_lwp_failure(ktest_ctx_hdl_t *ctx)
+{
+	proc_t *p = NULL;
+	struct pid *identity = NULL;
+	ns_lwp_identity_t prepared = { 0 };
+	pid_t pid;
+	int error = EINVAL;
+	uint_t before;
+
+	mutex_enter(&ns_pid_lock);
+	if (!ns_process_pid(ctx, &pid) || ns_pid_process_zone == NULL ||
+	    pid != ns_pid_process_owner)
+		goto out;
+	identity = lx_pid_identity_hold(pid, ns_pid_process_zone);
+	if (identity == NULL)
+		goto out;
+	p = sprlock_zone(pid, ns_pid_process_zone->zone_id);
+	if (p == NULL)
+		goto out;
+	if (p->p_pidp != identity || p->p_brand != &lx_brand ||
+	    p->p_lwpcnt != 1 || p->p_tlist == NULL ||
+	    p->p_tlist->t_state != TS_STOPPED ||
+	    strcmp(PTOU(p)->u_comm, "pid_ownership") != 0 ||
+	    ptolxproc(p)->l_pidns_map == NULL ||
+	    (p->p_flag & (SEXITING | SEXITLWPS | SKILLED)) != 0)
+		goto out;
+	before = p->p_lwpcnt;
+	mutex_exit(&p->p_lock);
+	error = lwp_failure_cleanup_lab(p, ns_lwp_prepared, &prepared);
+	mutex_enter(&pidlock);
+	/* A broken releaser may have freed the observer's held identity. */
+	if (prepared.nli_identity == NULL ||
+	    pid_find(prepared.nli_number) != prepared.nli_identity) {
+		error = EIO;
+	} else {
+		if (!prepared.nli_identity->pid_prinactive ||
+		    prepared.nli_identity->pid_ref != 1)
+			error = EIO;
+		PID_RELE(prepared.nli_identity);
+	}
+	mutex_exit(&pidlock);
+	mutex_enter(&p->p_lock);
+	if (p->p_lwpcnt != before)
+		error = EIO;
+out:
+	if (p != NULL)
+		sprunlock(p);
+	if (identity != NULL)
+		lx_pid_identity_rele(identity);
+	mutex_exit(&ns_pid_lock);
+	if (error == 0)
+		KT_PASS(ctx);
+	else
+		KT_FAIL(ctx, "failed-LWP cleanup/interleaving: %d", error);
+}
+
+/* Native identity observers only. Never hold a process or worker map. */
+static ns_lwp_identity_t ns_lwp_owner, ns_lwp_worker;
+
+static boolean_t
+ns_lwp_lab(void)
+{
+	char *lab;
+	boolean_t allowed;
+
+	if (ddi_prop_lookup_string(DDI_DEV_T_ANY, ddi_root_node(),
+	    DDI_PROP_DONTPASS, "lx_lab", &lab) != DDI_PROP_SUCCESS)
+		return (B_FALSE);
+	allowed = strcmp(lab, "true") == 0;
+	ddi_prop_free(lab);
+	return (allowed);
+}
+
+static void
+ns_lwp_track(ktest_ctx_hdl_t *ctx, boolean_t worker)
+{
+	ns_lwp_identity_t *slot = worker ? &ns_lwp_worker : &ns_lwp_owner;
+	struct pid *identity = NULL;
+	proc_t *p = NULL;
+	kthread_t *t;
+	pid_t number;
+	boolean_t passed = B_FALSE;
+
+	mutex_enter(&ns_pid_lock);
+	if (!ns_lwp_lab() || slot->nli_identity != NULL ||
+	    ns_pid_process_space == NULL ||
+	    ns_pid_process_observer != NULL ||
+	    ns_pid_process_descendant_map != NULL ||
+	    !ns_process_pid(ctx, &number) ||
+	    (worker ? ns_lwp_owner.nli_identity == NULL :
+	    number != ns_pid_process_owner))
+		goto out;
+	identity = lx_pid_identity_hold(number, ns_pid_process_zone);
+	if (identity == NULL || lx_lpid_lock(number, ns_pid_process_zone,
+	    0, &p, &t) != 0)
+		goto out;
+	if (t == NULL || t->t_state != TS_STOPPED ||
+	    p->p_brand != &lx_brand || p->p_pid != ns_pid_process_owner ||
+	    strcmp(PTOU(p)->u_comm, "pid_ownership") != 0 ||
+	    lx_pidns_active(p) != ns_pid_process_space ||
+	    ttolxlwp(t)->br_pidns_map == NULL)
+		goto out;
+	if (worker) {
+		if (number == p->p_pid ||
+		    p->p_pidp != ns_lwp_owner.nli_identity ||
+		    ttolxlwp(t)->br_lpid == NULL ||
+		    ttolxlwp(t)->br_lpid->lxp_pidp != identity)
+			goto out;
+	} else if (p->p_lwpcnt != 1 || identity != p->p_pidp) {
+		goto out;
+	}
+	slot->nli_identity = identity;
+	slot->nli_number = number;
+	identity = NULL;
+	passed = B_TRUE;
+out:
+	if (p != NULL)
+		mutex_exit(&p->p_lock);
+	if (identity != NULL)
+		lx_pid_identity_rele(identity);
+	mutex_exit(&ns_pid_lock);
+	if (passed)
+		KT_PASS(ctx);
+	else
+		KT_FAIL(ctx, "isolated fixture identity/stop mismatch");
+}
+
+static void
+ns_lwp_owner_hold(ktest_ctx_hdl_t *ctx)
+{
+	ns_lwp_track(ctx, B_FALSE);
+}
+
+static void
+ns_lwp_worker_hold(ktest_ctx_hdl_t *ctx)
+{
+	ns_lwp_track(ctx, B_TRUE);
+}
+
+/* No numeric PID signal is permitted by the controller, even on failure. */
+static void
+ns_lwp_signal(ktest_ctx_hdl_t *ctx, boolean_t aborting)
+{
+	proc_t *p;
+	boolean_t passed = B_FALSE, stopped;
+
+	mutex_enter(&ns_pid_lock);
+	if (!ns_lwp_lab() || ns_lwp_owner.nli_identity == NULL ||
+	    ns_pid_process_zone == NULL)
+		goto out;
+	mutex_enter(&pidlock);
+	if (pid_find(ns_lwp_owner.nli_number) == ns_lwp_owner.nli_identity &&
+	    (p = prfind_zone(ns_lwp_owner.nli_number,
+	    ns_pid_process_zone->zone_id)) != NULL &&
+	    p->p_pidp == ns_lwp_owner.nli_identity && p->p_brand == &lx_brand) {
+		mutex_enter(&p->p_lock);
+		stopped = p->p_tlist != NULL &&
+		    p->p_tlist->t_state == TS_STOPPED;
+		mutex_exit(&p->p_lock);
+		if (aborting || stopped) {
+			if (aborting)
+				psignal(p, SIGKILL);
+			psignal(p, SIGCONT);
+			passed = B_TRUE;
+		}
+	}
+	mutex_exit(&pidlock);
+out:
+	mutex_exit(&ns_pid_lock);
+	if (passed)
+		KT_PASS(ctx);
+	else
+		KT_FAIL(ctx, "owned fixture unavailable for exact signal");
+}
+
+static void
+ns_lwp_continue(ktest_ctx_hdl_t *ctx)
+{
+	ns_lwp_signal(ctx, B_FALSE);
+}
+
+static void
+ns_lwp_abort(ktest_ctx_hdl_t *ctx)
+{
+	ns_lwp_signal(ctx, B_TRUE);
+}
+
+/* Must check numeric lookup before dereferencing a held native identity. */
+static boolean_t
+ns_lwp_retired(ns_lwp_identity_t *id)
+{
+	ASSERT(MUTEX_HELD(&pidlock));
+	return (id->nli_identity != NULL &&
+	    pid_find(id->nli_number) == id->nli_identity &&
+	    id->nli_identity->pid_prinactive && id->nli_identity->pid_ref == 1);
+}
+
+/* One check after the direct zlogin wait. No polling or delayed retry. */
+static void
+ns_lwp_cleanup(ktest_ctx_hdl_t *ctx)
+{
+	lx_userns_t *root;
+	uint32_t maximum, used;
+	pid_t owner, worker;
+	boolean_t gone;
+
+	mutex_enter(&ns_pid_lock);
+	if (!ns_lwp_lab() || ns_pid_process_zone == NULL ||
+	    ns_pid_process_space == NULL || ns_pid_process_observer != NULL ||
+	    ns_pid_process_descendant_map != NULL ||
+	    ns_pid_process_target != 0 || ns_pid_process_descendant_pid != 0 ||
+	    ns_pid_process_owner != ns_lwp_owner.nli_number)
+		goto fail;
+	owner = ns_lwp_owner.nli_number;
+	worker = ns_lwp_worker.nli_number;
+	mutex_enter(&pidlock);
+	gone = prfind_zone(owner, ALL_ZONES) == NULL &&
+	    ns_lwp_retired(&ns_lwp_owner) && ns_lwp_retired(&ns_lwp_worker);
+	mutex_exit(&pidlock);
+	if (!gone)
+		goto fail;
+	root = ztolxzd(ns_pid_process_zone)->lxzd_userns;
+	lx_userns_hold(root);
+	/* Only this fixture's attachment is eligible for dropping. */
+	ns_pid_process_drop();
+	mutex_enter(&pidlock);
+	/* Recheck before dereference/release, including after map teardown. */
+	gone = ns_lwp_retired(&ns_lwp_owner) && ns_lwp_retired(&ns_lwp_worker);
+	if (gone) {
+		PID_RELE(ns_lwp_owner.nli_identity);
+		PID_RELE(ns_lwp_worker.nli_identity);
+		ns_lwp_owner.nli_identity = ns_lwp_worker.nli_identity = NULL;
+		ns_lwp_owner.nli_number = ns_lwp_worker.nli_number = 0;
+		gone = pid_find(owner) == NULL && pid_find(worker) == NULL;
+	}
+	mutex_exit(&pidlock);
+	lx_userns_pidns_budget_get(root, &maximum, &used);
+	lx_userns_rele(root);
+	if (!gone || used != 0 || lx_pidns_busy())
+		goto fail;
+	mutex_exit(&ns_pid_lock);
+	KT_PASS(ctx);
+	return;
+fail:
+	mutex_exit(&ns_pid_lock);
+	KT_FAIL(ctx, "isolated exit retained identity/map/namespace/quota; "
+	    "preserve VM evidence, do not retry");
+}
+
 static void
 ns_pid_process_observe(ktest_ctx_hdl_t *ctx, uint_t kind)
 {
@@ -3039,6 +3316,18 @@ _init(void)
 	    ns_nested_drained, 0)) != 0 ||
 	    (error = ktest_add_test(ks, "nested_release",
 	    ns_nested_release, 0)) != 0 ||
+	    (error = ktest_add_test(ks, "lwp_failure", ns_pid_lwp_failure,
+	    KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "lwp_owner_hold", ns_lwp_owner_hold,
+	    KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "lwp_worker_hold", ns_lwp_worker_hold,
+	    KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "lwp_continue", ns_lwp_continue,
+	    0)) != 0 ||
+	    (error = ktest_add_test(ks, "lwp_abort", ns_lwp_abort,
+	    0)) != 0 ||
+	    (error = ktest_add_test(ks, "lwp_cleanup", ns_lwp_cleanup,
+	    0)) != 0 ||
 	    (error = ktest_add_test(ks, "process_attach", ns_pid_process_attach,
 	    KTEST_FLAG_INPUT)) != 0 ||
 	    (error = ktest_add_test(ks, "process_thread", ns_pid_process_thread,

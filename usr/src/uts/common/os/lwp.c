@@ -73,6 +73,114 @@ void *segkp_lwp;		/* cookie for pool of segkp resources */
 extern void reapq_move_lq_to_tq(kthread_t *);
 extern void freectx_ctx(struct ctxop *);
 
+/* Private VM test overlay. Not part of the production genunix source. */
+#include <sys/ddi.h>
+#include <sys/sunddi.h>
+
+typedef struct lwp_fail_case {
+	proc_t *lf_proc;
+	volatile uint_t lf_start;
+	volatile uint_t lf_ready;
+	boolean_t lf_acquired;
+	boolean_t lf_injected;
+	int lf_error;
+	int (*lf_observe)(void *, void *);
+	void *lf_arg;
+} lwp_fail_case_t;
+
+static void
+lwp_fail_never(void)
+{
+	panic("private failed LWP was published");
+}
+
+static void
+lwp_fail_opponent(void *arg)
+{
+	lwp_fail_case_t *fc = arg;
+	proc_t *p = fc->lf_proc;
+	hrtime_t until = gethrtime() + 5 * NANOSEC;
+
+	/* Creation precedes lwp_create, so it cannot invert p_lock/pidlock. */
+	while (fc->lf_start == 0 && gethrtime() < until)
+		delay(1);
+	membar_consumer();
+	if (fc->lf_start == 1) {
+		until = gethrtime() + NANOSEC;
+		while (gethrtime() < until) {
+			if (mutex_tryenter(&pidlock)) {
+				membar_producer();
+				fc->lf_ready = 1;
+				while (gethrtime() < until) {
+					if (mutex_tryenter(&p->p_lock)) {
+						fc->lf_acquired = B_TRUE;
+						mutex_exit(&p->p_lock);
+						break;
+					}
+					drv_usecwait(10);
+				}
+				mutex_exit(&pidlock);
+				break;
+			}
+			drv_usecwait(10);
+		}
+	}
+	thread_exit();
+}
+
+static void
+lwp_fail_inject(lwp_fail_case_t *fc)
+{
+	hrtime_t until = gethrtime() + 2 * NANOSEC;
+
+	ASSERT(MUTEX_HELD(&fc->lf_proc->p_lock));
+	fc->lf_injected = B_TRUE;
+	membar_producer();
+	fc->lf_start = 1;
+	while (fc->lf_ready == 0 && gethrtime() < until)
+		drv_usecwait(10);
+	membar_consumer();
+}
+
+/* Caller holds /proc exclusion on an owned, stopped foreign fixture. */
+int
+lwp_failure_cleanup_lab(proc_t *p, int (*observe)(void *, void *), void *arg)
+{
+	lwp_fail_case_t fc = { 0 };
+	kthread_t *opponent;
+	kt_did_t did;
+	klwp_t *lwp;
+	char *lab;
+	int error;
+
+	if (ddi_prop_lookup_string(DDI_DEV_T_ANY, ddi_root_node(),
+	    DDI_PROP_DONTPASS, "lx_lab", &lab) != DDI_PROP_SUCCESS)
+		return (EPERM);
+	error = strcmp(lab, "true") == 0 ? 0 : EPERM;
+	ddi_prop_free(lab);
+	if (error != 0)
+		return (error);
+	fc.lf_proc = p;
+	fc.lf_observe = observe;
+	fc.lf_arg = arg;
+	opponent = thread_create(NULL, 0, lwp_fail_opponent, &fc, 0, &p0,
+	    TS_STOPPED, minclsyspri);
+	did = opponent->t_did;
+	thread_lock(opponent);
+	opponent->t_schedflag |= TS_ALLSTART;
+	setrun_locked(opponent);
+	thread_unlock(opponent);
+	lwp = lwp_create(lwp_fail_never, (caddr_t)&fc, 0, p,
+	    TS_STOPPED, curthread->t_pri, &curthread->t_hold, NOCLASS, 0);
+	if (!fc.lf_injected)
+		fc.lf_start = 2;
+	thread_join(did);
+	if (lwp != NULL)
+		panic("private LWP failure injection missed");
+	return (fc.lf_injected && fc.lf_ready && fc.lf_acquired &&
+	    fc.lf_error == 0 ? 0 : EIO);
+}
+
 /*
  * Create a kernel thread associated with a particular system process.  Give
  * it an LWP so that microstate accounting will be available for it.
@@ -304,7 +412,17 @@ lwp_create(void (*proc)(), caddr_t arg, size_t len, proc_t *p,
 		}
 	}
 
+	if (proc == lwp_fail_never && brand_data != NULL) {
+		lwp_fail_case_t *fc = (lwp_fail_case_t *)arg;
+
+		fc->lf_error = fc->lf_observe(brand_data, fc->lf_arg);
+	}
 	mutex_enter(&p->p_lock);
+	if (proc == lwp_fail_never && brand_data != NULL) {
+		lwp_fail_inject((lwp_fail_case_t *)arg);
+		err = 1;
+		goto error;
+	}
 grow:
 	/*
 	 * Grow the lwp (thread) directory and lwpid hash table if necessary.

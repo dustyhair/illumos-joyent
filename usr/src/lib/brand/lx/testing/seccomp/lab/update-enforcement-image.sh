@@ -121,6 +121,7 @@ for controller in mntns-budget-native mount-owner-test.sh \
     queued-signal-checkpoint.sh siginfo32-test.sh siginfo32-checkpoint.sh \
     pgrp-checkpoint.sh lwp-checkpoint.sh lwp-failure-test.sh \
     lwp-production-checkpoint.sh \
+    lwp-isolated-checkpoint.sh lwp-isolated-test.sh \
     native_errno32 native_errno64 native_errno32.sha256 native_errno64.sha256 \
     bubblewrap-trace.sh; do
     test -f "$lab/$controller"
