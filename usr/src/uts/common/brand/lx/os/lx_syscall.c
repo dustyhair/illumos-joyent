@@ -454,6 +454,14 @@ lx_syscall_enter(int entry)
 		return (0);
 	}
 
+	/* Public PID namespaces never enter the legacy usermode clone path. */
+	if (syscall_num == 56 && lx_pidns_entry_enabled() &&
+	    (args[0] & LX_CLONE_NEWPID) != 0) {
+		ret = lx_kernel_fork(syscall_num, args);
+		lx_syscall_return(lwp, syscall_num, ret);
+		return (0);
+	}
+
 	if (((lx_kernel_restricted(curproc) ||
 	    lx_pidns_children(curproc) != NULL) &&
 	    (syscall_num == 56 || syscall_num == 57)) ||

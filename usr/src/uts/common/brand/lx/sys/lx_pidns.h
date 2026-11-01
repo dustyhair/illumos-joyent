@@ -18,7 +18,8 @@ struct zone;
 struct proc;
 
 /*
- * Private PID map backend; Linux namespace flags remain disabled.
+ * PID map backend. Public Linux namespace entry is experimental and disabled
+ * by default; the map and lifecycle primitives are also used by KTEST.
  * Creation checks CAP_SYS_ADMIN in the owner's user namespace and charges
  * its zone-wide PID namespace budget. NULL parent denotes the outer zone.
  * Each namespace owns an immutable credential and parent reference.
@@ -39,6 +40,8 @@ struct proc;
  * Release and lookup accept pidlock held, as required by native reap.
  */
 extern int lx_pidns_create(cred_t *, lx_pidns_t *, uint_t, lx_pidns_t **);
+extern boolean_t lx_pidns_entry_enabled(void);
+extern int lx_pidns_entry_create(cred_t *, lx_pidns_t *, lx_pidns_t **);
 extern void lx_pidns_hold(lx_pidns_t *);
 extern void lx_pidns_rele(lx_pidns_t *);
 extern boolean_t lx_pidns_busy(void);
@@ -64,5 +67,6 @@ extern void lx_pidns_roles_update(struct proc *);
 extern pid_t lx_pidns_map_id(lx_pidns_map_t *, lx_pidns_t *);
 extern pid_t lx_pidns_visible(lx_pidns_t *, pid_t);
 extern struct pid *lx_pidns_lookup(lx_pidns_t *, pid_t);
+extern pid_t lx_pidns_map_backing(lx_pidns_t *, pid_t);
 
 #endif /* _SYS_LX_PIDNS_H */

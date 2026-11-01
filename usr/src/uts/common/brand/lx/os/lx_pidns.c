@@ -58,6 +58,25 @@ struct lx_pidns_map {
 
 static uint_t lx_pidns_nspaces;
 
+/* /etc/system: set lx_brand:lx_pidns_experimental = 1 (lab only). */
+int lx_pidns_experimental = 0;
+
+boolean_t
+lx_pidns_entry_enabled(void)
+{
+	return (lx_pidns_experimental != 0);
+}
+
+int
+lx_pidns_entry_create(cred_t *owner, lx_pidns_t *parent, lx_pidns_t **out)
+{
+	if (!lx_pidns_entry_enabled()) {
+		*out = NULL;
+		return (EINVAL);
+	}
+	return (lx_pidns_create(owner, parent, LX_PIDNS_PID_LIMIT, out));
+}
+
 static int
 lx_pidns_number_cmp(const void *a, const void *b)
 {
@@ -580,6 +599,20 @@ lx_pidns_lookup(lx_pidns_t *ns, pid_t number)
 	if (!held)
 		mutex_exit(&pidlock);
 	return (identity);
+}
+
+/* Translate a namespace-local task, group or session ID to its backing ID. */
+pid_t
+lx_pidns_map_backing(lx_pidns_t *ns, pid_t number)
+{
+	struct pid *identity;
+	pid_t backing = 0;
+
+	if ((identity = lx_pidns_lookup(ns, number)) != NULL) {
+		backing = identity->pid_id;
+		lx_pid_identity_rele(identity);
+	}
+	return (backing);
 }
 
 /* Process membership is held by its PID map through native zombie/reap. */

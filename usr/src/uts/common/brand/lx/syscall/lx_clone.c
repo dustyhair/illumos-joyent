@@ -616,16 +616,20 @@ lx_kernel_fork(int nr, uintptr_t *args)
 	uint_t flags = nr == 57 ? LX_SIGCHLD : args[0];
 	lx_lwp_data_t *lwpd = ttolxlwp(curthread);
 	uint_t allowed = LX_CSIGNAL | LX_CLONE_NEWUSER | LX_CLONE_NEWNS |
+	    LX_CLONE_NEWPID |
 	    LX_CLONE_PARENT_SETTID |
 	    LX_CLONE_CHILD_SETTID | LX_CLONE_CHILD_CLEARTID;
 	pid_t pid = -1;
 	int piderror = 0;
-	boolean_t unsupported;
-	lx_pidns_t *pidns;
+	boolean_t unsupported, pidconflict;
+	lx_pidns_t *pidns = NULL, *viewer = NULL;
 
 	VERIFY(lx_kernel_restricted(p) || lx_pidns_children(p) != NULL ||
 	    (nr == 56 &&
-	    (flags & (LX_CLONE_NEWUSER | LX_CLONE_NEWNS)) != 0));
+	    (flags & (LX_CLONE_NEWUSER | LX_CLONE_NEWNS |
+	    LX_CLONE_NEWPID)) != 0));
+	if ((flags & LX_CLONE_NEWPID) != 0 && !lx_pidns_entry_enabled())
+		return (set_errno(EINVAL));
 	pidns = lx_pidns_active(p);
 	if ((flags & LX_CLONE_PARENT) != 0 && pidns != NULL &&
 	    lx_pidns_map_id(pd->l_pidns_map, pidns) == 1)
@@ -645,12 +649,16 @@ lx_kernel_fork(int nr, uintptr_t *args)
 		return (set_errno(EINVAL));
 	mutex_enter(&p->p_lock);
 	unsupported = pd->l_ptrace != 0;
+	pidconflict = (flags & LX_CLONE_NEWPID) != 0 &&
+	    pd->l_pidns_children != NULL;
 	if (!unsupported) {
 		/* Do not inherit stale user-emulation clone tracing state. */
 		lwpd->br_ptrace_clone_option = 0;
 		lwpd->br_ptrace_flags &= ~LX_PTF_INHERIT;
 	}
 	mutex_exit(&p->p_lock);
+	if (pidconflict)
+		return (set_errno(EINVAL));
 	if (unsupported)
 		return (set_errno(EOPNOTSUPP));
 
@@ -658,17 +666,6 @@ lx_kernel_fork(int nr, uintptr_t *args)
 	VERIFY(lwpd->br_clone_mntns == NULL);
 	VERIFY(lwpd->br_clone_pidns_map == NULL);
 	lwpd->br_clone_pidns_error = 0;
-	mutex_enter(&p->p_lock);
-	pidns = lx_pidns_children(p);
-	if (pidns != NULL)
-		lx_pidns_hold(pidns);
-	mutex_exit(&p->p_lock);
-	if (pidns != NULL) {
-		piderror = lx_pidns_reserve(pidns, &lwpd->br_clone_pidns_map);
-		lx_pidns_rele(pidns);
-		if (piderror != 0)
-			return (set_errno(piderror));
-	}
 	if (nr == 56 &&
 	    (flags & (LX_CLONE_NEWUSER | LX_CLONE_NEWNS)) != 0) {
 		int error = lx_namespace_clone_prepare(flags,
@@ -679,12 +676,38 @@ lx_kernel_fork(int nr, uintptr_t *args)
 			goto cleanup;
 		}
 	}
+	mutex_enter(&p->p_lock);
+	if ((viewer = lx_pidns_active(p)) != NULL)
+		lx_pidns_hold(viewer);
+	if ((flags & LX_CLONE_NEWPID) == 0 &&
+	    (pidns = lx_pidns_children(p)) != NULL)
+		lx_pidns_hold(pidns);
+	mutex_exit(&p->p_lock);
+	if ((flags & LX_CLONE_NEWPID) != 0) {
+		piderror = lx_pidns_entry_create(lwpd->br_clone_cred != NULL ?
+		    lwpd->br_clone_cred : CRED(), viewer, &pidns);
+		if (piderror != 0)
+			goto cleanup;
+	}
+	if (pidns != NULL) {
+		piderror = lx_pidns_reserve(pidns, &lwpd->br_clone_pidns_map);
+		lx_pidns_rele(pidns);
+		pidns = NULL;
+		if (piderror != 0)
+			goto cleanup;
+	}
 
 	pid = (pid_t)forksys(0, (flags & LX_CSIGNAL) == 0 ?
 	    FORK_NOSIGCHLD : 0);
 	if (pid < 0)
 		piderror = lwpd->br_clone_pidns_error;
+	if (pid > 0 && viewer != NULL)
+		pid = lx_pidns_visible(viewer, pid);
 cleanup:
+	if (pidns != NULL)
+		lx_pidns_rele(pidns);
+	if (viewer != NULL)
+		lx_pidns_rele(viewer);
 	if (lwpd->br_clone_pidns_map != NULL) {
 		lx_pidns_map_t *map = lwpd->br_clone_pidns_map;
 
@@ -707,7 +730,6 @@ cleanup:
 	}
 	if (piderror != 0)
 		return (set_errno(piderror));
-	/* Linux PID translation is deferred until signal/wait paths agree. */
 	if (pid > 0 && (flags & LX_CLONE_PARENT_SETTID) != 0)
 		(void) suword32((void *)args[2], pid);
 	return (pid);
@@ -759,7 +781,12 @@ lx_kernel_fork_child(klwp_t *parent, klwp_t *child)
 	    as_checkprot(cp->p_as, (caddr_t)src->br_syscall_args[3],
 	    sizeof (dst->br_pid), PROT_WRITE) == 0) {
 		/* Do not force a write into a read-only child mapping. */
-		(void) uwrite(cp, &dst->br_pid, sizeof (dst->br_pid),
+		pid_t childpid = dst->br_pid;
+		lx_pidns_t *ns = lx_pidns_active(cp);
+
+		if (ns != NULL)
+			childpid = lx_pidns_map_id(dst->br_pidns_map, ns);
+		(void) uwrite(cp, &childpid, sizeof (childpid),
 		    src->br_syscall_args[3]);
 	}
 }

@@ -35,10 +35,26 @@
 #include <sys/brand.h>
 #include <sys/lx_brand.h>
 #include <sys/lx_syscalls.h>
+#include <sys/lx_pidns.h>
 #include <lx_signum.h>
 #include <sys/contract/process_impl.h>
 
 extern int kill(pid_t, int);
+
+static pid_t
+lx_signal_backing(lx_pidns_t *ns, pid_t id)
+{
+	return (ns == NULL ? id : lx_pidns_map_backing(ns, id));
+}
+
+static pid_t
+lx_signal_sender(proc_t *target)
+{
+	lx_pidns_t *ns = lx_pidns_active(target);
+
+	return (ns == NULL ? curproc->p_pid :
+	    lx_pidns_visible(ns, curproc->p_pid));
+}
 
 /*
  * Check if it is legal to send this signal to the init process.  Linux
@@ -78,6 +94,9 @@ lx_thrkill(pid_t tgid, pid_t pid, int lx_sig, boolean_t tgkill)
 	proc_t *pp, *cp = curproc;
 	sigqueue_t *sqp;
 	int sig, rv;
+	lx_pidns_t *ns = lx_pidns_active(cp);
+	pid_t backing, group;
+	boolean_t nsinit;
 
 	/*
 	 * Unlike kill(2), Linux tkill(2) doesn't allow signals to
@@ -95,11 +114,12 @@ lx_thrkill(pid_t tgid, pid_t pid, int lx_sig, boolean_t tgkill)
 	 *
 	 * Otherwise, extract the tid and real pid from the Linux pid.
 	 */
-	if (pid == 1) {
-		pid_t initpid;
-
-		initpid = cp->p_zone->zone_proc_initpid;
-		if ((rv = lx_init_sig_check(sig, initpid)) != 0) {
+	if ((backing = lx_signal_backing(ns, pid)) == 0)
+		return (set_errno(ESRCH));
+	nsinit = (ns != NULL && pid == 1) ||
+	    (ns == NULL && pid == cp->p_zone->zone_proc_initpid);
+	if (nsinit && backing != cp->p_pid) {
+		if ((rv = lx_init_sig_check(sig, backing)) != 0) {
 			return (set_errno(rv));
 		}
 	}
@@ -107,7 +127,7 @@ lx_thrkill(pid_t tgid, pid_t pid, int lx_sig, boolean_t tgkill)
 	/*
 	 * Find the process for the passed pid...
 	 */
-	if (lx_lpid_lock(pid, curzone, 0, &pp, &t) != 0) {
+	if (lx_lpid_lock(backing, curzone, 0, &pp, &t) != 0) {
 		rv = set_errno(ESRCH);
 		goto free_and_exit;
 	}
@@ -116,8 +136,8 @@ lx_thrkill(pid_t tgid, pid_t pid, int lx_sig, boolean_t tgkill)
 	 * Make sure the thread group matches the thread.
 	 */
 	if (tgkill) {
-		if ((pid == 1 && tgid != 1) ||
-		    (pid != 1 && tgid != pp->p_pid)) {
+		group = lx_signal_backing(ns, tgid);
+		if (group == 0 || group != pp->p_pid) {
 			mutex_exit(&pp->p_lock);
 			rv = set_errno(ESRCH);
 			goto free_and_exit;
@@ -141,10 +161,18 @@ lx_thrkill(pid_t tgid, pid_t pid, int lx_sig, boolean_t tgkill)
 		rv = 0;
 		goto free_and_exit;
 	}
+	/* PID1 may generate a default-disposition signal without dying. */
+	if (nsinit && pp == cp && !sigismember(&cantmask, sig) &&
+	    (PTOU(pp)->u_signal[sig - 1] == SIG_DFL ||
+	    PTOU(pp)->u_signal[sig - 1] == SIG_IGN)) {
+		mutex_exit(&pp->p_lock);
+		rv = 0;
+		goto free_and_exit;
+	}
 
 	sqp->sq_info.si_signo = sig;
 	sqp->sq_info.si_code = SI_LWP;
-	sqp->sq_info.si_pid = cp->p_pid;
+	sqp->sq_info.si_pid = lx_signal_sender(pp);
 	sqp->sq_info.si_zoneid = getzoneid();
 	sqp->sq_info.si_uid = crgetruid(CRED());
 	sigaddqa(pp, t, sqp);
@@ -178,6 +206,7 @@ lx_kill(pid_t lx_pid, int lx_sig)
 	zone_t *zone = curzone;
 	struct proc *p;
 	int err, sig, nfound;
+	lx_pidns_t *ns = lx_pidns_active(curproc);
 
 	if ((lx_sig < 0) || (lx_sig > LX_NSIG) ||
 	    ((sig = ltos_signo[lx_sig]) < 0))
@@ -191,7 +220,12 @@ lx_kill(pid_t lx_pid, int lx_sig)
 		 * Translations for individual processes (including pid 1) is
 		 * all handled by lx_lpid_to_spair.
 		 */
-		if (lx_lpid_to_spair(lx_pid, &s_pid, NULL) != 0) {
+		if (ns != NULL) {
+			s_pid = lx_pidns_map_backing(ns, lx_pid);
+		} else if (lx_lpid_to_spair(lx_pid, &s_pid, NULL) != 0) {
+			s_pid = 0;
+		}
+		if (s_pid == 0) {
 			/*
 			 * If we didn't find this pid that means it doesn't
 			 * exist in this zone.
@@ -200,7 +234,11 @@ lx_kill(pid_t lx_pid, int lx_sig)
 		}
 	} else {
 		ASSERT(lx_pid < 0);
-		if (lx_lpid_to_spair(-lx_pid, &s_pid, NULL) != 0) {
+		if (ns != NULL) {
+			s_pid = lx_pidns_map_backing(ns, -lx_pid);
+			if (s_pid == 0)
+				return (set_errno(ESRCH));
+		} else if (lx_lpid_to_spair(-lx_pid, &s_pid, NULL) != 0) {
 			/*
 			 * If we didn't find this pid it means that the
 			 * process group leader doesn't exist in this zone.
@@ -215,7 +253,9 @@ lx_kill(pid_t lx_pid, int lx_sig)
 	/*
 	 * Check that it is legal for this signal to be sent to init
 	 */
-	if (s_pid == initpid && (err = lx_init_sig_check(sig, s_pid)) != 0)
+	if (((ns != NULL && lx_pid == 1) ||
+	    (ns == NULL && s_pid == initpid)) &&
+	    (err = lx_init_sig_check(sig, s_pid)) != 0)
 		return (set_errno(err));
 
 	/*
@@ -244,7 +284,11 @@ lx_kill(pid_t lx_pid, int lx_sig)
 	p = (lx_pid == -1) ? practive : pgfind(s_pid);
 	nfound = 0;
 	while (err == 0 && p != NULL) {
+		pid_t visible = ns == NULL ? p->p_pid :
+		    lx_pidns_visible(ns, p->p_pid);
+
 		if ((p->p_zone == zone) && (p->p_stat != SIDL) &&
+		    visible != 0 && visible != 1 &&
 		    (p->p_pid != initpid) && (lx_pid < -1 || p != curproc)) {
 			nfound++;
 			err = sigsendproc(p, &v);

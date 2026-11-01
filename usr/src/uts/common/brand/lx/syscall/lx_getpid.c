@@ -33,6 +33,7 @@
 #include <sys/cpuvar.h>
 #include <sys/brand.h>
 #include <sys/lx_brand.h>
+#include <sys/lx_pidns.h>
 
 /*
  * return the pid
@@ -41,9 +42,12 @@ long
 lx_getpid(void)
 {
 	lx_lwp_data_t *lwpd = ttolxlwp(curthread);
+	lx_pidns_t *ns = lx_pidns_active(curproc);
 	long rv;
 
-	if (curproc->p_pid == curproc->p_zone->zone_proc_initpid) {
+	if (ns != NULL) {
+		rv = lx_pidns_map_id(ptolxproc(curproc)->l_pidns_map, ns);
+	} else if (curproc->p_pid == curproc->p_zone->zone_proc_initpid) {
 		rv = 1;
 	} else {
 		VERIFY(lwpd != NULL);
@@ -60,7 +64,10 @@ lx_getpid(void)
 long
 lx_getppid(void)
 {
-	return (lx_lwp_ppid(ttolwp(curthread), NULL, NULL));
+	pid_t ppid = lx_lwp_ppid(ttolwp(curthread), NULL, NULL);
+	lx_pidns_t *ns = lx_pidns_active(curproc);
+
+	return (ns == NULL ? ppid : lx_pidns_visible(ns, ppid));
 }
 
 /*
@@ -70,6 +77,9 @@ long
 lx_gettid(void)
 {
 	lx_lwp_data_t *lwpd = ttolxlwp(curthread);
+	lx_pidns_t *ns = lx_pidns_active(curproc);
 
+	if (ns != NULL)
+		return (lx_pidns_map_id(lwpd->br_pidns_map, ns));
 	return (lwpd->br_pid == curzone->zone_proc_initpid ? 1 : lwpd->br_pid);
 }

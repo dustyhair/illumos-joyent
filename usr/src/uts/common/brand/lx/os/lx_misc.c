@@ -1155,21 +1155,30 @@ lx_stol_hwaddr(const struct sockaddr_dl *src, struct sockaddr *dst, int *size)
  * and si_status to Linux values. Similar to the stol_ksiginfo function but
  * this one converts in-place, converts the pid, and does not copyout.
  */
+static pid_t
+lx_siginfo_pid(pid_t backing)
+{
+	zone_t *zone = curproc->p_zone;
+	lx_pidns_t *ns = lx_pidns_active(curproc);
+
+	if (ns != NULL)
+		return (lx_pidns_visible(ns, backing));
+	if (backing == zone->zone_proc_initpid ||
+	    backing == zone->zone_zsched->p_pid)
+		return (1);
+	return (backing);
+}
+
 void
 lx_sigfd_translate(k_siginfo_t *infop)
 {
-	zone_t *zone = curproc->p_zone;
 
 	infop->si_signo = lx_stol_signo(infop->si_signo, LX_SIGKILL);
 	infop->si_status = lx_stol_status(infop->si_status, LX_SIGKILL);
 	infop->si_code = lx_stol_sigcode(infop->si_code);
 	infop->si_errno = lx_errno(infop->si_errno, EINVAL);
 
-	/* Map zsched and zone init to pid 1 */
-	if (infop->si_pid == zone->zone_proc_initpid ||
-	    infop->si_pid == zone->zone_zsched->p_pid) {
-		infop->si_pid = 1;
-	}
+	infop->si_pid = lx_siginfo_pid(infop->si_pid);
 }
 
 int
@@ -1189,7 +1198,7 @@ stol_ksiginfo_copyout(k_siginfo_t *sip, void *ulxsip)
 		break;
 
 	case LX_SIGCHLD:
-		lsi.lsi_pid = sip->si_pid;
+		lsi.lsi_pid = lx_siginfo_pid(sip->si_pid);
 		if (sip->si_code <= 0 || sip->si_code == CLD_EXITED) {
 			lsi.lsi_status = sip->si_status;
 		} else {
@@ -1208,7 +1217,7 @@ stol_ksiginfo_copyout(k_siginfo_t *sip, void *ulxsip)
 		break;
 
 	default:
-		lsi.lsi_pid = sip->si_pid;
+		lsi.lsi_pid = lx_siginfo_pid(sip->si_pid);
 		lsi.lsi_uid = LX_UID32_TO_UID16(sip->si_uid);
 	}
 
@@ -1237,7 +1246,7 @@ stol_ksiginfo32_copyout(k_siginfo_t *sip, void *ulxsip)
 		break;
 
 	case LX_SIGCHLD:
-		lsi.lsi_pid = sip->si_pid;
+		lsi.lsi_pid = lx_siginfo_pid(sip->si_pid);
 		if (sip->si_code <= 0 || sip->si_code == CLD_EXITED) {
 			lsi.lsi_status = sip->si_status;
 		} else {
@@ -1256,7 +1265,7 @@ stol_ksiginfo32_copyout(k_siginfo_t *sip, void *ulxsip)
 		break;
 
 	default:
-		lsi.lsi_pid = sip->si_pid;
+		lsi.lsi_pid = lx_siginfo_pid(sip->si_pid);
 		lsi.lsi_uid = LX_UID32_TO_UID16(sip->si_uid);
 	}
 

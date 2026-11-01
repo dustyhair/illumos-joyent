@@ -887,19 +887,24 @@ lx_namespace_unshare(uintptr_t flags)
 	lx_lwp_data_t *lwpd = ttolxlwp(curthread);
 	boolean_t user = (flags & LX_CLONE_NEWUSER) != 0;
 	boolean_t mount = (flags & LX_CLONE_NEWNS) != 0;
+	boolean_t pid = (flags & LX_CLONE_NEWPID) != 0;
 	cred_t *source = NULL, *base = NULL, *scoped = NULL;
 	cred_t *old_process = NULL, *old_task = NULL;
 	vnode_t *root = NULL, *cwd = NULL;
 	lx_mntns_view_t *view = NULL;
+	lx_pidns_t *pidparent = NULL, *pidstate = NULL;
 	lx_mntns_state_t state = { 0 };
 	int error;
 
-	if ((!user && !mount) || (user && !lx_userns_experimental))
+	if ((!user && !mount && !pid) || (user && !lx_userns_experimental))
 		return (set_errno(EPERM));
+	if (pid && !lx_pidns_entry_enabled())
+		return (set_errno((user || mount) ? EINVAL : EPERM));
 	/* Retain the previous unsupported-combination error while disabled. */
 	if (mount && !lx_mntns_entry_enabled())
 		return (set_errno(user ? EINVAL : EPERM));
-	if ((flags & ~(LX_CLONE_NEWUSER | LX_CLONE_NEWNS | LX_CLONE_FS)) != 0)
+	if ((flags & ~(LX_CLONE_NEWUSER | LX_CLONE_NEWNS | LX_CLONE_NEWPID |
+	    LX_CLONE_FS)) != 0)
 		return (set_errno(EINVAL));
 	if (get_udatamodel() != DATAMODEL_NATIVE ||
 	    lwpd->br_syscall_entry != BRAND_ENTRY_AMD64 ||
@@ -910,7 +915,11 @@ lx_namespace_unshare(uintptr_t flags)
 	error = lx_userns_entry_check(p);
 	if (error == 0 && mount && pd->l_ptrace != 0)
 		error = EOPNOTSUPP;
+	if (error == 0 && pid && pd->l_pidns_children != NULL)
+		error = EINVAL;
 	if (error == 0) {
+		if (pid && (pidparent = lx_pidns_active(p)) != NULL)
+			lx_pidns_hold(pidparent);
 		mutex_enter(&p->p_crlock);
 		crhold(source = CRED());
 		crhold(base = p->p_cred);
@@ -932,16 +941,22 @@ lx_namespace_unshare(uintptr_t flags)
 	if (mount && (error = lx_mntns_entry_prepare(user ? scoped : source,
 	    root, cwd, view, &state)) != 0)
 		goto out;
+	if (pid && (error = lx_pidns_entry_create(user ? scoped : source,
+	    pidparent, &pidstate)) != 0)
+		goto out;
 
 	mutex_enter(&p->p_lock);
 	mutex_enter(&p->p_crlock);
 	error = lx_userns_entry_check(p);
 	if (error == 0 && (p->p_cred != base || CRED() != source ||
 	    (user && crgetruid(scoped) != crgetruid(base)) ||
-	    (mount && pd->l_mntns != view)))
+	    (mount && pd->l_mntns != view) ||
+	    (pid && (pd->l_pidns_children != NULL ||
+	    lx_pidns_active(p) != pidparent))))
 		error = EAGAIN;
 	if (error == 0 && ((user && !lx_userns_experimental) ||
-	    (mount && !lx_mntns_entry_enabled())))
+	    (mount && !lx_mntns_entry_enabled()) ||
+	    (pid && !lx_pidns_entry_enabled())))
 		error = EPERM;
 	if (error == 0 && mount)
 		error = lx_mntns_proc_swap(p, root, cwd, &state);
@@ -954,6 +969,11 @@ lx_namespace_unshare(uintptr_t flags)
 		p->p_cred = curthread->t_cred = scoped;
 		pd->l_flags |= LX_PROC_USERNS;
 	}
+	if (error == 0 && pid) {
+		VERIFY(pd->l_pidns_children == NULL);
+		pd->l_pidns_children = pidstate;
+		pidstate = NULL;
+	}
 	mutex_exit(&p->p_crlock);
 	mutex_exit(&p->p_lock);
 	if (old_process != NULL)
@@ -961,6 +981,10 @@ lx_namespace_unshare(uintptr_t flags)
 	if (old_task != NULL)
 		crfree(old_task);
 out:
+	if (pidstate != NULL)
+		lx_pidns_rele(pidstate);
+	if (pidparent != NULL)
+		lx_pidns_rele(pidparent);
 	lx_mntns_state_fini(&state);
 	if (root != NULL)
 		VN_RELE(root);

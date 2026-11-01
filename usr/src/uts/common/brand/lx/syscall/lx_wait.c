@@ -71,6 +71,7 @@
 #include <sys/lx_brand.h>
 #include <sys/lx_types.h>
 #include <sys/lx_misc.h>
+#include <sys/lx_pidns.h>
 #include <lx_signum.h>
 #include <lx_errno.h>
 #include <lx_syscall.h>
@@ -214,12 +215,13 @@ lx_wait4(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4)
 	int native_options, extra_options;
 	int *statusp = (int *)p2;
 	void *rup = (void *)p4;
+	lx_pidns_t *ns = lx_pidns_active(curproc);
 
 	if (ltos_options(p3, &native_options, &extra_options) == -1) {
 		return (set_errno(EINVAL));
 	}
 
-	if (pid > maxpid) {
+	if (ns == NULL && pid > maxpid) {
 		return (set_errno(ECHILD));
 	}
 
@@ -266,7 +268,9 @@ lx_wait4(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4)
 
 	if (pid < -1) {
 		idtype = P_PGID;
-		id = -pid;
+		id = ns == NULL ? -pid : lx_pidns_map_backing(ns, -pid);
+		if (id == 0)
+			return (set_errno(ECHILD));
 	} else if (pid == -1) {
 		idtype = P_ALL;
 		id = 0;
@@ -277,7 +281,9 @@ lx_wait4(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4)
 		mutex_exit(&pidlock);
 	} else {
 		idtype = P_PID;
-		id = pid;
+		id = ns == NULL ? pid : lx_pidns_map_backing(ns, pid);
+		if (id == 0)
+			return (set_errno(ECHILD));
 	}
 
 	native_options |= (WEXITED | WTRAPPED);
@@ -316,7 +322,8 @@ lx_wait4(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4)
 		}
 	}
 
-	return (info.si_pid);
+	return (ns == NULL ? info.si_pid :
+	    lx_pidns_visible(ns, info.si_pid));
 }
 
 long
@@ -331,6 +338,7 @@ lx_waitid(uintptr_t idtype, uintptr_t id, uintptr_t infop, uintptr_t opt)
 	int error;
 	int native_options, extra_options;
 	k_siginfo_t info = { 0 };
+	lx_pidns_t *ns = lx_pidns_active(curproc);
 
 	if (ltos_options(opt, &native_options, &extra_options) == -1) {
 		return (set_errno(EINVAL));
@@ -353,6 +361,10 @@ lx_waitid(uintptr_t idtype, uintptr_t id, uintptr_t infop, uintptr_t opt)
 	default:
 		return (set_errno(EINVAL));
 	}
+	if (ns != NULL && idtype != P_ALL && id != 0) {
+		if ((id = lx_pidns_map_backing(ns, id)) == 0)
+			return (set_errno(ECHILD));
+	}
 
 	if ((error = lx_call_waitid(idtype, id, &info, native_options,
 	    extra_options)) != 0) {
@@ -365,6 +377,8 @@ lx_waitid(uintptr_t idtype, uintptr_t id, uintptr_t infop, uintptr_t opt)
 	if ((native_options & WNOHANG) && info.si_pid == 0) {
 		return (0);
 	}
+	if (ns != NULL)
+		info.si_pid = lx_pidns_visible(ns, info.si_pid);
 
 #if defined(_SYSCALL32_IMPL)
 	if (get_udatamodel() != DATAMODEL_NATIVE) {

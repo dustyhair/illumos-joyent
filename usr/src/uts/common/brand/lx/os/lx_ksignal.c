@@ -24,6 +24,7 @@
 #include <sys/lx_misc.h>
 #include <sys/lx_signal.h>
 #include <sys/lx_ksignal.h>
+#include <sys/lx_pidns.h>
 #include <vm/as.h>
 
 #define	LXK_MAXDEPTH 32
@@ -53,6 +54,14 @@ static const int lxk_regs[LXK_NREG] = {
 	REG_RDI, REG_RSI, REG_RBP, REG_RBX, REG_RDX, REG_RAX, REG_RCX,
 	REG_RSP, REG_RIP, REG_RFL
 };
+
+static pid_t
+lxk_sigpid(pid_t backing)
+{
+	lx_pidns_t *ns = lx_pidns_active(curproc);
+
+	return (ns == NULL ? backing : lx_pidns_visible(ns, backing));
+}
 
 static void
 lxk_free_record(struct lx_sigrecord *r)
@@ -384,7 +393,7 @@ lx_sigdeliver_kernel(int sig, k_siginfo_t *sip, void (*handler)())
 		    lx_stol_sigcode(sip->si_code);
 		/* Select only the initialized union member for this source. */
 		if (SI_FROMUSER(sip)) {
-			int32_t pid = sip->si_pid;
+			int32_t pid = lxk_sigpid(sip->si_pid);
 			uint32_t uid = sip->si_uid;
 			bcopy(&pid, frame->info.data, sizeof (pid));
 			bcopy(&uid, frame->info.data + 4, sizeof (uid));
@@ -401,7 +410,8 @@ lx_sigdeliver_kernel(int sig, k_siginfo_t *sip, void (*handler)())
 			bcopy(&fault, frame->info.data, sizeof (fault));
 			frame->uc.context.cr2 = ls == LX_SIGSEGV ? fault : 0;
 		} else if (ls == LX_SIGCHLD) {
-			int32_t pid = sip->si_pid, status = sip->si_status;
+			int32_t pid = lxk_sigpid(sip->si_pid);
+			int32_t status = sip->si_status;
 			uint32_t uid = sip->si_uid;
 			uint64_t utime = (uint64_t)sip->si_utime * 100 / hz;
 			uint64_t stime = (uint64_t)sip->si_stime * 100 / hz;
