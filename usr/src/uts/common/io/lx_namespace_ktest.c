@@ -2294,9 +2294,7 @@ ns_lwp_track(ktest_ctx_hdl_t *ctx, boolean_t worker)
 	struct pid *identity = NULL;
 	proc_t *p = NULL;
 	kthread_t *t;
-	pid_t number = 0, spid = -1;
-	int reason = 0, state = -1;
-	uint_t lwpcnt = 0;
+	pid_t number;
 	boolean_t passed = B_FALSE;
 
 	mutex_enter(&ns_pid_lock);
@@ -2306,65 +2304,25 @@ ns_lwp_track(ktest_ctx_hdl_t *ctx, boolean_t worker)
 	    ns_pid_process_descendant_map != NULL ||
 	    !ns_process_pid(ctx, &number) ||
 	    (worker ? ns_lwp_owner.nli_identity == NULL :
-	    number != ns_pid_process_owner)) {
-		reason = 1;
+	    number != ns_pid_process_owner))
 		goto out;
-	}
 	identity = lx_pid_identity_hold(number, ns_pid_process_zone);
-	if (identity == NULL) {
-		reason = 2;
+	if (identity == NULL || lx_lpid_lock(number, ns_pid_process_zone,
+	    0, &p, &t) != 0)
 		goto out;
-	}
-	if (lx_lpid_lock(number, ns_pid_process_zone, 0, &p, &t) != 0) {
-		reason = 3;
+	if (t == NULL || t->t_state != TS_STOPPED ||
+	    p->p_brand != &lx_brand || p->p_pid != ns_pid_process_owner ||
+	    strcmp(PTOU(p)->u_comm, "pid_ownership") != 0 ||
+	    lx_pidns_active(p) != ns_pid_process_space ||
+	    ttolxlwp(t)->br_pidns_map == NULL)
 		goto out;
-	}
-	spid = p->p_pid;
-	lwpcnt = p->p_lwpcnt;
-	if (t == NULL) {
-		reason = 4;
-		goto out;
-	}
-	state = t->t_state;
-	if (state != TS_STOPPED) {
-		reason = 5;
-		goto out;
-	}
-	if (p->p_brand != &lx_brand || p->p_pid != ns_pid_process_owner) {
-		reason = 6;
-		goto out;
-	}
-	if (strcmp(PTOU(p)->u_comm, "pid_ownership") != 0) {
-		reason = 7;
-		goto out;
-	}
-	if (lx_pidns_active(p) != ns_pid_process_space) {
-		reason = 8;
-		goto out;
-	}
-	if (ttolxlwp(t)->br_pidns_map == NULL) {
-		reason = 9;
-		goto out;
-	}
 	if (worker) {
-		if (number == p->p_pid) {
-			reason = 10;
+		if (number == p->p_pid ||
+		    p->p_pidp != ns_lwp_owner.nli_identity ||
+		    ttolxlwp(t)->br_lpid == NULL ||
+		    ttolxlwp(t)->br_lpid->lxp_pidp != identity)
 			goto out;
-		}
-		if (p->p_pidp != ns_lwp_owner.nli_identity) {
-			reason = 11;
-			goto out;
-		}
-		if (ttolxlwp(t)->br_lpid == NULL) {
-			reason = 12;
-			goto out;
-		}
-		if (ttolxlwp(t)->br_lpid->lxp_pidp != identity) {
-			reason = 13;
-			goto out;
-		}
 	} else if (p->p_lwpcnt != 1 || identity != p->p_pidp) {
-		reason = 14;
 		goto out;
 	}
 	slot->nli_identity = identity;
@@ -2380,9 +2338,7 @@ out:
 	if (passed)
 		KT_PASS(ctx);
 	else
-		KT_FAIL(ctx, "isolated fixture mismatch worker=%d reason=%d "
-		    "number=%d spid=%d state=%d lwpcnt=%u", worker, reason,
-		    number, spid, state, lwpcnt);
+		KT_FAIL(ctx, "isolated fixture identity/stop mismatch");
 }
 
 static void
