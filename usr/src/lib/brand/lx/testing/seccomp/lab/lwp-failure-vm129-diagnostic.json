@@ -1,0 +1,11 @@
+{
+  "vm": 129,
+  "qemu_pid": 3703124,
+  "source": "73dcb17302c9698e9907e45f41add53eee596fee",
+  "production_source": "af98c92ce10ebc6bd09b8d33943e6a4fe93f2117",
+  "accepted": false,
+  "partial": "lwp_failure passed its full native identity/refcount/interlock check once",
+  "failure": "Subsequent legacy process_thread test requires namespace PID2 after the injected failed creation consumed a reservation. Combined fixture is not accepted; isolate failure test from legacy numbering controls.",
+  "cleanup": "zone halted, pool export0, syncdone, QEMU exited",
+  "console_sha256": "a3fc9a81b233006c8bd6164d5c3557105e40f3be7d61f6a53710db39897a6871"
+}

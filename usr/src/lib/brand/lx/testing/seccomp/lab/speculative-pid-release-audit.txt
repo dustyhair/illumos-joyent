@@ -1,0 +1,66 @@
+# Speculative PID release audit
+
+Read-only source audit, 2026-10-31. No build, VM, runtime test, patch, commit, or push performed. All source references below are relative to `/build/workspaces/lx/illumos` on `jwagner@192.168.1.210`. Snapshots beside this report preserve line numbers.
+
+Baseline: branch `lx/codex-sandbox`, HEAD `73dcb17302c9698e9907e45f41add53eee596fee`, initially clean. Production fix `af98c92ce10ebc6bd09b8d33943e6a4fe93f2117`. The complete LX source subtree is identical between these two commits. Their diff is private instrumentation in `common/os/lwp.c` and `common/io/lx_namespace_ktest.c`. During this audit parent advanced HEAD to `270bf4eb833fa2742f917a7e09f907fa9d05705f`; findings remain pinned to the requested baseline. No integration state was changed. Snapshot SHA256s and source paths are in `source-sha256.json`.
+
+Read local parent-continuation.json, rationale.txt, vm128-state.json and builder `/build/AGENTS.md`; no nested AGENTS found in the workspace parent tree searched. Applied unslop writing skill. User's artifact-only scope overrides builder instructions to update shared running logs.
+
+## Finding: existing private-backend agent path can free a mapped identity
+
+`usr/src/uts/common/brand/lx/os/lx_pid.c:184` is the sole remaining direct native `pid_rele` call in LX. It is safe for ordinary fresh native branding, but its `br_ppid == 0` classification also covers a native /proc controller creating an agent in an existing mapped LX process.
+
+Concrete source path:
+
+1. `common/fs/proc/prcontrol.c:2089-2127`, `pr_agent`, allows a stopped target without an existing agent or exiting/killed/vfork-parent state. It drops target `p_lock` while retaining P_PR_LOCK, then calls `lwp_create` in the controller's thread context. This path has no LX namespace rejection.
+2. `common/os/lwp.c:404-420` allocates target brand data before acquiring `p_lock`. For an existing target, `lx_misc.c:568-573` allocates an inactive synthetic reservation with native refcount 1.
+3. With a privately attached active namespace, `lx_misc.c:524-534` reserves and binds an LWP map to that reservation. `lx_pidns.c:386-394` adds an identity hold. Successful binding leaves two native references, allocator and map, even though the map is uncommitted.
+4. `lx_misc.c:655-675` derives `br_ppid` from the creating thread. A native controller has no LX LWP data, so the oddball branch sets `br_ppid = 0`. For a new thread, `tp->t_next == tp` is false; even if that branch were selected its process parent value would need separate checking, not an ownership argument.
+5. Under target `p_lock`, `lx_pid_assign` takes its unused-reservation branch because `br_ppid == 0`. Native `pid_rele` removes and frees the object unconditionally, without decrementing/testing `pid_ref`, `common/os/pid.c:249-267`. The map still owns the freed pointer. Subsequent map commit/lookup/release can reach freed storage. `lx_initlwp_post`, `lx_misc.c:748-757`, commits this additional-LWP map after insertion.
+
+This is a source-proven reachable path using the existing private namespace attachment and native PCAGENT operation. It is not a demonstrated VM failure and not a claim that public CLONE_NEWPID is enabled. Without an attached map, the same native-agent branch discards a sole-owned reservation; its legacy identity semantics are separate from this retained-reference defect.
+
+## Ordering and lock table
+
+| Caller / phase | Reservation and observers | Locks at release or assignment |
+| --- | --- | --- |
+| Native exec branding, `exec.c:408-432` | `brand_setbrand` allocates zeroed process brand data, `brand.c:484-495`; `lx_setbrand` adds no maps, `lx_brand.c:418`. With existing LWPs allocation is speculative. Fresh active namespace is NULL, so preparation cannot bind a map. No LX hash entry exists for this reservation yet. | Allocation outside `p_lock`; `b_initlwp` and unused release under `p_lock`, without `pidlock`. |
+| Native multi-LWP branding | `brand.c:462-475` holds other LWPs first. Caller has no old LX LWP data, so `br_ppid=0`; unused reservation remains sole-owned. Exec failure frees/debrands; success kills other LWPs during exec. | Same as above. |
+| First fork LWP | `getproc`, `fork.c:1195-1203`, brands/copies process data while child has zero LWPs. `lx_copy_procdata`, `lx_brand.c:2107-2117`, takes ownership of a pending unbound map or child namespace. Preparation binds **p_pidp**, not a speculative reservation. | Preparation outside lock; assign under child `p_lock`; no speculative native release. |
+| Additional ordinary LX LWP / forkall LWP | `p_lwpcnt>0`, creator has LX data and nonzero `br_pid`, hence nonzero `br_ppid`. Reservation remains the task identity; map can legitimately own an extra hold. | Assign under `p_lock`; retained reservation, no release there. |
+| Native controller PCAGENT into mapped LX target | Preparation binds speculative reservation; native caller yields `br_ppid=0`. Map legitimately retains a native identity reference before assignment. | Unsafe unconditional free under target `p_lock`. |
+| `lx_lwpdata_alloc` preparation failure, `lx_misc.c:584-599` | Preparation releases its map hold; allocator drops its original reservation through `lx_pid_identity_rele`. | Outside `p_lock`; helper takes `pidlock`. |
+| Failed native LWP creation, `lwp.c:883-919` | Before init/publication; map released first, then original reservation with ref-aware helper, `lx_misc.c:620-626`. Observer must remain exactly refcount 1. | Production cleanup drops `p_lock` before callback. |
+| Published LWP retirement / exec reassignment | `lx_pid.c:118-124, 237-241, 257-260` marks synthetic identity inactive and uses PID_RELE. Map or observer references can survive. `lx_misc.c:198-211` switches a nonleader's map to process map on exec. | Hash removal finishes before acquiring `pidlock`; freelwp/exec run outside `p_lock`. |
+
+Native-brand ordering is preparation -> init under p_lock -> gexec. On gexec failure `exec.c:440-443` frees LWP data and clears brand. On successful native image selection `exec.c:560-564` does the same after other LWPs are gone. On successful branded exec `b_exec` runs at `exec.c:591-592` before native tid reset. `lx_native_exec`, `lx_brand.c:2728-2734`, rejects kernel-restricted or PID-namespace-child processes, which further limits namespace/native-exec transitions.
+
+Native `proc_ref`, STREAMS and process/session/group holds obtain real process or group identities, not an unpublished inactive synthetic reservation. See `pid.c:679-685`, `streamio.c:4740-4772, 4859-4882, 4985-5005`, `pgrp.c:115-143`. LX identity lookup uses registered LX hashes, `lx_pid.c:128-136`; assignment inserts the new hash only after discarding the speculative reservation. Namespace lookup requires committed maps, `lx_pidns.c:510-516`. Thus fresh native branding has no identified legitimate observer; agent map binding is the concrete exception. Arbitrary kernel code that guesses a numeric reservation and adds a hold is not an established production caller.
+
+## Bind and failure ownership
+
+`lx_pidns_bind_native` borrows the original reservation; it never consumes the caller's reference. EXDEV before locking and ESRCH/EXDEV validation exits acquire no hold. Success acquires exactly one hold and passes it to `lx_pidns_bind_identity`. That internal function consumes that extra hold on every exit.
+
+`lx_pidns_bind_identity`, `lx_pidns.c:307-364`, validates all ancestor slots before inserting any. EALREADY, DEAD/ENOMEM, invalid-state/EAGAIN and duplicate-backing/EEXIST release only the incoming identity hold through `lx_pid_identity_rele`. Existing bound map ownership stays intact on EALREADY. Success transfers the hold to pm_identity and clears the local pointer. There is no fallible operation after index insertion begins.
+
+`lx_pidns_reserve`, lines 255-303, records only successfully allocated slots in pm_count. Failure releases that map, frees all recorded numbers, and resets an aborted initial reservation to NEW unless DEAD. Final map release, lines 434-471, removes indices only when bound, frees every reserved number, uses PID_RELE under pidlock, frees the map and drops its namespace chain. Preparation bind failure drops its acquired map reference; unpublished child process and parent pending-map owners remain responsible for their independent references. `fork_fail`, `fork.c:709-710`, invokes brand cleanup; `lx_clearbrand`, `lx_brand.c:686-698`, detaches process ownership under p_lock and releases outside it. `lx_clone.c:688-694` clears/releases the parent's pending map on return. No additional reference leak or double consumption found in these failure paths.
+
+## Minimal correction direction, artifacts only
+
+Do not replace line 184 with `lx_pid_identity_rele` or PID_RELE under its present locks. The helper would acquire pidlock under p_lock; bare PID_RELE requires pidlock. `lwp.c:827-830` expressly forbids dropping p_lock inside b_initlwp.
+
+For the concrete agent defect, preserve the allocated identity for an additional newly created LWP even when its creator is native. Distinguish an existing calling LWP being branded from a different newly created target LWP; `br_ppid` alone is not that distinction. A narrow condition worth parent review is retaining the reservation when `p_lwpcnt > 0 && (br_ppid != 0 || t != curthread)`. This keeps agent map and task identity aligned without adding locks, hooks, ABI, registries or workers. It needs the bounded agent regression before integration. No patch produced here. A generic future discard with external holds must release ownership outside p_lock, or avoid allocating the unused reservation; changing only the release primitive is insufficient.
+
+Future map-acquisition/final-release synchronization and namespace PGID/SID ownership remain separate design gaps. Public PID namespace creation remains excluded by the kernel clone whitelist, `lx_clone.c:618-642`, and legacy namespace rejection, `user-clone.c:341-348`. This finding needs existing private attachment plus a native controller, not new public namespace support.
+
+## Bounded test proposal, not executed
+
+Parent owns image selection, builds and all runtime actions. Use a disposable private VM after VM129's current run, not a live production target. Retain exact source/image hashes.
+
+1. Keep the existing strict failed-LWP test in `usr/src/uts/common/io/lx_namespace_ktest.c:2198-2261` and `lx-sandbox/lwp-failure-cleanup-parent/lwp-failure-test.sh`. Its observer holds native identity only; require `pid_find(saved_number)==saved_pointer` under pidlock before any dereference/release and exactly one inactive remaining reference. No weakened expectation and no map observer.
+2. Reuse the stopped `pid_ownership` fixture and existing `ktest run -i /lab/lwp-failure-owner.bin lx_namespace:pid:process_attach` setup. From a native controller exercise one PCAGENT creation, using existing `usr/src/lib/libproc/common/Psyscall.c` Pcreate_agent and Pdestroy_agent. Native proc path is `usr/src/uts/common/fs/proc/prcontrol.c:2089`. First run an unattached control; then the attached-map case. No repeated stress loop is needed to establish ownership.
+3. A private checker or existing probe capture must save the prepared native number and pointer before assignment. Check numeric lookup equality under pidlock before inspecting map identity or using any map lookup that adds a hold. On old code, pointer disappearance despite the map's hold is failure. Stop there and preserve the disposable VM; ordinary map teardown itself is unsafe after this failure. Avoid masking the bug with a map observer or treating cleanup failure as a passing retry.
+4. With a reviewed correction, require agent identity equals its prepared native reservation, differs from leader identity, maps to the correct namespace number, and survives agent exit while a deliberate native-only observer remains. After map/task ownership is gone require exactly one inactive reference, release it, then require numeric lookup absent. Complete process_release/process_idle and namespace budget checks already used by the fixture.
+5. Cover one successful and one failed native-to-LX exec from a native single-LWP process, plus multi-LWP exec, ordinary LX additional LWP and first fork LWP. These distinguish actual branding from agent creation. Existing `/lab/lwp-checkpoint.sh` and parent native/LX thread controls remain useful controls, but their passing alone would not exercise the agent case.
+
+No Linux control is needed to establish this illumos-specific ownership/locking defect. VM128's rejected result is inherited evidence only; no VM129 or candidate validation is claimed.
