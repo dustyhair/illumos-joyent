@@ -10,6 +10,7 @@
 #include <sys/id_space.h>
 #include <sys/kmem.h>
 #include <sys/proc.h>
+#include <sys/session.h>
 #include <sys/signal.h>
 #include <sys/sysmacros.h>
 #include <sys/zone.h>
@@ -441,13 +442,30 @@ lx_pidns_map_rele(lx_pidns_map_t *map)
 {
 	lx_pidns_t *ns = map->pm_namespace;
 	boolean_t held = MUTEX_HELD(&pidlock);
+	uint_t refs;
 	uint_t i;
 	size_t size;
 
-	if (atomic_dec_uint_nv(&map->pm_refs) != 0)
-		return;
+	/*
+	 * Nonfinal releases need no lock. The final transition is serialized
+	 * with pn_backing readers so an indexed map can never be revived from
+	 * zero while its releaser waits for pidlock.
+	 */
+	for (;;) {
+		VERIFY3U((refs = map->pm_refs), !=, 0);
+		if (refs == 1)
+			break;
+		if (atomic_cas_uint(&map->pm_refs, refs, refs - 1) == refs)
+			return;
+	}
 	if (!held)
 		mutex_enter(&pidlock);
+	if (atomic_cas_uint(&map->pm_refs, 1, 0) != 1) {
+		if (!held)
+			mutex_exit(&pidlock);
+		lx_pidns_map_rele(map);
+		return;
+	}
 	for (i = 0; i < map->pm_count; i++) {
 		lx_pidns_slot_t *slot = &map->pm_slots[i];
 		lx_pidns_t *at = slot->ps_namespace;
@@ -469,6 +487,50 @@ lx_pidns_map_rele(lx_pidns_map_t *map)
 	size = sizeof (*map) + ns->pn_depth * sizeof (map->pm_slots[0]);
 	kmem_free(map, size);
 	lx_pidns_rele(ns);
+}
+
+/* Return a held committed map already indexed in active ancestry. */
+static lx_pidns_map_t *
+lx_pidns_role_hold(lx_pidns_t *ns, struct pid *identity)
+{
+	lx_pidns_t *at;
+	lx_pidns_slot_t key = { .ps_backing = identity->pid_id };
+	lx_pidns_slot_t *slot;
+
+	ASSERT(MUTEX_HELD(&pidlock));
+	for (at = ns; at != NULL; at = at->pn_parent) {
+		if ((slot = avl_find(&at->pn_backing, &key, NULL)) == NULL ||
+		    !slot->ps_map->pm_committed)
+			continue;
+		/* Final 1 -> 0 transitions also require pidlock. */
+		VERIFY3U(slot->ps_map->pm_refs, !=, 0);
+		atomic_inc_uint(&slot->ps_map->pm_refs);
+		return (slot->ps_map);
+	}
+	return (NULL);
+}
+
+void
+lx_pidns_roles_update(proc_t *p)
+{
+	lx_proc_data_t *pd = ptolxproc(p);
+	lx_pidns_t *ns;
+	lx_pidns_map_t *pgid, *sid, *old_pgid, *old_sid;
+
+	ASSERT(MUTEX_HELD(&pidlock));
+	if (pd == NULL || (ns = lx_pidns_active(p)) == NULL)
+		return;
+
+	pgid = lx_pidns_role_hold(ns, p->p_pgidp);
+	sid = lx_pidns_role_hold(ns, p->p_sessp->s_sidp);
+	old_pgid = pd->l_pidns_pgid;
+	old_sid = pd->l_pidns_sid;
+	pd->l_pidns_pgid = pgid;
+	pd->l_pidns_sid = sid;
+	if (old_pgid != NULL)
+		lx_pidns_map_rele(old_pgid);
+	if (old_sid != NULL)
+		lx_pidns_map_rele(old_sid);
 }
 
 pid_t

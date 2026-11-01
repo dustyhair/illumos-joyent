@@ -14,6 +14,7 @@
 #include <sys/sysmacros.h>
 #include <sys/brand.h>
 #include <sys/proc.h>
+#include <sys/session.h>
 #include <sys/zone.h>
 #include <sys/lx_brand.h>
 #include <sys/machbrand.h>
@@ -2153,6 +2154,16 @@ ns_pid_process_attach(ktest_ctx_hdl_t *ctx)
 	mutex_exit(&p->p_lock);
 	p = NULL;
 	PO_CHECK(lx_pidns_commit(map), "namespace died during test attachment");
+	mutex_enter(&pidlock);
+	p = prfind_zone(pid, zone->zone_id);
+	if (p == NULL) {
+		mutex_exit(&pidlock);
+		KT_FAIL(ctx, "process disappeared before role seeding");
+		goto out;
+	}
+	lx_pidns_roles_update(p);
+	mutex_exit(&pidlock);
+	p = NULL;
 	ns_pid_process_space = space;
 	space = NULL;
 	ns_pid_process_zone = zone;
@@ -2184,6 +2195,41 @@ out:
 	if (passed)
 		KT_PASS(ctx);
 #undef PO_CHECK
+}
+
+static void
+ns_pid_process_roles(ktest_ctx_hdl_t *ctx)
+{
+	proc_t *p;
+	lx_proc_data_t *pd;
+	pid_t pgid, sid;
+	boolean_t passed;
+
+	mutex_enter(&ns_pid_lock);
+	mutex_enter(&pidlock);
+	p = prfind_zone(ns_pid_process_owner, ALL_ZONES);
+	if (ns_pid_process_space == NULL || p == NULL ||
+	    (pd = ptolxproc(p)) == NULL) {
+		mutex_exit(&pidlock);
+		mutex_exit(&ns_pid_lock);
+		KT_ERROR(ctx, "no attached PID role fixture");
+		return;
+	}
+	pgid = lx_pidns_visible(ns_pid_process_space, p->p_pgidp->pid_id);
+	sid = lx_pidns_visible(ns_pid_process_space,
+	    p->p_sessp->s_sidp->pid_id);
+	passed = (pgid == 0 ? pd->l_pidns_pgid == NULL :
+	    pd->l_pidns_pgid != NULL && lx_pidns_map_id(pd->l_pidns_pgid,
+	    ns_pid_process_space) == pgid) &&
+	    (sid == 0 ? pd->l_pidns_sid == NULL :
+	    pd->l_pidns_sid != NULL && lx_pidns_map_id(pd->l_pidns_sid,
+	    ns_pid_process_space) == sid);
+	mutex_exit(&pidlock);
+	mutex_exit(&ns_pid_lock);
+	if (passed)
+		KT_PASS(ctx);
+	else
+		KT_FAIL(ctx, "native roles do not retain their visible maps");
 }
 
 static void
@@ -3041,6 +3087,8 @@ _init(void)
 	    ns_nested_release, 0)) != 0 ||
 	    (error = ktest_add_test(ks, "process_attach", ns_pid_process_attach,
 	    KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "process_roles", ns_pid_process_roles,
+	    0)) != 0 ||
 	    (error = ktest_add_test(ks, "process_thread", ns_pid_process_thread,
 	    KTEST_FLAG_INPUT)) != 0 ||
 	    (error = ktest_add_test(ks, "process_child", ns_pid_process_child,

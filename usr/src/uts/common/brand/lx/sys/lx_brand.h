@@ -396,6 +396,9 @@ typedef struct lx_proc_data {
 
 	/* Internal PID maps; Linux namespace entry remains disabled. */
 	struct lx_pidns_map *l_pidns_map;
+	/* Native group and session membership retain existing numeric maps. */
+	struct lx_pidns_map *l_pidns_pgid;
+	struct lx_pidns_map *l_pidns_sid;
 	/* NULL means the active map's namespace; SIDL may hold its target. */
 	struct lx_pidns *l_pidns_children;
 } lx_proc_data_t;

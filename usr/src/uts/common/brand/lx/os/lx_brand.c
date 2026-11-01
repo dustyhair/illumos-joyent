@@ -262,6 +262,7 @@ static int lx_pagefault(proc_t *, klwp_t *, caddr_t, enum fault_type,
     enum seg_rw);
 #endif
 static void	lx_clearbrand(proc_t *, boolean_t);
+static void	lx_pgjoin(proc_t *);
 
 typedef struct lx_zfs_ds {
 	list_node_t	ds_link;
@@ -323,7 +324,8 @@ struct brand_ops lx_brops = {
 	lx_userns_cred_perm,		/* b_cred_proc_perm */
 	lx_userns_cred_exec,		/* b_cred_exec */
 	lx_userns_cred_setattr,		/* b_cred_vnode_setattr */
-	lx_reparent_children		/* b_reparent_children */
+	lx_reparent_children,		/* b_reparent_children */
+	lx_pgjoin			/* b_pgjoin */
 };
 
 struct brand_mach_ops lx_mops = {
@@ -337,7 +339,7 @@ struct brand_mach_ops lx_mops = {
 };
 
 struct brand lx_brand = {
-	BRAND_VER_2,
+	BRAND_VER_3,
 	"lx",
 	&lx_brops,
 	&lx_mops,
@@ -678,6 +680,7 @@ lx_clearbrand(proc_t *p, boolean_t lwps_ok)
 	lx_userns_t *memory;
 	lx_mntns_view_t *view;
 	lx_pidns_map_t *pidmap;
+	lx_pidns_map_t *pgidmap, *sidmap;
 	lx_pidns_t *children;
 
 	lx_clone_grp_exit(p, lwps_ok);
@@ -690,11 +693,19 @@ lx_clearbrand(proc_t *p, boolean_t lwps_ok)
 	ptolxproc(p)->l_mntns = NULL;
 	pidmap = ptolxproc(p)->l_pidns_map;
 	ptolxproc(p)->l_pidns_map = NULL;
+	pgidmap = ptolxproc(p)->l_pidns_pgid;
+	ptolxproc(p)->l_pidns_pgid = NULL;
+	sidmap = ptolxproc(p)->l_pidns_sid;
+	ptolxproc(p)->l_pidns_sid = NULL;
 	children = ptolxproc(p)->l_pidns_children;
 	ptolxproc(p)->l_pidns_children = NULL;
 	mutex_exit(&p->p_lock);
 	if (pidmap != NULL)
 		lx_pidns_map_rele(pidmap);
+	if (pgidmap != NULL)
+		lx_pidns_map_rele(pgidmap);
+	if (sidmap != NULL)
+		lx_pidns_map_rele(sidmap);
 	lx_pidns_rele(children);
 	lx_seccomp_rele(filter);
 	lx_userns_rele(memory);
@@ -2107,6 +2118,8 @@ lx_copy_procdata(proc_t *cp, proc_t *pp)
 	bcopy(ppd, cpd, sizeof (lx_proc_data_t));
 	/* Copied PID pointers are borrowed; assign ownership below. */
 	cpd->l_pidns_map = NULL;
+	cpd->l_pidns_pgid = NULL;
+	cpd->l_pidns_sid = NULL;
 	cpd->l_pidns_children = NULL;
 	if (ttolxlwp(curthread) != NULL &&
 	    ttolxlwp(curthread)->br_clone_pidns_map != NULL) {
@@ -2729,7 +2742,7 @@ lx_native_exec(uint8_t osabi, const char **interp)
 {
 	if (osabi != ELFOSABI_SOLARIS)
 		return (B_FALSE);
-	if (lx_kernel_restricted(curproc) ||
+	if (lx_kernel_restricted(curproc) || lx_pidns_active(curproc) != NULL ||
 	    lx_pidns_children(curproc) != NULL)
 		return (-ENOEXEC);
 
@@ -2750,6 +2763,12 @@ lx_native_exec(uint8_t osabi, const char **interp)
 	mutex_exit(&curproc->p_lock);
 
 	return (B_TRUE);
+}
+
+static void
+lx_pgjoin(proc_t *p)
+{
+	lx_pidns_roles_update(p);
 }
 
 static void

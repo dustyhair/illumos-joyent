@@ -37,11 +37,13 @@ extern "C" {
 #include <sys/types.h>
 
 /*
- * Version 2 appends the optional child-reaper operation. Version 1
- * brands remain supported without accessing the appended field.
+ * Version 2 appends the optional child-reaper operation. Version 3 appends
+ * the process-group join completion operation. Older brands remain supported
+ * without accessing the appended fields.
  */
 #define	BRAND_VER_1	1
 #define	BRAND_VER_2	2
+#define	BRAND_VER_3	3
 
 /*
  * sub-commands to brandsys.
@@ -232,6 +234,7 @@ struct brand_ops {
 	int	(*b_cred_vnode_setattr)(const struct cred *, struct vnode *,
 	    struct vattr *, const struct vattr *, uint_t);
 	struct proc *(*b_reparent_children)(struct proc *);
+	void	(*b_pgjoin)(struct proc *);
 };
 
 /*

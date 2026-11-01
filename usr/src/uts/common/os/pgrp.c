@@ -38,6 +38,7 @@
 #include <sys/user.h>
 #include <sys/mount.h>
 #include <sys/proc.h>
+#include <sys/brand.h>
 #include <sys/signal.h>
 #include <sys/siginfo.h>
 #include <sys/ucontext.h>
@@ -147,6 +148,11 @@ pgjoin(p, pgp)
 			pgp->pid_pgorphaned = 1;
 	} else if (pgp->pid_pgorphaned && pglinked(p, p->p_parent))
 		pgp->pid_pgorphaned = 0;
+
+	/* Both native group and session identities are now final. */
+	if (PROC_IS_BRANDED(p) && p->p_brand->b_version >= BRAND_VER_3 &&
+	    BROP(p)->b_pgjoin != NULL)
+		BROP(p)->b_pgjoin(p);
 }
 
 void
