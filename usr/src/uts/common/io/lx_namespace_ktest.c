@@ -2293,7 +2293,7 @@ ns_pid_process_observe(ktest_ctx_hdl_t *ctx, uint_t kind)
 	proc_t *p = NULL;
 	kthread_t *t;
 	lx_pidns_map_t *map = NULL;
-	pid_t target, number;
+	pid_t target, number = kind == 2 ? 3 : 2;
 	boolean_t child = kind != 0, descendant = kind == 2;
 	boolean_t passed = B_FALSE;
 	lx_pidns_map_t **observer = descendant ?
@@ -2319,15 +2319,14 @@ ns_pid_process_observe(ktest_ctx_hdl_t *ctx, uint_t kind)
 		goto out;
 	}
 	map = child ? ptolxproc(p)->l_pidns_map : ttolxlwp(t)->br_pidns_map;
-	number = map == NULL ? 0 :
-	    lx_pidns_map_id(map, ns_pid_process_space);
 	if ((child && (p->p_ppid != (descendant ? ns_pid_process_target :
 	    ns_pid_process_owner) ||
 	    p->p_pid != target || ttolxlwp(t)->br_pidns_map != map)) ||
 	    (!child && (p->p_pid != ns_pid_process_owner ||
 	    target == p->p_pid ||
 	    ttolxlwp(t)->br_pidns_map == ptolxproc(p)->l_pidns_map)) ||
-	    map == NULL || number <= 1 ||
+	    map == NULL ||
+	    lx_pidns_map_id(map, ns_pid_process_space) != number ||
 	    (descendant && ptolxproc(p)->l_parent_deathsig != 0)) {
 		KT_FAIL(ctx, "fork or thread did not receive the next PID map");
 		goto out;
