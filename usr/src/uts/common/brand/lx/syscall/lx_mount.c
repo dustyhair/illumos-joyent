@@ -986,9 +986,11 @@ lx_mnt_private_umount(lx_mntns_view_t *view, const char *pathp, int flags)
 	if (error == 0) {
 		if (!lx_mntns_view_capable(view, CRED()))
 			error = EPERM;
+		else if (flags == 0)
+			error = lx_mntns_mount_unmount(view, path, CRED());
 		else if (flags == LX_MNT_DETACH)
 			error = lx_mntns_mount_detach(view, path, CRED());
-		else if (flags == 0 || flags == LX_MNT_FORCE)
+		else if (flags == LX_MNT_FORCE)
 			error = EOPNOTSUPP;
 		else
 			error = EINVAL;

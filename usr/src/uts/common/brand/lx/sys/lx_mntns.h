@@ -65,6 +65,7 @@ extern int lx_mntns_view_clone(lx_mntns_view_t *, cred_t *, cred_t *,
 extern int lx_mntns_vnodetopath(vnode_t *, char *, size_t, cred_t *);
 extern int lx_mntns_pivot(lx_mntns_view_t *, const char *, const char *,
     cred_t *);
+extern int lx_mntns_mount_unmount(lx_mntns_view_t *, const char *, cred_t *);
 extern int lx_mntns_mount_detach(lx_mntns_view_t *, const char *, cred_t *);
 extern int lx_mntns_mount_private(lx_mntns_view_t *, const char *, cred_t *);
 extern int lx_mntns_mount_readonly(lx_mntns_view_t *, const char *, uint_t,

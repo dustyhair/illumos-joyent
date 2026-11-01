@@ -1361,6 +1361,71 @@ lx_mntns_retire(lx_mntns_view_t *view)
 	mutex_exit(&view->lv_lock);
 }
 
+/* Destroy one visible leaf mount while retaining the rest of the view. */
+int
+lx_mntns_mount_unmount(lx_mntns_view_t *view, const char *target,
+    cred_t *actor)
+{
+	lx_mntns_mount_t *mount, *scan, **link;
+	vnode_t *vp = NULL;
+	vfs_t *vfs;
+	int error;
+
+	if (!lx_mntns_entry_enabled() ||
+	    !lx_mntns_view_capable(view, actor))
+		return (EPERM);
+	mutex_enter(&view->lv_lock);
+	if ((error = lookupname((char *)target, UIO_SYSSPACE, FOLLOW,
+	    NULL, &vp)) != 0)
+		goto out;
+	for (link = &view->lv_mounts; (mount = *link) != NULL;
+	    link = &mount->lm_next) {
+		if (vp == mount->lm_root &&
+		    mount->lm_vfs->vfs_vnodecovered != NULL)
+			break;
+	}
+	if (mount == NULL || !(vp->v_flag & VROOT)) {
+		error = vp == view->lv_root ? EOPNOTSUPP : EINVAL;
+		goto out;
+	}
+	for (scan = view->lv_mounts; scan != NULL; scan = scan->lm_next) {
+		if (scan != mount && scan->lm_vfs->vfs_vnodecovered != NULL &&
+		    lx_mntns_descendant(view, scan->lm_vfs, mount->lm_vfs)) {
+			error = EBUSY;
+			goto out;
+		}
+	}
+	vfs = mount->lm_vfs;
+	vfs_lock_wait(vfs);
+	if ((error = vn_vfswlock(vfs->vfs_vnodecovered)) != 0) {
+		vfs_unlock(vfs);
+		goto out;
+	}
+	vfs_unlock(vfs);
+	VN_RELE(vp);
+	vp = NULL;
+	VN_RELE(mount->lm_root);
+	mount->lm_root = NULL;
+	/* dounmount consumes the covered-vnode lock. */
+	if ((error = dounmount(vfs, 0, view->lv_cred)) != 0) {
+		VERIFY0(VFS_ROOT(vfs, &mount->lm_root));
+		goto out;
+	}
+	*link = mount->lm_next;
+	VERIFY3U(view->lv_nmounts, >, 0);
+	view->lv_nmounts--;
+	VFS_RELE(vfs);
+	refstr_rele(mount->lm_path);
+	if (mount->lm_prefix != NULL)
+		refstr_rele(mount->lm_prefix);
+	kmem_free(mount, sizeof (*mount));
+out:
+	if (vp != NULL)
+		VN_RELE(vp);
+	mutex_exit(&view->lv_lock);
+	return (error);
+}
+
 /*
  * Remove graph edges without unmounting busy filesystems. Lock every covered
  * vnode before changing any edge, so a failed lock leaves the tree intact.
