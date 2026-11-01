@@ -2063,7 +2063,7 @@ ns_pid_pcagent_live(ktest_ctx_hdl_t *ctx)
 	    ns_pid_process_zone == NULL || pid != ns_pid_process_owner ||
 	    (p = sprlock_zone(pid, ns_pid_process_zone->zone_id)) == NULL ||
 	    (t = p->p_agenttp) == NULL || (ld = ttolxlwp(t)) == NULL ||
-	    (map = ld->br_pidns_map) == NULL || ld->br_lpid == NULL) {
+	    (map = ld->br_pidns_map) == NULL) {
 		KT_FAIL(ctx, "missing live native /proc agent bookkeeping");
 		goto out;
 	}
@@ -2071,9 +2071,8 @@ ns_pid_pcagent_live(ktest_ctx_hdl_t *ctx)
 	lx_pcagent_lab_prepared(&prepared, &number);
 	mapped = lx_pidns_map_id(map, ns_pid_process_space);
 	if (prepared == NULL || number == 0 || prepared == p->p_pidp ||
-	    ld->br_lpid->lxp_pidp != prepared || ld->br_pid != number ||
-	    mapped == 0 || mapped != lx_pidns_visible(ns_pid_process_space,
-	    number)) {
+	    ld->br_lpid != NULL || ld->br_pid != number || mapped == 0 ||
+	    mapped != lx_pidns_visible(ns_pid_process_space, number)) {
 		KT_FAIL(ctx,
 		    "agent did not retain its prepared mapped identity");
 		goto out;
