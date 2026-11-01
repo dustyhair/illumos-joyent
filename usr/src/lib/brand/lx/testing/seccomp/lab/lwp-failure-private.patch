@@ -123,22 +123,28 @@
 +	}
 --- a/usr/src/uts/common/io/lx_namespace_ktest.c
 +++ b/usr/src/uts/common/io/lx_namespace_ktest.c
-@@ -2188,0 +2189,71 @@
+@@ -2188,0 +2189,82 @@
 +extern int lwp_failure_cleanup_lab(proc_t *, int (*)(void *, void *), void *);
++
++typedef struct ns_lwp_identity {
++	struct pid *nli_identity;
++	pid_t nli_number;
++} ns_lwp_identity_t;
 +
 +/* Hold only the native identity, so no observer can mask a leaked map. */
 +static int
 +ns_lwp_prepared(void *data, void *arg)
 +{
 +	lx_lwp_data_t *ld = data;
-+	struct pid **identity = arg;
++	ns_lwp_identity_t *observed = arg;
 +
 +	if (ld->br_pidns_map == NULL || ld->br_lpid == NULL ||
 +	    ld->br_lpid->lxp_pidp == NULL)
 +		return (EINVAL);
 +	mutex_enter(&pidlock);
-+	*identity = ld->br_lpid->lxp_pidp;
-+	PID_HOLD(*identity);
++	observed->nli_identity = ld->br_lpid->lxp_pidp;
++	observed->nli_number = observed->nli_identity->pid_id;
++	PID_HOLD(observed->nli_identity);
 +	mutex_exit(&pidlock);
 +	return (0);
 +}
@@ -147,7 +153,8 @@
 +ns_pid_lwp_failure(ktest_ctx_hdl_t *ctx)
 +{
 +	proc_t *p = NULL;
-+	struct pid *identity = NULL, *prepared = NULL;
++	struct pid *identity = NULL;
++	ns_lwp_identity_t prepared = { 0 };
 +	pid_t pid;
 +	int error = EINVAL;
 +	uint_t before;
@@ -173,11 +180,15 @@
 +	mutex_exit(&p->p_lock);
 +	error = lwp_failure_cleanup_lab(p, ns_lwp_prepared, &prepared);
 +	mutex_enter(&pidlock);
-+	if (prepared == NULL || !prepared->pid_prinactive ||
-+	    prepared->pid_ref != 1)
++	/* A broken releaser may have freed the observer's held identity. */
++	if (prepared.nli_identity == NULL ||
++	    pid_find(prepared.nli_number) != prepared.nli_identity) {
 +		error = EIO;
-+	if (prepared != NULL) {
-+		PID_RELE(prepared);
++	} else {
++		if (!prepared.nli_identity->pid_prinactive ||
++		    prepared.nli_identity->pid_ref != 1)
++			error = EIO;
++		PID_RELE(prepared.nli_identity);
 +	}
 +	mutex_exit(&pidlock);
 +	mutex_enter(&p->p_lock);
@@ -195,6 +206,6 @@
 +		KT_FAIL(ctx, "failed-LWP cleanup/interleaving: %d", error);
 +}
 +
-@@ -3041,0 +3113,2 @@
+@@ -3041,0 +3124,2 @@
 +	    (error = ktest_add_test(ks, "lwp_failure", ns_pid_lwp_failure,
 +	    KTEST_FLAG_INPUT)) != 0 ||

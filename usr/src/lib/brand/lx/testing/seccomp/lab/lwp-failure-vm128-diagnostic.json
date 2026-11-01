@@ -1,0 +1,11 @@
+{
+  "vm": 128,
+  "qemu_pid": 3519368,
+  "source": "41e9a4a254a0390188d4596d12c3f4da8667667d",
+  "production_source": "25e56214dddd5da7f90f87d9e51ecc4547ef5a38",
+  "accepted": false,
+  "failure": "Interlock helper returns0, lwpcnt1, observer native PID refs2 instead of1. lx_lwpdata_free calls unconditional native pid_rele; source proves observer identity can be freed.",
+  "console_sha256": "e89e79954fe5d143528b8daa65600d3895b998cb7cfcb3c9a6377bbf798810c6",
+  "cleanup": "Namespace counter0 observed after diagnostic; zone halted, pool healthy/export0, syncdone,QEMU exited",
+  "next": "Fix speculative native reservation release with existing ref-aware helper; rebuild and fresh VM129."
+}

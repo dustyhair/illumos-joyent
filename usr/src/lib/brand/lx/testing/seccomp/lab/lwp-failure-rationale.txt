@@ -69,3 +69,11 @@ TS_STOPPED kernel thread stopped. Stacks show thread_join waiting on that
 helper. VM128 uses thread_lock, TS_ALLSTART, setrun_locked, thread_unlock.
 Production sources exclude both versions of the private helper. VM128 is
 pending; VM127 is not a successful kernel lock-boundary test.
+
+VM128: interlock helper returned0, published LWPs stayed1, but native observer
+reference count was2. Native pid_rele unconditionally frees its argument, so
+lx_lwpdata_free bypassed the observer reference after dropping the map. af98
+uses existing lx_pid_identity_rele for the two outside-p_lock failure releases.
+The private observer now records the numeric identity separately and verifies
+pid_find(number) == held pointer before dereference or release. Expected count
+remains1. VM128 is diagnostic, not accepted. VM129 tests the correction.

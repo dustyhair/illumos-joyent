@@ -2186,88 +2186,6 @@ out:
 #undef PO_CHECK
 }
 
-extern int lwp_failure_cleanup_lab(proc_t *, int (*)(void *, void *), void *);
-
-typedef struct ns_lwp_identity {
-	struct pid *nli_identity;
-	pid_t nli_number;
-} ns_lwp_identity_t;
-
-/* Hold only the native identity, so no observer can mask a leaked map. */
-static int
-ns_lwp_prepared(void *data, void *arg)
-{
-	lx_lwp_data_t *ld = data;
-	ns_lwp_identity_t *observed = arg;
-
-	if (ld->br_pidns_map == NULL || ld->br_lpid == NULL ||
-	    ld->br_lpid->lxp_pidp == NULL)
-		return (EINVAL);
-	mutex_enter(&pidlock);
-	observed->nli_identity = ld->br_lpid->lxp_pidp;
-	observed->nli_number = observed->nli_identity->pid_id;
-	PID_HOLD(observed->nli_identity);
-	mutex_exit(&pidlock);
-	return (0);
-}
-
-static void
-ns_pid_lwp_failure(ktest_ctx_hdl_t *ctx)
-{
-	proc_t *p = NULL;
-	struct pid *identity = NULL;
-	ns_lwp_identity_t prepared = { 0 };
-	pid_t pid;
-	int error = EINVAL;
-	uint_t before;
-
-	mutex_enter(&ns_pid_lock);
-	if (!ns_process_pid(ctx, &pid) || ns_pid_process_zone == NULL ||
-	    pid != ns_pid_process_owner)
-		goto out;
-	identity = lx_pid_identity_hold(pid, ns_pid_process_zone);
-	if (identity == NULL)
-		goto out;
-	p = sprlock_zone(pid, ns_pid_process_zone->zone_id);
-	if (p == NULL)
-		goto out;
-	if (p->p_pidp != identity || p->p_brand != &lx_brand ||
-	    p->p_lwpcnt != 1 || p->p_tlist == NULL ||
-	    p->p_tlist->t_state != TS_STOPPED ||
-	    strcmp(PTOU(p)->u_comm, "pid_ownership") != 0 ||
-	    ptolxproc(p)->l_pidns_map == NULL ||
-	    (p->p_flag & (SEXITING | SEXITLWPS | SKILLED)) != 0)
-		goto out;
-	before = p->p_lwpcnt;
-	mutex_exit(&p->p_lock);
-	error = lwp_failure_cleanup_lab(p, ns_lwp_prepared, &prepared);
-	mutex_enter(&pidlock);
-	/* A broken releaser may have freed the observer's held identity. */
-	if (prepared.nli_identity == NULL ||
-	    pid_find(prepared.nli_number) != prepared.nli_identity) {
-		error = EIO;
-	} else {
-		if (!prepared.nli_identity->pid_prinactive ||
-		    prepared.nli_identity->pid_ref != 1)
-			error = EIO;
-		PID_RELE(prepared.nli_identity);
-	}
-	mutex_exit(&pidlock);
-	mutex_enter(&p->p_lock);
-	if (p->p_lwpcnt != before)
-		error = EIO;
-out:
-	if (p != NULL)
-		sprunlock(p);
-	if (identity != NULL)
-		lx_pid_identity_rele(identity);
-	mutex_exit(&ns_pid_lock);
-	if (error == 0)
-		KT_PASS(ctx);
-	else
-		KT_FAIL(ctx, "failed-LWP cleanup/interleaving: %d", error);
-}
-
 static void
 ns_pid_process_observe(ktest_ctx_hdl_t *ctx, uint_t kind)
 {
@@ -3121,8 +3039,6 @@ _init(void)
 	    ns_nested_drained, 0)) != 0 ||
 	    (error = ktest_add_test(ks, "nested_release",
 	    ns_nested_release, 0)) != 0 ||
-	    (error = ktest_add_test(ks, "lwp_failure", ns_pid_lwp_failure,
-	    KTEST_FLAG_INPUT)) != 0 ||
 	    (error = ktest_add_test(ks, "process_attach", ns_pid_process_attach,
 	    KTEST_FLAG_INPUT)) != 0 ||
 	    (error = ktest_add_test(ks, "process_thread", ns_pid_process_thread,
