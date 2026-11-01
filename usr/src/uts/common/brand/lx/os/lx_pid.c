@@ -48,17 +48,6 @@ static struct lx_pid **ltos_pid_hash;
 
 static kmutex_t hash_lock;
 
-/* Private VM regression overlay. Removed before production acceptance. */
-static struct pid *lx_pcagent_prepared;
-static pid_t lx_pcagent_prepared_number;
-
-void
-lx_pcagent_lab_prepared(struct pid **identity, pid_t *number)
-{
-	*identity = lx_pcagent_prepared;
-	*number = lx_pcagent_prepared_number;
-}
-
 static void
 lx_pid_insert_hash(struct lx_pid *lpidp)
 {
@@ -171,12 +160,6 @@ lx_pid_assign(kthread_t *t, struct lx_pid *lpidp)
 	lx_lwp_data_t *lwpd = ttolxlwp(t);
 	pid_t spid = p->p_pid;
 	id_t stid = t->t_tid;
-
-	if (p->p_lwpcnt > 0 && lwpd->br_ppid == 0 && t != curthread) {
-		lx_pcagent_prepared = lpidp->lxp_pidp;
-		lx_pcagent_prepared_number = lpidp->lxp_pidp->pid_id;
-		membar_producer();
-	}
 
 	/*
 	 * When lx_initlwp is called from lx_setbrand, p_lwpcnt will already be

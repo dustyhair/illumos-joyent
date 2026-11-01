@@ -23,7 +23,6 @@
 #include <sys/lx_cap.h>
 
 extern brand_t lx_brand;
-extern void lx_pcagent_lab_prepared(struct pid **, pid_t *);
 
 extern void lx_userns_test_maps(ktest_ctx_hdl_t *);
 extern void lx_userns_test_caps(ktest_ctx_hdl_t *);
@@ -2044,107 +2043,6 @@ static lx_pidns_map_t *ns_pid_process_observer;
 static lx_pidns_map_t *ns_pid_process_descendant_map;
 static pid_t ns_pid_process_descendant_pid;
 static pid_t ns_pid_process_owner, ns_pid_process_target;
-static struct pid *ns_pcagent_observer;
-static pid_t ns_pcagent_number;
-
-static void
-ns_pid_pcagent_live(ktest_ctx_hdl_t *ctx)
-{
-	proc_t *p = NULL;
-	kthread_t *t;
-	lx_lwp_data_t *ld;
-	lx_pidns_map_t *map;
-	struct pid *prepared = NULL;
-	pid_t pid, number = 0, mapped;
-	boolean_t passed = B_FALSE;
-
-	mutex_enter(&ns_pid_lock);
-	if (ns_pcagent_observer != NULL || !ns_process_pid(ctx, &pid) ||
-	    ns_pid_process_zone == NULL || pid != ns_pid_process_owner ||
-	    (p = sprlock_zone(pid, ns_pid_process_zone->zone_id)) == NULL ||
-	    (t = p->p_agenttp) == NULL || (ld = ttolxlwp(t)) == NULL ||
-	    (map = ld->br_pidns_map) == NULL || ld->br_lpid == NULL) {
-		KT_FAIL(ctx, "missing live native /proc agent bookkeeping");
-		goto out;
-	}
-	membar_consumer();
-	lx_pcagent_lab_prepared(&prepared, &number);
-	mapped = lx_pidns_map_id(map, ns_pid_process_space);
-	if (prepared == NULL || number == 0 || prepared == p->p_pidp ||
-	    ld->br_lpid->lxp_pidp != prepared || ld->br_pid != number ||
-	    mapped == 0 || mapped != lx_pidns_visible(ns_pid_process_space,
-	    number)) {
-		KT_FAIL(ctx,
-		    "agent did not retain its prepared mapped identity");
-		goto out;
-	}
-	mutex_exit(&p->p_lock);
-	mutex_enter(&pidlock);
-	if (pid_find(number) != prepared) {
-		mutex_exit(&pidlock);
-		mutex_enter(&p->p_lock);
-		KT_FAIL(ctx,
-		    "prepared agent identity is absent from native hash");
-		goto out;
-	}
-	PID_HOLD(prepared);
-	mutex_exit(&pidlock);
-	mutex_enter(&p->p_lock);
-	ns_pcagent_observer = prepared;
-	ns_pcagent_number = number;
-	passed = B_TRUE;
-out:
-	if (p != NULL)
-		sprunlock(p);
-	mutex_exit(&ns_pid_lock);
-	if (passed)
-		KT_PASS(ctx);
-}
-
-static void
-ns_pid_pcagent_dead(ktest_ctx_hdl_t *ctx)
-{
-	proc_t *p = NULL;
-	struct pid *identity;
-	pid_t pid, number;
-	boolean_t passed = B_FALSE;
-
-	mutex_enter(&ns_pid_lock);
-	identity = ns_pcagent_observer;
-	number = ns_pcagent_number;
-	if (identity == NULL || !ns_process_pid(ctx, &pid) ||
-	    ns_pid_process_zone == NULL || pid != ns_pid_process_owner ||
-	    (p = sprlock_zone(pid, ns_pid_process_zone->zone_id)) == NULL ||
-	    p->p_agenttp != NULL || p->p_lwpcnt != 1) {
-		KT_FAIL(ctx, "native /proc agent did not leave cleanly");
-		goto out;
-	}
-	sprunlock(p);
-	p = NULL;
-	mutex_enter(&pidlock);
-	if (pid_find(number) != identity || !identity->pid_prinactive ||
-	    identity->pid_ref != 1) {
-		mutex_exit(&pidlock);
-		KT_FAIL(ctx, "agent teardown did not leave only its observer");
-		goto out;
-	}
-	PID_RELE(identity);
-	if (pid_find(number) != NULL) {
-		mutex_exit(&pidlock);
-		KT_FAIL(ctx, "agent identity remained after final release");
-		goto out;
-	}
-	mutex_exit(&pidlock);
-	ns_pcagent_observer = NULL;
-	ns_pcagent_number = 0;
-	passed = B_TRUE;
-out:
-	if (p != NULL)
-		sprunlock(p);
-	mutex_exit(&ns_pid_lock);
-	if (passed)
-		KT_PASS(ctx);
-}
 
 static void
 ns_pid_process_drop(void)
@@ -3142,10 +3040,6 @@ _init(void)
 	    (error = ktest_add_test(ks, "nested_release",
 	    ns_nested_release, 0)) != 0 ||
 	    (error = ktest_add_test(ks, "process_attach", ns_pid_process_attach,
-	    KTEST_FLAG_INPUT)) != 0 ||
-	    (error = ktest_add_test(ks, "pcagent_live", ns_pid_pcagent_live,
-	    KTEST_FLAG_INPUT)) != 0 ||
-	    (error = ktest_add_test(ks, "pcagent_dead", ns_pid_pcagent_dead,
 	    KTEST_FLAG_INPUT)) != 0 ||
 	    (error = ktest_add_test(ks, "process_thread", ns_pid_process_thread,
 	    KTEST_FLAG_INPUT)) != 0 ||
