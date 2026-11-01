@@ -2044,6 +2044,7 @@ static lx_pidns_map_t *ns_pid_process_observer;
 static lx_pidns_map_t *ns_pid_process_descendant_map;
 static pid_t ns_pid_process_descendant_pid;
 static pid_t ns_pid_process_owner, ns_pid_process_target;
+static pid_t ns_pid_process_target_nspid, ns_pid_process_descendant_nspid;
 static struct pid *ns_pcagent_observer;
 static pid_t ns_pcagent_number;
 
@@ -2155,6 +2156,8 @@ ns_pid_process_drop(void)
 		lx_pidns_map_rele(ns_pid_process_descendant_map);
 	ns_pid_process_descendant_map = NULL;
 	ns_pid_process_descendant_pid = 0;
+	ns_pid_process_target_nspid = 0;
+	ns_pid_process_descendant_nspid = 0;
 	lx_pidns_rele(ns_pid_process_space);
 	if (ns_pid_process_zone != NULL)
 		zone_rele(ns_pid_process_zone);
@@ -2338,6 +2341,10 @@ ns_pid_process_observe(ktest_ctx_hdl_t *ctx, uint_t kind)
 		ns_pid_process_descendant_pid = target;
 	else
 		ns_pid_process_target = target;
+	if (descendant)
+		ns_pid_process_descendant_nspid = number;
+	else
+		ns_pid_process_target_nspid = number;
 	mutex_exit(&p->p_lock);
 	p = NULL;
 	if (lx_pidns_visible(ns_pid_process_space, target) != number) {
@@ -2396,9 +2403,11 @@ ns_pid_process_dead(ktest_ctx_hdl_t *ctx)
 		goto out;
 	}
 	for (attempt = 0; attempt < 100; attempt++) {
-		struct pid *child = lx_pidns_lookup(ns_pid_process_space, 2);
+		struct pid *child = lx_pidns_lookup(ns_pid_process_space,
+		    ns_pid_process_target_nspid);
 		struct pid *descendant =
-		    lx_pidns_lookup(ns_pid_process_space, 3);
+		    lx_pidns_lookup(ns_pid_process_space,
+		    ns_pid_process_descendant_nspid);
 
 		mutex_enter(&pidlock);
 		passed = child != NULL && descendant != NULL &&
@@ -2445,9 +2454,11 @@ ns_pid_process_drained(ktest_ctx_hdl_t *ctx)
 		goto out;
 	}
 	{
-		struct pid *child = lx_pidns_lookup(ns_pid_process_space, 2);
+		struct pid *child = lx_pidns_lookup(ns_pid_process_space,
+		    ns_pid_process_target_nspid);
 		struct pid *descendant =
-		    lx_pidns_lookup(ns_pid_process_space, 3);
+		    lx_pidns_lookup(ns_pid_process_space,
+		    ns_pid_process_descendant_nspid);
 
 		mutex_enter(&pidlock);
 		passed = child != NULL && descendant != NULL &&
@@ -2608,7 +2619,8 @@ ns_pid_orphan_retired(ktest_ctx_hdl_t *ctx)
 		goto out;
 	}
 	for (attempt = 0; attempt < 100; attempt++) {
-		struct pid *identity = lx_pidns_lookup(ns_pid_process_space, 3);
+		struct pid *identity = lx_pidns_lookup(ns_pid_process_space,
+		    ns_pid_process_descendant_nspid);
 
 		if (identity == NULL)
 			break;
@@ -2647,7 +2659,8 @@ ns_pid_process_retired(ktest_ctx_hdl_t *ctx)
 		goto out;
 	}
 	for (attempt = 0; attempt < 100; attempt++) {
-		identity = lx_pidns_lookup(ns_pid_process_space, 2);
+		identity = lx_pidns_lookup(ns_pid_process_space,
+		    ns_pid_process_target_nspid);
 		if (identity == NULL)
 			break;
 		mutex_enter(&pidlock);
