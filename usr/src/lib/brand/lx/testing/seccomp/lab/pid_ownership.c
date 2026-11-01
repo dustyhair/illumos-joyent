@@ -88,7 +88,8 @@ main(int argc, char **argv)
 	if (strcmp(mode, "image") == 0)
 		goto retired;
 	if (strcmp(mode, "exit") != 0 && strcmp(mode, "exec") != 0 &&
-	    strcmp(mode, "fork") != 0 && strcmp(mode, "death") != 0)
+	    strcmp(mode, "fork") != 0 && strcmp(mode, "death") != 0 &&
+	    strcmp(mode, "roles") != 0)
 		return (2);
 	for (int i = 2; i < argc; i++) {
 		if (strcmp(argv[i], "--guard") == 0)
@@ -106,6 +107,65 @@ main(int argc, char **argv)
 	    getpid(), syscall(SYS_gettid), mode);
 	if (raise(SIGSTOP))
 		return (1);
+	if (strcmp(mode, "roles") == 0) {
+		pid_t leader = fork();
+		int status;
+
+		if (leader < 0) {
+			perror("role leader fork");
+			return (1);
+		}
+		if (leader == 0) {
+			pid_t member;
+
+			if (setsid() < 0) {
+				perror("leader setsid");
+				_exit(4);
+			}
+			member = fork();
+			if (member < 0) {
+				perror("role member fork");
+				_exit(5);
+			}
+			if (member == 0) {
+				(void) printf(
+				    "PID_ROLE_MEMBER pid=%d leader=%d "
+				    "pgid=%d sid=%d\n", getpid(), getppid(),
+				    getpgrp(), getsid(0));
+				if (raise(SIGSTOP) || setpgid(0, 0) != 0)
+					_exit(6);
+				(void) printf("PID_ROLE_SPLIT pid=%d pgid=%d "
+				    "sid=%d\n", getpid(), getpgrp(), getsid(0));
+				if (raise(SIGSTOP))
+					_exit(7);
+				(void) printf("PID_ROLE_MEMBER_EXIT pid=%d\n",
+				    getpid());
+				_exit(29);
+			}
+			(void) printf("PID_ROLE_LEADER pid=%d member=%d "
+			    "pgid=%d sid=%d\n", getpid(), member, getpgrp(),
+			    getsid(0));
+			if (raise(SIGSTOP))
+				_exit(8);
+			_exit(31);
+		}
+		(void) printf("PID_ROLE_OWNER pid=%d leader=%d\n", getpid(),
+		    leader);
+		if (raise(SIGSTOP) || waitpid(leader, &status, 0) != leader ||
+		    !WIFEXITED(status) || WEXITSTATUS(status) != 31)
+			return (1);
+		(void) printf("PID_ROLE_LEADER_REAPED pid=%d\n", leader);
+		if (raise(SIGSTOP))
+			return (1);
+		leader = waitpid(-1, &status, 0);
+		if (leader < 0 || !WIFEXITED(status) ||
+		    WEXITSTATUS(status) != 29)
+			return (1);
+		(void) printf("PID_ROLE_MEMBER_REAPED pid=%d\n", leader);
+		if (raise(SIGSTOP))
+			return (1);
+		goto retired;
+	}
 	if (strcmp(mode, "fork") == 0 || strcmp(mode, "death") == 0) {
 		pid_t parent = getpid(), child = fork();
 		int status;

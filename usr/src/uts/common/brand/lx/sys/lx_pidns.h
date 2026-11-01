@@ -57,6 +57,8 @@ extern boolean_t lx_pidns_commit(lx_pidns_map_t *);
 extern int lx_pidns_publish(lx_pidns_map_t *, pid_t);
 extern void lx_pidns_map_hold(lx_pidns_map_t *);
 extern void lx_pidns_map_rele(lx_pidns_map_t *);
+/* Return a held committed map indexed by this role identity. */
+extern lx_pidns_map_t *lx_pidns_role_hold(lx_pidns_t *, struct pid *);
 /* Refresh native group/session role holds after pgjoin, under pidlock. */
 extern void lx_pidns_roles_update(struct proc *);
 extern pid_t lx_pidns_map_id(lx_pidns_map_t *, lx_pidns_t *);

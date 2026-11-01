@@ -491,7 +491,7 @@ lx_pidns_map_rele(lx_pidns_map_t *map)
 }
 
 /* Return a held committed map already indexed in active ancestry. */
-static lx_pidns_map_t *
+lx_pidns_map_t *
 lx_pidns_role_hold(lx_pidns_t *ns, struct pid *identity)
 {
 	lx_pidns_t *at;

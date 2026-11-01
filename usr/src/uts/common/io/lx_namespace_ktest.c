@@ -15,6 +15,10 @@
 #include <sys/brand.h>
 #include <sys/proc.h>
 #include <sys/session.h>
+#include <sys/taskq.h>
+#include <sys/disp.h>
+#include <sys/ddi.h>
+#include <sys/atomic.h>
 #include <sys/zone.h>
 #include <sys/lx_brand.h>
 #include <sys/machbrand.h>
@@ -2044,6 +2048,7 @@ static lx_pidns_map_t *ns_pid_process_observer;
 static lx_pidns_map_t *ns_pid_process_descendant_map;
 static pid_t ns_pid_process_descendant_pid;
 static pid_t ns_pid_process_owner, ns_pid_process_target;
+static pid_t ns_pid_role_leader, ns_pid_role_member;
 
 static void
 ns_pid_process_drop(void)
@@ -2062,6 +2067,7 @@ ns_pid_process_drop(void)
 	ns_pid_process_space = NULL;
 	ns_pid_process_zone = NULL;
 	ns_pid_process_owner = ns_pid_process_target = 0;
+	ns_pid_role_leader = ns_pid_role_member = 0;
 }
 
 static boolean_t
@@ -2230,6 +2236,311 @@ ns_pid_process_roles(ktest_ctx_hdl_t *ctx)
 		KT_PASS(ctx);
 	else
 		KT_FAIL(ctx, "native roles do not retain their visible maps");
+}
+
+static boolean_t
+ns_pid_role_maps_match(proc_t *p, pid_t pgid, pid_t sid)
+{
+	lx_proc_data_t *pd = ptolxproc(p);
+
+	return (pd != NULL &&
+	    (pgid == 0 ? pd->l_pidns_pgid == NULL :
+	    pd->l_pidns_pgid != NULL &&
+	    lx_pidns_map_id(pd->l_pidns_pgid, ns_pid_process_space) == pgid) &&
+	    (sid == 0 ? pd->l_pidns_sid == NULL :
+	    pd->l_pidns_sid != NULL &&
+	    lx_pidns_map_id(pd->l_pidns_sid, ns_pid_process_space) == sid));
+}
+
+static boolean_t
+ns_pid_role_process(proc_t *p, pid_t own, pid_t pgid, pid_t sid,
+    boolean_t zombie)
+{
+	lx_proc_data_t *pd = ptolxproc(p);
+
+	if (p->p_brand != &lx_brand || pd == NULL ||
+	    lx_pidns_active(p) != ns_pid_process_space ||
+	    pd->l_pidns_map == NULL ||
+	    lx_pidns_map_id(pd->l_pidns_map, ns_pid_process_space) != own ||
+	    !ns_pid_role_maps_match(p, pgid, sid))
+		return (B_FALSE);
+	if (zombie)
+		return (p->p_stat == SZOMB);
+	return (p->p_tlist != NULL && p->p_tlist->t_state == TS_STOPPED);
+}
+
+static void
+ns_pid_role_pair(ktest_ctx_hdl_t *ctx)
+{
+	proc_t *owner, *leader, *member;
+	pid_t leader_pid, member_pid;
+	boolean_t passed = B_FALSE;
+
+	mutex_enter(&ns_pid_lock);
+	if (ns_pid_process_space == NULL || ns_pid_role_leader != 0 ||
+	    !ns_pid_pair(ctx, &leader_pid, &member_pid)) {
+		KT_ERROR(ctx, "invalid PID role fixture pair");
+		goto out;
+	}
+	mutex_enter(&pidlock);
+	owner = prfind_zone(ns_pid_process_owner, ALL_ZONES);
+	leader = prfind_zone(leader_pid, ALL_ZONES);
+	member = prfind_zone(member_pid, ALL_ZONES);
+	if (owner != NULL && leader != NULL && member != NULL) {
+		mutex_enter(&leader->p_lock);
+		passed = leader->p_parent == owner &&
+		    leader->p_pgidp->pid_id == leader_pid &&
+		    leader->p_sessp->s_sidp->pid_id == leader_pid &&
+		    ns_pid_role_process(leader, 2, 2, 2, B_FALSE);
+		mutex_exit(&leader->p_lock);
+		mutex_enter(&member->p_lock);
+		passed = passed && member->p_parent == leader &&
+		    member->p_pgidp->pid_id == leader_pid &&
+		    member->p_sessp->s_sidp->pid_id == leader_pid &&
+		    ns_pid_role_process(member, 3, 2, 2, B_FALSE);
+		mutex_exit(&member->p_lock);
+	}
+	mutex_exit(&pidlock);
+	if (passed) {
+		ns_pid_role_leader = leader_pid;
+		ns_pid_role_member = member_pid;
+		KT_PASS(ctx);
+	} else {
+		KT_FAIL(ctx,
+		    "initial group/session role maps are inconsistent");
+	}
+out:
+	mutex_exit(&ns_pid_lock);
+}
+
+static void
+ns_pid_role_survivor(ktest_ctx_hdl_t *ctx)
+{
+	proc_t *owner, *member;
+	boolean_t passed = B_FALSE;
+
+	mutex_enter(&ns_pid_lock);
+	mutex_enter(&pidlock);
+	owner = prfind_zone(ns_pid_process_owner, ALL_ZONES);
+	member = prfind_zone(ns_pid_role_member, ALL_ZONES);
+	if (ns_pid_process_space != NULL && owner != NULL && member != NULL &&
+	    prfind_zone(ns_pid_role_leader, ALL_ZONES) == NULL) {
+		mutex_enter(&member->p_lock);
+		passed = member->p_parent == owner &&
+		    member->p_pgidp->pid_id == ns_pid_role_leader &&
+		    member->p_sessp->s_sidp->pid_id == ns_pid_role_leader &&
+		    lx_pidns_visible(ns_pid_process_space,
+		    ns_pid_role_leader) == 2 &&
+		    ns_pid_role_process(member, 3, 2, 2, B_FALSE);
+		mutex_exit(&member->p_lock);
+	}
+	mutex_exit(&pidlock);
+	mutex_exit(&ns_pid_lock);
+	if (passed)
+		KT_PASS(ctx);
+	else
+		KT_FAIL(ctx, "leader reap lost a surviving member role map");
+}
+
+static void
+ns_pid_role_split(ktest_ctx_hdl_t *ctx)
+{
+	proc_t *member;
+	boolean_t passed = B_FALSE;
+
+	mutex_enter(&ns_pid_lock);
+	mutex_enter(&pidlock);
+	member = prfind_zone(ns_pid_role_member, ALL_ZONES);
+	if (ns_pid_process_space != NULL && member != NULL) {
+		mutex_enter(&member->p_lock);
+		passed = member->p_pgidp->pid_id == ns_pid_role_member &&
+		    member->p_sessp->s_sidp->pid_id == ns_pid_role_leader &&
+		    lx_pidns_visible(ns_pid_process_space,
+		    ns_pid_role_leader) == 2 &&
+		    lx_pidns_visible(ns_pid_process_space,
+		    ns_pid_role_member) == 3 &&
+		    ns_pid_role_process(member, 3, 3, 2, B_FALSE);
+		mutex_exit(&member->p_lock);
+	}
+	mutex_exit(&pidlock);
+	mutex_exit(&ns_pid_lock);
+	if (passed)
+		KT_PASS(ctx);
+	else
+		KT_FAIL(ctx, "group departure did not retain the session role");
+}
+
+static void
+ns_pid_role_zombie(ktest_ctx_hdl_t *ctx)
+{
+	proc_t *owner, *member;
+	boolean_t passed = B_FALSE;
+
+	mutex_enter(&ns_pid_lock);
+	mutex_enter(&pidlock);
+	owner = prfind_zone(ns_pid_process_owner, ALL_ZONES);
+	member = prfind_zone(ns_pid_role_member, ALL_ZONES);
+	if (ns_pid_process_space != NULL && owner != NULL && member != NULL) {
+		mutex_enter(&member->p_lock);
+		passed = member->p_parent == owner &&
+		    member->p_pgidp->pid_id == ns_pid_role_member &&
+		    member->p_sessp->s_sidp->pid_id == ns_pid_role_leader &&
+		    lx_pidns_visible(ns_pid_process_space,
+		    ns_pid_role_leader) == 2 &&
+		    lx_pidns_visible(ns_pid_process_space,
+		    ns_pid_role_member) == 3 &&
+		    ns_pid_role_process(member, 3, 3, 2, B_TRUE);
+		mutex_exit(&member->p_lock);
+	}
+	mutex_exit(&pidlock);
+	mutex_exit(&ns_pid_lock);
+	if (passed)
+		KT_PASS(ctx);
+	else
+		KT_FAIL(ctx, "zombie membership lost a native role map");
+}
+
+static void
+ns_pid_role_reaped(ktest_ctx_hdl_t *ctx)
+{
+	boolean_t passed;
+
+	mutex_enter(&ns_pid_lock);
+	mutex_enter(&pidlock);
+	passed = ns_pid_process_space != NULL &&
+	    prfind_zone(ns_pid_role_leader, ALL_ZONES) == NULL &&
+	    prfind_zone(ns_pid_role_member, ALL_ZONES) == NULL &&
+	    lx_pidns_visible(ns_pid_process_space, ns_pid_role_leader) == 0 &&
+	    lx_pidns_visible(ns_pid_process_space, ns_pid_role_member) == 0;
+	mutex_exit(&pidlock);
+	mutex_exit(&ns_pid_lock);
+	if (passed)
+		KT_PASS(ctx);
+	else
+		KT_FAIL(ctx, "final role departure retained a PID map");
+}
+
+typedef struct ns_pid_role_race {
+	lx_pidns_map_t *rr_map;
+	volatile uint32_t rr_started;
+	volatile uint32_t rr_done;
+} ns_pid_role_race_t;
+
+static void
+ns_pid_role_race_rele(void *arg)
+{
+	ns_pid_role_race_t *race = arg;
+
+	atomic_inc_32(&race->rr_started);
+	lx_pidns_map_rele(race->rr_map);
+	atomic_inc_32(&race->rr_done);
+}
+
+static void
+ns_pid_role_race(ktest_ctx_hdl_t *ctx)
+{
+	ns_pid_role_race_t race = { 0 };
+	lx_pidns_map_t *map = NULL, *acquired = NULL;
+	struct pid *identity = NULL;
+	taskq_t *queue = NULL;
+	taskqid_t task = TASKQID_INVALID;
+	pid_t fresh, number = 0;
+	boolean_t passed = B_FALSE, dispatched = B_FALSE, token_gone = B_FALSE;
+	uint_t attempt;
+
+	mutex_enter(&ns_pid_lock);
+	if (ns_pid_process_space == NULL || ns_pid_process_zone == NULL ||
+	    ns_pid_role_leader == 0 || ns_pid_role_member == 0) {
+		KT_ERROR(ctx, "no completed PID role fixture");
+		goto out;
+	}
+	if (lx_pidns_reserve(ns_pid_process_space, &map) != 0 ||
+	    (fresh = pid_allocate(curproc, 0, 0)) <= 1) {
+		KT_FAIL(ctx, "cannot prepare final-release race map");
+		goto out;
+	}
+	mutex_enter(&pidlock);
+	identity = pid_find(fresh);
+	mutex_exit(&pidlock);
+	if (identity == NULL || lx_pidns_bind_native(map,
+	    ns_pid_process_zone, identity) != 0 || !lx_pidns_commit(map)) {
+		KT_FAIL(ctx, "cannot publish final-release race map");
+		goto out;
+	}
+	number = lx_pidns_map_id(map, ns_pid_process_space);
+	queue = taskq_create("lx_pid_role_race", 1, minclsyspri,
+	    1, 1, TASKQ_PREPOPULATE);
+	if (queue == NULL) {
+		KT_FAIL(ctx, "cannot create final-release race taskq");
+		goto out;
+	}
+	race.rr_map = map;
+	mutex_enter(&pidlock);
+	task = taskq_dispatch(queue, ns_pid_role_race_rele, &race, TQ_SLEEP);
+	if (task != TASKQID_INVALID) {
+		dispatched = B_TRUE;
+		map = NULL;
+	}
+	for (attempt = 0; dispatched && race.rr_started == 0 &&
+	    attempt < 100000; attempt++)
+		drv_usecwait(10);
+	if (race.rr_started != 0)
+		acquired = lx_pidns_role_hold(ns_pid_process_space, identity);
+	mutex_exit(&pidlock);
+	if (dispatched)
+		taskq_wait(queue);
+	passed = acquired == race.rr_map && race.rr_done == 1 &&
+	    lx_pidns_map_id(acquired, ns_pid_process_space) == number &&
+	    lx_pidns_visible(ns_pid_process_space, fresh) == number;
+	if (acquired != NULL) {
+		lx_pidns_map_rele(acquired);
+		acquired = NULL;
+	}
+	if (passed)
+		passed = lx_pidns_visible(ns_pid_process_space, fresh) == 0;
+out:
+	if (dispatched && race.rr_done == 0 && queue != NULL)
+		taskq_wait(queue);
+	if (queue != NULL)
+		taskq_destroy(queue);
+	if (acquired != NULL)
+		lx_pidns_map_rele(acquired);
+	if (map != NULL)
+		lx_pidns_map_rele(map);
+	if (identity != NULL) {
+		mutex_enter(&pidlock);
+		PID_RELE(identity);
+		token_gone = pid_find(fresh) == NULL;
+		mutex_exit(&pidlock);
+	}
+	mutex_exit(&ns_pid_lock);
+	if (passed && token_gone)
+		KT_PASS(ctx);
+	else
+		KT_FAIL(ctx, "final release raced with role acquisition");
+}
+
+static void
+ns_pid_role_release(ktest_ctx_hdl_t *ctx)
+{
+	pid_t owner, leader, member;
+	boolean_t gone;
+
+	mutex_enter(&ns_pid_lock);
+	owner = ns_pid_process_owner;
+	leader = ns_pid_role_leader;
+	member = ns_pid_role_member;
+	ns_pid_process_drop();
+	mutex_enter(&pidlock);
+	gone = owner > 1 && leader > 1 && member > 1 &&
+	    pid_find(owner) == NULL && pid_find(leader) == NULL &&
+	    pid_find(member) == NULL;
+	mutex_exit(&pidlock);
+	mutex_exit(&ns_pid_lock);
+	if (gone)
+		KT_PASS(ctx);
+	else
+		KT_FAIL(ctx, "role fixture identities outlived final release");
 }
 
 static void
@@ -3088,6 +3399,20 @@ _init(void)
 	    (error = ktest_add_test(ks, "process_attach", ns_pid_process_attach,
 	    KTEST_FLAG_INPUT)) != 0 ||
 	    (error = ktest_add_test(ks, "process_roles", ns_pid_process_roles,
+	    0)) != 0 ||
+	    (error = ktest_add_test(ks, "role_pair", ns_pid_role_pair,
+	    KTEST_FLAG_INPUT)) != 0 ||
+	    (error = ktest_add_test(ks, "role_survivor",
+	    ns_pid_role_survivor, 0)) != 0 ||
+	    (error = ktest_add_test(ks, "role_split", ns_pid_role_split,
+	    0)) != 0 ||
+	    (error = ktest_add_test(ks, "role_zombie", ns_pid_role_zombie,
+	    0)) != 0 ||
+	    (error = ktest_add_test(ks, "role_reaped", ns_pid_role_reaped,
+	    0)) != 0 ||
+	    (error = ktest_add_test(ks, "role_race", ns_pid_role_race,
+	    0)) != 0 ||
+	    (error = ktest_add_test(ks, "role_release", ns_pid_role_release,
 	    0)) != 0 ||
 	    (error = ktest_add_test(ks, "process_thread", ns_pid_process_thread,
 	    KTEST_FLAG_INPUT)) != 0 ||
