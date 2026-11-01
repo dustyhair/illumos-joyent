@@ -324,6 +324,7 @@ lx_helper_rt_sigqueueinfo(pid_t tgid, int sig, siginfo_t *uinfo)
 	sigsend_t send;
 	int err;
 	siginfo_t kinfo;
+	lx_pidns_t *ns = lx_pidns_active(curproc);
 
 	if (copyin(uinfo, &kinfo, sizeof (siginfo_t)) != 0)
 		return (set_errno(EFAULT));
@@ -337,7 +338,10 @@ lx_helper_rt_sigqueueinfo(pid_t tgid, int sig, siginfo_t *uinfo)
 	 * function to translate. Since we're sending to the whole group, we
 	 * only need the solaris pid, and not the lwp id.
 	 */
-	if (tgid == 1) {
+	if (ns != NULL) {
+		if ((s_pid = lx_pidns_map_backing(ns, tgid)) == 0)
+			return (set_errno(ESRCH));
+	} else if (tgid == 1) {
 		s_pid = zone->zone_proc_initpid;
 	} else {
 		if (lx_lpid_to_spair(tgid, &s_pid, NULL) != 0) {
@@ -390,6 +394,8 @@ lx_helper_rt_tgsigqueueinfo(pid_t tgid, pid_t tid, int sig, siginfo_t *uinfo)
 	kthread_t *t;
 	sigqueue_t *sqp = NULL;
 	siginfo_t kinfo;
+	lx_pidns_t *ns = lx_pidns_active(cp);
+	pid_t backing_tid, backing_tgid;
 
 	bzero(&kinfo, sizeof (kinfo));
 #ifdef _SYSCALL32_IMPL
@@ -423,18 +429,22 @@ lx_helper_rt_tgsigqueueinfo(pid_t tgid, pid_t tid, int sig, siginfo_t *uinfo)
 	    kinfo.si_code != SI_QUEUE && kinfo.si_code != SI_TIMER &&
 	    kinfo.si_code != SI_ASYNCIO && kinfo.si_code != SI_MESGQ)
 		return (set_errno(EINVAL));
+	backing_tid = lx_signal_backing(ns, tid);
+	backing_tgid = lx_signal_backing(ns, tgid);
+	if (backing_tid == 0 || backing_tgid == 0)
+		return (set_errno(ESRCH));
 
 	/* Never allocate for signal zero, or sleep with target p_lock held. */
 	if (sig != 0)
 		sqp = kmem_zalloc(sizeof (sigqueue_t), KM_SLEEP);
 
-	if (lx_lpid_lock(tid, curzone, 0, &p, &t) != 0) {
+	if (lx_lpid_lock(backing_tid, curzone, 0, &p, &t) != 0) {
 		err = ESRCH;
 		goto errout;
 	}
 
 	/* PID 1 names the zone init, including its nonleader threads. */
-	if ((tgid == 1 ? cp->p_zone->zone_proc_initpid : tgid) != p->p_pid) {
+	if (backing_tgid != p->p_pid) {
 		err = ESRCH;
 		goto errout;
 	}

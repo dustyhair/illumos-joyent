@@ -511,11 +511,14 @@ long
 lx_set_tid_address(int *tidp)
 {
 	struct lx_lwp_data *lwpd = ttolxlwp(curthread);
+	lx_pidns_t *ns = lx_pidns_active(curproc);
 	long rv;
 
 	lwpd->br_clear_ctidp = tidp;
 
-	if (curproc->p_pid == curproc->p_zone->zone_proc_initpid) {
+	if (ns != NULL) {
+		rv = lx_pidns_map_id(lwpd->br_pidns_map, ns);
+	} else if (curproc->p_pid == curproc->p_zone->zone_proc_initpid) {
 		rv = 1;
 	} else {
 		rv = lwpd->br_pid;
@@ -536,6 +539,7 @@ lx_kernel_thread(uint_t flags, uintptr_t *args)
 	klwp_t *parent = ttolwp(curthread), *child;
 	lx_lwp_data_t *src = lwptolxlwp(parent), *dst;
 	kthread_t *t;
+	lx_pidns_t *ns;
 	pid_t tid;
 	uint_t allowed = SHARED_AS | LX_CLONE_SYSVSEM | LX_CLONE_SETTLS |
 	    LX_CLONE_PARENT_SETTID | LX_CLONE_CHILD_SETTID |
@@ -589,6 +593,8 @@ lx_kernel_thread(uint_t flags, uintptr_t *args)
 	child->lwp_eosys = JUSTRETURN;
 	t->t_sysnum = curthread->t_sysnum;
 	tid = dst->br_pid;
+	if ((ns = lx_pidns_active(p)) != NULL)
+		tid = lx_pidns_map_id(dst->br_pidns_map, ns);
 	if ((flags & LX_CLONE_PARENT_SETTID) != 0)
 		(void) suword32((void *)args[2], tid);
 	if ((flags & LX_CLONE_CHILD_SETTID) != 0)

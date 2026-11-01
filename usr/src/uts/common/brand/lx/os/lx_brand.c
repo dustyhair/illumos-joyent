@@ -1663,14 +1663,21 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		 */
 		pid_t s_pid;
 		id_t s_tid;
+		lx_pidns_t *pidns = lx_pidns_active(p);
+		pid_t lpid = (pid_t)arg1;
 
-		if ((pid_t)arg1 == 1) {
+		if (pidns != NULL) {
+			if ((lpid = lx_pidns_map_backing(pidns, lpid)) == 0)
+				return (ESRCH);
+			if (lx_lpid_to_spair(lpid, &s_pid, &s_tid) < 0)
+				return (ESRCH);
+		} else if (lpid == 1) {
 			s_pid = p->p_zone->zone_proc_initpid;
 			/* handle the dead/missing init(1M) case */
 			if (s_pid == -1)
 				s_pid = 1;
 			s_tid = 1;
-		} else if (lx_lpid_to_spair((pid_t)arg1, &s_pid, &s_tid) < 0) {
+		} else if (lx_lpid_to_spair(lpid, &s_pid, &s_tid) < 0) {
 			return (ESRCH);
 		}
 

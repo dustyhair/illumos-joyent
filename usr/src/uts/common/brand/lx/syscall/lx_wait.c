@@ -377,9 +377,6 @@ lx_waitid(uintptr_t idtype, uintptr_t id, uintptr_t infop, uintptr_t opt)
 	if ((native_options & WNOHANG) && info.si_pid == 0) {
 		return (0);
 	}
-	if (ns != NULL)
-		info.si_pid = lx_pidns_visible(ns, info.si_pid);
-
 #if defined(_SYSCALL32_IMPL)
 	if (get_udatamodel() != DATAMODEL_NATIVE) {
 		return (stol_ksiginfo32_copyout(&info, (void *)infop));
