@@ -1568,6 +1568,68 @@ out:
 	return (error);
 }
 
+/* A private proc mount captures the caller's active PID namespace. */
+int
+lx_mntns_mount_proc(lx_mntns_view_t *view, const char *target,
+    const char *options, int flags, cred_t *actor)
+{
+	lx_mntns_mount_t *mount = NULL;
+	vnode_t *covered = NULL;
+	char *resolved;
+	int error;
+
+	if (!lx_mntns_entry_enabled() ||
+	    !lx_mntns_view_capable(view, actor))
+		return (EPERM);
+	resolved = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+	mutex_enter(&view->lv_lock);
+	if (view->lv_nmounts >= LX_MNTNS_MAX_MOUNTS) {
+		error = ENOSPC;
+		goto out;
+	}
+	error = lookupname((char *)target, UIO_SYSSPACE, FOLLOW, NULL,
+	    &covered);
+	if (error != 0)
+		goto out;
+	if (!lx_mntns_owns(view, covered)) {
+		error = lx_mntns_detached(covered) ? ENOENT : EINVAL;
+		goto out;
+	}
+	if (covered->v_type != VDIR) {
+		error = ENOTDIR;
+		goto out;
+	}
+	if (covered == view->lv_root) {
+		error = EOPNOTSUPP;
+		goto out;
+	}
+	if ((error = lx_mntns_path_locked(view, covered, actor, resolved)) != 0)
+		goto out;
+	mount = kmem_zalloc(sizeof (*mount), KM_SLEEP);
+	mount->lm_path = refstr_alloc(resolved);
+	error = lx_mntns_mount("proc", resolved, "lx_proc", options, flags,
+	    covered, NULL, NULL, view->lv_cred, &mount->lm_vfs);
+	if (error == 0)
+		error = lx_mntns_pin(mount, view->lv_cred);
+	if (error == 0) {
+		mount->lm_order = view->lv_next_order++;
+		mount->lm_next = view->lv_mounts;
+		view->lv_mounts = mount;
+		view->lv_nmounts++;
+		mount = NULL;
+	}
+out:
+	if (covered != NULL)
+		VN_RELE(covered);
+	if (mount != NULL) {
+		refstr_rele(mount->lm_path);
+		kmem_free(mount, sizeof (*mount));
+	}
+	mutex_exit(&view->lv_lock);
+	kmem_free(resolved, MAXPATHLEN);
+	return (error);
+}
+
 int
 lx_mntns_view_bind(lx_mntns_view_t *view, vnode_t *source,
     const char *path, boolean_t readonly, cred_t *cr)

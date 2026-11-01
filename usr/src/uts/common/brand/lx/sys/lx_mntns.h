@@ -71,6 +71,8 @@ extern int lx_mntns_mount_readonly(lx_mntns_view_t *, const char *, uint_t,
     cred_t *);
 extern int lx_mntns_mount_tmpfs(lx_mntns_view_t *, const char *, const char *,
     uid_t, gid_t, cred_t *);
+extern int lx_mntns_mount_proc(lx_mntns_view_t *, const char *, const char *,
+    int, cred_t *);
 extern int lx_mntns_mount_bind(lx_mntns_view_t *, const char *,
     const char *, boolean_t, cred_t *);
 extern int lx_mntns_view_bind(lx_mntns_view_t *, vnode_t *, const char *,

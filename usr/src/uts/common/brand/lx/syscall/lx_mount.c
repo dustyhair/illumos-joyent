@@ -622,11 +622,29 @@ lx_mnt_private_mount(lx_mntns_view_t *view, const char *sourcep,
 	} else if (!bind) {
 		if (fstypep == NULL)
 			error = EINVAL;
-		else if (strcmp(type, "tmpfs") != 0)
-			error = EOPNOTSUPP;
-		else
+		else if (strcmp(type, "tmpfs") == 0)
 			error = lx_mnt_private_tmpfs(view, target, options,
 			    flags);
+		else if (strcmp(type, "proc") == 0) {
+			int sflags = 0;
+
+			if ((error = lx_mnt_opt_verify(options,
+			    lx_proc_options)) != 0)
+				goto out;
+			if (flags & LX_MS_NOSUID)
+				sflags |= MS_NOSUID;
+			if ((flags & LX_MS_NODEV) != 0 &&
+			    (error = lx_mnt_add_opt("nodev", options,
+			    MAX_MNTOPT_STR)) != 0)
+				goto out;
+			if ((flags & LX_MS_NOEXEC) != 0 &&
+			    (error = lx_mnt_add_opt("noexec", options,
+			    MAX_MNTOPT_STR)) != 0)
+				goto out;
+			error = lx_mntns_mount_proc(view, target, options,
+			    sflags, CRED());
+		} else
+			error = EOPNOTSUPP;
 	} else if (sourcep == NULL)
 		error = EINVAL;
 	else
