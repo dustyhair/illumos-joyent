@@ -224,6 +224,7 @@ lxpr_mount(vfs_t *vfsp, vnode_t *mvp, mounta_t *uap, cred_t *cr)
 	vfs_setresource(vfsp, "lxproc", 0);
 
 	lxpr_mnt = kmem_alloc(sizeof (*lxpr_mnt), KM_SLEEP);
+	lxpr_mnt->lxprm_pidns = NULL;
 
 	if ((err = ldi_ident_from_mod(&modlinkage, &li)) != 0) {
 		kmem_free(lxpr_mnt, sizeof (*lxpr_mnt));
@@ -250,6 +251,8 @@ lxpr_mount(vfs_t *vfsp, vnode_t *mvp, mounta_t *uap, cred_t *cr)
 	 * Hold a zone reference for access to the lxzd structure.
 	 */
 	zone_hold(lxpr_mnt->lxprm_zone = zone);
+	if ((lxpr_mnt->lxprm_pidns = lx_pidns_active(curproc)) != NULL)
+		lx_pidns_hold(lxpr_mnt->lxprm_pidns);
 
 	/*
 	 * Allocate the first vnode and arbitrarily set the parent vnode to the
@@ -322,6 +325,8 @@ lxpr_unmount(vfs_t *vfsp, int flag, cred_t *cr)
 	 */
 	lxpr_freenode(lxpr_mnt->lxprm_node);
 	zone_rele(lxpr_mnt->lxprm_zone);
+	if (lxpr_mnt->lxprm_pidns != NULL)
+		lx_pidns_rele(lxpr_mnt->lxprm_pidns);
 
 	ldi_ident_release(lxpr_mnt->lxprm_li);
 

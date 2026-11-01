@@ -201,11 +201,17 @@ lxpr_lock_pid(lxpr_node_t *lxpnp, pid_t pid, zombok_t zombie_ok,
     kthread_t **tp)
 {
 	zone_t *zone = LXPTOZ(lxpnp);
+	lx_pidns_t *pidns = LXPTOPIDNS(lxpnp);
 	proc_t *p;
 	kthread_t *t;
 	lx_pid_flag_t flags = LXP_PRLOCK;
 
 	ASSERT(!MUTEX_HELD(&pidlock));
+	if (pidns != NULL &&
+	    (lxpnp->lxpr_pid == 0 || pid != lxpnp->lxpr_pid)) {
+		if ((pid = lx_pidns_map_backing(pidns, pid)) == 0)
+			return (NULL);
+	}
 
 	/* Consider zsched to be invisible to LX */
 	if (pid == zone->zone_zsched->p_pid) {
@@ -302,8 +308,10 @@ lxpr_lock(lxpr_node_t *lxpnp, zombok_t zombie_ok)
 }
 
 void
-lxpr_fixpid(zone_t *zone, proc_t *p, pid_t *pidp, pid_t *ppidp)
+lxpr_fixpid(lxpr_node_t *lxpnp, proc_t *p, pid_t *pidp, pid_t *ppidp)
 {
+	zone_t *zone = LXPTOZ(lxpnp);
+	lx_pidns_t *pidns = LXPTOPIDNS(lxpnp);
 	pid_t pid = p->p_pid;
 	pid_t ppid = p->p_ppid;
 
@@ -312,7 +320,10 @@ lxpr_fixpid(zone_t *zone, proc_t *p, pid_t *pidp, pid_t *ppidp)
 	ASSERT(zone->zone_brand == &lx_brand);
 	ASSERT(pid != zone->zone_zsched->p_pid);
 
-	if (pid == zone->zone_proc_initpid) {
+	if (pidns != NULL) {
+		pid = lx_pidns_visible(pidns, pid);
+		ppid = lx_pidns_visible(pidns, ppid);
+	} else if (pid == zone->zone_proc_initpid) {
 		pid = 1;
 		ppid = 0;	/* parent pid for init is 0 */
 	} else {

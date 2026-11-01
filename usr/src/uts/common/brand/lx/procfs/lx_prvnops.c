@@ -2866,7 +2866,7 @@ lxpr_read_status_common(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf,
 	}
 
 	/* Translate the pid (e.g. initpid to 1) */
-	lxpr_fixpid(LXPTOZ(lxpnp), p, &pid, &ppid);
+	lxpr_fixpid(lxpnp, p, &pid, &ppid);
 
 	if (t != NULL) {
 		thread_lock(t);
@@ -3108,7 +3108,7 @@ lxpr_read_pid_tid_stat(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 
 	/* Set Linux defaults if we're the zone's init process */
 	pid = p->p_pid;
-	lxpr_fixpid(zone, p, &pid, &ppid);
+	lxpr_fixpid(lxpnp, p, &pid, &ppid);
 	if (pid == 1) {
 		/* init process */
 		pgpid = 0;
@@ -7592,7 +7592,11 @@ lxpr_readdir_procdir(lxpr_node_t *lxpnp, uio_t *uiop, int *eofp)
 		}
 
 		/* Translate the pid (e.g. initpid to 1) */
-		lxpr_fixpid(LXPTOZ(lxpnp), p, &pid, NULL);
+		lxpr_fixpid(lxpnp, p, &pid, NULL);
+		if (pid == 0) {
+			mutex_exit(&pidlock);
+			goto next;
+		}
 		raw_pid = p->p_pid;
 
 		ASSERT(p->p_stat != 0);
@@ -7680,6 +7684,7 @@ lxpr_readdir_taskdir(lxpr_node_t *lxpnp, uio_t *uiop, int *eofp)
 	proc_t *p;
 	kthread_t *t;
 	boolean_t branded;
+	lx_pidns_t *pidns = LXPTOPIDNS(lxpnp);
 
 	ASSERT(lxpnp->lxpr_type == LXPR_PID_TASKDIR);
 
@@ -7765,11 +7770,18 @@ lxpr_readdir_taskdir(lxpr_node_t *lxpnp, uio_t *uiop, int *eofp)
 				goto next;
 			}
 			emul_tid = lwpd->br_pid;
+			if (pidns != NULL) {
+				emul_tid = lx_pidns_map_id(lwpd->br_pidns_map,
+				    pidns);
+				if (emul_tid == 0)
+					goto next;
+			}
 			/*
 			 * Convert pid to Linux default of 1 if we're the
 			 * zone's init.
 			 */
-			if (emul_tid == LXPTOZ(lxpnp)->zone_proc_initpid)
+			if (pidns == NULL &&
+			    emul_tid == LXPTOZ(lxpnp)->zone_proc_initpid)
 				emul_tid = 1;
 		}
 
@@ -9090,7 +9102,7 @@ lxpr_readlink(vnode_t *vp, uio_t *uiop, cred_t *cr, caller_context_t *ct)
 		switch (lxpnp->lxpr_type) {
 		case LXPR_SELF:
 			/* Translate the pid (e.g. initpid to 1) */
-			lxpr_fixpid(LXPTOZ(lxpnp), curproc, &pid, NULL);
+			lxpr_fixpid(lxpnp, curproc, &pid, NULL);
 
 			/*
 			 * Don't need to check result as every possible int

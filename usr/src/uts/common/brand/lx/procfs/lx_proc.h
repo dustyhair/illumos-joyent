@@ -61,6 +61,7 @@ extern "C" {
 #include <sys/sysmacros.h>
 #include <sys/cred.h>
 #include <sys/lx_userns.h>
+#include <sys/lx_pidns.h>
 #include <sys/priv.h>
 #include <sys/vnode.h>
 #include <sys/vfs.h>
@@ -97,6 +98,8 @@ extern "C" {
  */
 #define	LXPTOZ(lxpnp) \
 	(((lxpr_mnt_t *)(lxpnp)->lxpr_vnode->v_vfsp->vfs_data)->lxprm_zone)
+#define	LXPTOPIDNS(lxpnp) \
+	(((lxpr_mnt_t *)(lxpnp)->lxpr_vnode->v_vfsp->vfs_data)->lxprm_pidns)
 
 #define	LXPNSIZ		256	/* max size of lx /proc file name entries */
 
@@ -348,6 +351,7 @@ struct zone;    /* forward declaration */
 typedef struct lxpr_mnt {
 	lxpr_node_t	*lxprm_node;	/* node at root of proc mount */
 	struct zone	*lxprm_zone;	/* zone for this mount */
+	lx_pidns_t	*lxprm_pidns;	/* PID view selected at mount */
 	ldi_ident_t	lxprm_li;	/* ident for ldi */
 } lxpr_mnt_t;
 
@@ -399,7 +403,7 @@ extern proc_t *lxpr_lock(lxpr_node_t *, zombok_t);
 extern proc_t *lxpr_lock_pid(lxpr_node_t *, pid_t, zombok_t, kthread_t **);
 extern void lxpr_unlock(proc_t *);
 extern netstack_t *lxpr_netstack(lxpr_node_t *);
-extern void lxpr_fixpid(zone_t *, proc_t *, pid_t *, pid_t *);
+extern void lxpr_fixpid(lxpr_node_t *, proc_t *, pid_t *, pid_t *);
 extern file_t *lxpr_getf(proc_t *, uint_t, short *);
 extern void lxpr_releasef(proc_t *, uint_t);
 
