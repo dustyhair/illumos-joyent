@@ -2938,6 +2938,25 @@ out:
 }
 
 static void
+ns_pid_process_owner_release(ktest_ctx_hdl_t *ctx)
+{
+	pid_t owner;
+	boolean_t gone;
+
+	mutex_enter(&ns_pid_lock);
+	owner = ns_pid_process_owner;
+	ns_pid_process_drop();
+	mutex_enter(&pidlock);
+	gone = owner > 1 && pid_find(owner) == NULL;
+	mutex_exit(&pidlock);
+	mutex_exit(&ns_pid_lock);
+	if (gone)
+		KT_PASS(ctx);
+	else
+		KT_FAIL(ctx, "owner PID outlived its last map reference");
+}
+
+static void
 ns_pid_process_release(ktest_ctx_hdl_t *ctx)
 {
 	pid_t target, descendant;
@@ -3436,6 +3455,8 @@ _init(void)
 	    0)) != 0 ||
 	    (error = ktest_add_test(ks, "process_retired",
 	    ns_pid_process_retired, 0)) != 0 ||
+	    (error = ktest_add_test(ks, "process_owner_release",
+	    ns_pid_process_owner_release, 0)) != 0 ||
 	    (error = ktest_add_test(ks, "process_release",
 	    ns_pid_process_release, 0)) != 0 ||
 	    (error = ktest_add_test(ks, "process_idle", ns_pid_process_idle,
