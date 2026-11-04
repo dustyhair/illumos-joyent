@@ -172,16 +172,21 @@ done
 "$here/codex-lx-network" status clx | grep -q 'health=ready'
 "$here/codex-lx-network" reapply clx
 [[ -f "$work/state/clx/state" ]]
+mkdir "$work/state/other"
+: > "$work/state/other/state"
 printf '%s\n' 2 > "$MOCK_NAT_SESSIONS"
 "$here/codex-lx-network" teardown clx
 [[ ! -e "$work/state/clx" ]]
 [[ ! -e "$work/zone/root/etc/codex-lx-network.conf" ]]
-[[ ! -e "$work/state/base.state" ]]
+[[ -e "$work/state/base.state" ]]
 [[ $(cat "$MOCK_NAT_SESSIONS") == 0 ]]
 flush_line=$(grep -n '^ipnat:-F' "$MOCK_LOG" | tail -1 | cut -d: -f1)
 filter_line=$(grep -n 'ipf:-r -f .*ipf-out-egress.rules' "$MOCK_LOG" |
     tail -1 | cut -d: -f1)
 (( flush_line < filter_line ))
+rm -rf "$work/state/other"
+"$here/codex-lx-network" recover | grep -q 'deployments=0'
+[[ ! -e "$work/state/base.state" ]]
 for gate in seccomp userns mntns pidns ipcns netns; do
 	grep -q "mdb-input:lx_brand.*lx_${gate}_experimental/W 0" \
 	    "$MOCK_LOG"

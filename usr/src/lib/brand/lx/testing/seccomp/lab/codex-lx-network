@@ -128,9 +128,11 @@ flush_owned_nat_sessions()
 	[[ -f "$state_root/base.state" ]] || return
 	. "$state_root/base.state"
 	read -r nat_rules nat_sessions <<< "$(nat_counts)"
+	# Active translations pin their outbound IPF rules.  When the NAT table
+	# started empty, every current translation belongs to these deployments.
 	if [[ "${nat_rules_were_empty:-no}" == yes &&
 	    "${nat_sessions_were_empty:-no}" == yes &&
-	    "$nat_rules" == 0 && "$nat_sessions" != 0 ]]; then
+	    "$nat_sessions" != 0 ]]; then
 		ipnat -F
 	fi
 }
@@ -206,9 +208,9 @@ remove_deployment()
 	if [[ -f "$directory/ipnat.rules" ]]; then
 		ipnat -r -f "$directory/ipnat.rules" 2>/dev/null || true
 	fi
+	flush_owned_nat_sessions
 	if (( $(deployment_count) == 1 )); then
 		last=1
-		flush_owned_nat_sessions
 	fi
 	for rules in "$directory"/ipf-*.rules; do
 		[[ -f "$rules" ]] || continue
