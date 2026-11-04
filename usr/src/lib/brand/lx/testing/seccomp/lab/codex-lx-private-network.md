@@ -11,6 +11,10 @@ forwarding, enables `lx_netns_experimental`, loads narrow forwarding rules and
 loads two NAT rules. The script records the previous shared settings and
 restores them after removing the last managed deployment.
 
+The prefix in the example produces `clxstub0`, `clxhost0` and sandbox links
+`clxnet0` through `clxnet3`. The numeric suffixes satisfy SmartOS datalink
+naming rules.
+
 The setup command requires an installed lx zone and boots it after assigning
 the links. The teardown command halts that zone. Both operations hold a global
 lock. A failed setup runs the same removal path as an explicit teardown.

@@ -79,7 +79,7 @@ export CODEX_LX_NETWORK_STATE_DIR=$work/state
 export CODEX_LX_NETWORK_LOCK_DIR=$work/lock
 mkdir -p "$work/zone/root/etc"
 "$here/codex-lx-network" setup lx-test clx external0 10.88.0 2
-grep -q "CODEX_LX_NET_LINKS='clx0=10.88.0.2/24,clx1=10.88.0.3/24'" \
+grep -q "CODEX_LX_NET_LINKS='clxnet0=10.88.0.2/24,clxnet1=10.88.0.3/24'" \
     "$work/zone/root/etc/codex-lx-network.conf"
 [[ -f "$work/state/clx/state" ]]
 "$here/codex-lx-network" reapply clx

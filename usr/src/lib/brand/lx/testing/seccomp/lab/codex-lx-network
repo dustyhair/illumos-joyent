@@ -194,12 +194,12 @@ setup()
 
 	directory=$state_root/$prefix
 	[[ ! -e "$directory" ]] || die "deployment prefix already exists: $prefix"
-	stub=${prefix}s
-	host=${prefix}h
+	stub=${prefix}stub0
+	host=${prefix}host0
 	gateway=$network.1
 	subnet=$network.0/24
 	for ((index = 0; index < count; index++)); do
-		link=$prefix$index
+		link=${prefix}net$index
 		address=$network.$((index + 2))/24
 		[[ -z "$links" ]] || links+=,
 		links+=$link=$address
