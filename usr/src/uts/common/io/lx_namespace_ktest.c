@@ -20,6 +20,7 @@
 #include <sys/ddi.h>
 #include <sys/atomic.h>
 #include <sys/zone.h>
+#include <sys/netstack.h>
 #include <sys/lx_brand.h>
 #include <sys/machbrand.h>
 #include <sys/lx_mntns.h>
@@ -3298,6 +3299,58 @@ ns_nested_release(ktest_ctx_hdl_t *ctx)
 		KT_FAIL(ctx, "nested release retained native identities");
 }
 
+/* Exercise full module initialization and teardown for one owner zone. */
+static void
+ns_netstack_lifecycle(ktest_ctx_hdl_t *ctx)
+{
+	netstack_t *stacks[2] = { NULL, NULL };
+	netstack_t *found = NULL;
+	zoneid_t zoneid = curzone->zone_id;
+	boolean_t passed = B_FALSE;
+	int i;
+
+#define	NET_CHECK(expr, why) do { \
+	if (!(expr)) { \
+		KT_FAIL(ctx, "%s", why); \
+		goto out; \
+	} \
+} while (0)
+	stacks[0] = netstack_create_detached(zoneid);
+	stacks[1] = netstack_create_detached(zoneid);
+	for (i = 0; i < 2; i++) {
+		NET_CHECK(stacks[i] != NULL, "detached stack creation failed");
+		NET_CHECK(netstack_is_detached(stacks[i]),
+		    "stack is not marked detached");
+		NET_CHECK(stacks[i]->netstack_stackid < -1,
+		    "detached stack did not receive a private ID");
+		NET_CHECK(netstack_get_zoneid(stacks[i]) == zoneid &&
+		    netstackid_to_zoneid(stacks[i]->netstack_stackid) == zoneid,
+		    "detached stack lost its owner zone");
+		NET_CHECK(stacks[i]->netstack_dls != NULL &&
+		    stacks[i]->netstack_ip != NULL &&
+		    stacks[i]->netstack_tcp != NULL &&
+		    stacks[i]->netstack_udp != NULL,
+		    "required network modules did not initialize");
+		found = netstack_find_by_stackid(stacks[i]->netstack_stackid);
+		NET_CHECK(found == stacks[i], "private stack ID lookup failed");
+		netstack_rele(found);
+		found = NULL;
+	}
+	NET_CHECK(stacks[0]->netstack_stackid !=
+	    stacks[1]->netstack_stackid, "private stack IDs collided");
+	passed = B_TRUE;
+out:
+	if (found != NULL)
+		netstack_rele(found);
+	for (i = 0; i < 2; i++) {
+		if (stacks[i] != NULL)
+			netstack_destroy_detached(stacks[i]);
+	}
+	if (passed)
+		KT_PASS(ctx);
+#undef NET_CHECK
+}
+
 static struct modlmisc ns_modlmisc = {
 	.misc_modops = &mod_miscops,
 	.misc_linkinfo = "lx namespace tests"
@@ -3354,6 +3407,9 @@ _init(void)
 	    KTEST_FLAG_INPUT)) != 0 ||
 	    (error = ktest_add_test(ks, "process_idle", ns_process_idle,
 	    0)) != 0 ||
+	    (error = ktest_add_suite(km, "network", &ks)) != 0 ||
+	    (error = ktest_add_test(ks, "detached_lifecycle",
+	    ns_netstack_lifecycle, 0)) != 0 ||
 	    (error = ktest_add_suite(km, "user", &ks)) != 0 ||
 	    (error = ktest_add_test(ks, "maps", lx_userns_test_maps, 0)) != 0 ||
 	    (error = ktest_add_test(ks, "capabilities", lx_userns_test_caps,
