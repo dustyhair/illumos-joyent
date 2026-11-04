@@ -3308,9 +3308,11 @@ ns_netstack_lifecycle(ktest_ctx_hdl_t *ctx)
 {
 	netstack_t *stacks[2] = { NULL, NULL };
 	netstack_t *found = NULL;
+	netstackid_t stackids[2] = { -1, -1 };
 	zoneid_t zoneid = curzone->zone_id;
+	boolean_t gone;
 	boolean_t passed = B_FALSE;
-	int i;
+	int i, retry;
 
 #define	NET_CHECK(expr, why) do { \
 	if (!(expr)) { \
@@ -3326,6 +3328,7 @@ ns_netstack_lifecycle(ktest_ctx_hdl_t *ctx)
 		    "stack is not marked detached");
 		NET_CHECK(stacks[i]->netstack_stackid < -1,
 		    "detached stack did not receive a private ID");
+		stackids[i] = stacks[i]->netstack_stackid;
 		NET_CHECK(netstack_get_zoneid(stacks[i]) == zoneid &&
 		    netstackid_to_zoneid(stacks[i]->netstack_stackid) == zoneid,
 		    "detached stack lost its owner zone");
@@ -3346,8 +3349,23 @@ out:
 	if (found != NULL)
 		netstack_rele(found);
 	for (i = 0; i < 2; i++) {
-		if (stacks[i] != NULL)
+		if (stacks[i] != NULL) {
 			netstack_destroy_detached(stacks[i]);
+			stacks[i] = NULL;
+		}
+	}
+	if (passed) {
+		for (retry = 0; retry < 50; retry++) {
+			gone = !netstack_inuse_by_stackid(stackids[0]) &&
+			    !netstack_inuse_by_stackid(stackids[1]);
+			if (gone)
+				break;
+			delay(MAX(1, hz / 10));
+		}
+		if (!gone) {
+			KT_FAIL(ctx, "detached stacks did not drain");
+			passed = B_FALSE;
+		}
 	}
 	if (passed)
 		KT_PASS(ctx);
@@ -3362,10 +3380,11 @@ ns_netstack_owner(ktest_ctx_hdl_t *ctx)
 	lx_userns_t *root = NULL;
 	lx_netns_t *first = NULL, *extra = NULL;
 	netstack_t *stack;
+	netstackid_t stackid = -1;
 	ill_t *ill = NULL;
 	cred_t *owner = NULL, *reduced = NULL;
 	uint32_t saved_max = 0, maximum, used;
-	int error = 0;
+	int error = 0, retry;
 	boolean_t passed = B_FALSE;
 
 #define	NET_OWNER_CHECK(expr, why) do { \
@@ -3396,6 +3415,7 @@ ns_netstack_owner(ktest_ctx_hdl_t *ctx)
 	NET_OWNER_CHECK(stack != NULL && netstack_is_detached(stack) &&
 	    netstack_get_zoneid(stack) == zone->zone_id,
 	    "network namespace stack lost LX zone ownership");
+	stackid = stack->netstack_stackid;
 	ill = ill_lookup_on_name(ipif_loopback_name, B_FALSE, B_FALSE, NULL,
 	    stack->netstack_ip);
 	NET_OWNER_CHECK(ill != NULL, "network namespace has no IPv4 loopback");
@@ -3419,6 +3439,13 @@ ns_netstack_owner(ktest_ctx_hdl_t *ctx)
 	first = NULL;
 	lx_userns_netns_budget_get(root, &maximum, &used);
 	NET_OWNER_CHECK(used == 0, "final release leaked a charge");
+	for (retry = 0; retry < 50; retry++) {
+		if (!netstack_inuse_by_stackid(stackid))
+			break;
+		delay(MAX(1, hz / 10));
+	}
+	NET_OWNER_CHECK(!netstack_inuse_by_stackid(stackid),
+	    "final release retained the detached stack");
 	passed = B_TRUE;
 out:
 	if (ill != NULL)

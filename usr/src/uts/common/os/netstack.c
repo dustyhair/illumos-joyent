@@ -90,6 +90,13 @@ static netstack_t *netstack_head;
 static netstackid_t netstack_next_detached_id = -2;
 
 /*
+ * Some shutdown callbacks open network devices using owner-zone credentials.
+ * Detached stacks have no zone framework entry, so keep the explicit target
+ * available to those synchronous opens for the duration of shutdown.
+ */
+static uint_t netstack_shutdown_key;
+
+/*
  * To support kstat_create_netstack() using kstat_zone_add we need
  * to track both
  *  - all zoneids that use the global/shared stack
@@ -147,6 +154,7 @@ netstack_init(void)
 {
 	mutex_init(&netstack_g_lock, NULL, MUTEX_DEFAULT, NULL);
 	mutex_init(&netstack_shared_lock, NULL, MUTEX_DEFAULT, NULL);
+	tsd_create(&netstack_shutdown_key, NULL);
 
 	sema_init(&netstack_reap_limiter, netstack_outstanding_reaps, NULL,
 	    SEMA_DRIVER, NULL);
@@ -512,6 +520,8 @@ netstack_zone_create(zoneid_t zoneid)
 static void
 netstack_shutdown(netstack_t *ns)
 {
+	netstack_t *previous = NULL;
+	boolean_t detached;
 	int i;
 
 	mutex_enter(&netstack_g_lock);
@@ -547,7 +557,15 @@ netstack_shutdown(netstack_t *ns)
 	 * Call the shutdown function for all registered modules for this
 	 * netstack.
 	 */
+	detached = netstack_is_detached(ns);
+	if (detached) {
+		previous = tsd_get(netstack_shutdown_key);
+		VERIFY0(tsd_set(netstack_shutdown_key, ns));
+	}
 	apply_all_modules_reverse(ns, netstack_apply_shutdown);
+
+	if (detached)
+		VERIFY0(tsd_set(netstack_shutdown_key, previous));
 
 	/* Tell any waiting netstack_register/netstack_unregister to proceed */
 	mutex_enter(&ns->netstack_lock);
@@ -1022,6 +1040,9 @@ netstack_get_current(void)
 {
 	netstack_t *ns;
 
+	if ((ns = tsd_get(netstack_shutdown_key)) != NULL)
+		return (netstack_hold_if_active(ns));
+
 	/* Older brands keep using the zone's network stack. */
 	if (PROC_IS_BRANDED(curproc) &&
 	    curproc->p_brand->b_version >= BRAND_VER_4 &&
@@ -1043,10 +1064,16 @@ netstack_t *
 netstack_find_by_cred(const cred_t *cr)
 {
 	zoneid_t zoneid = crgetzoneid(cr);
+	netstack_t *ns;
 
 	/* Handle the case when cr_zone is NULL */
 	if (zoneid == (zoneid_t)-1)
 		zoneid = GLOBAL_ZONEID;
+
+	/* A detached shutdown target belongs to, but is not backed by, a zone. */
+	if ((ns = tsd_get(netstack_shutdown_key)) != NULL &&
+	    ns->netstack_zoneid == zoneid)
+		return (netstack_hold_if_active(ns));
 
 	/* For performance ... */
 	if (curproc->p_zone->zone_id == zoneid)
