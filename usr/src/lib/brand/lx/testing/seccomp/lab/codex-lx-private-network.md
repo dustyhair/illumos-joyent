@@ -32,9 +32,12 @@ through the packaged `codex-lx` launcher. Private mode is the default:
 /opt/codex-lx/codex-lx
 ```
 
-The bubblewrap integrity wrapper retains the single `--unshare-net` option and
-temporarily adds `CAP_NET_ADMIN` and `CAP_SETPCAP`, then inserts `codex-lx-net`
-as the sandbox command. The helper races only for links listed in the
+The launcher selects a workspace-derived Codex permission profile with network
+syscalls enabled. In private mode, the bubblewrap integrity wrapper injects
+the single `--unshare-net` option that this profile omits; it also accepts and
+retains one supplied by older Codex builds. The wrapper temporarily adds
+`CAP_NET_ADMIN` and `CAP_SETPCAP`, then inserts `codex-lx-net` as the sandbox
+command. The helper races only for links listed in the
 root-owned config, claims one assigned link, brings it up, adds its address,
 waits for DAD to finish and installs the default route. Before it execs the
 requested command, it removes both setup capabilities from the ambient,
@@ -73,9 +76,9 @@ Shared networking remains an explicit compatibility mode:
 CODEX_LX_NETWORK_MODE=shared /opt/codex-lx/codex-lx
 ```
 
-Shared mode removes `--unshare-net` exactly as the VM168 package did. Private
-mode never falls back to shared networking when the config or link pool is
-missing.
+Shared mode removes a supplied `--unshare-net` exactly as the VM168 package
+did and accepts its absence from network-enabled Codex profiles. Private mode
+never falls back to shared networking when the config or link pool is missing.
 
 ## Accepted data path
 

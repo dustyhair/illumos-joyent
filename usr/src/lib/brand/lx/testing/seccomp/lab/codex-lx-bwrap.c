@@ -161,6 +161,8 @@ start_c(unsigned long *stack)
 			if (private && payload_argv0 == (void *)0)
 				fail("expected exactly one --argv0");
 			if (private) {
+				if (found_net == 0)
+					lx_argv[out++] = (char *)net;
 				lx_argv[out++] = (char *)cap_add;
 				lx_argv[out++] = (char *)cap_net_admin;
 				lx_argv[out++] = (char *)cap_add;
@@ -188,8 +190,8 @@ start_c(unsigned long *stack)
 		lx_argv[out++] = argv[i];
 	}
 	lx_argv[out] = (void *)0;
-	if (found_net != 1)
-		fail("expected exactly one --unshare-net");
+	if (found_net > 1)
+		fail("expected at most one --unshare-net");
 	if (found_separator != 1)
 		fail("expected one bubblewrap command separator");
 

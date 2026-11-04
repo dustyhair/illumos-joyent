@@ -5,7 +5,7 @@ set -o pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT HUP INT TERM
+trap 'status=$?; rm -rf "$work"; exit $status' EXIT HUP INT TERM
 
 cc=${CC:-gcc}
 "$cc" -nostdlib -static -fno-pie -no-pie -Wall -Wextra -Werror \
@@ -17,9 +17,9 @@ private=$(env -i CODEX_LX_NETWORK_MODE=private \
     CODEX_LX_REAL_BWRAP=/bin/echo CODEX_LX_NET_HELPER=/opt/codex-lx-net \
     CODEX_LX_NET_LINKS='clx0=10.88.0.2/24,clx1=10.88.0.3/24' \
     CODEX_LX_NET_GATEWAY=10.88.0.1 \
-	"$work/bwrap" --unshare-user --unshare-net \
+	"$work/bwrap" --unshare-user \
 	--argv0 codex-linux-sandbox -- /bin/true argument)
-expected_private='--unshare-user --unshare-net --argv0 codex-linux-sandbox '
+expected_private='--unshare-user --argv0 codex-linux-sandbox --unshare-net '
 expected_private+='--cap-add CAP_NET_ADMIN '
 expected_private+='--cap-add CAP_SETPCAP -- /opt/codex-lx-net '
 expected_private+='--payload-argv0 codex-linux-sandbox '
@@ -27,10 +27,29 @@ expected_private+='--links clx0=10.88.0.2/24,clx1=10.88.0.3/24 '
 expected_private+='--gateway 10.88.0.1 -- /bin/true argument'
 [[ "$private" == "$expected_private" ]]
 
+private_existing=$(env -i CODEX_LX_NETWORK_MODE=private \
+    CODEX_LX_REAL_BWRAP=/bin/echo CODEX_LX_NET_HELPER=/opt/codex-lx-net \
+    CODEX_LX_NET_LINKS='clx0=10.88.0.2/24,clx1=10.88.0.3/24' \
+    CODEX_LX_NET_GATEWAY=10.88.0.1 \
+    "$work/bwrap" --unshare-user --unshare-net \
+    --argv0 codex-linux-sandbox -- /bin/true argument)
+expected_existing='--unshare-user --unshare-net --argv0 codex-linux-sandbox '
+expected_existing+='--cap-add CAP_NET_ADMIN '
+expected_existing+='--cap-add CAP_SETPCAP -- /opt/codex-lx-net '
+expected_existing+='--payload-argv0 codex-linux-sandbox '
+expected_existing+='--links clx0=10.88.0.2/24,clx1=10.88.0.3/24 '
+expected_existing+='--gateway 10.88.0.1 -- /bin/true argument'
+[[ "$private_existing" == "$expected_existing" ]]
+
 shared=$(env -i CODEX_LX_NETWORK_MODE=shared \
     CODEX_LX_REAL_BWRAP=/bin/echo \
     "$work/bwrap" --unshare-user --unshare-net -- /bin/true argument)
 [[ "$shared" == '--unshare-user -- /bin/true argument' ]]
+
+shared_existing=$(env -i CODEX_LX_NETWORK_MODE=shared \
+    CODEX_LX_REAL_BWRAP=/bin/echo \
+    "$work/bwrap" --unshare-user -- /bin/true argument)
+[[ "$shared_existing" == '--unshare-user -- /bin/true argument' ]]
 
 set +o errexit
 env -i CODEX_LX_NETWORK_MODE=shared CODEX_LX_REAL_BWRAP=/bin/echo \
@@ -43,7 +62,7 @@ duplicate_status=$?
 net_status=$?
 set -o errexit
 [[ $duplicate_status == 125 ]]
-grep -q 'expected exactly one --unshare-net' "$work/duplicate.out"
+grep -q 'expected at most one --unshare-net' "$work/duplicate.out"
 [[ $net_status == 125 ]]
 grep -q 'name=address/prefix' "$work/net.out"
 

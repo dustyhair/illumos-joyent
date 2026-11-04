@@ -31,4 +31,6 @@ shared)
 esac
 
 exec "$here/vendor/bin/codex" \
-	-c sandbox_workspace_write.network_access=true "$@"
+	-c 'permissions.lx-private.extends=":workspace"' \
+	-c permissions.lx-private.network.enabled=true \
+	-c 'default_permissions="lx-private"' "$@"
