@@ -7,6 +7,7 @@
 #include <sys/types.h>
 #include <sys/cred.h>
 #include <sys/vnode.h>
+#include <sys/vfs.h>
 #include <sys/refstr.h>
 
 struct proc;
