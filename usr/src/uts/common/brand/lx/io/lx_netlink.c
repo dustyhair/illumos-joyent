@@ -26,9 +26,13 @@
 #include <sys/socketvar.h>
 #include <sys/sunddi.h>
 #include <sys/sunldi.h>
+#include <sys/stropts.h>
 #include <sys/strsun.h>
+#include <sys/file.h>
+#include <sys/vnode.h>
 #include <sys/tihdr.h>
 #include <sys/sockio.h>
+#include <sys/dls.h>
 #include <sys/brand.h>
 #include <sys/debug.h>
 #include <sys/ucred.h>
@@ -48,6 +52,10 @@
 #include <sys/ddi.h>
 #include <net/route.h>
 #include <inet/ip_if.h>
+
+#define	LX_NETLINK_UDPDEV	"/devices/pseudo/udp@0:udp"
+#define	LX_NETLINK_IPMOD	"ip"
+#define	LX_NETLINK_ARPMOD	"arp"
 
 /*
  * Flags in netlink header
@@ -1510,15 +1518,183 @@ lx_netlink_newaddr(lx_netlink_sock_t *lxsock, lx_netlink_hdr_t *hdr,
 }
 
 static int
+lx_netlink_stream_ioctl(ldi_handle_t handle, int command, void *arg,
+    size_t size)
+{
+	struct strioctl ioc;
+	int rval;
+
+	ioc.ic_cmd = command;
+	ioc.ic_timout = 15;
+	ioc.ic_len = size;
+	ioc.ic_dp = arg;
+	return (ldi_ioctl(handle, I_STR, (intptr_t)&ioc, FKIOCTL,
+	    zone_kcred(), &rval));
+}
+
+static int
+lx_netlink_open_assigned(const char *name, ldi_handle_t *handle)
+{
+	dls_dl_handle_t dlh;
+	dev_t dev;
+	int error;
+
+	*handle = NULL;
+	if ((error = dls_devnet_open_in_zone(name, &dlh, &dev,
+	    crgetzoneid(CRED()))) != 0)
+		return (error);
+	error = ldi_open_by_dev(&dev, OTYP_CHR, FREAD | FWRITE,
+	    zone_kcred(), handle, lx_netlink_ldi);
+	dls_devnet_close(dlh);
+	return (error);
+}
+
+static int
+lx_netlink_prepare_stream(const char *name, const char *module,
+    uint64_t flags, ldi_handle_t *handle)
+{
+	struct lifreq lifr;
+	int error, rval;
+
+	if ((error = lx_netlink_open_assigned(name, handle)) != 0)
+		return (error);
+	if ((error = ldi_ioctl(*handle, I_PUSH, (intptr_t)module, FKIOCTL,
+	    zone_kcred(), &rval)) != 0)
+		return (error);
+	bzero(&lifr, sizeof (lifr));
+	(void) strlcpy(lifr.lifr_name, name, sizeof (lifr.lifr_name));
+	lifr.lifr_ppa = 0;
+	lifr.lifr_flags = flags;
+	return (lx_netlink_stream_ioctl(*handle, SIOCSLIFNAME, &lifr,
+	    sizeof (lifr)));
+}
+
+/*
+ * Claim a datalink that the zone administrator has already assigned to this
+ * LX zone, and plumb it only into the caller's detached network stack.  The
+ * datalink remains owned by the zone; namespace teardown removes the IP/ARP
+ * plumbing and makes it available for another private stack.
+ */
+static int
+lx_netlink_plumb_assigned(lx_netlink_sock_t *lxsock, const char *name)
+{
+	ldi_handle_t ip = NULL, arp = NULL, mux = NULL;
+	struct lifreq lifr;
+	struct ifreq ifr;
+	uint64_t flags = IFF_IPV4;
+	int error, ip_muxid = -1, arp_muxid = -1, rval;
+	int plink_flags = FREAD | FWRITE | FNOCTTY | FKIOCTL;
+
+	bzero(&lifr, sizeof (lifr));
+	(void) strlcpy(lifr.lifr_name, name, sizeof (lifr.lifr_name));
+	error = ldi_ioctl(lxsock->lxns_iphandle, SIOCGLIFFLAGS,
+	    (intptr_t)&lifr, FKIOCTL, zone_kcred(), NULL);
+	if (error == 0)
+		return (EEXIST);
+	if (error != ENXIO && error != ENODEV)
+		return (error);
+
+	if ((error = ldi_open_by_name(LX_NETLINK_UDPDEV, FREAD | FWRITE,
+	    zone_kcred(), &mux, lx_netlink_ldi)) != 0)
+		goto out;
+	if ((error = lx_netlink_prepare_stream(name, LX_NETLINK_IPMOD,
+	    flags, &ip)) != 0)
+		goto out;
+	bzero(&lifr, sizeof (lifr));
+	(void) strlcpy(lifr.lifr_name, name, sizeof (lifr.lifr_name));
+	if ((error = lx_netlink_stream_ioctl(ip, SIOCGLIFFLAGS, &lifr,
+	    sizeof (lifr))) != 0)
+		goto out;
+	flags = lifr.lifr_flags;
+	if ((error = ldi_ioctl(mux, I_PLINK, (intptr_t)ip, plink_flags,
+	    zone_kcred(), &ip_muxid)) != 0)
+		goto out;
+
+	if ((flags & IFF_NOARP) == 0) {
+		if ((error = lx_netlink_prepare_stream(name,
+		    LX_NETLINK_ARPMOD, flags, &arp)) != 0)
+			goto out;
+		if ((error = ldi_ioctl(mux, I_PLINK, (intptr_t)arp,
+		    plink_flags, zone_kcred(), &arp_muxid)) != 0)
+			goto out;
+	}
+
+	bzero(&ifr, sizeof (ifr));
+	(void) strlcpy(ifr.ifr_name, name, sizeof (ifr.ifr_name));
+	ifr.ifr_ip_muxid = ip_muxid;
+	ifr.ifr_arp_muxid = arp_muxid == -1 ? 0 : arp_muxid;
+	if ((error = ldi_ioctl(mux, SIOCSIFMUXID, (intptr_t)&ifr,
+	    FKIOCTL, zone_kcred(), &rval)) != 0)
+		goto out;
+
+out:
+	if (error != 0 && mux != NULL) {
+		if (arp_muxid != -1) {
+			(void) ldi_ioctl(mux, I_PUNLINK, arp_muxid,
+			    plink_flags, zone_kcred(), &rval);
+		}
+		if (ip_muxid != -1) {
+			(void) ldi_ioctl(mux, I_PUNLINK, ip_muxid,
+			    plink_flags, zone_kcred(), &rval);
+		}
+	}
+	if (arp != NULL)
+		(void) ldi_close(arp, FREAD | FWRITE, zone_kcred());
+	if (ip != NULL)
+		(void) ldi_close(ip, FREAD | FWRITE, zone_kcred());
+	if (mux != NULL)
+		(void) ldi_close(mux, FREAD | FWRITE, zone_kcred());
+	return (error);
+}
+
+static int
 lx_netlink_newlink(lx_netlink_sock_t *lxsock, lx_netlink_hdr_t *hdr,
     mblk_t *mp)
 {
+	lx_netlink_attr_t *attrs[LX_NETLINK_IFLA_MAX];
+	lx_netlink_attr_t *nameattr = NULL;
 	lx_netlink_ifinfomsg_t *ifi;
 	struct lifreq lifr;
-	int error;
+	unsigned int nattrs = sizeof (attrs) / sizeof (attrs[0]);
+	uint16_t create_flags = LX_NETLINK_NLM_F_REQUEST |
+	    LX_NETLINK_NLM_F_ACK | LX_NETLINK_NLM_F_EXCL |
+	    LX_NETLINK_NLM_F_CREATE;
+	int error, i;
 
 	if (!lx_netns_configure_allowed(CRED()))
 		return (lx_netlink_private_error(lxsock, hdr, EPERM));
+	if (hdr->lxnh_type == LX_NETLINK_RTM_NEWLINK &&
+	    hdr->lxnh_flags == create_flags) {
+		char name[LIFNAMSIZ];
+		size_t len, namelen;
+
+		if (lx_netlink_parse_msg_attrs(mp, (void **)&ifi,
+		    sizeof (*ifi), attrs, &nattrs) != 0 ||
+		    ifi->lxnl_ifi_family != AF_UNSPEC ||
+		    ifi->lxnl_ifi_type != 0 || ifi->lxnl_ifi_index != 0 ||
+		    ifi->lxnl_ifi_flags != 0 || ifi->lxnl_ifi_change != 0)
+			return (lx_netlink_private_error(lxsock, hdr, EINVAL));
+		for (i = 0; i < nattrs; i++) {
+			lx_netlink_attr_t *attr = attrs[i];
+
+			if (attr->lxna_type != LX_NETLINK_IFLA_IFNAME ||
+			    nameattr != NULL ||
+			    attr->lxna_len <= LXATTR_HDRLEN)
+				return (lx_netlink_private_error(lxsock, hdr,
+				    EINVAL));
+			nameattr = attr;
+		}
+		if (nameattr == NULL)
+			return (lx_netlink_private_error(lxsock, hdr, EINVAL));
+		len = nameattr->lxna_len - LXATTR_HDRLEN;
+		namelen = strnlen(LXATTR_PAYLOAD(nameattr), len);
+		if (namelen == 0 || namelen == len || namelen >= sizeof (name))
+			return (lx_netlink_private_error(lxsock, hdr, EINVAL));
+		bcopy(LXATTR_PAYLOAD(nameattr), name, namelen + 1);
+		if ((error = lx_netlink_plumb_assigned(lxsock, name)) != 0)
+			return (lx_netlink_private_error(lxsock, hdr, error));
+		return (lx_netlink_reply_ack(lxsock, hdr));
+	}
 	if (hdr->lxnh_flags != (LX_NETLINK_NLM_F_REQUEST |
 	    LX_NETLINK_NLM_F_ACK) ||
 	    lx_netlink_parse_msg_attrs(mp, (void **)&ifi, sizeof (*ifi),
