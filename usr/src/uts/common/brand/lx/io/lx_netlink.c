@@ -1342,6 +1342,15 @@ lx_netlink_getaddr_lifreq(lx_netlink_reply_t *reply, struct lifreq *lifr)
 	 */
 	if ((lifr->lifr_flags & IFF_NOLOCAL) != 0)
 		return;
+	if ((lifr->lifr_flags & IFF_DUPLICATE) != 0) {
+		ifa.lxnl_ifa_flags |= LX_NETLINK_IFA_F_DADFAILED;
+	} else {
+		if (lx_netlink_reply_ioctl(reply, SIOCGLIFDADSTATE,
+		    lifr) != 0)
+			return;
+		if (lifr->lifr_dadstate == DAD_IN_PROGRESS)
+			ifa.lxnl_ifa_flags |= LX_NETLINK_IFA_F_TENTATIVE;
+	}
 
 	if (lx_netlink_reply_ioctl(reply, SIOCGLIFSUBNET, lifr) != 0)
 		return;
