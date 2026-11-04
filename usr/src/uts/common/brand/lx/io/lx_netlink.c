@@ -46,6 +46,8 @@
 #include <sys/dlpi.h>
 #include <sys/policy.h>
 #include <sys/ddi.h>
+#include <net/route.h>
+#include <inet/ip_if.h>
 
 /*
  * Flags in netlink header
@@ -920,7 +922,8 @@ lx_netlink_reply_done(lx_netlink_reply_t *reply)
 		mp->b_wptr += sizeof (lx_netlink_err_t);
 
 		err->lxne_failed = reply->lxnr_hdr;
-		err->lxne_errno = reply->lxnr_errno;
+		/* Linux nlmsgerr.error carries a negated errno. */
+		err->lxne_errno = -reply->lxnr_errno;
 		hdr->lxnh_type = LX_NETLINK_NLMSG_ERROR;
 		hdr->lxnh_seq = reply->lxnr_hdr.lxnh_seq;
 		hdr->lxnh_len = sizeof (lx_netlink_err_t);
@@ -1390,20 +1393,27 @@ lx_netlink_getaddr(lx_netlink_sock_t *lxsock, lx_netlink_hdr_t *hdr, mblk_t *mp)
 }
 
 static int
-lx_netlink_loopback_index(lx_netlink_sock_t *lxsock, uint32_t *index)
+lx_netlink_index_lifreq(lx_netlink_sock_t *lxsock, uint32_t index,
+    boolean_t isv6, struct lifreq *lifr)
 {
-	struct lifreq lifr;
-	int error;
+	netstack_t *ns;
+	ill_t *ill;
 
-	bzero(&lifr, sizeof (lifr));
-	(void) strlcpy(lifr.lifr_name, ipif_loopback_name,
-	    sizeof (lifr.lifr_name));
-	lxsock->lxns_current = lxsock->lxns_iphandle;
-	error = ldi_ioctl(lxsock->lxns_current, SIOCGLIFINDEX,
-	    (intptr_t)&lifr, FKIOCTL, kcred, NULL);
-	if (error == 0)
-		*index = lifr.lifr_index;
-	return (error);
+	bzero(lifr, sizeof (*lifr));
+	if ((ns = netstack_get_current()) == NULL)
+		return (ENXIO);
+	ill = ill_lookup_on_ifindex(index, isv6, ns->netstack_ip);
+	if (ill == NULL) {
+		netstack_rele(ns);
+		return (ENODEV);
+	}
+	(void) strlcpy(lifr->lifr_name, ill->ill_name,
+	    sizeof (lifr->lifr_name));
+	ill_refrele(ill);
+	netstack_rele(ns);
+	lxsock->lxns_current = isv6 ? lxsock->lxns_ip6handle :
+	    lxsock->lxns_iphandle;
+	return (0);
 }
 
 static int
@@ -1413,12 +1423,6 @@ lx_netlink_private_error(lx_netlink_sock_t *lxsock,
 	return (lx_netlink_reply_error(lxsock, hdr, error));
 }
 
-/*
- * Bubblewrap configures the otherwise empty loopback device in a new network
- * namespace with 127.0.0.1/8, then marks it up.  Accept only that exact
- * private-stack mutation; connected interfaces and the zone's initial stack
- * remain read-only through rtnetlink.
- */
 static int
 lx_netlink_newaddr(lx_netlink_sock_t *lxsock, lx_netlink_hdr_t *hdr,
     mblk_t *mp)
@@ -1428,7 +1432,7 @@ lx_netlink_newaddr(lx_netlink_sock_t *lxsock, lx_netlink_hdr_t *hdr,
 	lx_netlink_ifaddrmsg_t *ifa;
 	struct sockaddr_in *sin;
 	struct lifreq lifr;
-	uint32_t index, loopback = htonl(INADDR_LOOPBACK);
+	uint32_t addr, mask;
 	unsigned int nattrs = sizeof (attrs) / sizeof (attrs[0]);
 	int error, i;
 
@@ -1439,53 +1443,66 @@ lx_netlink_newaddr(lx_netlink_sock_t *lxsock, lx_netlink_hdr_t *hdr,
 	    LX_NETLINK_NLM_F_CREATE) ||
 	    lx_netlink_parse_msg_attrs(mp, (void **)&ifa, sizeof (*ifa),
 	    attrs, &nattrs) != 0 || ifa->lxnl_ifa_family != LX_AF_INET ||
-	    ifa->lxnl_ifa_prefixlen != 8 ||
-	    ifa->lxnl_ifa_flags != LX_NETLINK_IFA_F_PERMANENT ||
-	    ifa->lxnl_ifa_scope != LX_RTSCOPE_HOST)
+	    ifa->lxnl_ifa_prefixlen > 32 ||
+	    (ifa->lxnl_ifa_flags != 0 &&
+	    ifa->lxnl_ifa_flags != LX_NETLINK_IFA_F_PERMANENT))
 		return (lx_netlink_private_error(lxsock, hdr, EINVAL));
 
 	for (i = 0; i < nattrs; i++) {
 		lx_netlink_attr_t *attr = attrs[i];
 
-		if (attr->lxna_len != LXATTR_LEN(sizeof (loopback)))
-			return (lx_netlink_private_error(lxsock, hdr, EINVAL));
 		switch (attr->lxna_type) {
 		case LX_NETLINK_IFA_LOCAL:
+			if (attr->lxna_len != LXATTR_LEN(sizeof (addr)))
+				return (lx_netlink_private_error(lxsock, hdr,
+				    EINVAL));
 			if (local != NULL)
 				return (lx_netlink_private_error(lxsock, hdr,
 				    EINVAL));
 			local = attr;
 			break;
 		case LX_NETLINK_IFA_ADDRESS:
+			if (attr->lxna_len != LXATTR_LEN(sizeof (addr)))
+				return (lx_netlink_private_error(lxsock, hdr,
+				    EINVAL));
 			if (address != NULL)
 				return (lx_netlink_private_error(lxsock, hdr,
 				    EINVAL));
 			address = attr;
 			break;
+		case LX_NETLINK_IFA_BROADCAST:
+			if (attr->lxna_len != LXATTR_LEN(sizeof (addr)))
+				return (lx_netlink_private_error(lxsock, hdr,
+				    EINVAL));
+			break;
 		default:
 			return (lx_netlink_private_error(lxsock, hdr, EINVAL));
 		}
 	}
-	if (local == NULL || address == NULL ||
-	    bcmp(LXATTR_PAYLOAD(local), &loopback, sizeof (loopback)) != 0 ||
-	    bcmp(LXATTR_PAYLOAD(address), &loopback, sizeof (loopback)) != 0)
+	if (local == NULL && address == NULL)
 		return (lx_netlink_private_error(lxsock, hdr, EINVAL));
-	if ((error = lx_netlink_loopback_index(lxsock, &index)) != 0)
+	if (local != NULL && address != NULL &&
+	    bcmp(LXATTR_PAYLOAD(local), LXATTR_PAYLOAD(address),
+	    sizeof (addr)) != 0)
+		return (lx_netlink_private_error(lxsock, hdr, EINVAL));
+	if (local != NULL)
+		bcopy(LXATTR_PAYLOAD(local), &addr, sizeof (addr));
+	else
+		bcopy(LXATTR_PAYLOAD(address), &addr, sizeof (addr));
+	if ((error = lx_netlink_index_lifreq(lxsock,
+	    ifa->lxnl_ifa_index, B_FALSE, &lifr)) != 0)
 		return (lx_netlink_private_error(lxsock, hdr, error));
-	if (ifa->lxnl_ifa_index != index)
-		return (lx_netlink_private_error(lxsock, hdr, ENODEV));
 
-	bzero(&lifr, sizeof (lifr));
-	(void) strlcpy(lifr.lifr_name, ipif_loopback_name,
-	    sizeof (lifr.lifr_name));
 	sin = (struct sockaddr_in *)&lifr.lifr_addr;
 	sin->sin_family = AF_INET;
-	sin->sin_addr.s_addr = loopback;
+	sin->sin_addr.s_addr = addr;
 	if ((error = ldi_ioctl(lxsock->lxns_iphandle, SIOCSLIFADDR,
 	    (intptr_t)&lifr, FKIOCTL, kcred, NULL)) != 0)
 		return (lx_netlink_private_error(lxsock, hdr, error));
 
-	sin->sin_addr.s_addr = htonl(IN_CLASSA_NET);
+	mask = ifa->lxnl_ifa_prefixlen == 0 ? 0 :
+	    htonl(UINT32_MAX << (32 - ifa->lxnl_ifa_prefixlen));
+	sin->sin_addr.s_addr = mask;
 	if ((error = ldi_ioctl(lxsock->lxns_iphandle, SIOCSLIFNETMASK,
 	    (intptr_t)&lifr, FKIOCTL, kcred, NULL)) != 0)
 		return (lx_netlink_private_error(lxsock, hdr, error));
@@ -1498,7 +1515,6 @@ lx_netlink_newlink(lx_netlink_sock_t *lxsock, lx_netlink_hdr_t *hdr,
 {
 	lx_netlink_ifinfomsg_t *ifi;
 	struct lifreq lifr;
-	uint32_t index;
 	int error;
 
 	if (!lx_netns_configure_allowed(CRED()))
@@ -1507,25 +1523,171 @@ lx_netlink_newlink(lx_netlink_sock_t *lxsock, lx_netlink_hdr_t *hdr,
 	    LX_NETLINK_NLM_F_ACK) ||
 	    lx_netlink_parse_msg_attrs(mp, (void **)&ifi, sizeof (*ifi),
 	    NULL, NULL) != 0 || ifi->lxnl_ifi_family != AF_UNSPEC ||
-	    ifi->lxnl_ifi_type != 0 || ifi->lxnl_ifi_flags != LX_IFF_UP ||
+	    ifi->lxnl_ifi_type != 0 ||
+	    (ifi->lxnl_ifi_flags & ~LX_IFF_UP) != 0 ||
 	    ifi->lxnl_ifi_change != LX_IFF_UP)
 		return (lx_netlink_private_error(lxsock, hdr, EINVAL));
-	if ((error = lx_netlink_loopback_index(lxsock, &index)) != 0)
+	if ((error = lx_netlink_index_lifreq(lxsock,
+	    ifi->lxnl_ifi_index, B_FALSE, &lifr)) != 0)
 		return (lx_netlink_private_error(lxsock, hdr, error));
-	if (ifi->lxnl_ifi_index != index)
-		return (lx_netlink_private_error(lxsock, hdr, ENODEV));
-
-	bzero(&lifr, sizeof (lifr));
-	(void) strlcpy(lifr.lifr_name, ipif_loopback_name,
-	    sizeof (lifr.lifr_name));
 	if ((error = ldi_ioctl(lxsock->lxns_iphandle, SIOCGLIFFLAGS,
 	    (intptr_t)&lifr, FKIOCTL, kcred, NULL)) != 0)
 		return (lx_netlink_private_error(lxsock, hdr, error));
-	lifr.lifr_flags |= IFF_UP;
+	if ((ifi->lxnl_ifi_flags & LX_IFF_UP) != 0)
+		lifr.lifr_flags |= IFF_UP;
+	else
+		lifr.lifr_flags &= ~IFF_UP;
 	if ((error = ldi_ioctl(lxsock->lxns_iphandle, SIOCSLIFFLAGS,
 	    (intptr_t)&lifr, FKIOCTL, kcred, NULL)) != 0)
 		return (lx_netlink_private_error(lxsock, hdr, error));
 	return (lx_netlink_reply_ack(lxsock, hdr));
+}
+
+static int
+lx_netlink_route_change(lx_netlink_sock_t *lxsock,
+    lx_netlink_hdr_t *hdr, mblk_t *mp, boolean_t add)
+{
+	lx_netlink_attr_t *attrs[LX_NETLINK_MAX_RTA];
+	lx_netlink_attr_t *dstattr = NULL, *gwattr = NULL;
+	lx_netlink_rtmsg_t *rtm;
+	netstack_t *ns;
+	ill_t *ill = NULL;
+	struct lifreq lifr;
+	struct sockaddr_in *sin;
+	ipaddr_t dst = INADDR_ANY, gateway = INADDR_ANY, mask;
+	uint32_t oif = 0, table = LX_ROUTE_TABLE_MAIN;
+	unsigned int nattrs = sizeof (attrs) / sizeof (attrs[0]);
+	uint16_t expected_flags;
+	int error, flags, i;
+
+	if (!lx_netns_configure_allowed(CRED()))
+		return (lx_netlink_private_error(lxsock, hdr, EPERM));
+	expected_flags = LX_NETLINK_NLM_F_REQUEST | LX_NETLINK_NLM_F_ACK;
+	if (add) {
+		expected_flags |= LX_NETLINK_NLM_F_EXCL |
+		    LX_NETLINK_NLM_F_CREATE;
+	}
+	if (hdr->lxnh_flags != expected_flags ||
+	    lx_netlink_parse_msg_attrs(mp, (void **)&rtm, sizeof (*rtm),
+	    attrs, &nattrs) != 0 || rtm->rtm_family != LX_AF_INET ||
+	    rtm->rtm_dst_len > 32 || rtm->rtm_src_len != 0 ||
+	    rtm->rtm_tos != 0 ||
+	    (rtm->rtm_table != 0 &&
+	    rtm->rtm_table != LX_ROUTE_TABLE_MAIN) ||
+	    (rtm->rtm_protocol != LX_RTPROT_UNSPEC &&
+	    rtm->rtm_protocol != LX_RTPROT_BOOT &&
+	    rtm->rtm_protocol != LX_RTPROT_STATIC) ||
+	    (rtm->rtm_scope != LX_RTSCOPE_UNIVERSE &&
+	    rtm->rtm_scope != LX_RTSCOPE_LINK) ||
+	    rtm->rtm_type != LX_RTN_UNICAST || rtm->rtm_flags != 0) {
+		return (lx_netlink_private_error(lxsock, hdr, EINVAL));
+	}
+
+	for (i = 0; i < nattrs; i++) {
+		lx_netlink_attr_t *attr = attrs[i];
+
+		switch (attr->lxna_type) {
+		case LX_NETLINK_RTA_DST:
+			if (dstattr != NULL ||
+			    attr->lxna_len != LXATTR_LEN(sizeof (dst)))
+				return (lx_netlink_private_error(lxsock, hdr,
+				    EINVAL));
+			dstattr = attr;
+			break;
+		case LX_NETLINK_RTA_GATEWAY:
+			if (gwattr != NULL ||
+			    attr->lxna_len != LXATTR_LEN(sizeof (gateway)))
+				return (lx_netlink_private_error(lxsock, hdr,
+				    EINVAL));
+			gwattr = attr;
+			break;
+		case LX_NETLINK_RTA_OIF:
+			if (attr->lxna_len != LXATTR_LEN(sizeof (oif)))
+				return (lx_netlink_private_error(lxsock, hdr,
+				    EINVAL));
+			bcopy(LXATTR_PAYLOAD(attr), &oif, sizeof (oif));
+			break;
+		case LX_NETLINK_RTA_TABLE:
+			if (attr->lxna_len != LXATTR_LEN(sizeof (table)))
+				return (lx_netlink_private_error(lxsock, hdr,
+				    EINVAL));
+			bcopy(LXATTR_PAYLOAD(attr), &table, sizeof (table));
+			break;
+		default:
+			return (lx_netlink_private_error(lxsock, hdr, EINVAL));
+		}
+	}
+	if (table != LX_ROUTE_TABLE_MAIN ||
+	    (rtm->rtm_dst_len != 0 && dstattr == NULL))
+		return (lx_netlink_private_error(lxsock, hdr, EINVAL));
+	if (dstattr != NULL)
+		bcopy(LXATTR_PAYLOAD(dstattr), &dst, sizeof (dst));
+	if (gwattr != NULL)
+		bcopy(LXATTR_PAYLOAD(gwattr), &gateway, sizeof (gateway));
+	mask = rtm->rtm_dst_len == 0 ? 0 :
+	    htonl(UINT32_MAX << (32 - rtm->rtm_dst_len));
+	/*
+	 * Linux represents an interface route with RTA_OIF and no gateway.
+	 * illumos represents the same route with the interface's local address
+	 * in the gateway argument while leaving RTF_GATEWAY clear.
+	 */
+	if (gwattr == NULL) {
+		if (oif == 0)
+			return (lx_netlink_private_error(lxsock, hdr, EINVAL));
+		if ((error = lx_netlink_index_lifreq(lxsock, oif, B_FALSE,
+		    &lifr)) != 0)
+			return (lx_netlink_private_error(lxsock, hdr, error));
+		if ((error = ldi_ioctl(lxsock->lxns_iphandle, SIOCGLIFADDR,
+		    (intptr_t)&lifr, FKIOCTL, kcred, NULL)) != 0)
+			return (lx_netlink_private_error(lxsock, hdr, error));
+		sin = (struct sockaddr_in *)&lifr.lifr_addr;
+		if (sin->sin_family != AF_INET ||
+		    sin->sin_addr.s_addr == INADDR_ANY)
+			return (lx_netlink_private_error(lxsock, hdr,
+			    EADDRNOTAVAIL));
+		gateway = sin->sin_addr.s_addr;
+	}
+
+	if ((ns = netstack_get_current()) == NULL)
+		return (lx_netlink_private_error(lxsock, hdr, ENXIO));
+	if (oif != 0 && (ill = ill_lookup_on_ifindex(oif, B_FALSE,
+	    ns->netstack_ip)) == NULL) {
+		netstack_rele(ns);
+		return (lx_netlink_private_error(lxsock, hdr, ENODEV));
+	}
+	flags = RTF_UP | RTF_STATIC;
+	if (gwattr != NULL)
+		flags |= RTF_GATEWAY;
+	if (rtm->rtm_dst_len == 32)
+		flags |= RTF_HOST;
+	if (add) {
+		error = ip_rt_add(dst, mask, gateway, 0, flags, ill, NULL,
+		    B_FALSE, NULL, ns->netstack_ip, ALL_ZONES);
+	} else {
+		error = ip_rt_delete(dst, mask, gateway,
+		    RTA_DST | RTA_GATEWAY | RTA_NETMASK, flags, ill, B_FALSE,
+		    ns->netstack_ip, ALL_ZONES);
+	}
+	if (ill != NULL)
+		ill_refrele(ill);
+	netstack_rele(ns);
+	if (error != 0)
+		return (lx_netlink_private_error(lxsock, hdr, error));
+	return (lx_netlink_reply_ack(lxsock, hdr));
+}
+
+static int
+lx_netlink_newroute(lx_netlink_sock_t *lxsock, lx_netlink_hdr_t *hdr,
+    mblk_t *mp)
+{
+	return (lx_netlink_route_change(lxsock, hdr, mp, B_TRUE));
+}
+
+static int
+lx_netlink_delroute(lx_netlink_sock_t *lxsock, lx_netlink_hdr_t *hdr,
+    mblk_t *mp)
+{
+	return (lx_netlink_route_change(lxsock, hdr, mp, B_FALSE));
 }
 
 struct lx_getroute_ctx {
@@ -2101,7 +2263,13 @@ lx_netlink_send(sock_lower_handle_t handle, mblk_t *mp,
 		{ LX_NETLINK_ROUTE,
 		    LX_NETLINK_RTM_NEWLINK, lx_netlink_newlink },
 		{ LX_NETLINK_ROUTE,
+		    LX_NETLINK_RTM_SETLINK, lx_netlink_newlink },
+		{ LX_NETLINK_ROUTE,
 		    LX_NETLINK_RTM_NEWADDR, lx_netlink_newaddr },
+		{ LX_NETLINK_ROUTE,
+		    LX_NETLINK_RTM_NEWROUTE, lx_netlink_newroute },
+		{ LX_NETLINK_ROUTE,
+		    LX_NETLINK_RTM_DELROUTE, lx_netlink_delroute },
 		{ LX_NETLINK_ROUTE,
 		    LX_NETLINK_RTM_GETLINK, lx_netlink_getlink },
 		{ LX_NETLINK_ROUTE,
