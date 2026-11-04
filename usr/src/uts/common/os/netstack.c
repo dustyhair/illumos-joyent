@@ -105,6 +105,9 @@ static struct shared_kstat_list	*netstack_shared_kstats;
 static void	*netstack_zone_create(zoneid_t zoneid);
 static void	netstack_zone_shutdown(zoneid_t zoneid, void *arg);
 static void	netstack_zone_destroy(zoneid_t zoneid, void *arg);
+static void	netstack_prepare_create(netstack_t *);
+static void	netstack_complete_create(netstack_t *);
+static void	netstack_shutdown(netstack_t *);
 
 static void	netstack_shared_zone_add(zoneid_t zoneid);
 static void	netstack_shared_zone_remove(zoneid_t zoneid);
@@ -318,6 +321,50 @@ netstack_unregister(int moduleid)
 	mutex_exit(&netstack_g_lock);
 }
 
+static void
+netstack_prepare_create(netstack_t *ns)
+{
+	int i;
+
+	ASSERT(MUTEX_HELD(&netstack_g_lock));
+	ASSERT(MUTEX_HELD(&ns->netstack_lock));
+	ASSERT(ns->netstack_flags & NSF_UNINIT);
+	ASSERT(!(ns->netstack_flags & NSF_ZONE_INPROGRESS));
+
+	/*
+	 * Mark this netstack as having a CREATE running so that module
+	 * registration waits for the initial callbacks to complete in order.
+	 */
+	ns->netstack_flags |= NSF_ZONE_CREATE;
+
+	for (i = 0; i < NS_MAX; i++) {
+		nm_state_t *nms = &ns->netstack_m_state[i];
+
+		cv_init(&nms->nms_cv, NULL, CV_DEFAULT, NULL);
+
+		if ((ns_reg[i].nr_flags == NRF_REGISTERED) &&
+		    (nms->nms_flags & NSS_CREATE_ALL) == 0) {
+			nms->nms_flags |= NSS_CREATE_NEEDED;
+			DTRACE_PROBE2(netstack__create__needed,
+			    netstack_t *, ns, int, i);
+		}
+	}
+}
+
+static void
+netstack_complete_create(netstack_t *ns)
+{
+	apply_all_modules(ns, netstack_apply_create);
+
+	/* Tell any waiting module registration operation to proceed. */
+	mutex_enter(&ns->netstack_lock);
+	ns->netstack_flags &= ~NSF_UNINIT;
+	ASSERT(ns->netstack_flags & NSF_ZONE_CREATE);
+	ns->netstack_flags &= ~NSF_ZONE_CREATE;
+	cv_broadcast(&ns->netstack_cv);
+	mutex_exit(&ns->netstack_lock);
+}
+
 /*
  * Lookup and/or allocate a netstack for this zone.
  */
@@ -328,7 +375,6 @@ netstack_zone_create(zoneid_t zoneid)
 	netstack_t *ns;
 	netstack_t **nsp;
 	zone_t	*zone;
-	int i;
 
 	ASSERT(netstack_initialized);
 
@@ -371,7 +417,8 @@ netstack_zone_create(zoneid_t zoneid)
 	/* Not found */
 	mutex_init(&ns->netstack_lock, NULL, MUTEX_DEFAULT, NULL);
 	cv_init(&ns->netstack_cv, NULL, CV_DEFAULT, NULL);
-	ns->netstack_stackid = zoneid;
+	ns->netstack_stackid = stackid;
+	ns->netstack_zoneid = zoneid;
 	ns->netstack_numzones = 1;
 	ns->netstack_refcnt = 1; /* Decremented by netstack_zone_destroy */
 	ns->netstack_flags = NSF_UNINIT;
@@ -379,66 +426,19 @@ netstack_zone_create(zoneid_t zoneid)
 	zone->zone_netstack = ns;
 
 	mutex_enter(&ns->netstack_lock);
-	/*
-	 * Mark this netstack as having a CREATE running so
-	 * any netstack_register/netstack_unregister waits for
-	 * the existing create callbacks to complete in moduleid order
-	 */
-	ns->netstack_flags |= NSF_ZONE_CREATE;
-
-	/*
-	 * Determine the set of module create functions that need to be
-	 * called before we drop the lock.
-	 * Set NSS_CREATE_NEEDED for each of those.
-	 * Skip any with NRF_DYING set, since those are in the process of
-	 * going away, by checking for flags being exactly NRF_REGISTERED.
-	 */
-	for (i = 0; i < NS_MAX; i++) {
-		nm_state_t *nms = &ns->netstack_m_state[i];
-
-		cv_init(&nms->nms_cv, NULL, CV_DEFAULT, NULL);
-
-		if ((ns_reg[i].nr_flags == NRF_REGISTERED) &&
-		    (nms->nms_flags & NSS_CREATE_ALL) == 0) {
-			nms->nms_flags |= NSS_CREATE_NEEDED;
-			DTRACE_PROBE2(netstack__create__needed,
-			    netstack_t *, ns, int, i);
-		}
-	}
+	netstack_prepare_create(ns);
 	mutex_exit(&ns->netstack_lock);
 	mutex_exit(&netstack_g_lock);
 
-	apply_all_modules(ns, netstack_apply_create);
-
-	/* Tell any waiting netstack_register/netstack_unregister to proceed */
-	mutex_enter(&ns->netstack_lock);
-	ns->netstack_flags &= ~NSF_UNINIT;
-	ASSERT(ns->netstack_flags & NSF_ZONE_CREATE);
-	ns->netstack_flags &= ~NSF_ZONE_CREATE;
-	cv_broadcast(&ns->netstack_cv);
-	mutex_exit(&ns->netstack_lock);
+	netstack_complete_create(ns);
 
 	return (ns);
 }
 
-/* ARGSUSED */
 static void
-netstack_zone_shutdown(zoneid_t zoneid, void *arg)
+netstack_shutdown(netstack_t *ns)
 {
-	netstack_t *ns = (netstack_t *)arg;
 	int i;
-
-	ASSERT(arg != NULL);
-
-	mutex_enter(&ns->netstack_lock);
-	ASSERT(ns->netstack_numzones > 0);
-	if (ns->netstack_numzones != 1) {
-		/* Stack instance being used by other zone */
-		mutex_exit(&ns->netstack_lock);
-		ASSERT(ns->netstack_stackid == GLOBAL_NETSTACKID);
-		return;
-	}
-	mutex_exit(&ns->netstack_lock);
 
 	mutex_enter(&netstack_g_lock);
 	mutex_enter(&ns->netstack_lock);
@@ -481,6 +481,27 @@ netstack_zone_shutdown(zoneid_t zoneid, void *arg)
 	ns->netstack_flags &= ~NSF_ZONE_SHUTDOWN;
 	cv_broadcast(&ns->netstack_cv);
 	mutex_exit(&ns->netstack_lock);
+}
+
+/* ARGSUSED */
+static void
+netstack_zone_shutdown(zoneid_t zoneid, void *arg)
+{
+	netstack_t *ns = (netstack_t *)arg;
+
+	ASSERT(arg != NULL);
+
+	mutex_enter(&ns->netstack_lock);
+	ASSERT(ns->netstack_numzones > 0);
+	if (ns->netstack_numzones != 1) {
+		/* Stack instance being used by other zone */
+		mutex_exit(&ns->netstack_lock);
+		ASSERT(ns->netstack_stackid == GLOBAL_NETSTACKID);
+		return;
+	}
+	mutex_exit(&ns->netstack_lock);
+
+	netstack_shutdown(ns);
 }
 
 /*
@@ -1390,7 +1411,7 @@ zoneid_to_netstackid(zoneid_t zoneid)
 zoneid_t
 netstack_get_zoneid(netstack_t *ns)
 {
-	return (netstackid_to_zoneid(ns->netstack_stackid));
+	return (ns->netstack_zoneid);
 }
 
 /*

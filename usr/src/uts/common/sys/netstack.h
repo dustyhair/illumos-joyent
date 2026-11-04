@@ -193,6 +193,7 @@ struct netstack {
 	kmutex_t	netstack_lock;
 	struct netstack *netstack_next;
 	netstackid_t	netstack_stackid;
+	zoneid_t	netstack_zoneid;	/* Zone which owns this stack */
 	int		netstack_numzones;	/* Number of zones using this */
 	int		netstack_refcnt;	/* Number of hold-rele */
 	int		netstack_flags;	/* See below */
