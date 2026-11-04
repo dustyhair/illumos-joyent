@@ -99,7 +99,9 @@ start_c(unsigned long *stack)
 	static const char cap_add[] = "--cap-add";
 	static const char cap_net_admin[] = "CAP_NET_ADMIN";
 	static const char cap_setpcap[] = "CAP_SETPCAP";
+	static const char argv0_option[] = "--argv0";
 	static const char separator[] = "--";
+	static const char payload_argv0_option[] = "--payload-argv0";
 	static const char links_option[] = "--links";
 	static const char gateway_option[] = "--gateway";
 	char **argv = (char **)(stack + 1);
@@ -109,6 +111,7 @@ start_c(unsigned long *stack)
 	const char *helper = (void *)0;
 	const char *links = (void *)0;
 	const char *gateway = (void *)0;
+	const char *payload_argv0 = (void *)0;
 	lx_size_t argc = stack[0];
 	lx_size_t found_net = 0;
 	lx_size_t found_separator = 0;
@@ -141,13 +144,22 @@ start_c(unsigned long *stack)
 		fail("CODEX_LX_NET_LINKS is empty");
 	if (private && (gateway == (void *)0 || gateway[0] == '\0'))
 		fail("CODEX_LX_NET_GATEWAY is empty");
-	if (argc + 11 >= LX_MAX_ARGV)
+	if (argc + 13 >= LX_MAX_ARGV)
 		fail("bubblewrap argument list is too long");
 
 	lx_argv[out++] = (char *)real;
 	for (i = 1; i < argc; i++) {
+		if (!command && string_equal(argv[i], argv0_option)) {
+			if (i + 1 >= argc)
+				fail("--argv0 is missing its value");
+			if (payload_argv0 != (void *)0)
+				fail("expected exactly one --argv0");
+			payload_argv0 = argv[i + 1];
+		}
 		if (!command && string_equal(argv[i], separator)) {
 			found_separator++;
+			if (private && payload_argv0 == (void *)0)
+				fail("expected exactly one --argv0");
 			if (private) {
 				lx_argv[out++] = (char *)cap_add;
 				lx_argv[out++] = (char *)cap_net_admin;
@@ -157,6 +169,8 @@ start_c(unsigned long *stack)
 			lx_argv[out++] = argv[i];
 			if (private) {
 				lx_argv[out++] = (char *)helper;
+				lx_argv[out++] = (char *)payload_argv0_option;
+				lx_argv[out++] = (char *)payload_argv0;
 				lx_argv[out++] = (char *)links_option;
 				lx_argv[out++] = (char *)links;
 				lx_argv[out++] = (char *)gateway_option;

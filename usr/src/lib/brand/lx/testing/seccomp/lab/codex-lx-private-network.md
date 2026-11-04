@@ -39,6 +39,8 @@ root-owned config, claims one assigned link, brings it up, adds its address,
 waits for DAD to finish and installs the default route. Before it execs the
 requested command, it removes both setup capabilities from the ambient,
 bounding, permitted, effective and inheritable sets and verifies the removal.
+It also preserves bubblewrap's requested payload `argv[0]`, which Codex uses
+to select its internal Linux sandbox runner.
 Exiting the namespace returns the link to the zone, so there is no per-command
 host cleanup process.
 

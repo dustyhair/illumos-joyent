@@ -17,9 +17,12 @@ private=$(env -i CODEX_LX_NETWORK_MODE=private \
     CODEX_LX_REAL_BWRAP=/bin/echo CODEX_LX_NET_HELPER=/opt/codex-lx-net \
     CODEX_LX_NET_LINKS='clx0=10.88.0.2/24,clx1=10.88.0.3/24' \
     CODEX_LX_NET_GATEWAY=10.88.0.1 \
-    "$work/bwrap" --unshare-user --unshare-net -- /bin/true argument)
-expected_private='--unshare-user --unshare-net --cap-add CAP_NET_ADMIN '
+	"$work/bwrap" --unshare-user --unshare-net \
+	--argv0 codex-linux-sandbox -- /bin/true argument)
+expected_private='--unshare-user --unshare-net --argv0 codex-linux-sandbox '
+expected_private+='--cap-add CAP_NET_ADMIN '
 expected_private+='--cap-add CAP_SETPCAP -- /opt/codex-lx-net '
+expected_private+='--payload-argv0 codex-linux-sandbox '
 expected_private+='--links clx0=10.88.0.2/24,clx1=10.88.0.3/24 '
 expected_private+='--gateway 10.88.0.1 -- /bin/true argument'
 [[ "$private" == "$expected_private" ]]
@@ -34,7 +37,8 @@ env -i CODEX_LX_NETWORK_MODE=shared CODEX_LX_REAL_BWRAP=/bin/echo \
     "$work/bwrap" --unshare-net --unshare-net -- /bin/true \
     >"$work/duplicate.out" 2>&1
 duplicate_status=$?
-"$work/net" --links bad --gateway 10.88.0.1 -- /bin/true \
+"$work/net" --payload-argv0 test --links bad --gateway 10.88.0.1 -- \
+	/bin/true \
     >"$work/net.out" 2>&1
 net_status=$?
 set -o errexit

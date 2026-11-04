@@ -395,16 +395,18 @@ main(int argc, char **argv)
 	struct in_addr gateway;
 	unsigned int index;
 	size_t count, selected;
+	char *command;
 	int fd;
 
-	if (argc < 7 || strcmp(argv[1], "--links") != 0 ||
-	    strcmp(argv[3], "--gateway") != 0 ||
-	    strcmp(argv[5], "--") != 0) {
-		fail("usage: --links name=address/prefix,... "
-		    "--gateway address -- command");
+	if (argc < 9 || strcmp(argv[1], "--payload-argv0") != 0 ||
+	    strcmp(argv[3], "--links") != 0 ||
+	    strcmp(argv[5], "--gateway") != 0 ||
+	    strcmp(argv[7], "--") != 0 || argv[2][0] == '\0') {
+		fail("usage: --payload-argv0 value --links "
+		    "name=address/prefix,... --gateway address -- command");
 	}
-	count = parse_links(argv[2], links);
-	if (inet_pton(AF_INET, argv[4], &gateway) != 1)
+	count = parse_links(argv[4], links);
+	if (inet_pton(AF_INET, argv[6], &gateway) != 1)
 		fail("invalid private IPv4 gateway");
 	if ((fd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC,
 	    NETLINK_ROUTE)) == -1)
@@ -433,9 +435,11 @@ main(int argc, char **argv)
 	(void) fprintf(stderr, "codex-lx-net: ready link=%s address=%s/%u "
 	    "gateway=%s\n", links[selected].cll_name,
 	    inet_ntoa(links[selected].cll_address),
-	    links[selected].cll_prefix, argv[4]);
+	    links[selected].cll_prefix, argv[6]);
 	(void) close(fd);
 	drop_setup_capabilities();
-	execvp(argv[6], &argv[6]);
+	command = argv[8];
+	argv[8] = argv[2];
+	execvp(command, &argv[8]);
 	fail_errno("cannot execute the sandbox command");
 }
