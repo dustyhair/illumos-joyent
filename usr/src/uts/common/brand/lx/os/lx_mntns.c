@@ -40,6 +40,9 @@ int lx_mntns_experimental = 0;
 /* Bound retained mount records, including mounts hidden by an overmount. */
 #define	LX_MNTNS_MAX_MOUNTS	4096
 
+/* A concurrent private mount can invalidate an initial native-tree scan. */
+#define	LX_MNTNS_SNAPSHOT_RETRIES	16
+
 typedef struct lx_mntns_mount {
 	vfs_t *lm_vfs;
 	vnode_t *lm_root;
@@ -1987,6 +1990,7 @@ lx_mntns_entry_prepare(cred_t *owner, vnode_t *root, vnode_t *cwd,
 	lx_mntns_budget_t *budget;
 	cred_t *native;
 	char *path;
+	uint_t attempt;
 	int error;
 
 	bzero(state, sizeof (*state));
@@ -2003,9 +2007,17 @@ lx_mntns_entry_prepare(cred_t *owner, vnode_t *root, vnode_t *cwd,
 	native = crdup(curzone->zone_kcred);
 	if (source != NULL) {
 		error = lx_mntns_view_clone(source, native, owner, &view);
-	} else if ((error = lx_mntns_charge(budget)) == 0) {
-		error = lx_mntns_snapshot(root, curzone->zone_rootpath,
-		    native, owner, budget, &view);
+	} else {
+		for (attempt = 0; attempt < LX_MNTNS_SNAPSHOT_RETRIES;
+		    attempt++) {
+			if ((error = lx_mntns_charge(budget)) != 0)
+				break;
+			error = lx_mntns_snapshot(root, curzone->zone_rootpath,
+			    native, owner, budget, &view);
+			if (error != EAGAIN)
+				break;
+			delay(1);
+		}
 	}
 	if (error == 0)
 		error = lx_mntns_state_prepare(view, path, owner, state);
