@@ -1,0 +1,342 @@
+#!/usr/bin/bash
+# Prepare and remove a private Codex network for one lx zone.
+set -o errexit
+set -o nounset
+set -o pipefail
+
+PATH=${CODEX_LX_NETWORK_PATH:-/usr/sbin:/usr/bin:/sbin}
+export PATH
+
+state_root=${CODEX_LX_NETWORK_STATE_DIR:-/var/codex-lx-network}
+lock_dir=${CODEX_LX_NETWORK_LOCK_DIR:-/var/run/codex-lx-network.lock}
+rollback_directory=
+
+usage()
+{
+	cat >&2 <<EOF
+usage:
+  codex-lx-network setup ZONE PREFIX EGRESS A.B.C COUNT
+  codex-lx-network teardown PREFIX
+  codex-lx-network reapply PREFIX
+  codex-lx-network status
+
+setup creates A.B.C.0/24.  The host gateway is A.B.C.1 and COUNT sandbox
+links use A.B.C.2 through A.B.C.(COUNT+1).
+EOF
+	exit 2
+}
+
+die()
+{
+	printf 'codex-lx-network: %s\n' "$*" >&2
+	exit 1
+}
+
+acquire_lock()
+{
+	local -i attempt=0
+
+	mkdir -p "$state_root"
+	chmod 700 "$state_root"
+	while ! mkdir "$lock_dir" 2>/dev/null; do
+		(( attempt += 1 ))
+		if (( attempt == 10 )); then
+			die "could not acquire $lock_dir"
+		fi
+		sleep 1
+	done
+}
+
+release_lock()
+{
+	rmdir "$lock_dir" 2>/dev/null || true
+}
+
+deployment_count()
+{
+	local -i count=0
+	local path
+
+	for path in "$state_root"/*/state; do
+		[[ -f "$path" ]] || continue
+		(( count += 1 ))
+	done
+	printf '%s\n' "$count"
+}
+
+read_netns_switch()
+{
+	printf '%s\n' 'lx_brand`lx_netns_experimental/D' | mdb -k |
+	    awk 'NF != 0 { value = $NF } END { print value }'
+}
+
+set_netns_switch()
+{
+	printf 'lx_brand`lx_netns_experimental/W %s\n' "$1" | mdb -kw
+}
+
+write_base_state()
+{
+	local forwarding ipf_running netns
+
+	forwarding=$(ipadm show-prop -c -o current -p forwarding ipv4)
+	ipf_running=$(ipf -V | awk '/^Running:/ { print $2 }')
+	netns=$(read_netns_switch)
+	[[ "$forwarding" == on || "$forwarding" == off ]] ||
+	    die "cannot read the IPv4 forwarding property"
+	[[ "$ipf_running" == yes || "$ipf_running" == no ]] ||
+	    die "cannot read the IP Filter state"
+	[[ "$netns" == 0 || "$netns" == 0x0 || "$netns" == 1 ||
+	    "$netns" == 0x1 ]] || die "cannot read lx_netns_experimental"
+	cat > "$state_root/base.state" <<EOF
+forwarding_was=$forwarding
+ipf_was=$ipf_running
+netns_was=$netns
+EOF
+	chmod 600 "$state_root/base.state"
+}
+
+restore_base_state()
+{
+	[[ -f "$state_root/base.state" ]] || return
+	. "$state_root/base.state"
+	ipadm set-prop -t -p "forwarding=$forwarding_was" ipv4
+	if [[ "$netns_was" == 0 || "$netns_was" == 0x0 ]]; then
+		set_netns_switch 0
+	fi
+	if [[ "$ipf_was" == no ]]; then
+		ipf -D 2>/dev/null || true
+	fi
+	rm -f "$state_root/base.state"
+}
+
+remove_deployment()
+{
+	local directory=$1
+	local link status
+
+	[[ -f "$directory/state" ]] || die "missing deployment state: $directory"
+	. "$directory/state"
+	status=$(zoneadm -z "$zone" list -p 2>/dev/null |
+	    awk -F: 'NR == 1 { print $3 }')
+	if [[ "$status" == running || "$status" == ready ||
+	    "$status" == shutting_down || "$status" == down ]]; then
+		zoneadm -z "$zone" halt 2>/dev/null || true
+	fi
+	if [[ -f "$directory/ipnat.rules" ]]; then
+		ipnat -r -f "$directory/ipnat.rules" 2>/dev/null || true
+	fi
+	if [[ -f "$directory/ipf.rules" ]]; then
+		ipf -r -f "$directory/ipf.rules" 2>/dev/null || true
+	fi
+	[[ ! -f "$config" ]] || rm -f "$config"
+	ipadm delete-addr "$host/v4" 2>/dev/null || true
+	ipadm delete-if "$host" 2>/dev/null || true
+	for link in ${links//,/ }; do
+		link=${link%%=*}
+		dladm delete-vnic "$link" 2>/dev/null || true
+	done
+	dladm delete-vnic "$host" 2>/dev/null || true
+	dladm delete-etherstub "$stub" 2>/dev/null || true
+	rm -f "$directory/ipnat.rules" "$directory/ipf.rules" \
+	    "$directory/state"
+	rmdir "$directory"
+	if (( $(deployment_count) == 0 )); then
+		restore_base_state
+	fi
+}
+
+rollback_setup()
+{
+	local result=$?
+
+	trap - EXIT HUP INT TERM
+	set +o errexit
+	remove_deployment "$rollback_directory"
+	release_lock
+	exit "$result"
+}
+
+setup()
+{
+	(( $# == 5 )) || usage
+	local zone=$1 prefix=$2 egress=$3 network=$4 count=$5
+	local directory stub host gateway subnet zonepath zone_root config
+	local links= link address status octet first=0
+	local -i index value
+
+	[[ "$zone" =~ ^[A-Za-z0-9_.-]+$ ]] || die "invalid zone name"
+	[[ "$prefix" =~ ^[A-Za-z0-9]+$ && ${#prefix} -le 10 ]] ||
+	    die "PREFIX must contain at most 10 letters or digits"
+	[[ "$egress" =~ ^[A-Za-z0-9_.-]+$ ]] || die "invalid egress link"
+	[[ "$network" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+	    die "network must contain the first three IPv4 octets"
+	for octet in ${network//./ }; do
+		[[ "$octet" == 0 || "$octet" != 0* ]] ||
+		    die "IPv4 octets must not contain leading zeroes"
+		value=$((10#$octet))
+		(( value >= 0 && value <= 255 )) || die "invalid IPv4 octet"
+	done
+	[[ "$count" =~ ^[0-9]+$ ]] || die "COUNT must be an integer"
+	(( count >= 1 && count <= 32 )) || die "COUNT must be from 1 to 32"
+	dladm show-link -p -o link "$egress" >/dev/null 2>&1 ||
+	    die "egress link does not exist: $egress"
+	status=$(zoneadm -z "$zone" list -p 2>/dev/null |
+	    awk -F: 'NR == 1 { print $3 }')
+	[[ "$status" == installed ]] || die "zone must be installed, not $status"
+	zonepath=$(zonecfg -z "$zone" info zonepath |
+	    awk '$1 == "zonepath:" { print $2 }')
+	[[ "$zonepath" =~ ^/[A-Za-z0-9_./-]+$ ]] ||
+	    die "cannot determine a safe zone path"
+	zone_root=$zonepath/root
+	config=$zone_root/etc/codex-lx-network.conf
+	[[ ! -e "$config" ]] || die "network config already exists: $config"
+
+	directory=$state_root/$prefix
+	[[ ! -e "$directory" ]] || die "deployment prefix already exists: $prefix"
+	stub=${prefix}s
+	host=${prefix}h
+	gateway=$network.1
+	subnet=$network.0/24
+	for ((index = 0; index < count; index++)); do
+		link=$prefix$index
+		address=$network.$((index + 2))/24
+		[[ -z "$links" ]] || links+=,
+		links+=$link=$address
+	done
+
+	if (( $(deployment_count) == 0 )); then
+		write_base_state
+		first=1
+	fi
+	if ! mkdir "$directory"; then
+		(( first == 0 )) || restore_base_state
+		die "cannot create deployment state: $directory"
+	fi
+	chmod 700 "$directory"
+	cat > "$directory/state" <<EOF
+zone='$zone'
+prefix='$prefix'
+egress='$egress'
+network='$network'
+count='$count'
+stub='$stub'
+host='$host'
+gateway='$gateway'
+subnet='$subnet'
+zone_root='$zone_root'
+config='$config'
+links='$links'
+EOF
+	chmod 600 "$directory/state"
+
+	rollback_directory=$directory
+	trap rollback_setup EXIT
+	trap 'exit 125' HUP INT TERM
+	ipadm set-prop -t -p forwarding=on ipv4
+	set_netns_switch 1
+	ipf -E 2>/dev/null || true
+	dladm create-etherstub -t "$stub"
+	dladm create-vnic -t -l "$stub" "$host"
+	for link in ${links//,/ }; do
+		link=${link%%=*}
+		dladm create-vnic -t -l "$stub" "$link"
+	done
+	ipadm create-if -t "$host"
+	ipadm create-addr -t -T static -a "$gateway/24" "$host/v4"
+	cat > "$directory/ipf.rules" <<EOF
+pass in quick on $host from $subnet to any
+pass out quick on $host from any to $subnet
+pass out quick on $egress from $subnet to any
+pass in quick on $egress from any to $subnet
+EOF
+	cat > "$directory/ipnat.rules" <<EOF
+map $egress $subnet -> 0/32 portmap tcp/udp auto
+map $egress $subnet -> 0/32
+EOF
+	ipf -f "$directory/ipf.rules"
+	ipnat -f "$directory/ipnat.rules"
+	zoneadm -z "$zone" ready
+	for link in ${links//,/ }; do
+		link=${link%%=*}
+		dladm set-linkprop -t -p "zone=$zone" "$link"
+	done
+	cat > "$config" <<EOF
+CODEX_LX_NET_LINKS='$links'
+CODEX_LX_NET_GATEWAY='$gateway'
+EOF
+	chmod 644 "$config"
+	zoneadm -z "$zone" boot
+	trap - EXIT HUP INT TERM
+	rollback_directory=
+	release_lock
+	printf 'CODEX_LX_NETWORK_READY zone=%s prefix=%s links=%s gateway=%s\n' \
+	    "$zone" "$prefix" "$count" "$gateway"
+}
+
+teardown()
+{
+	(( $# == 1 )) || usage
+	local prefix=$1 directory
+
+	[[ "$prefix" =~ ^[A-Za-z0-9]+$ && ${#prefix} -le 10 ]] ||
+	    die "invalid deployment prefix"
+	directory=$state_root/$prefix
+	remove_deployment "$directory"
+	printf 'CODEX_LX_NETWORK_REMOVED prefix=%s\n' "$prefix"
+}
+
+reapply()
+{
+	(( $# == 1 )) || usage
+	local requested=$1 directory
+	local saved_zone saved_prefix saved_egress saved_network saved_count
+
+	[[ "$requested" =~ ^[A-Za-z0-9]+$ && ${#requested} -le 10 ]] ||
+	    die "invalid deployment prefix"
+	directory=$state_root/$requested
+	[[ -f "$directory/state" ]] || die "missing deployment state: $directory"
+	. "$directory/state"
+	saved_zone=$zone
+	saved_prefix=$prefix
+	saved_egress=$egress
+	saved_network=$network
+	saved_count=$count
+	remove_deployment "$directory"
+	setup "$saved_zone" "$saved_prefix" "$saved_egress" "$saved_network" \
+	    "$saved_count"
+}
+
+status_command()
+{
+	local path found=0
+
+	for path in "$state_root"/*/state; do
+		[[ -f "$path" ]] || continue
+		. "$path"
+		printf 'zone=%s prefix=%s subnet=%s egress=%s links=%s\n' \
+		    "$zone" "$prefix" "$subnet" "$egress" "$count"
+		found=1
+	done
+	(( found != 0 )) || printf '%s\n' 'no Codex lx network deployments'
+}
+
+(( $# >= 1 )) || usage
+command=$1
+shift
+case "$command" in
+setup|teardown|reapply)
+	acquire_lock
+	trap release_lock EXIT HUP INT TERM
+	"$command" "$@"
+	trap - EXIT HUP INT TERM
+	release_lock
+	;;
+status)
+	(( $# == 0 )) || usage
+	status_command
+	;;
+*)
+	usage
+	;;
+esac

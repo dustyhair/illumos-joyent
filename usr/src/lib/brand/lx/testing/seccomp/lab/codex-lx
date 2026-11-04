@@ -1,10 +1,34 @@
 #!/bin/sh
-# Codex launcher for the illumos lx-brand sandbox with zone-shared networking.
+# Codex launcher for the illumos lx-brand sandbox.
 set -eu
 
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-export CODEX_LX_SHARED_NETWORK=1
+mode=${CODEX_LX_NETWORK_MODE:-private}
+
+export CODEX_LX_NETWORK_MODE=$mode
 export CODEX_LX_REAL_BWRAP="$here/vendor/codex-resources/bwrap.real"
+
+case "$mode" in
+private)
+	config=${CODEX_LX_NETWORK_CONFIG:-/etc/codex-lx-network.conf}
+	if [ ! -r "$config" ]; then
+		echo "codex-lx: private network config is not readable: $config" >&2
+		exit 125
+	fi
+	. "$config"
+	: "${CODEX_LX_NET_LINKS:?missing CODEX_LX_NET_LINKS in $config}"
+	: "${CODEX_LX_NET_GATEWAY:?missing CODEX_LX_NET_GATEWAY in $config}"
+	export CODEX_LX_NET_LINKS CODEX_LX_NET_GATEWAY
+	CODEX_LX_NET_HELPER="$here/vendor/codex-resources/codex-lx-net"
+	export CODEX_LX_NET_HELPER
+	;;
+shared)
+	;;
+*)
+	echo "codex-lx: CODEX_LX_NETWORK_MODE must be private or shared" >&2
+	exit 125
+	;;
+esac
 
 exec "$here/vendor/bin/codex" \
 	-c sandbox_workspace_write.network_access=true "$@"

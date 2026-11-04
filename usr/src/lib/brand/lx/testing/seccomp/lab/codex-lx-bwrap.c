@@ -8,6 +8,10 @@ typedef unsigned long lx_size_t;
 #define	LX_SYS_WRITE	1
 #define	LX_SYS_EXECVE	59
 #define	LX_SYS_EXIT	60
+#define	LX_MAX_ARGV	4096
+
+static char *lx_argv[LX_MAX_ARGV];
+
 static long
 lx_syscall1(long number, long first)
 {
@@ -84,49 +88,89 @@ void start_c(unsigned long *) __attribute__((noreturn, used));
 void
 start_c(unsigned long *stack)
 {
-	static const char mode[] = "CODEX_LX_SHARED_NETWORK=1";
+	static const char mode_name[] = "CODEX_LX_NETWORK_MODE=";
+	static const char helper_name[] = "CODEX_LX_NET_HELPER=";
+	static const char links_name[] = "CODEX_LX_NET_LINKS=";
+	static const char gateway_name[] = "CODEX_LX_NET_GATEWAY=";
+	static const char shared_name[] = "shared";
+	static const char private_name[] = "private";
 	static const char real_name[] = "CODEX_LX_REAL_BWRAP=";
 	static const char net[] = "--unshare-net";
 	static const char separator[] = "--";
+	static const char links_option[] = "--links";
+	static const char gateway_option[] = "--gateway";
 	char **argv = (char **)(stack + 1);
 	char **envp = argv + stack[0] + 1;
 	const char *real = (void *)0;
+	const char *mode = (void *)0;
+	const char *helper = (void *)0;
+	const char *links = (void *)0;
+	const char *gateway = (void *)0;
 	lx_size_t argc = stack[0];
 	lx_size_t found_net = 0;
-	lx_size_t out = 1;
+	lx_size_t found_separator = 0;
+	lx_size_t out = 0;
 	lx_size_t i;
-	int shared = 0;
 	int command = 0;
+	int private;
 
 	for (i = 0; envp[i] != (void *)0; i++) {
-		if (string_equal(envp[i], mode))
-			shared = 1;
+		if (string_prefix(envp[i], mode_name))
+			mode = envp[i] + sizeof (mode_name) - 1;
 		if (string_prefix(envp[i], real_name))
 			real = envp[i] + sizeof (real_name) - 1;
+		if (string_prefix(envp[i], helper_name))
+			helper = envp[i] + sizeof (helper_name) - 1;
+		if (string_prefix(envp[i], links_name))
+			links = envp[i] + sizeof (links_name) - 1;
+		if (string_prefix(envp[i], gateway_name))
+			gateway = envp[i] + sizeof (gateway_name) - 1;
 	}
 	if (real == (void *)0 || real[0] != '/')
 		fail("CODEX_LX_REAL_BWRAP must be an absolute path");
-	argv[0] = (char *)real;
-	if (!shared) {
-		(void) lx_syscall3(LX_SYS_EXECVE, (long)real,
-		    (long)argv, (long)envp);
-		fail("cannot execute bwrap.real");
-	}
+	if (mode == (void *)0 || (!string_equal(mode, shared_name) &&
+	    !string_equal(mode, private_name)))
+		fail("CODEX_LX_NETWORK_MODE must be private or shared");
+	private = string_equal(mode, private_name);
+	if (private && (helper == (void *)0 || helper[0] != '/'))
+		fail("CODEX_LX_NET_HELPER must be an absolute path");
+	if (private && (links == (void *)0 || links[0] == '\0'))
+		fail("CODEX_LX_NET_LINKS is empty");
+	if (private && (gateway == (void *)0 || gateway[0] == '\0'))
+		fail("CODEX_LX_NET_GATEWAY is empty");
+	if (argc + 7 >= LX_MAX_ARGV)
+		fail("bubblewrap argument list is too long");
 
+	lx_argv[out++] = (char *)real;
 	for (i = 1; i < argc; i++) {
-		if (!command && string_equal(argv[i], separator))
+		if (!command && string_equal(argv[i], separator)) {
+			found_separator++;
+			lx_argv[out++] = argv[i];
+			if (private) {
+				lx_argv[out++] = (char *)helper;
+				lx_argv[out++] = (char *)links_option;
+				lx_argv[out++] = (char *)links;
+				lx_argv[out++] = (char *)gateway_option;
+				lx_argv[out++] = (char *)gateway;
+				lx_argv[out++] = (char *)separator;
+			}
 			command = 1;
-		if (!command && string_equal(argv[i], net)) {
-			found_net++;
 			continue;
 		}
-		argv[out++] = argv[i];
+		if (!command && string_equal(argv[i], net)) {
+			found_net++;
+			if (!private)
+				continue;
+		}
+		lx_argv[out++] = argv[i];
 	}
-	argv[out] = (void *)0;
+	lx_argv[out] = (void *)0;
 	if (found_net != 1)
-		fail("shared-network mode expected exactly one --unshare-net");
+		fail("expected exactly one --unshare-net");
+	if (found_separator != 1)
+		fail("expected one bubblewrap command separator");
 
-	(void) lx_syscall3(LX_SYS_EXECVE, (long)real, (long)argv,
+	(void) lx_syscall3(LX_SYS_EXECVE, (long)real, (long)lx_argv,
 	    (long)envp);
 	fail("cannot execute bwrap.real");
 }

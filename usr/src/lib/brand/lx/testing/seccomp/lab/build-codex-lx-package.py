@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a self-contained Codex package for lx shared-network mode."""
+"""Build a self-contained Codex package for lx network modes."""
 
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--vendor", type=Path, required=True)
     parser.add_argument("--wrapper", type=Path, required=True)
+    parser.add_argument("--network-helper", type=Path, required=True)
     parser.add_argument("--launcher", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -48,8 +49,11 @@ def main() -> None:
     real_bwrap = bundled.with_name("bwrap.real")
     bundled.rename(real_bwrap)
     shutil.copy2(args.wrapper, bundled)
+    network_helper = bundled.with_name("codex-lx-net")
+    shutil.copy2(args.network_helper, network_helper)
     bundled.chmod(0o755)
     real_bwrap.chmod(0o755)
+    network_helper.chmod(0o755)
     (args.output / "codex-lx").chmod(0o755)
 
     wrapper_digest = digest(bundled)
@@ -64,14 +68,15 @@ def main() -> None:
     manifest = {
         "codex_version": "0.166.0",
         "policy": (
-            "shared zone network; private sandbox /dev with a zone-scoped "
-            "devpts graft and ptmx alias; no CLONE_NEWNET"
+            "private network by default with a preassigned vNIC pool and "
+            "host NAT; explicit shared mode remains available"
         ),
         "original_codex_sha256": digest(original_codex),
         "patched_codex_sha256": digest(codex),
         "original_bwrap_sha256": digest(original_bwrap),
         "wrapper_bwrap_sha256": wrapper_digest,
         "real_bwrap_sha256": digest(real_bwrap),
+        "network_helper_sha256": digest(network_helper),
     }
     (args.output / "lx-package-manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
