@@ -47,6 +47,7 @@
 #include <sys/ethernet.h>
 #include <sys/dlpi.h>
 #include <sys/lx_autofs.h>
+#include <sys/lx_netns.h>
 #include <sys/netstack.h>
 #include <inet/ip.h>
 #include <inet/ip_if.h>
@@ -1245,6 +1246,25 @@ ict_if_ioctl(vnode_t *vn, int cmd, intptr_t arg, int flags, cred_t *cred)
 	 */
 	if (vn->v_type == VSOCK && VTOSO(vn)->so_family == AF_PACKET)
 		return (VOP_IOCTL(vn, cmd, arg, flags, cred, &rv, NULL));
+
+	/*
+	 * The zone-wide helper is permanently bound to the network stack in
+	 * which it is created.  A private network namespace must therefore use
+	 * a temporary helper or it would poison the cache for later processes
+	 * and retain the detached stack until zone shutdown.
+	 */
+	if (lx_netns_current(curproc) != NULL) {
+		cred_t *zonecred = curproc->p_zone->zone_kcred;
+
+		ks = NULL;
+		error = ksocket_socket(&ks, AF_INET, SOCK_DGRAM, 0, 0,
+		    zonecred);
+		if (error != 0)
+			return (error);
+		error = ksocket_ioctl(ks, cmd, arg, &rv, cred);
+		(void) ksocket_close(ks, zonecred);
+		return (error);
+	}
 
 	mutex_enter(&lxzd->lxzd_lock);
 	ks = lxzd->lxzd_ioctl_sock;
