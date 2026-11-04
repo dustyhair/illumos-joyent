@@ -1503,15 +1503,15 @@ lx_netlink_newaddr(lx_netlink_sock_t *lxsock, lx_netlink_hdr_t *hdr,
 
 	sin = (struct sockaddr_in *)&lifr.lifr_addr;
 	sin->sin_family = AF_INET;
-	sin->sin_addr.s_addr = addr;
-	if ((error = ldi_ioctl(lxsock->lxns_iphandle, SIOCSLIFADDR,
-	    (intptr_t)&lifr, FKIOCTL, kcred, NULL)) != 0)
-		return (lx_netlink_private_error(lxsock, hdr, error));
-
 	mask = ifa->lxnl_ifa_prefixlen == 0 ? 0 :
 	    htonl(UINT32_MAX << (32 - ifa->lxnl_ifa_prefixlen));
 	sin->sin_addr.s_addr = mask;
 	if ((error = ldi_ioctl(lxsock->lxns_iphandle, SIOCSLIFNETMASK,
+	    (intptr_t)&lifr, FKIOCTL, kcred, NULL)) != 0)
+		return (lx_netlink_private_error(lxsock, hdr, error));
+
+	sin->sin_addr.s_addr = addr;
+	if ((error = ldi_ioctl(lxsock->lxns_iphandle, SIOCSLIFADDR,
 	    (intptr_t)&lifr, FKIOCTL, kcred, NULL)) != 0)
 		return (lx_netlink_private_error(lxsock, hdr, error));
 	return (lx_netlink_reply_ack(lxsock, hdr));
@@ -1576,23 +1576,27 @@ lx_netlink_prepare_stream(const char *name, const char *module,
  * plumbing and makes it available for another private stack.
  */
 static int
-lx_netlink_plumb_assigned(lx_netlink_sock_t *lxsock, const char *name)
+lx_netlink_plumb_assigned(const char *name)
 {
 	ldi_handle_t ip = NULL, arp = NULL, mux = NULL;
+	netstack_t *ns;
+	ill_t *ill;
 	struct lifreq lifr;
 	struct ifreq ifr;
 	uint64_t flags = IFF_IPV4;
 	int error, ip_muxid = -1, arp_muxid = -1, rval;
 	int plink_flags = FREAD | FWRITE | FNOCTTY | FKIOCTL;
 
-	bzero(&lifr, sizeof (lifr));
-	(void) strlcpy(lifr.lifr_name, name, sizeof (lifr.lifr_name));
-	error = ldi_ioctl(lxsock->lxns_iphandle, SIOCGLIFFLAGS,
-	    (intptr_t)&lifr, FKIOCTL, zone_kcred(), NULL);
-	if (error == 0)
+	if ((ns = netstack_get_current()) == NULL)
+		return (ENXIO);
+	ill = ill_lookup_on_name((char *)name, B_FALSE, B_FALSE, NULL,
+	    ns->netstack_ip);
+	if (ill != NULL) {
+		ill_refrele(ill);
+		netstack_rele(ns);
 		return (EEXIST);
-	if (error != ENXIO && error != ENODEV)
-		return (error);
+	}
+	netstack_rele(ns);
 
 	if ((error = ldi_open_by_name(LX_NETLINK_UDPDEV, FREAD | FWRITE,
 	    zone_kcred(), &mux, lx_netlink_ldi)) != 0)
@@ -1691,7 +1695,7 @@ lx_netlink_newlink(lx_netlink_sock_t *lxsock, lx_netlink_hdr_t *hdr,
 		if (namelen == 0 || namelen == len || namelen >= sizeof (name))
 			return (lx_netlink_private_error(lxsock, hdr, EINVAL));
 		bcopy(LXATTR_PAYLOAD(nameattr), name, namelen + 1);
-		if ((error = lx_netlink_plumb_assigned(lxsock, name)) != 0)
+		if ((error = lx_netlink_plumb_assigned(name)) != 0)
 			return (lx_netlink_private_error(lxsock, hdr, error));
 		return (lx_netlink_reply_ack(lxsock, hdr));
 	}
