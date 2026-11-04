@@ -57,6 +57,7 @@
 
 typedef struct dls_stack {
 	zoneid_t	dlss_zoneid;
+	boolean_t	dlss_detached;
 } dls_stack_t;
 
 static kmem_cache_t	*i_dls_devnet_cachep;
@@ -253,6 +254,7 @@ dls_stack_init(netstackid_t stackid, netstack_t *ns)
 
 	dlss = kmem_zalloc(sizeof (*dlss), KM_SLEEP);
 	dlss->dlss_zoneid = netstackid_to_zoneid(stackid);
+	dlss->dlss_detached = netstack_is_detached(ns);
 	return (dlss);
 }
 
@@ -261,6 +263,10 @@ static void
 dls_stack_shutdown(netstackid_t stackid, void *arg)
 {
 	dls_stack_t	*dlss = (dls_stack_t *)arg;
+
+	/* A detached stack never owns the zone's assigned datalinks. */
+	if (dlss->dlss_detached)
+		return;
 
 	/* Move remaining datalinks in this zone back to the global zone. */
 	(void) zone_datalink_walk(dlss->dlss_zoneid, dls_zone_remove, NULL);

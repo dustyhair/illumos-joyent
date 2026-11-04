@@ -83,6 +83,12 @@ static struct netstack_registry	ns_reg[NS_MAX];
 static netstack_t *netstack_head;
 
 /*
+ * Detached netstacks use negative IDs so they cannot collide with zone IDs.
+ * -1 is reserved as the conventional invalid ID.
+ */
+static netstackid_t netstack_next_detached_id = -2;
+
+/*
  * To support kstat_create_netstack() using kstat_zone_add we need
  * to track both
  *  - all zoneids that use the global/shared stack
@@ -363,6 +369,73 @@ netstack_complete_create(netstack_t *ns)
 	ns->netstack_flags &= ~NSF_ZONE_CREATE;
 	cv_broadcast(&ns->netstack_cv);
 	mutex_exit(&ns->netstack_lock);
+}
+
+/*
+ * Create a netstack whose lifetime is controlled by its caller rather than by
+ * zone create/shutdown/destroy callbacks.  The owner zone is still recorded
+ * for credentials and policy decisions made by individual network modules.
+ */
+netstack_t *
+netstack_create_detached(zoneid_t zoneid)
+{
+	netstack_t *ns;
+
+	ASSERT(netstack_initialized);
+	ASSERT(zoneid >= GLOBAL_ZONEID);
+
+	ns = kmem_zalloc(sizeof (*ns), KM_SLEEP);
+	mutex_init(&ns->netstack_lock, NULL, MUTEX_DEFAULT, NULL);
+	cv_init(&ns->netstack_cv, NULL, CV_DEFAULT, NULL);
+
+	mutex_enter(&netstack_g_lock);
+	VERIFY3S(netstack_next_detached_id, >, INT_MIN);
+	ns->netstack_stackid = netstack_next_detached_id--;
+	ns->netstack_zoneid = zoneid;
+	ns->netstack_numzones = 0;
+	ns->netstack_refcnt = 1;
+	ns->netstack_flags = NSF_UNINIT | NSF_DETACHED;
+	ns->netstack_next = netstack_head;
+	netstack_head = ns;
+
+	mutex_enter(&ns->netstack_lock);
+	netstack_prepare_create(ns);
+	mutex_exit(&ns->netstack_lock);
+	mutex_exit(&netstack_g_lock);
+
+	netstack_complete_create(ns);
+	return (ns);
+}
+
+/*
+ * Consume the creator's reference and begin asynchronous teardown.  Other
+ * references may keep the netstack alive until their users have drained.
+ */
+void
+netstack_destroy_detached(netstack_t *ns)
+{
+	ASSERT(ns != NULL);
+
+	mutex_enter(&ns->netstack_lock);
+	VERIFY(ns->netstack_flags & NSF_DETACHED);
+	VERIFY(!(ns->netstack_flags & (NSF_UNINIT | NSF_CLOSING)));
+	VERIFY3S(ns->netstack_numzones, ==, 0);
+	mutex_exit(&ns->netstack_lock);
+
+	netstack_shutdown(ns);
+
+	mutex_enter(&ns->netstack_lock);
+	VERIFY(!(ns->netstack_flags & NSF_CLOSING));
+	ns->netstack_flags |= NSF_CLOSING;
+	mutex_exit(&ns->netstack_lock);
+
+	netstack_rele(ns);
+}
+
+boolean_t
+netstack_is_detached(const netstack_t *ns)
+{
+	return ((ns->netstack_flags & NSF_DETACHED) != 0);
 }
 
 /*
@@ -1240,6 +1313,12 @@ kstat_create_netstack(char *ks_module, int ks_instance, char *ks_name,
 	} else {
 		zoneid_t zoneid = ks_netstackid;
 
+		/*
+		 * A detached stack's synthetic negative ID remains its kstat
+		 * zone.  This gives the stack a private namespace without
+		 * exposing duplicate per-stack kstats in its owner zone.
+		 */
+
 		return (kstat_create_zone(ks_module, ks_instance, ks_name,
 		    ks_class, ks_type, ks_ndata, ks_flags, zoneid));
 	}
@@ -1396,7 +1475,23 @@ netstack_find_shared_zoneid(zoneid_t zoneid)
 zoneid_t
 netstackid_to_zoneid(netstackid_t stackid)
 {
-	return (stackid);
+	netstack_t *ns;
+	zoneid_t zoneid = stackid;
+
+	/* Zone-backed stacks retain the historical identity mapping. */
+	if (stackid >= GLOBAL_NETSTACKID || stackid == -1)
+		return (zoneid);
+
+	mutex_enter(&netstack_g_lock);
+	for (ns = netstack_head; ns != NULL; ns = ns->netstack_next) {
+		if (ns->netstack_stackid == stackid) {
+			zoneid = ns->netstack_zoneid;
+			break;
+		}
+	}
+	mutex_exit(&netstack_g_lock);
+
+	return (zoneid);
 }
 
 netstackid_t

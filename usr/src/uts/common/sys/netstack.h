@@ -211,6 +211,7 @@ typedef struct netstack netstack_t;
 #define	NSF_ZONE_CREATE		0x04		/* create callbacks inprog */
 #define	NSF_ZONE_SHUTDOWN	0x08		/* shutdown callbacks */
 #define	NSF_ZONE_DESTROY	0x10		/* destroy callbacks */
+#define	NSF_DETACHED		0x20		/* caller-owned lifecycle */
 
 #define	NSF_ZONE_INPROGRESS	\
 	(NSF_ZONE_CREATE|NSF_ZONE_SHUTDOWN|NSF_ZONE_DESTROY)
@@ -244,6 +245,9 @@ extern netstack_t *netstack_find_by_cred(const cred_t *);
 extern netstack_t *netstack_find_by_stackid(netstackid_t);
 extern netstack_t *netstack_find_by_zoneid(zoneid_t);
 extern boolean_t netstack_inuse_by_stackid(netstackid_t stackid);
+extern netstack_t *netstack_create_detached(zoneid_t);
+extern void netstack_destroy_detached(netstack_t *);
+extern boolean_t netstack_is_detached(const netstack_t *);
 
 extern zoneid_t netstackid_to_zoneid(netstackid_t);
 extern zoneid_t netstack_get_zoneid(netstack_t *);
