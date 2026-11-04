@@ -9,7 +9,7 @@ INC_PATH += -I$(UTSBASE)/common/brand/lx -I$(SRC)/common/brand/lx
 ALL_TARGET = $(BINARY)
 INSTALL_TARGET = $(BINARY) $(ROOTMODULE)
 INC_PATH += -I$(UTSBASE)/common/brand/lx/procfs
-LDFLAGS += -N drv/ktest -N brand/lx_brand -N fs/lx_proc
+LDFLAGS += -N drv/ktest -N drv/ip -N brand/lx_brand -N fs/lx_proc
 
 .KEEP_STATE:
 def: $(DEF_DEPS)

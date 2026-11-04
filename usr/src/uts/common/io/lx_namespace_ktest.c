@@ -28,6 +28,8 @@
 #include <sys/lx_pidns.h>
 #include <sys/lx_userns.h>
 #include <sys/lx_cap.h>
+#include <inet/ip.h>
+#include <inet/ip_if.h>
 
 extern brand_t lx_brand;
 
@@ -3360,6 +3362,7 @@ ns_netstack_owner(ktest_ctx_hdl_t *ctx)
 	lx_userns_t *root = NULL;
 	lx_netns_t *first = NULL, *extra = NULL;
 	netstack_t *stack;
+	ill_t *ill = NULL;
 	cred_t *owner = NULL, *reduced = NULL;
 	uint32_t saved_max = 0, maximum, used;
 	int error = 0;
@@ -3393,6 +3396,15 @@ ns_netstack_owner(ktest_ctx_hdl_t *ctx)
 	NET_OWNER_CHECK(stack != NULL && netstack_is_detached(stack) &&
 	    netstack_get_zoneid(stack) == zone->zone_id,
 	    "network namespace stack lost LX zone ownership");
+	ill = ill_lookup_on_name(ipif_loopback_name, B_FALSE, B_FALSE, NULL,
+	    stack->netstack_ip);
+	NET_OWNER_CHECK(ill != NULL, "network namespace has no IPv4 loopback");
+	ill_refrele(ill);
+	ill = ill_lookup_on_name(ipif_loopback_name, B_FALSE, B_TRUE, NULL,
+	    stack->netstack_ip);
+	NET_OWNER_CHECK(ill != NULL, "network namespace has no IPv6 loopback");
+	ill_refrele(ill);
+	ill = NULL;
 	lx_userns_netns_budget_get(root, &maximum, &used);
 	NET_OWNER_CHECK(maximum == 1 && used == 1,
 	    "network namespace creation was not charged");
@@ -3409,6 +3421,8 @@ ns_netstack_owner(ktest_ctx_hdl_t *ctx)
 	NET_OWNER_CHECK(used == 0, "final release leaked a charge");
 	passed = B_TRUE;
 out:
+	if (ill != NULL)
+		ill_refrele(ill);
 	lx_netns_rele(extra);
 	lx_netns_rele(first);
 	if (reduced != NULL)
