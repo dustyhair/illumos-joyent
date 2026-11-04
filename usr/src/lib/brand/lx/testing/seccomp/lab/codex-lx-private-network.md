@@ -82,9 +82,12 @@ never falls back to shared networking when the config or link pool is missing.
 
 ## Accepted data path
 
-VM196 used the same host topology and kernel interfaces. Routed UDP preserved
-the source `10.88.0.2`. With IP Filter NAT enabled, the receiver observed
-`10.99.0.1` and IPNAT recorded the live mapping from `10.88.0.2`. Both
-namespace lifecycle KTESTs passed. This result proves the kernel routing and
-NAT path; package-level private Codex acceptance remains required for this
-controller and helper.
+VM201 exercised this packaged launcher, wrapper, helper and controller with
+real Codex 0.166.0. Two sequential sandbox commands each claimed `clxnet0`,
+configured `10.88.0.2/24`, removed the temporary setup capabilities and
+completed a UDP exchange through the controller's forwarding and NAT rules.
+The peer, running in a separate private netstack behind the selected egress
+link, observed `10.99.0.1`; IPNAT recorded the live mapping from
+`10.88.0.2`. The second command's clone flags were `0x78020011`, including
+`CLONE_NEWNET`. Both detached lifecycle KTESTs passed, and teardown left only
+the global netstack.
