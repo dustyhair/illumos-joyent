@@ -24,6 +24,7 @@
 #include <sys/lx_brand.h>
 #include <sys/machbrand.h>
 #include <sys/lx_mntns.h>
+#include <sys/lx_netns.h>
 #include <sys/lx_pidns.h>
 #include <sys/lx_userns.h>
 #include <sys/lx_cap.h>
@@ -3351,6 +3352,85 @@ out:
 #undef NET_CHECK
 }
 
+/* Verify LX ownership, authorization, and aggregate resource accounting. */
+static void
+ns_netstack_owner(ktest_ctx_hdl_t *ctx)
+{
+	zone_t *zone = zone_find_by_name("lx-probe");
+	lx_userns_t *root = NULL;
+	lx_netns_t *first = NULL, *extra = NULL;
+	netstack_t *stack;
+	cred_t *owner = NULL, *reduced = NULL;
+	uint32_t saved_max = 0, maximum, used;
+	int error = 0;
+	boolean_t passed = B_FALSE;
+
+#define	NET_OWNER_CHECK(expr, why) do { \
+	if (!(expr)) { \
+		KT_FAIL(ctx, "%s, error=%d", why, error); \
+		goto out; \
+	} \
+} while (0)
+	NET_OWNER_CHECK(zone != NULL && zone->zone_brand == &lx_brand &&
+	    ztolxzd(zone) != NULL, "private lx-probe zone missing");
+	root = ztolxzd(zone)->lxzd_userns;
+	lx_userns_netns_budget_get(root, &saved_max, &used);
+	NET_OWNER_CHECK(used == 0, "network namespace fixture is busy");
+	NET_OWNER_CHECK(lx_userns_netns_budget_set(root, 1) == 0,
+	    "cannot set network namespace fixture budget");
+	owner = crdup(zone->zone_kcred);
+	reduced = lx_userns_native_cred(owner);
+	error = lx_netns_create(reduced, &extra);
+	NET_OWNER_CHECK(error == EPERM && extra == NULL,
+	    "reduced credential created a network namespace");
+	lx_userns_netns_budget_get(root, &maximum, &used);
+	NET_OWNER_CHECK(maximum == 1 && used == 0,
+	    "failed authorization changed network namespace accounting");
+	error = lx_netns_create(owner, &first);
+	NET_OWNER_CHECK(error == 0 && first != NULL,
+	    "zone owner could not create a network namespace");
+	stack = lx_netns_stack(first);
+	NET_OWNER_CHECK(stack != NULL && netstack_is_detached(stack) &&
+	    netstack_get_zoneid(stack) == zone->zone_id,
+	    "network namespace stack lost LX zone ownership");
+	lx_userns_netns_budget_get(root, &maximum, &used);
+	NET_OWNER_CHECK(maximum == 1 && used == 1,
+	    "network namespace creation was not charged");
+	lx_netns_hold(first);
+	lx_netns_rele(first);
+	lx_userns_netns_budget_get(root, &maximum, &used);
+	NET_OWNER_CHECK(used == 1, "shared ownership changed the charge");
+	error = lx_netns_create(owner, &extra);
+	NET_OWNER_CHECK(error == ENOSPC && extra == NULL,
+	    "network namespace budget admitted an extra stack");
+	lx_netns_rele(first);
+	first = NULL;
+	lx_userns_netns_budget_get(root, &maximum, &used);
+	NET_OWNER_CHECK(used == 0, "final release leaked a charge");
+	passed = B_TRUE;
+out:
+	lx_netns_rele(extra);
+	lx_netns_rele(first);
+	if (reduced != NULL)
+		crfree(reduced);
+	if (owner != NULL)
+		crfree(owner);
+	if (root != NULL) {
+		(void) lx_userns_netns_budget_set(root, saved_max);
+		lx_userns_netns_budget_get(root, &maximum, &used);
+		if (used != 0) {
+			KT_ERROR(ctx,
+			    "network namespace fixture leaked a charge");
+			passed = B_FALSE;
+		}
+	}
+	if (zone != NULL)
+		zone_rele(zone);
+	if (passed)
+		KT_PASS(ctx);
+#undef NET_OWNER_CHECK
+}
+
 static struct modlmisc ns_modlmisc = {
 	.misc_modops = &mod_miscops,
 	.misc_linkinfo = "lx namespace tests"
@@ -3410,6 +3490,8 @@ _init(void)
 	    (error = ktest_add_suite(km, "network", &ks)) != 0 ||
 	    (error = ktest_add_test(ks, "detached_lifecycle",
 	    ns_netstack_lifecycle, 0)) != 0 ||
+	    (error = ktest_add_test(ks, "owner_budget",
+	    ns_netstack_owner, 0)) != 0 ||
 	    (error = ktest_add_suite(km, "user", &ks)) != 0 ||
 	    (error = ktest_add_test(ks, "maps", lx_userns_test_maps, 0)) != 0 ||
 	    (error = ktest_add_test(ks, "capabilities", lx_userns_test_caps,
