@@ -138,3 +138,24 @@ lx_netns_current(proc_t *p)
 
 	return (pd != NULL ? lx_netns_stack(pd->l_netns) : NULL);
 }
+
+/*
+ * Network configuration in a detached stack is governed by the user
+ * namespace that owns it.  Native PRIV_SYS_IP_CONFIG is deliberately not
+ * required: Linux permits a task with CAP_NET_ADMIN in the owning user
+ * namespace to configure that namespace's devices.
+ */
+boolean_t
+lx_netns_configure_allowed(const cred_t *cred)
+{
+	lx_proc_data_t *pd = ptolxproc(curproc);
+	lx_userns_cred_t actor;
+	lx_netns_t *ns;
+
+	if (pd == NULL || (ns = pd->l_netns) == NULL)
+		return (B_FALSE);
+	if (lx_userns_map_actor(cred, ns->ln_userns, &actor) != 0)
+		return (B_FALSE);
+	return (lx_userns_has_cap(&actor, ns->ln_userns,
+	    LX_CAP_NET_ADMIN));
+}

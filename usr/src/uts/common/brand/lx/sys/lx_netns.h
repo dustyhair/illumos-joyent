@@ -39,6 +39,7 @@ extern void lx_netns_hold(lx_netns_t *);
 extern void lx_netns_rele(lx_netns_t *);
 extern struct netstack *lx_netns_stack(lx_netns_t *);
 extern struct netstack *lx_netns_current(struct proc *);
+extern boolean_t lx_netns_configure_allowed(const struct cred *);
 
 #ifdef __cplusplus
 }
