@@ -18,7 +18,8 @@ private=$(env -i CODEX_LX_NETWORK_MODE=private \
     CODEX_LX_NET_LINKS='clx0=10.88.0.2/24,clx1=10.88.0.3/24' \
     CODEX_LX_NET_GATEWAY=10.88.0.1 \
     "$work/bwrap" --unshare-user --unshare-net -- /bin/true argument)
-expected_private='--unshare-user --unshare-net -- /opt/codex-lx-net '
+expected_private='--unshare-user --unshare-net --cap-add CAP_NET_ADMIN '
+expected_private+='--cap-add CAP_SETPCAP -- /opt/codex-lx-net '
 expected_private+='--links clx0=10.88.0.2/24,clx1=10.88.0.3/24 '
 expected_private+='--gateway 10.88.0.1 -- /bin/true argument'
 [[ "$private" == "$expected_private" ]]

@@ -33,11 +33,14 @@ through the packaged `codex-lx` launcher. Private mode is the default:
 ```
 
 The bubblewrap integrity wrapper retains the single `--unshare-net` option and
-inserts `codex-lx-net` as the sandbox command. The helper races only for links
-listed in the root-owned config, claims one assigned link, brings it up, adds
-its address, waits for DAD to finish, installs the default route and then execs
-the requested command. Exiting the namespace returns the link to the zone, so
-there is no per-command host cleanup process.
+temporarily adds `CAP_NET_ADMIN` and `CAP_SETPCAP`, then inserts `codex-lx-net`
+as the sandbox command. The helper races only for links listed in the
+root-owned config, claims one assigned link, brings it up, adds its address,
+waits for DAD to finish and installs the default route. Before it execs the
+requested command, it removes both setup capabilities from the ambient,
+bounding, permitted, effective and inheritable sets and verifies the removal.
+Exiting the namespace returns the link to the zone, so there is no per-command
+host cleanup process.
 
 At most four sandbox commands can hold a link in this example. A fifth command
 fails with exit status 125 instead of sharing another command's network

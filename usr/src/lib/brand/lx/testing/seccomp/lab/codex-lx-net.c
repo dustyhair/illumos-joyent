@@ -1,7 +1,8 @@
-#define _GNU_SOURCE
+#define	_GNU_SOURCE
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <linux/capability.h>
 #include <linux/if_addr.h>
 #include <linux/rtnetlink.h>
 #include <net/if.h>
@@ -10,6 +11,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/prctl.h>
+#include <sys/syscall.h>
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
@@ -294,6 +297,55 @@ wait_for_address(int fd, unsigned int index)
 	fail_errno("private IPv4 address stayed tentative");
 }
 
+static void
+drop_setup_capabilities(void)
+{
+	struct __user_cap_header_struct header = {
+		.version = _LINUX_CAPABILITY_VERSION_3,
+		.pid = 0
+	};
+	struct __user_cap_data_struct data[_LINUX_CAPABILITY_U32S_3];
+	const unsigned int capabilities[] = { CAP_NET_ADMIN, CAP_SETPCAP };
+	size_t i;
+
+	for (i = 0; i < sizeof (capabilities) / sizeof (capabilities[0]); i++) {
+		if (prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_LOWER,
+		    capabilities[i], 0, 0) == -1)
+			fail_errno("cannot lower a private network setup "
+			    "capability");
+		if (prctl(PR_CAPBSET_DROP, capabilities[i], 0, 0, 0) == -1)
+			fail_errno("cannot drop a private network setup "
+			    "capability");
+	}
+	if (syscall(SYS_capget, &header, data) == -1)
+		fail_errno("cannot read private network setup capabilities");
+	for (i = 0; i < sizeof (capabilities) / sizeof (capabilities[0]); i++) {
+		unsigned int word = capabilities[i] / 32;
+		uint32_t bit = UINT32_C(1) << (capabilities[i] % 32);
+
+		data[word].effective &= ~bit;
+		data[word].permitted &= ~bit;
+		data[word].inheritable &= ~bit;
+	}
+	if (syscall(SYS_capset, &header, data) == -1)
+		fail_errno("cannot clear private network setup capabilities");
+	if (syscall(SYS_capget, &header, data) == -1)
+		fail_errno("cannot verify private network setup capabilities");
+	for (i = 0; i < sizeof (capabilities) / sizeof (capabilities[0]); i++) {
+		unsigned int word = capabilities[i] / 32;
+		uint32_t bit = UINT32_C(1) << (capabilities[i] % 32);
+
+		if (((data[word].effective | data[word].permitted |
+		    data[word].inheritable) & bit) != 0 ||
+		    prctl(PR_CAPBSET_READ, capabilities[i], 0, 0, 0) != 0 ||
+		    prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET,
+		    capabilities[i], 0, 0) != 0) {
+			errno = EPERM;
+			fail_errno("private network setup capability survived");
+		}
+	}
+}
+
 static size_t
 parse_links(const char *value, codex_lx_link_t *links)
 {
@@ -383,6 +435,7 @@ main(int argc, char **argv)
 	    inet_ntoa(links[selected].cll_address),
 	    links[selected].cll_prefix, argv[4]);
 	(void) close(fd);
+	drop_setup_capabilities();
 	execvp(argv[6], &argv[6]);
 	fail_errno("cannot execute the sandbox command");
 }

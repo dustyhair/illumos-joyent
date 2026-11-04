@@ -96,6 +96,9 @@ start_c(unsigned long *stack)
 	static const char private_name[] = "private";
 	static const char real_name[] = "CODEX_LX_REAL_BWRAP=";
 	static const char net[] = "--unshare-net";
+	static const char cap_add[] = "--cap-add";
+	static const char cap_net_admin[] = "CAP_NET_ADMIN";
+	static const char cap_setpcap[] = "CAP_SETPCAP";
 	static const char separator[] = "--";
 	static const char links_option[] = "--links";
 	static const char gateway_option[] = "--gateway";
@@ -138,13 +141,19 @@ start_c(unsigned long *stack)
 		fail("CODEX_LX_NET_LINKS is empty");
 	if (private && (gateway == (void *)0 || gateway[0] == '\0'))
 		fail("CODEX_LX_NET_GATEWAY is empty");
-	if (argc + 7 >= LX_MAX_ARGV)
+	if (argc + 11 >= LX_MAX_ARGV)
 		fail("bubblewrap argument list is too long");
 
 	lx_argv[out++] = (char *)real;
 	for (i = 1; i < argc; i++) {
 		if (!command && string_equal(argv[i], separator)) {
 			found_separator++;
+			if (private) {
+				lx_argv[out++] = (char *)cap_add;
+				lx_argv[out++] = (char *)cap_net_admin;
+				lx_argv[out++] = (char *)cap_add;
+				lx_argv[out++] = (char *)cap_setpcap;
+			}
 			lx_argv[out++] = argv[i];
 			if (private) {
 				lx_argv[out++] = (char *)helper;
