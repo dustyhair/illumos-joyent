@@ -38,12 +38,14 @@ extern "C" {
 
 /*
  * Version 2 appends the optional child-reaper operation. Version 3 appends
- * the process-group join completion operation. Older brands remain supported
- * without accessing the appended fields.
+ * the process-group join completion operation. Version 4 appends the current
+ * network-stack selector. Older brands remain supported without accessing
+ * the appended fields.
  */
 #define	BRAND_VER_1	1
 #define	BRAND_VER_2	2
 #define	BRAND_VER_3	3
+#define	BRAND_VER_4	4
 
 /*
  * sub-commands to brandsys.
@@ -108,6 +110,7 @@ struct intpdata;
 struct execa;
 struct brand_cred;
 struct vattr;
+struct netstack;
 
 /*
  * Common structure to define hooks for brand operation.
@@ -174,6 +177,9 @@ struct vattr;
  *                       filesystem-supplied attributes; may clear mode bits.
  *                       DEFER uses native
  *                       policy. Filesystems must recheck at locked update.
+ * b_netstack - Return the current process's raw network stack, or NULL for
+ *              the zone default. The caller takes any required hold.
+ *              Version 4.
  */
 struct brand_ops {
 	void	(*b_init_brand_data)(zone_t *, kmutex_t *);
@@ -235,6 +241,7 @@ struct brand_ops {
 	    struct vattr *, const struct vattr *, uint_t);
 	struct proc *(*b_reparent_children)(struct proc *);
 	void	(*b_pgjoin)(struct proc *);
+	struct netstack *(*b_netstack)(struct proc *);
 };
 
 /*

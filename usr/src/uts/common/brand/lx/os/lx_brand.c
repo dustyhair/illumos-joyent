@@ -171,6 +171,7 @@
 #include <sys/brand.h>
 #include <sys/lx_userns.h>
 #include <sys/lx_mntns.h>
+#include <sys/lx_netns.h>
 #include <sys/lx_pidns.h>
 #include <sys/sdt.h>
 #include <sys/x86_archext.h>
@@ -326,7 +327,8 @@ struct brand_ops lx_brops = {
 	lx_userns_cred_exec,		/* b_cred_exec */
 	lx_userns_cred_setattr,		/* b_cred_vnode_setattr */
 	lx_reparent_children,		/* b_reparent_children */
-	lx_pgjoin			/* b_pgjoin */
+	lx_pgjoin,			/* b_pgjoin */
+	lx_netns_current		/* b_netstack */
 };
 
 struct brand_mach_ops lx_mops = {
@@ -340,7 +342,7 @@ struct brand_mach_ops lx_mops = {
 };
 
 struct brand lx_brand = {
-	BRAND_VER_3,
+	BRAND_VER_4,
 	"lx",
 	&lx_brops,
 	&lx_mops,
@@ -377,6 +379,7 @@ lx_proc_exit(proc_t *p)
 	lx_proc_data_t *lxpd;
 	proc_t *cp;
 	lx_mntns_view_t *view;
+	lx_netns_t *netns;
 	lx_pidns_t *pidns;
 	boolean_t deathsig;
 
@@ -390,6 +393,8 @@ lx_proc_exit(proc_t *p)
 	/* Release at exit, even if the process remains an unreaped zombie. */
 	view = lxpd->l_mntns;
 	lxpd->l_mntns = NULL;
+	netns = lxpd->l_netns;
+	lxpd->l_netns = NULL;
 	deathsig = (lxpd->l_flags & LX_PROC_CHILD_DEATHSIG) != 0;
 	pidns = lx_pidns_map_namespace(lxpd->l_pidns_map);
 	mutex_exit(&p->p_lock);
@@ -398,6 +403,7 @@ lx_proc_exit(proc_t *p)
 		lx_pidns_init_exit(p);
 	if (view != NULL)
 		lx_mntns_view_rele(view);
+	lx_netns_rele(netns);
 	if (!deathsig)
 		return;
 
@@ -680,6 +686,7 @@ lx_clearbrand(proc_t *p, boolean_t lwps_ok)
 	struct lx_seccomp_filter *filter;
 	lx_userns_t *memory;
 	lx_mntns_view_t *view;
+	lx_netns_t *netns;
 	lx_pidns_map_t *pidmap;
 	lx_pidns_map_t *pgidmap, *sidmap;
 	lx_pidns_t *children;
@@ -692,6 +699,8 @@ lx_clearbrand(proc_t *p, boolean_t lwps_ok)
 	ptolxproc(p)->l_userns_mmap = NULL;
 	view = ptolxproc(p)->l_mntns;
 	ptolxproc(p)->l_mntns = NULL;
+	netns = ptolxproc(p)->l_netns;
+	ptolxproc(p)->l_netns = NULL;
 	pidmap = ptolxproc(p)->l_pidns_map;
 	ptolxproc(p)->l_pidns_map = NULL;
 	pgidmap = ptolxproc(p)->l_pidns_pgid;
@@ -712,6 +721,7 @@ lx_clearbrand(proc_t *p, boolean_t lwps_ok)
 	lx_userns_rele(memory);
 	if (view != NULL)
 		lx_mntns_view_rele(view);
+	lx_netns_rele(netns);
 }
 
 /*
@@ -2141,11 +2151,16 @@ lx_copy_procdata(proc_t *cp, proc_t *pp)
 		/* SIDL holds the target until its initial map is bound. */
 		lx_pidns_hold(cpd->l_pidns_children);
 	}
+	if (ttolxlwp(curthread) != NULL &&
+	    ttolxlwp(curthread)->br_clone_netns != NULL)
+		cpd->l_netns = ttolxlwp(curthread)->br_clone_netns;
 	lx_seccomp_hold(cpd->l_seccomp);
 	if (cpd->l_userns_mmap != NULL)
 		lx_userns_hold(cpd->l_userns_mmap);
 	if (cpd->l_mntns != NULL)
 		lx_mntns_view_hold(cpd->l_mntns);
+	if (cpd->l_netns != NULL)
+		lx_netns_hold(cpd->l_netns);
 	mutex_exit(&pp->p_lock);
 
 	/* Clear any aio contexts from child */

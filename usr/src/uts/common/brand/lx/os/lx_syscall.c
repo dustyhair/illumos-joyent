@@ -45,6 +45,7 @@
 #include <sys/lx_impl.h>
 #include <sys/lx_userns.h>
 #include <sys/lx_mntns.h>
+#include <sys/lx_netns.h>
 #include <sys/lx_misc.h>
 #include <lx_errno.h>
 #include <lx_syscall.h>
@@ -476,7 +477,9 @@ lx_syscall_enter(int entry)
 	    (args[0] & LX_CLONE_NEWUSER) != 0) ||
 	    (lx_mntns_entry_enabled() && (args[0] & LX_CLONE_NEWNS) != 0) ||
 	    (lx_ipcns_entry_enabled() &&
-	    (args[0] & LX_CLONE_NEWIPC) != 0)))) {
+	    (args[0] & LX_CLONE_NEWIPC) != 0) ||
+	    (lx_netns_entry_enabled() &&
+	    (args[0] & LX_CLONE_NEWNET) != 0)))) {
 		ret = lx_kernel_fork(syscall_num, args);
 		lx_syscall_return(lwp, syscall_num, ret);
 		return (0);

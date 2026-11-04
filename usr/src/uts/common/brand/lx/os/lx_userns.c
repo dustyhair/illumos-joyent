@@ -19,6 +19,7 @@
 #include <sys/lx_misc.h>
 #include <sys/lx_brand.h>
 #include <sys/lx_mntns.h>
+#include <sys/lx_netns.h>
 #include <sys/lx_pidns.h>
 #include <sys/proc.h>
 #include <sys/machbrand.h>
@@ -41,6 +42,8 @@ struct lx_userns {
 	uint32_t un_used;
 	uint32_t un_pidns_max;
 	uint32_t un_pidns_used;
+	uint32_t un_netns_max;
+	uint32_t un_netns_used;
 };
 
 static lx_userns_actor_t
@@ -64,6 +67,7 @@ lx_userns_root_create(void)
 	ns->un_refs = 1;
 	ns->un_max = LX_USERNS_DEFAULT_MAX;
 	ns->un_pidns_max = LX_PIDNS_DEFAULT_MAX;
+	ns->un_netns_max = LX_NETNS_DEFAULT_MAX;
 	lx_userns_model_root(&ns->un_model);
 	return (ns);
 }
@@ -148,6 +152,56 @@ lx_userns_pidns_uncharge(lx_userns_t *ns)
 	mutex_exit(&root->un_lock);
 }
 
+/* Network namespaces have their own zone-wide resource budget. */
+int
+lx_userns_netns_budget_set(lx_userns_t *ns, uint32_t maximum)
+{
+	if (ns->un_parent != NULL)
+		return (EINVAL);
+	mutex_enter(&ns->un_lock);
+	ns->un_netns_max = maximum;
+	mutex_exit(&ns->un_lock);
+	return (0);
+}
+
+void
+lx_userns_netns_budget_get(lx_userns_t *ns, uint32_t *maximum,
+    uint32_t *used)
+{
+	lx_userns_t *root = lx_userns_budget_root(ns);
+
+	mutex_enter(&root->un_lock);
+	*maximum = root->un_netns_max;
+	*used = root->un_netns_used;
+	mutex_exit(&root->un_lock);
+}
+
+int
+lx_userns_netns_charge(lx_userns_t *ns)
+{
+	lx_userns_t *root = lx_userns_budget_root(ns);
+	int error = 0;
+
+	mutex_enter(&root->un_lock);
+	if (root->un_netns_used >= root->un_netns_max)
+		error = ENOSPC;
+	else
+		root->un_netns_used++;
+	mutex_exit(&root->un_lock);
+	return (error);
+}
+
+void
+lx_userns_netns_uncharge(lx_userns_t *ns)
+{
+	lx_userns_t *root = lx_userns_budget_root(ns);
+
+	mutex_enter(&root->un_lock);
+	VERIFY3U(root->un_netns_used, !=, 0);
+	root->un_netns_used--;
+	mutex_exit(&root->un_lock);
+}
+
 static void
 lx_userns_uncharge(lx_userns_t *root)
 {
@@ -175,6 +229,7 @@ lx_userns_rele(lx_userns_t *ns)
 		if (parent == NULL) {
 			VERIFY0(ns->un_used);
 			VERIFY0(ns->un_pidns_used);
+			VERIFY0(ns->un_netns_used);
 		}
 		mutex_destroy(&ns->un_lock);
 		kmem_free(ns, sizeof (*ns));
@@ -820,25 +875,29 @@ lx_ipcns_isolated_syscall(int syscall_num)
 	}
 }
 
-/* Reserve both namespaces before native fork can publish a child. */
+/* Reserve the requested namespaces before native fork publishes a child. */
 int
 lx_namespace_clone_prepare(uint_t flags, cred_t **result,
-    lx_mntns_state_t **mountresult)
+    lx_mntns_state_t **mountresult, lx_netns_t **netresult)
 {
 	proc_t *p = curproc;
 	lx_lwp_data_t *lwpd = ttolxlwp(curthread);
 	boolean_t user = (flags & LX_CLONE_NEWUSER) != 0;
 	boolean_t mount = (flags & LX_CLONE_NEWNS) != 0;
+	boolean_t net = (flags & LX_CLONE_NEWNET) != 0;
 	cred_t *source = NULL, *scoped = NULL;
 	vnode_t *root = NULL, *cwd = NULL;
 	lx_mntns_view_t *view = NULL;
 	lx_mntns_state_t *state = NULL;
+	lx_netns_t *netstate = NULL;
 	int error;
 
 	*result = NULL;
 	*mountresult = NULL;
+	*netresult = NULL;
 	if ((user && !lx_userns_experimental) ||
-	    (mount && !lx_mntns_entry_enabled()))
+	    (mount && !lx_mntns_entry_enabled()) ||
+	    (net && !lx_netns_entry_enabled()))
 		return (EINVAL);
 	if (get_udatamodel() != DATAMODEL_NATIVE ||
 	    lwpd->br_syscall_entry != BRAND_ENTRY_AMD64 ||
@@ -869,11 +928,18 @@ lx_namespace_clone_prepare(uint_t flags, cred_t **result,
 		    root, cwd, view, state)) != 0)
 			goto out;
 	}
+	if (net && (error = lx_netns_create(user ? scoped : source,
+	    &netstate)) != 0)
+		goto out;
 	*result = scoped;
 	scoped = NULL;
 	*mountresult = state;
 	state = NULL;
+	*netresult = netstate;
+	netstate = NULL;
 out:
+	if (netstate != NULL)
+		lx_netns_rele(netstate);
 	if (state != NULL) {
 		lx_mntns_state_fini(state);
 		kmem_free(state, sizeof (*state));
@@ -930,26 +996,31 @@ lx_namespace_unshare(uintptr_t flags)
 	boolean_t mount = (flags & LX_CLONE_NEWNS) != 0;
 	boolean_t pid = (flags & LX_CLONE_NEWPID) != 0;
 	boolean_t ipc = (flags & LX_CLONE_NEWIPC) != 0;
+	boolean_t net = (flags & LX_CLONE_NEWNET) != 0;
 	cred_t *source = NULL, *base = NULL, *scoped = NULL;
 	cred_t *old_process = NULL, *old_task = NULL;
 	vnode_t *root = NULL, *cwd = NULL;
 	lx_mntns_view_t *view = NULL;
 	lx_pidns_t *pidparent = NULL, *pidstate = NULL;
+	lx_netns_t *netbase = NULL, *netstate = NULL, *oldnet = NULL;
 	lx_mntns_state_t state = { 0 };
 	int error;
 
-	if ((!user && !mount && !pid && !ipc) ||
+	if ((!user && !mount && !pid && !ipc && !net) ||
 	    (user && !lx_userns_experimental))
 		return (set_errno(EPERM));
 	if (ipc && !lx_ipcns_entry_enabled())
-		return (set_errno((user || mount || pid) ? EINVAL : EPERM));
+		return (set_errno((user || mount || pid || net) ?
+		    EINVAL : EPERM));
 	if (pid && !lx_pidns_entry_enabled())
-		return (set_errno((user || mount) ? EINVAL : EPERM));
+		return (set_errno((user || mount || net) ? EINVAL : EPERM));
+	if (net && !lx_netns_entry_enabled())
+		return (set_errno((user || mount || pid) ? EINVAL : EPERM));
 	/* Retain the previous unsupported-combination error while disabled. */
 	if (mount && !lx_mntns_entry_enabled())
 		return (set_errno(user ? EINVAL : EPERM));
 	if ((flags & ~(LX_CLONE_NEWUSER | LX_CLONE_NEWNS | LX_CLONE_NEWPID |
-	    LX_CLONE_NEWIPC | LX_CLONE_FS)) != 0)
+	    LX_CLONE_NEWIPC | LX_CLONE_NEWNET | LX_CLONE_FS)) != 0)
 		return (set_errno(EINVAL));
 	if (get_udatamodel() != DATAMODEL_NATIVE ||
 	    lwpd->br_syscall_entry != BRAND_ENTRY_AMD64 ||
@@ -963,6 +1034,7 @@ lx_namespace_unshare(uintptr_t flags)
 	if (error == 0 && pid && pd->l_pidns_children != NULL)
 		error = EINVAL;
 	if (error == 0) {
+		netbase = pd->l_netns;
 		if (pid && (pidparent = lx_pidns_active(p)) != NULL)
 			lx_pidns_hold(pidparent);
 		mutex_enter(&p->p_crlock);
@@ -989,6 +1061,9 @@ lx_namespace_unshare(uintptr_t flags)
 	if (pid && (error = lx_pidns_entry_create(user ? scoped : source,
 	    pidparent, &pidstate)) != 0)
 		goto out;
+	if (net && (error = lx_netns_create(user ? scoped : source,
+	    &netstate)) != 0)
+		goto out;
 
 	mutex_enter(&p->p_lock);
 	mutex_enter(&p->p_crlock);
@@ -996,13 +1071,15 @@ lx_namespace_unshare(uintptr_t flags)
 	if (error == 0 && (p->p_cred != base || CRED() != source ||
 	    (user && crgetruid(scoped) != crgetruid(base)) ||
 	    (mount && pd->l_mntns != view) ||
+	    (net && pd->l_netns != netbase) ||
 	    (pid && (pd->l_pidns_children != NULL ||
 	    lx_pidns_active(p) != pidparent))))
 		error = EAGAIN;
 	if (error == 0 && ((user && !lx_userns_experimental) ||
 	    (mount && !lx_mntns_entry_enabled()) ||
 	    (pid && !lx_pidns_entry_enabled()) ||
-	    (ipc && !lx_ipcns_entry_enabled())))
+	    (ipc && !lx_ipcns_entry_enabled()) ||
+	    (net && !lx_netns_entry_enabled())))
 		error = EPERM;
 	if (error == 0 && mount)
 		error = lx_mntns_proc_swap(p, root, cwd, &state);
@@ -1022,13 +1099,21 @@ lx_namespace_unshare(uintptr_t flags)
 	}
 	if (error == 0 && ipc)
 		pd->l_flags |= LX_PROC_IPCNS;
+	if (error == 0 && net) {
+		oldnet = pd->l_netns;
+		pd->l_netns = netstate;
+		netstate = NULL;
+	}
 	mutex_exit(&p->p_crlock);
 	mutex_exit(&p->p_lock);
 	if (old_process != NULL)
 		crfree(old_process);
 	if (old_task != NULL)
 		crfree(old_task);
+	lx_netns_rele(oldnet);
 out:
+	if (netstate != NULL)
+		lx_netns_rele(netstate);
 	if (pidstate != NULL)
 		lx_pidns_rele(pidstate);
 	if (pidparent != NULL)

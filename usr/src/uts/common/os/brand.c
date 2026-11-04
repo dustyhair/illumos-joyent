@@ -38,7 +38,7 @@
 #include <sys/pathname.h>
 
 #define	MIN_BRAND_VERSION BRAND_VER_1
-#define	MAX_BRAND_VERSION BRAND_VER_3
+#define	MAX_BRAND_VERSION BRAND_VER_4
 
 #if defined(__sparcv9)
 /* sparcv9 uses system wide brand interposition hooks */

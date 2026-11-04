@@ -137,6 +137,7 @@
 #include <sys/lx_brand.h>
 #include <sys/lx_userns.h>
 #include <sys/lx_mntns.h>
+#include <sys/lx_netns.h>
 #include <sys/lx_pidns.h>
 #include <sys/lx_ldt.h>
 #include <sys/lx_misc.h>
@@ -622,7 +623,7 @@ lx_kernel_fork(int nr, uintptr_t *args)
 	uint_t flags = nr == 57 ? LX_SIGCHLD : args[0];
 	lx_lwp_data_t *lwpd = ttolxlwp(curthread);
 	uint_t allowed = LX_CSIGNAL | LX_CLONE_NEWUSER | LX_CLONE_NEWNS |
-	    LX_CLONE_NEWPID | LX_CLONE_NEWIPC |
+	    LX_CLONE_NEWPID | LX_CLONE_NEWIPC | LX_CLONE_NEWNET |
 	    LX_CLONE_PARENT_SETTID |
 	    LX_CLONE_CHILD_SETTID | LX_CLONE_CHILD_CLEARTID;
 	pid_t pid = -1;
@@ -633,12 +634,15 @@ lx_kernel_fork(int nr, uintptr_t *args)
 	VERIFY(lx_kernel_restricted(p) || lx_pidns_children(p) != NULL ||
 	    (nr == 56 &&
 	    (flags & (LX_CLONE_NEWUSER | LX_CLONE_NEWNS |
-	    LX_CLONE_NEWPID | LX_CLONE_NEWIPC)) != 0));
+	    LX_CLONE_NEWPID | LX_CLONE_NEWIPC | LX_CLONE_NEWNET)) != 0));
 	if ((flags & LX_CLONE_NEWIPC) != 0 && !lx_ipcns_entry_enabled())
+		return (set_errno(EINVAL));
+	if ((flags & LX_CLONE_NEWNET) != 0 && !lx_netns_entry_enabled())
 		return (set_errno(EINVAL));
 	if (nr == 56 && (flags & LX_CLONE_NEWIPC) != 0 &&
 	    (flags & (LX_CLONE_NEWUSER | LX_CLONE_NEWNS |
-	    LX_CLONE_NEWPID)) == 0 && !lx_kernel_restricted(p))
+	    LX_CLONE_NEWPID | LX_CLONE_NEWNET)) == 0 &&
+	    !lx_kernel_restricted(p))
 		return (set_errno(EOPNOTSUPP));
 	if ((flags & LX_CLONE_NEWPID) != 0 && !lx_pidns_entry_enabled())
 		return (set_errno(EINVAL));
@@ -676,12 +680,15 @@ lx_kernel_fork(int nr, uintptr_t *args)
 
 	VERIFY(lwpd->br_clone_cred == NULL);
 	VERIFY(lwpd->br_clone_mntns == NULL);
+	VERIFY(lwpd->br_clone_netns == NULL);
 	VERIFY(lwpd->br_clone_pidns_map == NULL);
 	lwpd->br_clone_pidns_error = 0;
 	if (nr == 56 &&
-	    (flags & (LX_CLONE_NEWUSER | LX_CLONE_NEWNS)) != 0) {
+	    (flags & (LX_CLONE_NEWUSER | LX_CLONE_NEWNS |
+	    LX_CLONE_NEWNET)) != 0) {
 		int error = lx_namespace_clone_prepare(flags,
-		    &lwpd->br_clone_cred, &lwpd->br_clone_mntns);
+		    &lwpd->br_clone_cred, &lwpd->br_clone_mntns,
+		    &lwpd->br_clone_netns);
 
 		if (error != 0) {
 			piderror = error;
@@ -734,6 +741,12 @@ cleanup:
 		lx_mntns_state_fini(state);
 		kmem_free(state, sizeof (*state));
 	}
+	if (lwpd->br_clone_netns != NULL) {
+		lx_netns_t *netns = lwpd->br_clone_netns;
+
+		lwpd->br_clone_netns = NULL;
+		lx_netns_rele(netns);
+	}
 	if (lwpd->br_clone_cred != NULL) {
 		cred_t *prepared = lwpd->br_clone_cred;
 
@@ -760,7 +773,8 @@ lx_kernel_fork_child(klwp_t *parent, klwp_t *child)
 
 	if ((!lx_kernel_restricted(lwptoproc(parent)) &&
 	    src->br_clone_cred == NULL && src->br_clone_mntns == NULL &&
-	    src->br_clone_pidns_map == NULL && !ipcclone) ||
+	    src->br_clone_netns == NULL && src->br_clone_pidns_map == NULL &&
+	    !ipcclone) ||
 	    src->br_stack_mode != LX_STACK_MODE_BRAND ||
 	    (src->br_syscall_num != 56 && src->br_syscall_num != 57))
 		return;

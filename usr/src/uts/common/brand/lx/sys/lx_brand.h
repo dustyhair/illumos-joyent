@@ -395,6 +395,9 @@ typedef struct lx_proc_data {
 	/* Mount-view reference; native root/cwd hold their own vnodes. */
 	struct lx_mntns_view *l_mntns;
 
+	/* Private network namespace; NULL selects the zone's initial stack. */
+	struct lx_netns *l_netns;
+
 	/* Internal PID maps; Linux namespace entry remains disabled. */
 	struct lx_pidns_map *l_pidns_map;
 	/* Native group and session membership retain existing numeric maps. */
@@ -655,6 +658,7 @@ struct lx_lwp_data {
 	struct cred *br_ptrace_cred; /* tracer credential captured at attach */
 	struct cred *br_clone_cred; /* kernel-owned pending namespace clone */
 	struct lx_mntns_state *br_clone_mntns; /* prepared child root/cwd */
+	struct lx_netns *br_clone_netns; /* prepared child network stack */
 	struct lx_pidns_map *br_pidns_map; /* held task identity */
 	struct lx_pidns_map *br_clone_pidns_map; /* parent-owned fork state */
 	int br_clone_pidns_error;

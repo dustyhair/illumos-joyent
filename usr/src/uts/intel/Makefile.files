@@ -338,6 +338,7 @@ LX_BRAND_OBJS  =		\
 	lx_mkdir.o		\
 	lx_modify_ldt.o		\
 	lx_mntns.o		\
+	lx_netns.o		\
 	lx_mount.o		\
 	lx_lockd.o		\
 	lx_open.o		\

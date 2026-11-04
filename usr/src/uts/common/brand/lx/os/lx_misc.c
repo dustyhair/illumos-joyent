@@ -39,6 +39,7 @@
 #include <sys/lx_pidns.h>
 #include <sys/lx_userns.h>
 #include <sys/lx_mntns.h>
+#include <sys/lx_netns.h>
 #include <sys/lx_misc.h>
 #include <sys/lx_siginfo.h>
 #include <sys/lx_futex.h>
@@ -495,6 +496,8 @@ lx_freelwp(klwp_t *lwp)
 		kmem_free(lwpd->br_clone_mntns,
 		    sizeof (*lwpd->br_clone_mntns));
 	}
+	if (lwpd->br_clone_netns != NULL)
+		lx_netns_rele(lwpd->br_clone_netns);
 	lx_sigframes_free(lwpd);
 	lwp->lwp_brand = NULL;
 	kmem_free(lwpd, sizeof (struct lx_lwp_data));
@@ -615,6 +618,7 @@ lx_lwpdata_free(void *lwpbd)
 	VERIFY(lwpd->br_affinitymask != NULL);
 	VERIFY(lwpd->br_clone_cred == NULL);
 	VERIFY(lwpd->br_clone_mntns == NULL);
+	VERIFY(lwpd->br_clone_netns == NULL);
 	VERIFY(lwpd->br_clone_pidns_map == NULL);
 
 	if (lwpd->br_pidns_map != NULL)

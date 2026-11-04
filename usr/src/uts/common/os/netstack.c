@@ -42,6 +42,7 @@
 #include <sys/disp.h>
 #include <vm/seg_kmem.h>
 #include <sys/zone.h>
+#include <sys/brand.h>
 #include <sys/netstack.h>
 
 /*
@@ -1020,6 +1021,13 @@ netstack_t *
 netstack_get_current(void)
 {
 	netstack_t *ns;
+
+	/* Older brands keep using the zone's network stack. */
+	if (PROC_IS_BRANDED(curproc) &&
+	    curproc->p_brand->b_version >= BRAND_VER_4 &&
+	    BROP(curproc)->b_netstack != NULL &&
+	    (ns = BROP(curproc)->b_netstack(curproc)) != NULL)
+		return (netstack_hold_if_active(ns));
 
 	ns = curproc->p_zone->zone_netstack;
 	ASSERT(ns != NULL);

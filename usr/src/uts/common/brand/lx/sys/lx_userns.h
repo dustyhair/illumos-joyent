@@ -26,8 +26,9 @@ extern boolean_t lx_userns_clone_enabled(void);
 extern boolean_t lx_ipcns_entry_enabled(void);
 extern boolean_t lx_ipcns_isolated_syscall(int);
 struct lx_mntns_state;
+struct lx_netns;
 extern int lx_namespace_clone_prepare(uint_t, cred_t **,
-    struct lx_mntns_state **);
+    struct lx_mntns_state **, struct lx_netns **);
 extern void lx_userns_clone_install(struct _klwp *, const cred_t *);
 extern lx_userns_t *lx_userns_root_create(void);
 extern int lx_userns_child_create(const lx_userns_cred_t *, lx_userns_t **);
@@ -37,6 +38,10 @@ extern int lx_userns_pidns_budget_set(lx_userns_t *, uint32_t);
 extern void lx_userns_pidns_budget_get(lx_userns_t *, uint32_t *, uint32_t *);
 extern int lx_userns_pidns_charge(lx_userns_t *);
 extern void lx_userns_pidns_uncharge(lx_userns_t *);
+extern int lx_userns_netns_budget_set(lx_userns_t *, uint32_t);
+extern void lx_userns_netns_budget_get(lx_userns_t *, uint32_t *, uint32_t *);
+extern int lx_userns_netns_charge(lx_userns_t *);
+extern void lx_userns_netns_uncharge(lx_userns_t *);
 extern void lx_userns_hold(lx_userns_t *);
 extern void lx_userns_rele(lx_userns_t *);
 extern int lx_userns_map_write(lx_userns_t *, int, const lx_userns_cred_t *,
