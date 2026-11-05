@@ -1462,17 +1462,6 @@ dld_capab_poll_enable(dld_str_t *dsp, dld_capab_poll_t *poll)
 		return (ENOTSUP);
 
 	/*
-	 * Enable client polling if and only if DLS bypass is
-	 * possible. Some traffic requires DLS processing in the Rx
-	 * data path. In such a case we can neither allow the client
-	 * (IP) to directly poll the soft ring (since DLS processing
-	 * hasn't been done) nor can we allow DLS bypass.
-	 */
-	if (!mac_rx_bypass_set(dsp->ds_mch, dsp->ds_rx, dsp->ds_rx_arg,
-	    dsp->ds_sap == ETHERTYPE_IPV6))
-		return (ENOTSUP);
-
-	/*
 	 * Register soft ring resources. This will come in handy later if
 	 * the user decides to modify CPU bindings to use more CPUs for the
 	 * device in which case we will switch to fanout using soft rings.
@@ -1484,7 +1473,29 @@ dld_capab_poll_enable(dld_str_t *dsp, dld_capab_poll_t *poll)
 	rcbs.mrc_bind = (mac_resource_bind_t)poll->poll_ring_bind_cf;
 	rcbs.mrc_arg = poll->poll_ring_ch;
 
-	mac_resource_set(dsp->ds_mch, &rcbs, dsp->ds_sap == ETHERTYPE_IPV6);
+	/*
+	 * Claim the protocol's polling resources before changing the receive
+	 * callback.  A MAC client can retain an old IP stream during a
+	 * re-plumb; in that case the new stream must fall back to the
+	 * non-polling path.
+	 */
+	if (!mac_resource_set(dsp->ds_mch, &rcbs,
+	    dsp->ds_sap == ETHERTYPE_IPV6))
+		return (ENOTSUP);
+
+	/*
+	 * Enable client polling if and only if DLS bypass is possible. Some
+	 * traffic requires DLS processing in the Rx data path. In such a case
+	 * we can neither allow the client to directly poll the soft ring nor
+	 * allow DLS bypass.
+	 */
+	if (!mac_rx_bypass_set(dsp->ds_mch, dsp->ds_rx, dsp->ds_rx_arg,
+	    dsp->ds_sap == ETHERTYPE_IPV6)) {
+		mac_resource_clear(dsp->ds_mch,
+		    dsp->ds_sap == ETHERTYPE_IPV6);
+		return (ENOTSUP);
+	}
+
 	mac_client_poll_enable(dsp->ds_mch, dsp->ds_sap == ETHERTYPE_IPV6);
 
 	dsp->ds_polling = B_TRUE;

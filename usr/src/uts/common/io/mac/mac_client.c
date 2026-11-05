@@ -3951,17 +3951,35 @@ mac_notify_remove(mac_notify_handle_t mnh, boolean_t wait)
  * Associate resource management callbacks with the specified MAC
  * clients.
  */
-void
+boolean_t
 mac_resource_set(mac_client_handle_t mch, mac_resource_cb_t *rcbs,
     boolean_t is_v6)
 {
 	mac_client_impl_t *mcip = (mac_client_impl_t *)mch;
+	mac_resource_cb_t *current;
+
+	ASSERT(MAC_PERIM_HELD((mac_handle_t)mcip->mci_mip));
+	VERIFY3P(rcbs->mrc_arg, !=, NULL);
 
 	if (is_v6) {
-		mcip->mci_rcb6 = *rcbs;
+		current = &mcip->mci_rcb6;
 	} else {
-		mcip->mci_rcb4 = *rcbs;
+		current = &mcip->mci_rcb4;
 	}
+
+	/*
+	 * A MAC client can briefly have two IP streams for the same protocol
+	 * while an interface is being replumbed.  The soft rings and their IP
+	 * resource cookies are shared by those streams, so replacing live
+	 * callbacks would leave the old cookie owned by the new consumer.
+	 * Refuse the second polling registration.  That stream will use the
+	 * ordinary non-polling receive path.
+	 */
+	if (current->mrc_arg != NULL)
+		return (B_FALSE);
+
+	*current = *rcbs;
+	return (B_TRUE);
 }
 
 void
