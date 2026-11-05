@@ -1,0 +1,80 @@
+#!/usr/bin/bash
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+version=0.1.2
+config=${LX_NETNS_CONFIG:-/etc/lx-private-network.conf}
+real_bwrap=${LX_NETNS_REAL_BWRAP:-/usr/bin/bwrap}
+helper=${LX_NETNS_HELPER:-/usr/libexec/lx-netns-tools/lx-netns-helper}
+wrapper=${LX_NETNS_WRAPPER:-/usr/libexec/lx-netns-tools/lx-bwrap-wrapper}
+run_lock=${LX_NETNS_RUN_LOCK:-/usr/libexec/lx-netns-tools/run.lock}
+
+usage()
+{
+	cat <<EOF
+usage: lx-bwrap BWRAP-OPTIONS -- COMMAND [ARG ...]
+
+Run stock bubblewrap with one VNIC from the LX zone's private network pool.
+The SmartOS LX brand writes the pool to /etc/lx-private-network.conf.
+EOF
+}
+
+case ${1:-} in
+-h|--help)
+	usage
+	exit 0
+	;;
+--version)
+	printf 'lx-netns-tools %s\n' "$version"
+	exit 0
+	;;
+esac
+
+[[ -r "$config" ]] || {
+	printf 'lx-bwrap: private network config is not readable: %s\n' \
+	    "$config" >&2
+	exit 125
+}
+
+unset LX_PRIVATE_NETWORK_LINKS LX_PRIVATE_NETWORK_GATEWAY
+# shellcheck disable=SC1090
+. "$config"
+: "${LX_PRIVATE_NETWORK_LINKS:?missing LX_PRIVATE_NETWORK_LINKS in $config}"
+: "${LX_PRIVATE_NETWORK_GATEWAY:?missing LX_PRIVATE_NETWORK_GATEWAY in $config}"
+
+[[ "$real_bwrap" == /* && -x "$real_bwrap" ]] || {
+	printf 'lx-bwrap: bubblewrap is not executable: %s\n' "$real_bwrap" >&2
+	exit 125
+}
+[[ "$helper" == /* && -x "$helper" ]] || {
+	printf 'lx-bwrap: helper is not executable: %s\n' "$helper" >&2
+	exit 125
+}
+[[ "$wrapper" == /* && -x "$wrapper" ]] || {
+	printf 'lx-bwrap: wrapper is not executable: %s\n' "$wrapper" >&2
+	exit 125
+}
+[[ -r "$run_lock" ]] || {
+	printf 'lx-bwrap: run lock is not readable: %s\n' "$run_lock" >&2
+	exit 125
+}
+
+export LX_NETNS_REAL_BWRAP=$real_bwrap
+export LX_NETNS_HELPER=$helper
+export LX_PRIVATE_NETWORK_LINKS LX_PRIVATE_NETWORK_GATEWAY
+
+# A VNIC cannot safely be plumbed while a previous LX network namespace is
+# still being torn down. Keep the package-owned inode locked for the complete
+# bubblewrap lifetime and a short teardown grace period.
+exec 9<"$run_lock"
+/usr/bin/flock -x 9
+set +o errexit
+"$wrapper" "$@"
+status=$?
+set -o errexit
+sleep 1
+/usr/bin/flock -u 9
+exec 9<&-
+exit "$status"
