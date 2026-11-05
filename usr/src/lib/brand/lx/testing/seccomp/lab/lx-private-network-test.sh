@@ -169,7 +169,7 @@ config=$work/control/$MOCK_ZONE/lx-private-network.conf
 state=$work/state/85b8918fb66f47409f8ca1a75aeaa3e6
 [[ -f "$state/state" ]]
 [[ -f "$state/ipf-in-host.rules" ]]
-[[ -f "$state/ipf-out-egress.rules" ]]
+[[ ! -e "$state/ipf-out-egress.rules" ]]
 if grep -q 'keep state' "$state"/ipf-*.rules; then
 	printf '%s\n' 'private-network pass rules must not retain IPF state' >&2
 	exit 1

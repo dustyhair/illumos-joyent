@@ -485,16 +485,15 @@ prepare()
 	done
 	ipadm create-if -t "$host"
 	ipadm create-addr -t -T static -a "$gateway/24" "$host/v4"
+	# The global-zone policy remains responsible for egress filtering.  An
+	# additional pass-out rule is unnecessary and IPNAT sessions can retain
+	# such a rule after the zone stops, preventing per-zone teardown from
+	# completing.
 	cat > "$directory/ipf-in-host.pending" <<EOF
 pass in quick on $host from $subnet to any
 EOF
 	ipf -f "$directory/ipf-in-host.pending"
 	mv "$directory/ipf-in-host.pending" "$directory/ipf-in-host.rules"
-	cat > "$directory/ipf-out-egress.pending" <<EOF
-pass out quick on $egress from $subnet to any
-EOF
-	ipf -f "$directory/ipf-out-egress.pending"
-	mv "$directory/ipf-out-egress.pending" "$directory/ipf-out-egress.rules"
 	cat > "$directory/ipnat-portmap.pending" <<EOF
 map $egress $subnet -> 0/32 portmap tcp/udp auto
 EOF
