@@ -40,9 +40,14 @@ fi
 
 # A private network is host infrastructure associated with the zone lifecycle.
 # Prepare it after zoneadmd has made the zone ready but before the brand boot
-# hook runs.  Remove its transient links and rules after halt.  vmadm and
-# zoneadm remain responsible for deciding whether the zone should run.
-if [[ "$1" == post && "$5" == 0 ]]; then
+# hook runs.  Remove its rules while the host VNIC still has an IP Filter
+# interface identity, then remove the transient links after halt.  The
+# post-halt cleanup is an idempotent fallback for interrupted transitions.
+# vmadm and zoneadm remain responsible for deciding whether the zone should
+# run.
+if [[ "$1" == pre && "$5" == 4 ]]; then
+	/usr/lib/brand/lx/lx_private_network quiesce "$2" "$3" || exit 1
+elif [[ "$1" == post && "$5" == 0 ]]; then
 	/usr/lib/brand/lx/lx_private_network prepare "$2" "$3" || exit 1
 elif [[ "$1" == post && "$5" == 4 ]]; then
 	/usr/lib/brand/lx/lx_private_network cleanup "$2" "$3" || exit 1

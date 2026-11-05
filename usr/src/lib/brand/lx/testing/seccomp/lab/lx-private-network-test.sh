@@ -61,17 +61,39 @@ if [[ -x "$lock_helper" ]]; then
 fi
 
 mkdir "$work/bin" "$work/zone"
-for command in dladm ipadm ipf ipnat logger zoneadm zonecfg mdb; do
+for command in dladm ipadm ipf ipfstat ipnat logger zoneadm zonecfg mdb; do
 	cat > "$work/bin/$command" <<'EOF'
 #!/usr/bin/bash
 name=${0##*/}
 printf '%s:%s\n' "$name" "$*" >> "$MOCK_LOG"
+
+remove_rules()
+{
+	rules=$1
+	active=$2
+	pending=$active.$$
+	/usr/bin/grep -F -v -x -f "$rules" "$active" > "$pending" || true
+	/usr/bin/mv "$pending" "$active"
+}
+
 case "$name:$*" in
 ipadm:show-prop*)
 	printf '%s\n' on
 	;;
 ipf:-V*)
 	printf '%s\n' 'Running: yes'
+	;;
+ipf:-r\ -f\ *)
+	[[ ${MOCK_SILENT_FILTER_DELETE:-0} == 0 ]] || exit 0
+	rules=${!#}
+	remove_rules "$rules" "$MOCK_FILTER_RULES"
+	;;
+ipf:-f\ *)
+	rules=${!#}
+	/usr/bin/cat "$rules" >> "$MOCK_FILTER_RULES"
+	;;
+ipfstat:-io)
+	/usr/bin/cat "$MOCK_FILTER_RULES"
 	;;
 zoneadm:*list\ -p*)
 	printf '%s\n' "-:$MOCK_ZONE:$MOCK_ZONE_STATUS:$MOCK_ZONEPATH:uuid:lx:excl"
@@ -100,8 +122,20 @@ mdb:*)
 		;;
 	esac
 	;;
-ipnat:-f*)
+ipnat:-l)
+	printf '%s\n' 'List of active MAP/Redirect filters:'
+	/usr/bin/cat "$MOCK_NAT_RULES"
+	printf '%s\n' 'List of active sessions:'
+	;;
+ipnat:-r\ -f\ *)
+	[[ ${MOCK_SILENT_NAT_DELETE:-0} == 0 ]] || exit 0
+	rules=${!#}
+	remove_rules "$rules" "$MOCK_NAT_RULES"
+	;;
+ipnat:-f\ *)
 	[[ ${MOCK_FAIL_IPNAT:-0} == 0 ]] || exit 1
+	rules=${!#}
+	/usr/bin/cat "$rules" >> "$MOCK_NAT_RULES"
 	;;
 dladm:delete-vnic*)
 	[[ ${MOCK_FAIL_DELETE_VNIC:-0} == 0 ]] || exit 1
@@ -118,12 +152,16 @@ export MOCK_ZONE_STATUS=ready
 export MOCK_SUBNET=10.88.0.0/24
 export MOCK_LINKS=2
 export MOCK_LOG=$work/mock.log
+export MOCK_FILTER_RULES=$work/filter.rules
+export MOCK_NAT_RULES=$work/nat.rules
 export LX_PRIVATE_NETWORK_PATH=$work/bin:/usr/bin:/bin
 export LX_PRIVATE_NETWORK_STATE_DIR=$work/state
 export LX_PRIVATE_NETWORK_CONTROL_DIR=$work/control
 export LX_PRIVATE_NETWORK_LOCKED=1
 mkdir -p "$work/control/$MOCK_ZONE"
 : > "$MOCK_LOG"
+: > "$MOCK_FILTER_RULES"
+: > "$MOCK_NAT_RULES"
 
 "$controller" prepare "$MOCK_ZONE" "$MOCK_ZONEPATH"
 prefix=lx85b8918f
@@ -132,6 +170,10 @@ state=$work/state/85b8918fb66f47409f8ca1a75aeaa3e6
 [[ -f "$state/state" ]]
 [[ -f "$state/ipf-in-host.rules" ]]
 [[ -f "$state/ipf-out-egress.rules" ]]
+if grep -q 'keep state' "$state"/ipf-*.rules; then
+	printf '%s\n' 'private-network pass rules must not retain IPF state' >&2
+	exit 1
+fi
 grep -q "LX_PRIVATE_NETWORK_LINKS='${prefix}n0=10.88.0.2/24,${prefix}n1=10.88.0.3/24'" \
     "$config"
 grep -q "LX_PRIVATE_NETWORK_GATEWAY='10.88.0.1'" "$config"
@@ -171,6 +213,16 @@ export MOCK_SUBNET=10.88.0.0/24
 MOCK_ZONE_STATUS=running "$controller" status "$MOCK_ZONE" |
     grep -q 'health=ready'
 export MOCK_ZONE_STATUS=installed
+before_delete=$(grep -c '^dladm:delete-vnic' "$MOCK_LOG" || true)
+"$controller" quiesce "$MOCK_ZONE" "$MOCK_ZONEPATH"
+after_delete=$(grep -c '^dladm:delete-vnic' "$MOCK_LOG" || true)
+[[ $after_delete == "$before_delete" ]]
+grep -q "^phase='quiesced'$" "$state/state"
+[[ -f "$state/ipf-in-host.rules" ]]
+[[ -f "$state/ipnat-map.rules" ]]
+[[ -f "$config" ]]
+! grep -q '10.88.0.0/24' "$MOCK_FILTER_RULES"
+! grep -q '10.88.0.0/24' "$MOCK_NAT_RULES"
 "$controller" cleanup "$MOCK_ZONE" "$MOCK_ZONEPATH"
 [[ ! -e "$state" ]]
 [[ ! -e "$config" ]]
@@ -198,8 +250,27 @@ set -o errexit
 [[ ! -e "$state" ]]
 [[ ! -e "$config" ]]
 
-# Cleanup failures retain ownership state so a later transition can retry.
+# A command that hides its delete failure must not make cleanup discard the
+# rule files or ownership state.
 export MOCK_SUBNET=10.90.0.0/24
+"$controller" prepare "$MOCK_ZONE" "$MOCK_ZONEPATH"
+set +o errexit
+MOCK_SILENT_FILTER_DELETE=1 MOCK_SILENT_NAT_DELETE=1 \
+    "$controller" cleanup "$MOCK_ZONE" "$MOCK_ZONEPATH" \
+    > "$work/silent-delete.out" 2>&1
+silent_status=$?
+set -o errexit
+[[ $silent_status != 0 ]]
+[[ -f "$state/state" ]]
+[[ -f "$state/ipf-in-host.rules" ]]
+[[ -f "$state/ipnat-map.rules" ]]
+grep -q 'IP Filter rule remains active' "$work/silent-delete.out"
+grep -q 'NAT rules remain active' "$work/silent-delete.out"
+"$controller" cleanup "$MOCK_ZONE" "$MOCK_ZONEPATH"
+[[ ! -e "$state" ]]
+
+# Link cleanup failures also retain ownership state for a later retry.
+export MOCK_SUBNET=10.91.0.0/24
 "$controller" prepare "$MOCK_ZONE" "$MOCK_ZONEPATH"
 set +o errexit
 MOCK_FAIL_DELETE_VNIC=1 "$controller" cleanup "$MOCK_ZONE" "$MOCK_ZONEPATH" \

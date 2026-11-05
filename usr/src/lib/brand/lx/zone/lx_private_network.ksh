@@ -47,6 +47,7 @@ usage()
 	cat >&2 <<EOF
 usage:
   lx_private_network prepare ZONE ZONEPATH
+  lx_private_network quiesce ZONE ZONEPATH
   lx_private_network cleanup ZONE ZONEPATH
   lx_private_network status [ZONE]
 
@@ -250,6 +251,22 @@ cleanup_failed()
 	cleanup_errors=1
 }
 
+nat_rules_present()
+{
+	ipnat -l 2>/dev/null | awk '
+	    /^List of active MAP\/Redirect filters:/ { active = 1; next }
+	    /^List of active sessions:/ { active = 0 }
+	    active { print }
+	' | grep -F " $subnet " >/dev/null 2>&1
+}
+
+filter_rules_present()
+{
+	typeset rules=$1
+
+	ipfstat -io 2>/dev/null | grep -F -x -f "$rules" >/dev/null 2>&1
+}
+
 remove_deployment()
 {
 	typeset directory=$1 expected_zone=$2 link rules
@@ -262,20 +279,28 @@ remove_deployment()
 	    die "runtime state belongs to $saved_zone, not $expected_zone"
 
 	rm -f "$directory"/*.pending
-	for rules in "$directory"/ipnat-*.rules; do
-		[[ -f "$rules" ]] || continue
-		if ipnat -r -f "$rules"; then
-			rm -f "$rules"
-		else
-			cleanup_failed "cannot remove NAT rule in $rules"
-		fi
-	done
+	if nat_rules_present; then
+		for rules in "$directory"/ipnat-*.rules; do
+			[[ -f "$rules" ]] || continue
+			ipnat -r -f "$rules" ||
+			    cleanup_failed "cannot remove NAT rule in $rules"
+		done
+	fi
+	if nat_rules_present; then
+		cleanup_failed "private-network NAT rules remain active"
+	else
+		rm -f "$directory"/ipnat-*.rules
+	fi
 	for rules in "$directory"/ipf-*.rules; do
 		[[ -f "$rules" ]] || continue
-		if ipf -r -f "$rules"; then
-			rm -f "$rules"
+		if filter_rules_present "$rules"; then
+			ipf -r -f "$rules" || cleanup_failed \
+			    "cannot remove IP Filter rules in $rules"
+		fi
+		if filter_rules_present "$rules"; then
+			cleanup_failed "IP Filter rule remains active: $rules"
 		else
-			cleanup_failed "cannot remove IP Filter rules in $rules"
+			rm -f "$rules"
 		fi
 	done
 	if [[ -e "$config" ]] && ! rm -f "$config"; then
@@ -319,6 +344,42 @@ remove_deployment()
 	fi
 	rm -f "$directory/state"
 	rmdir "$directory"
+}
+
+quiesce()
+{
+	(( $# == 2 )) || usage
+	typeset zone=$1 zonepath=$2 directory rules
+
+	zone_for_log=$zone
+	[[ "$zonepath" =~ ^/[A-Za-z0-9_./-]+$ ]] ||
+	    die "cannot determine a safe zone path"
+	directory=$(runtime_directory "$zone")
+	[[ -f "$directory/state" ]] || return
+	# shellcheck disable=SC1090,SC1091
+	. "$directory/state"
+	[[ "$saved_zone" == "$zone" ]] ||
+	    die "runtime state belongs to $saved_zone, not $zone"
+
+	if nat_rules_present; then
+		for rules in "$directory"/ipnat-*.rules; do
+			[[ -f "$rules" ]] || continue
+			ipnat -r -f "$rules" ||
+			    die "cannot quiesce NAT rule in $rules"
+		done
+	fi
+	nat_rules_present && die "private-network NAT rules remain active"
+	for rules in "$directory"/ipf-*.rules; do
+		[[ -f "$rules" ]] || continue
+		if filter_rules_present "$rules"; then
+			ipf -r -f "$rules" ||
+			    die "cannot quiesce IP Filter rule in $rules"
+		fi
+		filter_rules_present "$rules" &&
+		    die "private-network IP Filter rule remains active: $rules"
+	done
+	write_state "$directory" quiesced
+	printf 'LX_PRIVATE_NETWORK_QUIESCED zone=%s\n' "$zone"
 }
 
 rollback_prepare()
@@ -425,12 +486,12 @@ prepare()
 	ipadm create-if -t "$host"
 	ipadm create-addr -t -T static -a "$gateway/24" "$host/v4"
 	cat > "$directory/ipf-in-host.pending" <<EOF
-pass in quick on $host from $subnet to any keep state
+pass in quick on $host from $subnet to any
 EOF
 	ipf -f "$directory/ipf-in-host.pending"
 	mv "$directory/ipf-in-host.pending" "$directory/ipf-in-host.rules"
 	cat > "$directory/ipf-out-egress.pending" <<EOF
-pass out quick on $egress from $subnet to any keep state
+pass out quick on $egress from $subnet to any
 EOF
 	ipf -f "$directory/ipf-out-egress.pending"
 	mv "$directory/ipf-out-egress.pending" "$directory/ipf-out-egress.rules"
@@ -511,6 +572,9 @@ shift
 case "$command" in
 prepare)
 	prepare "$@"
+	;;
+quiesce)
+	quiesce "$@"
 	;;
 cleanup)
 	cleanup "$@"
