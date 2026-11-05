@@ -58,6 +58,8 @@ brand/lx/zone/lx_boot_zone_suse
 brand/lx/zone/lx_boot_zone_ubuntu
 brand/lx/zone/lx_boot_zone_void
 brand/lx/zone/lx_install
+brand/lx/zone/lx_private_network
+brand/lx/zone/lx_private_network_lock
 brand/lx/zone/lx_uninstall
 brand/lx/zone/poststate
 brand/lx/zone/prestate
