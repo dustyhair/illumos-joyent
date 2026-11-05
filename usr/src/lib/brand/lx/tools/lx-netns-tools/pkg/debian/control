@@ -1,10 +1,10 @@
 Package: lx-netns-tools
-Version: 0.1.2
+Version: 0.1.3
 Section: admin
 Priority: optional
 Architecture: amd64
 Depends: bash, bubblewrap, util-linux
-Maintainer: LX Brand Maintainers
+Maintainer: Jonathan Wagner <dustyhair@gmail.com>
 Description: private network namespace tools for SmartOS LX zones
  lx-bwrap reads the private VNIC pool assigned by the SmartOS LX brand,
  creates a bubblewrap network namespace, claims one VNIC, configures its IPv4

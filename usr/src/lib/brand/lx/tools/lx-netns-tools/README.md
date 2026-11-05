@@ -36,13 +36,27 @@ route, waits for duplicate-address detection, and drops `CAP_NET_ADMIN` and
 Networked `lx-bwrap` invocations are serialized for their complete lifetime,
 including a one-second teardown grace period. Current SmartOS LX kernels can
 panic in the host MAC polling path if one VNIC-backed network namespace is
-created while another is being torn down. Serialization makes the packaged
-interface safe at the cost of allowing only one active networked sandbox per
-LX zone. Additional configured links are reserved for future concurrent use
-after the host race is fixed.
+created while another is being torn down. The launcher keeps its lock file
+descriptor out of the payload, forwards HUP, INT, and TERM to bubblewrap, and
+retains the lock through an uninterrupted grace period. Do not send SIGKILL to
+the launcher because no process can run teardown handling after SIGKILL.
+Serialization allows only one active networked sandbox per LX zone.
+Additional configured links are reserved for future concurrent use after the
+host race is fixed.
 
-The package currently supports x86-64 LX guests. Build both package formats
-with:
+Stop all `lx-bwrap` processes before installing or upgrading the package.
+Version 0.1.3 locks the package directory so later package upgrades keep the
+same lock inode, but an upgrade from 0.1.2 changes the lock location.
+
+The argument rewriter follows the bubblewrap 0.11.2 option table. It rejects
+unknown options rather than risk interpreting an option operand as the
+command separator. `--args` is unsupported because it can hide options in a
+file descriptor, and `--share-net` conflicts with this command's purpose.
+
+The package currently supports x86-64 LX guests. `make test` builds both
+helpers and checks version consistency, argument rewriting, lock descriptor
+ownership, serialized launches, signal forwarding, exit status, and teardown
+grace. Build the package formats with:
 
 ```sh
 make deb
@@ -50,5 +64,7 @@ make xbps
 ```
 
 The package depends on `util-linux` for `flock`. The `deb` target requires
-`dpkg-deb`. The `xbps` target requires `xbps-create` and should run on Void
-Linux so the static helper uses musl.
+`dpkg-deb`, and the `xbps` target requires `xbps-create`. The helper is linked
+statically with the libc selected by `CC`; building on Void does not by itself
+select musl. The libc and target architecture policy remains packaging work
+for a future release.
