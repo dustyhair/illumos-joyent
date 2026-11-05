@@ -1,30 +1,44 @@
-#!/usr/bin/bash
+#!/bin/ksh -p
 #
 # CDDL HEADER START
 #
-# The contents of this file are subject to the terms of the Common Development
-# and Distribution License (the "License").  You may not use this file except
-# in compliance with the License.
+# The contents of this file are subject to the terms of the
+# Common Development and Distribution License (the "License").
+# You may not use this file except in compliance with the License.
 #
-# You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or
-# http://www.opensolaris.org/os/licensing.
+# You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
+# or http://www.opensolaris.org/os/licensing.
+# See the License for the specific language governing permissions
+# and limitations under the License.
+#
+# When distributing Covered Code, include this CDDL HEADER in each
+# file and include the License file at usr/src/OPENSOLARIS.LICENSE.
+# If applicable, add the following below this CDDL HEADER, with the
+# fields enclosed by brackets "[]" replaced with your own identifying
+# information: Portions Copyright [yyyy] [name of copyright owner]
 #
 # CDDL HEADER END
 #
-# Prepare private networking for an lx zone.  The persistent configuration is
-# stored in zone attributes managed by vmadm.  This file owns runtime state
-# only; zone boot and halt remain under zoneadm/vmadm control.
+# Copyright 2026 Jonathan Wagner.
+#
+# Prepare private networking for an lx zone.  Persistent intent is stored in
+# zone attributes.  This program owns temporary host resources only.
 #
 
 set -o errexit
 set -o nounset
 set -o pipefail
 
+unset LD_AUDIT LD_LIBRARY_PATH LD_LIBRARY_PATH_32 LD_LIBRARY_PATH_64
+unset LD_PRELOAD LD_PRELOAD_32 LD_PRELOAD_64
+
 PATH=${LX_PRIVATE_NETWORK_PATH:-/usr/sbin:/usr/bin:/sbin}
 export PATH
 
 state_root=${LX_PRIVATE_NETWORK_STATE_DIR:-/var/run/lx-private-network}
-lock_dir=${LX_PRIVATE_NETWORK_LOCK_DIR:-/var/run/lx-private-network.lock}
+control_root=${LX_PRIVATE_NETWORK_CONTROL_DIR:-/var/zonecontrol}
+lock_path=${LX_PRIVATE_NETWORK_LOCK_PATH:-$state_root/lock}
+lock_helper=${LX_PRIVATE_NETWORK_LOCK_HELPER:-/usr/lib/brand/lx/lx_private_network_lock}
 rollback_directory=
 gate_names=(seccomp userns mntns pidns ipcns netns)
 
@@ -36,70 +50,67 @@ usage:
   lx_private_network cleanup ZONE ZONEPATH
   lx_private_network status [ZONE]
 
-These commands are lx brand lifecycle hooks.  Configure the feature through
-the lx_private_network vmadm properties instead of invoking this file directly.
+These commands are lx brand lifecycle hooks.  Configure the experimental
+feature through vmadm instead of invoking this file directly.
 EOF
 	exit 2
 }
 
+log_error()
+{
+	logger -p daemon.err "[zone ${zone_for_log:-unknown}] lx private network: $*" \
+	    2>/dev/null || true
+	printf 'lx private network: %s\n' "$*" >&2
+}
+
 die()
 {
-	printf 'lx private network: %s\n' "$*" >&2
+	log_error "$*"
 	exit 1
 }
 
-acquire_lock()
+lock_and_restart()
 {
-	local -i attempt=0
-
 	mkdir -p "$state_root"
 	chmod 700 "$state_root"
-	while ! mkdir "$lock_dir" 2>/dev/null; do
-		(( attempt += 1 ))
-		if (( attempt == 10 )); then
-			die "could not acquire $lock_dir"
-		fi
-		sleep 1
-	done
-}
-
-release_lock()
-{
-	rmdir "$lock_dir" 2>/dev/null || true
+	[[ ${LX_PRIVATE_NETWORK_LOCKED:-0} == 1 ]] && return
+	[[ -x "$lock_helper" ]] || die "lock helper is not executable: $lock_helper"
+	exec "$lock_helper" -t 10 "$lock_path" /usr/bin/env \
+	    LX_PRIVATE_NETWORK_LOCKED=1 "$0" "$@"
 }
 
 zone_attr()
 {
-	local zone=$1 name=$2
+	typeset zone=$1 name=$2 variable
+	typeset -n value
 
+	variable=_ZONECFG_attr_${name//-/_}
+	value=$variable
+	if [[ ${value+x} == x ]]; then
+		printf '%s\n' "$value"
+		return
+	fi
 	zonecfg -z "$zone" info attr "name=$name" 2>/dev/null |
 	    awk '$1 == "value:" { print $2; exit }'
 }
 
-zone_prefix()
+zone_id()
 {
-	local compact=${1//-/}
+	typeset compact=${1//-/}
 
-	[[ "$compact" =~ ^[0-9A-Fa-f]{32}$ ]] ||
+	[[ ${#compact} == 32 && "$compact" != *[!0-9A-Fa-f]* ]] ||
 	    die "zone name is not a UUID: $1"
-	printf 'lx%s\n' "${compact:0:8}"
+	printf '%s\n' "$compact" | tr '[:upper:]' '[:lower:]'
 }
 
-deployment_count()
+runtime_directory()
 {
-	local -i count=0
-	local path
-
-	for path in "$state_root"/*/state; do
-		[[ -f "$path" ]] || continue
-		(( count += 1 ))
-	done
-	printf '%s\n' "$count"
+	printf '%s/%s\n' "$state_root" "$(zone_id "$1")"
 }
 
 read_gate()
 {
-	local gate=$1 value
+	typeset gate=$1 value
 
 	value=$(printf 'lx_brand`lx_%s_experimental/D\n' "$gate" | mdb -k |
 	    awk 'NF != 0 { value = $NF } END { print value }')
@@ -116,163 +127,77 @@ read_gate()
 	esac
 }
 
-set_gate()
+check_host_prerequisites()
 {
-	local gate=$1 value=$2
-
-	printf 'lx_brand`lx_%s_experimental/W %s\n' "$gate" "$value" |
-	    mdb -kw >/dev/null
-}
-
-set_all_gates()
-{
-	local value=$1 gate
-
-	for gate in "${gate_names[@]}"; do
-		set_gate "$gate" "$value"
-	done
-}
-
-nat_counts()
-{
-	ipnat -l | awk '
-	    /^List of active MAP\/Redirect filters:/ { section = "rules"; next }
-	    /^List of active sessions:/ { section = "sessions"; next }
-	    NF != 0 && section == "rules" { rules++ }
-	    NF != 0 && section == "sessions" { sessions++ }
-	    END { print rules + 0, sessions + 0 }
-	'
-}
-
-flush_owned_nat_sessions()
-{
-	local nat_rules nat_sessions
-
-	[[ -f "$state_root/base.state" ]] || return
-	. "$state_root/base.state"
-	read -r nat_rules nat_sessions <<< "$(nat_counts)"
-	if [[ "${nat_rules_were_empty:-no}" == yes &&
-	    "${nat_sessions_were_empty:-no}" == yes &&
-	    "$nat_sessions" != 0 ]]; then
-		ipnat -F
-	fi
-}
-
-write_base_state()
-{
-	local forwarding ipf_running gate temporary nat_rules nat_sessions
-	local -a values
-	local -i index
+	typeset forwarding ipf_running gate
 
 	forwarding=$(ipadm show-prop -c -o current -p forwarding ipv4)
 	ipf_running=$(ipf -V | awk '/^Running:/ { print $2 }')
-	[[ "$forwarding" == on || "$forwarding" == off ]] ||
-	    die "cannot read the IPv4 forwarding property"
-	[[ "$ipf_running" == yes || "$ipf_running" == no ]] ||
-	    die "cannot read the IP Filter state"
-	read -r nat_rules nat_sessions <<< "$(nat_counts)"
+	[[ "$forwarding" == on ]] ||
+	    die "IPv4 forwarding must be enabled by the host administrator"
+	[[ "$ipf_running" == yes ]] ||
+	    die "IP Filter must be enabled by the host administrator"
 	for gate in "${gate_names[@]}"; do
-		values+=("$(read_gate "$gate")")
+		[[ $(read_gate "$gate") == 1 ]] ||
+		    die "lx_${gate}_experimental must be enabled in /etc/system"
 	done
-	temporary=$state_root/base.state.$$
-	{
-		printf 'forwarding_was=%s\n' "$forwarding"
-		printf 'ipf_was=%s\n' "$ipf_running"
-		printf 'nat_rules_were_empty=%s\n' \
-		    "$([[ "$nat_rules" == 0 ]] && printf yes || printf no)"
-		printf 'nat_sessions_were_empty=%s\n' \
-		    "$([[ "$nat_sessions" == 0 ]] && printf yes || printf no)"
-		for ((index = 0; index < ${#gate_names[@]}; index++)); do
-			printf '%s_was=%s\n' "${gate_names[index]}" \
-			    "${values[index]}"
-		done
-	} > "$temporary"
-	chmod 600 "$temporary"
-	mv "$temporary" "$state_root/base.state"
 }
 
-restore_base_state()
+prefix_in_use()
 {
-	local gate variable value
+	typeset candidate=$1 owner=$2 path saved_zone prefix link
 
-	[[ -f "$state_root/base.state" ]] || return
-	. "$state_root/base.state"
-	ipadm set-prop -t -p "forwarding=$forwarding_was" ipv4
-	for gate in "${gate_names[@]}"; do
-		variable=${gate}_was
-		value=${!variable}
-		[[ "$value" == 0 || "$value" == 1 ]] ||
-		    die "invalid saved gate value: $gate"
-		set_gate "$gate" "$value"
+	for path in "$state_root"/*/state; do
+		[[ -f "$path" ]] || continue
+		unset saved_zone prefix
+		# Runtime files are root-owned and mode 0600.
+		# shellcheck disable=SC1090
+		. "$path"
+		if [[ ${prefix:-} == "$candidate" && ${saved_zone:-} != "$owner" ]]; then
+			return 0
+		fi
 	done
-	flush_owned_nat_sessions
-	if [[ "$ipf_was" == no ]]; then
-		ipf -D 2>/dev/null || true
-	fi
-	rm -f "$state_root/base.state"
+	while IFS= read -r link; do
+		case "$link" in
+		"$candidate"s0|"$candidate"h0|"$candidate"n[0-9]*)
+			return 0
+			;;
+		esac
+	done < <(dladm show-link -p -o link 2>/dev/null || true)
+	return 1
 }
 
-remove_deployment()
+allocate_prefix()
 {
-	local directory=$1
-	local link rules
-	local -i last=0
+	typeset zone=$1 compact length candidate
 
-	[[ -f "$directory/state" ]] || return
-	. "$directory/state"
-	if [[ -f "$directory/ipnat.rules" ]]; then
-		ipnat -r -f "$directory/ipnat.rules" 2>/dev/null || true
-	fi
-	flush_owned_nat_sessions
-	if (( $(deployment_count) == 1 )); then
-		last=1
-	fi
-	for rules in "$directory"/ipf-*.rules; do
-		[[ -f "$rules" ]] || continue
-		ipf -r -f "$rules" 2>/dev/null || true
+	compact=$(zone_id "$zone")
+	for length in 8 12 16 20 24 26; do
+		candidate=lx${compact:0:length}
+		if ! prefix_in_use "$candidate" "$zone"; then
+			printf '%s\n' "$candidate"
+			return
+		fi
 	done
-	[[ ! -f "$config" ]] || rm -f "$config"
-	ipadm delete-addr "$host/v4" 2>/dev/null || true
-	ipadm delete-if "$host" 2>/dev/null || true
-	for link in ${links//,/ }; do
-		link=${link%%=*}
-		dladm reset-linkprop -t -p zone "$link" 2>/dev/null || true
-		dladm delete-vnic "$link" 2>/dev/null || true
-	done
-	dladm delete-vnic "$host" 2>/dev/null || true
-	dladm delete-etherstub "$stub" 2>/dev/null || true
-	rm -f "$directory/ipnat.rules" "$directory"/ipf-*.rules \
-	    "$directory/state"
-	rmdir "$directory"
-	if (( last != 0 )); then
-		restore_base_state
-	fi
-}
-
-rollback_prepare()
-{
-	local result=$?
-
-	trap - EXIT HUP INT TERM
-	set +o errexit
-	remove_deployment "$rollback_directory"
-	release_lock
-	exit "$result"
+	die "cannot allocate a unique datalink prefix for $zone"
 }
 
 validate_subnet()
 {
-	local cidr=$1 first second third value
+	typeset cidr=$1 first second third value
 
 	[[ "$cidr" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)\.0/24$ ]] ||
 	    die "lx_private_network_subnet must be an IPv4 /24 network"
-	first=${BASH_REMATCH[1]}
-	second=${BASH_REMATCH[2]}
-	third=${BASH_REMATCH[3]}
+	# shellcheck disable=SC2296
+	first=${.sh.match[1]}
+	# shellcheck disable=SC2296
+	second=${.sh.match[2]}
+	# shellcheck disable=SC2296
+	third=${.sh.match[3]}
 	for value in "$first" "$second" "$third"; do
 		[[ "$value" == 0 || "$value" != 0* ]] ||
 		    die "private network octets must not contain leading zeroes"
-		(( 10#$value <= 255 )) || die "invalid private network octet"
+		(( value <= 255 )) || die "invalid private network octet"
 	done
 	if ! (( first == 10 || (first == 172 && second >= 16 && second <= 31) ||
 	    (first == 192 && second == 168) )); then
@@ -281,14 +206,155 @@ validate_subnet()
 	printf '%s.%s.%s\n' "$first" "$second" "$third"
 }
 
+write_state()
+{
+	typeset directory=$1 phase=$2 temporary
+
+	temporary=$directory/state.$$
+
+	{
+		printf "phase='%s'\n" "$phase"
+		printf "saved_zone='%s'\n" "$zone"
+		printf "prefix='%s'\n" "$prefix"
+		printf "egress='%s'\n" "$egress"
+		printf "network='%s'\n" "$network"
+		printf "count='%s'\n" "$count"
+		printf "stub='%s'\n" "$stub"
+		printf "host='%s'\n" "$host"
+		printf "gateway='%s'\n" "$gateway"
+		printf "subnet='%s'\n" "$subnet"
+		printf "config='%s'\n" "$config"
+		printf "links='%s'\n" "$links"
+	} > "$temporary"
+	chmod 600 "$temporary"
+	mv "$temporary" "$directory/state"
+}
+
+deployment_healthy()
+{
+	typeset link
+
+	[[ ${phase:-} == ready && -f "$config" ]] || return 1
+	dladm show-link -p -o link "$stub" >/dev/null 2>&1 || return 1
+	dladm show-link -p -o link "$host" >/dev/null 2>&1 || return 1
+	for link in ${links//,/ }; do
+		link=${link%%=*}
+		dladm show-link -p -o link "$link" >/dev/null 2>&1 || return 1
+	done
+	return 0
+}
+
+cleanup_failed()
+{
+	log_error "$*"
+	cleanup_errors=1
+}
+
+remove_deployment()
+{
+	typeset directory=$1 expected_zone=$2 link rules
+	typeset -i cleanup_errors=0
+
+	[[ -f "$directory/state" ]] || return
+	# shellcheck disable=SC1090,SC1091
+	. "$directory/state"
+	[[ "$saved_zone" == "$expected_zone" ]] ||
+	    die "runtime state belongs to $saved_zone, not $expected_zone"
+
+	rm -f "$directory"/*.pending
+	for rules in "$directory"/ipnat-*.rules; do
+		[[ -f "$rules" ]] || continue
+		if ipnat -r -f "$rules"; then
+			rm -f "$rules"
+		else
+			cleanup_failed "cannot remove NAT rule in $rules"
+		fi
+	done
+	for rules in "$directory"/ipf-*.rules; do
+		[[ -f "$rules" ]] || continue
+		if ipf -r -f "$rules"; then
+			rm -f "$rules"
+		else
+			cleanup_failed "cannot remove IP Filter rules in $rules"
+		fi
+	done
+	if [[ -e "$config" ]] && ! rm -f "$config"; then
+		cleanup_failed "cannot remove zone-control configuration $config"
+	fi
+	if ! ipadm delete-addr "$host/v4" 2>/dev/null; then
+		if ipadm show-addr "$host/v4" >/dev/null 2>&1; then
+			cleanup_failed "cannot remove address $host/v4"
+		fi
+	fi
+	if ! ipadm delete-if "$host" 2>/dev/null; then
+		if ipadm show-if "$host" >/dev/null 2>&1; then
+			cleanup_failed "cannot remove interface $host"
+		fi
+	fi
+	for link in ${links//,/ }; do
+		link=${link%%=*}
+		dladm reset-linkprop -t -p zone "$link" 2>/dev/null || true
+		if ! dladm delete-vnic "$link" 2>/dev/null; then
+			if dladm show-link "$link" >/dev/null 2>&1; then
+				cleanup_failed "cannot remove VNIC $link"
+			fi
+		fi
+	done
+	if ! dladm delete-vnic "$host" 2>/dev/null; then
+		if dladm show-link "$host" >/dev/null 2>&1; then
+			cleanup_failed "cannot remove VNIC $host"
+		fi
+	fi
+	if ! dladm delete-etherstub "$stub" 2>/dev/null; then
+		if dladm show-link "$stub" >/dev/null 2>&1; then
+			cleanup_failed "cannot remove etherstub $stub"
+		fi
+	fi
+
+	if (( cleanup_errors != 0 )); then
+		phase=cleanup_pending
+		# Keep the ownership record and any rule files for a retry.
+		write_state "$directory" "$phase"
+		return 1
+	fi
+	rm -f "$directory/state"
+	rmdir "$directory"
+}
+
+rollback_prepare()
+{
+	typeset result=$?
+
+	trap - EXIT HUP INT TERM
+	set +o errexit
+	remove_deployment "$rollback_directory" "$zone_for_log"
+	exit "$result"
+}
+
+write_guest_config()
+{
+	typeset temporary
+
+	[[ -d "$control_root/$zone" ]] ||
+	    die "zone-control directory does not exist: $control_root/$zone"
+	temporary=$(mktemp "$control_root/$zone/.lx-private-network.XXXXXX")
+	{
+		printf "LX_PRIVATE_NETWORK_LINKS='%s'\n" "$links"
+		printf "LX_PRIVATE_NETWORK_GATEWAY='%s'\n" "$gateway"
+	} > "$temporary"
+	chmod 644 "$temporary"
+	mv "$temporary" "$config"
+}
+
 prepare()
 {
 	(( $# == 2 )) || usage
-	local zone=$1 zonepath=$2 enabled egress cidr network count prefix
-	local directory stub host gateway subnet zone_root config
-	local links='' link rules address status first=0 state
-	local -i index
+	typeset zone=$1 zonepath=$2 enabled egress cidr network count prefix
+	typeset directory stub host gateway subnet config
+	typeset links='' link rules address status state phase saved_zone
+	typeset -i index
 
+	zone_for_log=$zone
 	[[ "$zonepath" =~ ^/[A-Za-z0-9_./-]+$ ]] ||
 	    die "cannot determine a safe zone path"
 	enabled=$(zone_attr "$zone" lx-private-network)
@@ -299,7 +365,7 @@ prepare()
 	[[ "$egress" =~ ^[A-Za-z0-9_.-]+$ ]] ||
 	    die "invalid lx_private_network_egress"
 	network=$(validate_subnet "$cidr")
-	[[ "$count" =~ ^[0-9]+$ ]] || count=4
+	[[ "$count" =~ ^[0-9]+$ ]] || count=1
 	(( count >= 1 && count <= 32 )) ||
 	    die "lx_private_network_links must be from 1 to 32"
 	dladm show-link -p -o link "$egress" >/dev/null 2>&1 ||
@@ -308,28 +374,34 @@ prepare()
 	    awk -F: 'NR == 1 { print $3 }')
 	[[ "$status" == ready || "$status" == running ]] ||
 	    die "zone must be ready or running, not ${status:-missing}"
+	check_host_prerequisites
 
-	prefix=$(zone_prefix "$zone")
-	directory=$state_root/$prefix
-	zone_root=$zonepath/root
-	config=$zone_root/etc/lx-private-network.conf
+	directory=$(runtime_directory "$zone")
 	if [[ -f "$directory/state" ]]; then
+		# shellcheck disable=SC1090,SC1091
 		. "$directory/state"
 		[[ "$saved_zone" == "$zone" ]] ||
-		    die "runtime prefix collision for $prefix"
-		return 0
+		    die "runtime state identity mismatch for $zone"
+		if deployment_healthy; then
+			return 0
+		fi
+		log_error "repairing incomplete private-network state"
+		remove_deployment "$directory" "$zone" ||
+		    die "incomplete state could not be removed"
 	fi
 	for state in "$state_root"/*/state; do
 		[[ -f "$state" ]] || continue
-		if grep -q "^subnet='$cidr'$" "$state"; then
+		if grep -F -x -q "subnet='$cidr'" "$state"; then
 			die "private subnet is already active: $cidr"
 		fi
 	done
 
+	prefix=$(allocate_prefix "$zone")
 	stub=${prefix}s0
 	host=${prefix}h0
 	gateway=$network.1
 	subnet=$cidr
+	config=$control_root/$zone/lx-private-network.conf
 	for ((index = 0; index < count; index++)); do
 		link=${prefix}n$index
 		address=$network.$((index + 2))/24
@@ -337,38 +409,13 @@ prepare()
 		links+=$link=$address
 	done
 
-	if (( $(deployment_count) == 0 )); then
-		write_base_state
-		first=1
-	fi
-	if ! mkdir "$directory"; then
-		(( first == 0 )) || restore_base_state
-		die "cannot create runtime state: $directory"
-	fi
+	mkdir "$directory" || die "cannot create runtime state: $directory"
 	chmod 700 "$directory"
-	cat > "$directory/state.new" <<EOF
-saved_zone='$zone'
-prefix='$prefix'
-egress='$egress'
-network='$network'
-count='$count'
-stub='$stub'
-host='$host'
-gateway='$gateway'
-subnet='$subnet'
-zone_root='$zone_root'
-config='$config'
-links='$links'
-EOF
-	chmod 600 "$directory/state.new"
-	mv "$directory/state.new" "$directory/state"
-
+	write_state "$directory" preparing
 	rollback_directory=$directory
 	trap rollback_prepare EXIT
 	trap 'exit 125' HUP INT TERM
-	ipadm set-prop -t -p forwarding=on ipv4
-	set_all_gates 1
-	ipf -E 2>/dev/null || true
+
 	dladm create-etherstub -t "$stub"
 	dladm create-vnic -t -l "$stub" "$host"
 	for link in ${links//,/ }; do
@@ -377,36 +424,32 @@ EOF
 	done
 	ipadm create-if -t "$host"
 	ipadm create-addr -t -T static -a "$gateway/24" "$host/v4"
-	cat > "$directory/ipf-in-host.rules" <<EOF
-pass in quick on $host from $subnet to any
+	cat > "$directory/ipf-in-host.pending" <<EOF
+pass in quick on $host from $subnet to any keep state
 EOF
-	cat > "$directory/ipf-in-egress.rules" <<EOF
-pass in quick on $egress from any to $subnet
+	ipf -f "$directory/ipf-in-host.pending"
+	mv "$directory/ipf-in-host.pending" "$directory/ipf-in-host.rules"
+	cat > "$directory/ipf-out-egress.pending" <<EOF
+pass out quick on $egress from $subnet to any keep state
 EOF
-	cat > "$directory/ipf-out-host.rules" <<EOF
-pass out quick on $host from any to $subnet
-EOF
-	cat > "$directory/ipf-out-egress.rules" <<EOF
-pass out quick on $egress from $subnet to any
-EOF
-	cat > "$directory/ipnat.rules" <<EOF
+	ipf -f "$directory/ipf-out-egress.pending"
+	mv "$directory/ipf-out-egress.pending" "$directory/ipf-out-egress.rules"
+	cat > "$directory/ipnat-portmap.pending" <<EOF
 map $egress $subnet -> 0/32 portmap tcp/udp auto
+EOF
+	ipnat -f "$directory/ipnat-portmap.pending"
+	mv "$directory/ipnat-portmap.pending" "$directory/ipnat-portmap.rules"
+	cat > "$directory/ipnat-map.pending" <<EOF
 map $egress $subnet -> 0/32
 EOF
-	for rules in "$directory"/ipf-*.rules; do
-		ipf -f "$rules"
-	done
-	ipnat -f "$directory/ipnat.rules"
+	ipnat -f "$directory/ipnat-map.pending"
+	mv "$directory/ipnat-map.pending" "$directory/ipnat-map.rules"
 	for link in ${links//,/ }; do
 		link=${link%%=*}
 		dladm set-linkprop -t -p "zone=$zone" "$link"
 	done
-	cat > "$config.new" <<EOF
-LX_PRIVATE_NETWORK_LINKS='$links'
-LX_PRIVATE_NETWORK_GATEWAY='$gateway'
-EOF
-	chmod 644 "$config.new"
-	mv "$config.new" "$config"
+	write_guest_config
+	write_state "$directory" ready
 	trap - EXIT HUP INT TERM
 	rollback_directory=
 	printf 'LX_PRIVATE_NETWORK_READY zone=%s links=%s gateway=%s\n' \
@@ -416,17 +459,18 @@ EOF
 cleanup()
 {
 	(( $# == 2 )) || usage
-	local zone=$1 zonepath=$2 prefix directory config
+	typeset zone=$1 zonepath=$2 directory config
 
+	zone_for_log=$zone
 	[[ "$zonepath" =~ ^/[A-Za-z0-9_./-]+$ ]] ||
 	    die "cannot determine a safe zone path"
-	prefix=$(zone_prefix "$zone")
-	directory=$state_root/$prefix
-	config=$zonepath/root/etc/lx-private-network.conf
+	directory=$(runtime_directory "$zone")
+	config=$control_root/$zone/lx-private-network.conf
 	if [[ -f "$directory/state" ]]; then
-		remove_deployment "$directory"
-	else
-		rm -f "$config"
+		remove_deployment "$directory" "$zone" ||
+		    die "private-network cleanup is incomplete; state retained"
+	elif [[ -e "$config" ]]; then
+		rm -f "$config" || die "cannot remove zone-control configuration"
 	fi
 	printf 'LX_PRIVATE_NETWORK_REMOVED zone=%s\n' "$zone"
 }
@@ -434,16 +478,18 @@ cleanup()
 status_command()
 {
 	(( $# <= 1 )) || usage
-	local requested=${1:-} path found=0 status health
+	typeset requested=${1:-} path found=0 status health
+	typeset saved_zone subnet egress count phase config stub
 
 	for path in "$state_root"/*/state; do
 		[[ -f "$path" ]] || continue
+		# shellcheck disable=SC1090
 		. "$path"
 		[[ -z "$requested" || "$saved_zone" == "$requested" ]] || continue
 		status=$(zoneadm -z "$saved_zone" list -p 2>/dev/null |
 		    awk -F: 'NR == 1 { print $3 }')
-		health=stale
-		if [[ "$status" == running && -f "$config" ]] &&
+		health=${phase:-stale}
+		if [[ ${phase:-} == ready && "$status" == running && -f "$config" ]] &&
 		    dladm show-link -p -o link "$stub" >/dev/null 2>&1; then
 			health=ready
 		fi
@@ -459,25 +505,18 @@ status_command()
 }
 
 (( $# >= 1 )) || usage
+lock_and_restart "$@"
 command=$1
 shift
 case "$command" in
-prepare|cleanup|status)
-	acquire_lock
-	trap release_lock EXIT HUP INT TERM
-	case "$command" in
-	prepare)
-		prepare "$@"
-		;;
-	cleanup)
-		cleanup "$@"
-		;;
-	status)
-		status_command "$@"
-		;;
-	esac
-	trap - EXIT HUP INT TERM
-	release_lock
+prepare)
+	prepare "$@"
+	;;
+cleanup)
+	cleanup "$@"
+	;;
+status)
+	status_command "$@"
 	;;
 *)
 	usage

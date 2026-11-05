@@ -5833,6 +5833,8 @@ f usr/lib/brand/lx/lx_boot_zone_void 0755 root root
 f usr/lib/brand/lx/lx_install 0755 root root
 f usr/lib/brand/lx/lx_librtld_db.so.1 0755 root root
 f usr/lib/brand/lx/lx_lockd 0755 root root
+f usr/lib/brand/lx/lx_private_network 0755 root root
+f usr/lib/brand/lx/lx_private_network_lock 0755 root root
 f usr/lib/brand/lx/lx_support 0755 root root
 f usr/lib/brand/lx/lx_uninstall 0755 root root
 f usr/lib/brand/lx/lx_vdso.so.1 0755 root root

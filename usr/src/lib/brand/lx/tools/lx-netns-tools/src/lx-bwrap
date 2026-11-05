@@ -26,8 +26,8 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
-version=0.1.3
-config=${LX_NETNS_CONFIG:-/etc/lx-private-network.conf}
+version=0.1.4
+config=${LX_NETNS_CONFIG:-/native/.zonecontrol/lx-private-network.conf}
 real_bwrap=${LX_NETNS_REAL_BWRAP:-/usr/bin/bwrap}
 helper=${LX_NETNS_HELPER:-/usr/libexec/lx-netns-tools/lx-netns-helper}
 wrapper=${LX_NETNS_WRAPPER:-/usr/libexec/lx-netns-tools/lx-bwrap-wrapper}
@@ -51,7 +51,7 @@ usage()
 usage: lx-bwrap BWRAP-OPTIONS -- COMMAND [ARG ...]
 
 Run stock bubblewrap with one VNIC from the LX zone's private network pool.
-The SmartOS LX brand writes the pool to /etc/lx-private-network.conf.
+The SmartOS LX brand exposes the pool through /native/.zonecontrol.
 EOF
 }
 

@@ -21,7 +21,7 @@
 # Copyright 2026 Jonathan Wagner.
 #
 
-VERSION = 0.1.3
+VERSION = 0.1.4
 XBPS_REVISION = 1
 ARCH = amd64
 XBPS_ARCH = x86_64

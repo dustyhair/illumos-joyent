@@ -15,9 +15,10 @@ vmadm update UUID \
 vmadm start UUID
 ```
 
-The brand writes `/etc/lx-private-network.conf` inside the zone. Install this
-package and the distribution's normal `bubblewrap` package, then call
-`lx-bwrap` with ordinary bubblewrap arguments:
+The brand writes a host-owned configuration file and exposes it read-only at
+`/native/.zonecontrol/lx-private-network.conf`. Install this package and the
+distribution's normal `bubblewrap` package, then call `lx-bwrap` with ordinary
+bubblewrap arguments:
 
 ```sh
 lx-bwrap \
@@ -40,12 +41,14 @@ created while another is being torn down. The launcher keeps its lock file
 descriptor out of the payload, forwards HUP, INT, and TERM to bubblewrap, and
 retains the lock through an uninterrupted grace period. Do not send SIGKILL to
 the launcher because no process can run teardown handling after SIGKILL.
-Serialization allows only one active networked sandbox per LX zone.
+This is an experimental guest-side mitigation, not a host safety boundary. A
+guest can bypass the launcher. Serialization allows only one active networked
+sandbox per LX zone.
 Additional configured links are reserved for future concurrent use after the
 host race is fixed.
 
 Stop all `lx-bwrap` processes before installing or upgrading the package.
-Version 0.1.3 locks the package directory so later package upgrades keep the
+Version 0.1.4 locks the package directory so later package upgrades keep the
 same lock inode, but an upgrade from 0.1.2 changes the lock location.
 
 The argument rewriter follows the bubblewrap 0.11.2 option table. It rejects

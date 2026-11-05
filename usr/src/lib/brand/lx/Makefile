@@ -47,6 +47,9 @@ _msg :=		TARGET= _msg
 
 all install clean clobber lint: $(SUBDIRS)
 
+check: FRC
+	@cd zone; pwd; $(MAKE) check
+
 _msg: $(MSGSUBDIRS)
 
 $(SUBDIRS): FRC

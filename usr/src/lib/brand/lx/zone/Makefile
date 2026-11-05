@@ -25,8 +25,8 @@
 # Copyright 2017 ASS-Einrichtungssysteme GmbH, Inc.  All rights reserved.
 #
 
-PROGS =	lx_boot lx_install lx_uninstall lx_private_network prestate poststate \
-	statechange
+PROGS =	lx_boot lx_install lx_uninstall lx_private_network \
+	lx_private_network_lock prestate poststate statechange
 PROGS += lx_boot_zone_redhat lx_boot_zone_ubuntu lx_boot_zone_debian
 PROGS += lx_boot_zone_busybox lx_boot_zone_suse lx_boot_zone_docker
 PROGS += lx_boot_zone_void
@@ -61,6 +61,10 @@ install: $(PROGS) $(ROOTXMLDOCS) $(ROOTTEMPLATES) $(ROOTPROGS)
 		-s /native/lib/secure/64:/native/usr/lib/secure/64
 
 lint:
+
+check: all
+	../testing/seccomp/lab/lx-private-network-test.sh \
+	    ./lx_private_network
 
 clean:
 	-$(RM) $(PROGS)
