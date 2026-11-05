@@ -331,6 +331,7 @@ ipnet_register_netihook(ipnet_stack_t *ips)
 	int		ret;
 	zoneid_t	zoneid;
 	netid_t		netid;
+	netstackid_t	stackid;
 
 	HOOK_INIT(ips->ips_nicevents, ipnet_nicevent_cb, "ipnet_nicevents",
 	    ips);
@@ -340,8 +341,10 @@ ipnet_register_netihook(ipnet_stack_t *ips)
 	 * shutting down here, and the netid and protocol lookups could fail
 	 * in that case.
 	 */
-	zoneid = netstackid_to_zoneid(ips->ips_netstack->netstack_stackid);
-	if ((netid = net_zoneidtonetid(zoneid)) == -1)
+	/* Detached stacks share their owner zone ID; use the exact stack ID. */
+	stackid = ips->ips_netstack->netstack_stackid;
+	zoneid = netstackid_to_zoneid(stackid);
+	if ((netid = net_getnetidbynetstackid(stackid)) == -1)
 		return;
 
 	if ((ips->ips_ndv4 = net_protocol_lookup(netid, NHF_INET)) != NULL) {
@@ -1726,10 +1729,11 @@ ipnet_stack_fini(netstackid_t stackid, void *arg)
 	ipnetif_t	*ipnetif, *nipnetif;
 
 	if (ips->ips_kstatp != NULL) {
-		zoneid_t zoneid;
+		netid_t netid;
 
-		zoneid = netstackid_to_zoneid(stackid);
-		net_kstat_delete(net_zoneidtonetid(zoneid), ips->ips_kstatp);
+		netid = net_getnetidbynetstackid(stackid);
+		if (netid != -1)
+			net_kstat_delete(netid, ips->ips_kstatp);
 	}
 	if (ips->ips_ndv4 != NULL) {
 		VERIFY(net_hook_unregister(ips->ips_ndv4, NH_NIC_EVENTS,
