@@ -6,6 +6,28 @@ which a seccomp-filtered or user-namespace process cannot enter. VM71
 exposed this as SIGSYS when the paced ownership-race probe called usleep.
 Syscall 267 also has a kernel handler for the i386 time32 timespec layout.
 
+Modern glibc probes the amd64 rseq syscall during process startup. The LX
+amd64 table previously ended at syscall 322, so strict processes recorded
+syscall 334 as unsupported and delivered SIGSYS after the next successful
+syscall. LX now returns ENOSYS for rseq without marking strict mode. This
+matches a Linux kernel without restartable-sequence support and lets glibc
+use its normal fallback.
+
+The same strict-mode rule applies to two probes bubblewrap and glibc make
+before confined payload execution. Legacy, non-user-namespace LX processes
+now report their capability bounding set without logging PR_CAPBSET_READ as
+unsupported; public user namespaces retain their tracked capability model.
+The amd64 faccessat2 probe returns ENOSYS without marking strict mode, so
+glibc can fall back to faccessat. Other out-of-range syscalls remain strict
+failures.
+
+Restricted processes also keep vfork inside the kernel. LX implements that
+call with fork semantics: the child receives a private address space and the
+parent is not suspended until child exec or exit. This is sufficient for the
+shell and libc exec pattern without permitting entry into the legacy usermode
+emulator. An unguarded process with a pending child PID namespace retains the
+existing EOPNOTSUPP result.
+
 The implementation reuses the native LWP delay condition variable and
 signal-aware timed waits. It supports relative and absolute REALTIME,
 MONOTONIC and BOOTTIME sleeps. BOOTTIME uses lx's existing monotonic clock
@@ -31,10 +53,12 @@ process clock identifiers therefore remain compatibility gaps.
 
 The static and dynamic clock_sleep probes install NNP and an allow-all
 seccomp filter before every case, forcing use of the kernel path. Each has
-18 cases covering clock/timespec validation, error ordering, ignored flags,
+21 cases covering clock/timespec validation, error ordering, ignored flags,
 unused remainder pointers, minimum elapsed time, past/absolute deadlines,
 signal interruption, SA_RESTART, bad remainder pointers, very large intervals,
-aliased arguments and libc usleep/clock_nanosleep. Linux controls pass 18+18.
+aliased arguments, libc usleep/clock_nanosleep, the rseq fallback and the
+capability/faccessat2 startup probes. A vfork/exec case covers the restricted
+kernel fallback. Linux controls pass 21+21.
 
 clock_sleep32.S is a standalone i386 executable. On Linux it installs an
 allow-all filter. Its --lx mode requires the existing i386 filter installation

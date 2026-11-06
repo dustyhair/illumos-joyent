@@ -277,6 +277,18 @@ lx_prctl(int opt, uintptr_t arg2, uintptr_t arg3, uintptr_t arg4,
 		return (0);
 	}
 
+	case LX_PR_CAPBSET_READ:
+		/*
+		 * Legacy LX credentials do not track a Linux capability
+		 * bounding set.  Report the initial full set, matching
+		 * CAPBSET_DROP's established best-effort behavior below.
+		 * Public user namespaces use their tracked bounding set in
+		 * lx_userns_prctl().
+		 */
+		if (arg2 > LX_CAP_LAST)
+			return (set_errno(EINVAL));
+		return (1);
+
 	case LX_PR_CAPBSET_DROP: {
 		/*
 		 * On recent versions of Linux the login svc drops capabilities

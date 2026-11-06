@@ -613,14 +613,16 @@ lx_kernel_thread(uint_t flags, uintptr_t *args)
  * A guarded process cannot invoke libc on its native stack. Fork directly
  * from Linux mode instead. Its child must remain on that same enforced
  * path; none of the copied native libc state is subsequently entered.
- * Shared-address-space clones, tracing and vfork need separate handling.
+ * Shared-address-space clones and tracing need separate handling.  A guarded
+ * vfork uses fork semantics: the child has a private address space and the
+ * parent is not suspended until exec or exit.
  */
 long
 lx_kernel_fork(int nr, uintptr_t *args)
 {
 	proc_t *p = curproc;
 	lx_proc_data_t *pd = ptolxproc(p);
-	uint_t flags = nr == 57 ? LX_SIGCHLD : args[0];
+	uint_t flags = nr == 56 ? args[0] : LX_SIGCHLD;
 	lx_lwp_data_t *lwpd = ttolxlwp(curthread);
 	uint_t allowed = LX_CSIGNAL | LX_CLONE_NEWUSER | LX_CLONE_NEWNS |
 	    LX_CLONE_NEWPID | LX_CLONE_NEWIPC | LX_CLONE_NEWNET |
@@ -776,7 +778,8 @@ lx_kernel_fork_child(klwp_t *parent, klwp_t *child)
 	    src->br_clone_netns == NULL && src->br_clone_pidns_map == NULL &&
 	    !ipcclone) ||
 	    src->br_stack_mode != LX_STACK_MODE_BRAND ||
-	    (src->br_syscall_num != 56 && src->br_syscall_num != 57))
+	    (src->br_syscall_num != 56 && src->br_syscall_num != 57 &&
+	    src->br_syscall_num != 58))
 		return;
 	if (src->br_clone_cred != NULL)
 		lx_userns_clone_install(child, src->br_clone_cred);
@@ -791,8 +794,8 @@ lx_kernel_fork_child(klwp_t *parent, klwp_t *child)
 	}
 	VERIFY(lx_kernel_restricted(cp) ||
 	    (ptolxproc(cp)->l_flags & LX_PROC_IPCNS) != 0);
-	flags = src->br_syscall_num == 57 ? LX_SIGCHLD :
-	    src->br_syscall_args[0];
+	flags = src->br_syscall_num == 56 ? src->br_syscall_args[0] :
+	    LX_SIGCHLD;
 	dst->br_lx_fsbase = src->br_lx_fsbase;
 	dst->br_ntv_fsbase = src->br_ntv_fsbase;
 	dst->br_lx_gsbase = src->br_lx_gsbase;

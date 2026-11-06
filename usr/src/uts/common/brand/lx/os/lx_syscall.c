@@ -302,6 +302,19 @@ lx_syscall_unsup_msg(lx_sysent_t *s, int syscall_num, int unsup_reason)
 }
 
 /*
+ * glibc probes rseq during process startup and falls back when the kernel
+ * returns ENOSYS.  LX does not implement restartable sequences, but this
+ * expected feature probe must not mark a strict process for SIGSYS.
+ */
+static long
+lx_rseq(void *rseqp, uint32_t rseq_len, int flags, uint32_t sig)
+{
+	_NOTE(ARGUNUSED(rseqp, rseq_len, flags, sig))
+
+	return (set_errno(ENOSYS));
+}
+
+/*
  * This function is used to override the processing of arguments and
  * invocation of a handler for emulated system calls, installed on each
  * branded LWP as "lwp_brand_syscall".  If this system call should use the
@@ -376,6 +389,22 @@ lx_syscall_enter(int entry)
 	if (!lx_seccomp_check(lwp, syscall_num))
 		return (0);
 	if (syscall_num < 0 || syscall_num >= LX_MAX_SYSCALL(lwp)) {
+#if defined(_LP64)
+		/*
+		 * glibc probes faccessat2(2) before falling back to
+		 * faccessat(2).
+		 * Keep the expected old-kernel ENOSYS result from poisoning a
+		 * strict native-model process.  Extending the table to 439
+		 * would also require entries for the reserved 335--423 syscall
+		 * range.
+		 */
+		if (lwp_getdatamodel(lwp) == DATAMODEL_NATIVE &&
+		    syscall_num == 439) {
+			(void) set_errno(ENOSYS);
+			lx_syscall_return(lwp, syscall_num, -1);
+			return (0);
+		}
+#endif
 		lx_syscall_unsup_msg(NULL, syscall_num, 0);
 
 		(void) set_errno(ENOTSUP);
@@ -440,6 +469,11 @@ lx_syscall_enter(int entry)
 
 	if (syscall_num == 58 && lx_pidns_children(curproc) != NULL) {
 		ret = set_errno(EOPNOTSUPP);
+		lx_syscall_return(lwp, syscall_num, ret);
+		return (0);
+	}
+	if (lx_kernel_restricted(curproc) && syscall_num == 58) {
+		ret = lx_kernel_fork(syscall_num, args);
 		lx_syscall_return(lwp, syscall_num, ret);
 		return (0);
 	}
@@ -1329,6 +1363,18 @@ lx_sysent_t lx_sysent64[] = {
 	{"kexec_file_load", NULL,		NOSYS_NULL,	0}, /* 320 */
 	{"bpf",		NULL,			NOSYS_NULL,	0}, /* 321 */
 	{"execveat",	NULL,			NOSYS_NULL,	0}, /* 322 */
+	{"userfaultfd",	NULL,			NOSYS_NULL,	1}, /* 323 */
+	{"membarrier",	NULL,			NOSYS_NULL,	3}, /* 324 */
+	{"mlock2",	NULL,			NOSYS_NULL,	3}, /* 325 */
+	{"copy_file_range", NULL,		NOSYS_NULL,	6}, /* 326 */
+	{"preadv2",	NULL,			NOSYS_NULL,	6}, /* 327 */
+	{"pwritev2",	NULL,			NOSYS_NULL,	6}, /* 328 */
+	{"pkey_mprotect", NULL,			NOSYS_NULL,	4}, /* 329 */
+	{"pkey_alloc",	NULL,			NOSYS_NULL,	2}, /* 330 */
+	{"pkey_free",	NULL,			NOSYS_NULL,	1}, /* 331 */
+	{"statx",	NULL,			NOSYS_NULL,	5}, /* 332 */
+	{"io_pgetevents", NULL,			NOSYS_NULL,	6}, /* 333 */
+	{"rseq",	lx_rseq,		0,		4}, /* 334 */
 
 	/* XXX TBD gap then x32 syscalls from 512 - 544 */
 };

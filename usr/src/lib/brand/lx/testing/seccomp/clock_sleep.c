@@ -1,6 +1,7 @@
 /* CDDL version 1.0, http://www.illumos.org/license/CDDL. */
 #define _GNU_SOURCE
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <linux/filter.h>
 #include <linux/seccomp.h>
@@ -13,6 +14,16 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+#ifndef SYS_rseq
+#define SYS_rseq 334
+#endif
+#ifndef SYS_faccessat2
+#define SYS_faccessat2 439
+#endif
+#ifndef PR_CAPBSET_READ
+#define PR_CAPBSET_READ 23
+#endif
 
 #define CHECK(x) do { if (!(x)) { fprintf(stderr,"line %d: %s errno=%d\n",__LINE__,#x,errno); return 1; } } while (0)
 static unsigned cases, failures;
@@ -131,6 +142,41 @@ static int libc_sleep(void)
     CHECK(clock_nanosleep(CLOCK_MONOTONIC,0,&t,NULL)==0);
     return 0;
 }
+static int rseq_fallback(void)
+{
+    struct timespec t={0,1000000};
+    errno=0;
+    CHECK(syscall(SYS_rseq,NULL,0,0,0)==-1);
+    CHECK(errno==ENOSYS || errno==EINVAL);
+    CHECK(rawsleep(CLOCK_MONOTONIC,0,&t,NULL)==0);
+    return 0;
+}
+static int modern_probe_fallbacks(void)
+{
+    struct timespec t={0,1000000};
+    long result;
+    errno=0;
+    result=prctl(PR_CAPBSET_READ,0,0,0,0);
+    CHECK(result==0 || result==1 || (result==-1 && errno==EINVAL));
+    errno=0;
+    result=syscall(SYS_faccessat2,AT_FDCWD,"/",F_OK,0);
+    CHECK(result==0 || (result==-1 && errno==ENOSYS));
+    CHECK(rawsleep(CLOCK_MONOTONIC,0,&t,NULL)==0);
+    return 0;
+}
+static int vfork_exec(void)
+{
+    int status;
+    pid_t p=vfork();
+    CHECK(p>=0);
+    if(p==0) {
+        execl("/bin/true","true",(char *)NULL);
+        _exit(127);
+    }
+    CHECK(waitpid(p,&status,0)==p);
+    CHECK(WIFEXITED(status) && WEXITSTATUS(status)==0);
+    return 0;
+}
 static void run(const char *name,int (*fn)(void))
 {
     pid_t p=fork();int status=-1;
@@ -168,6 +214,9 @@ int main(void)
     run("huge realtime absolute deadline does not overflow",huge_rt);
     run("request and remainder may alias",alias_rem);
     run("libc usleep and clock_nanosleep remain confined",libc_sleep);
+    run("rseq fallback does not poison later sleep",rseq_fallback);
+    run("cap bounds and faccessat2 probes do not poison later sleep",modern_probe_fallbacks);
+    run("restricted vfork exec uses the kernel fallback",vfork_exec);
     printf("CLOCK_SLEEP cases=%u failures=%u\n",cases,failures);
     return failures!=0;
 }
