@@ -613,9 +613,9 @@ lx_kernel_thread(uint_t flags, uintptr_t *args)
  * A guarded process cannot invoke libc on its native stack. Fork directly
  * from Linux mode instead. Its child must remain on that same enforced
  * path; none of the copied native libc state is subsequently entered.
- * Shared-address-space clones and tracing need separate handling.  A guarded
- * vfork uses fork semantics: the child has a private address space and the
- * parent is not suspended until exec or exit.
+ * Shared-address-space clones and tracing need separate handling.  For
+ * vfork, consume the native vfork wait here because the native syscall-exit
+ * path is not active while dispatching a Linux syscall through the brand.
  */
 long
 lx_kernel_fork(int nr, uintptr_t *args)
@@ -718,8 +718,20 @@ lx_kernel_fork(int nr, uintptr_t *args)
 			goto cleanup;
 	}
 
-	pid = (pid_t)forksys(0, (flags & LX_CSIGNAL) == 0 ?
-	    FORK_NOSIGCHLD : 0);
+	pid = (pid_t)forksys(nr == 58 ? 2 : 0,
+	    (flags & LX_CSIGNAL) == 0 ? FORK_NOSIGCHLD : 0);
+	if (nr == 58 && pid > 0) {
+		/*
+		 * forksys(2) arranges for native post_syscall() to call
+		 * vfwait().  This call did not enter through SYS_forksys, so
+		 * wait here and consume T_VFPARENT before returning to the
+		 * brand dispatcher.  Use the native PID; namespace translation
+		 * follows.
+		 */
+		VERIFY((curthread->t_flag & T_VFPARENT) != 0);
+		vfwait(pid);
+		curthread->t_flag &= ~T_VFPARENT;
+	}
 	if (pid < 0)
 		piderror = lwpd->br_clone_pidns_error;
 	if (pid > 0 && viewer != NULL)

@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/prctl.h>
+#include <sys/mman.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -177,6 +178,78 @@ static int vfork_exec(void)
     CHECK(WIFEXITED(status) && WEXITSTATUS(status)==0);
     return 0;
 }
+static long raw_read(int fd, void *buf, size_t len)
+{
+    long result;
+    __asm__ volatile("syscall"
+        : "=a" (result)
+        : "a" ((long)SYS_read), "D" ((long)fd), "S" (buf), "d" (len)
+        : "rcx", "r11", "memory");
+    return result;
+}
+static void raw_exit(int status)
+{
+    __asm__ volatile("syscall"
+        :
+        : "a" ((long)SYS_exit), "D" ((long)status)
+        : "rcx", "r11", "memory");
+    __builtin_unreachable();
+}
+static int vfork_shared_exit(void)
+{
+    volatile uint32_t *shared;
+    struct timespec delay={0,100000000};
+    int gate[2], child_status, helper_status;
+    int64_t start, elapsed;
+    pid_t helper, child;
+
+    shared=mmap(NULL,4096,PROT_READ|PROT_WRITE,
+        MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
+    CHECK(shared!=MAP_FAILED && pipe(gate)==0);
+    *shared=0x11111111;
+    helper=fork();
+    CHECK(helper>=0);
+    if(helper==0) {
+        char byte='x';
+        close(gate[0]);
+        if(syscall(SYS_nanosleep,&delay,NULL)!=0 ||
+            write(gate[1],&byte,1)!=1) _exit(1);
+        _exit(0);
+    }
+    close(gate[1]);
+    start=mono();CHECK(start>=0);
+    child=vfork();
+    CHECK(child>=0);
+    if(child==0) {
+        char byte;
+        *shared=0x22222222;
+        if(raw_read(gate[0],&byte,1)!=1) raw_exit(125);
+        raw_exit(42);
+    }
+    elapsed=mono()-start;
+    close(gate[0]);
+    CHECK(*shared==0x22222222);
+    CHECK(elapsed>=50000000);
+    CHECK(waitpid(child,&child_status,0)==child);
+    CHECK(WIFEXITED(child_status) && WEXITSTATUS(child_status)==42);
+    CHECK(waitpid(helper,&helper_status,0)==helper);
+    CHECK(WIFEXITED(helper_status) && WEXITSTATUS(helper_status)==0);
+    CHECK(munmap((void *)shared,4096)==0);
+    return 0;
+}
+static int vfork_exec_failure(void)
+{
+    int status;
+    pid_t p=vfork();
+    CHECK(p>=0);
+    if(p==0) {
+        execl("/file-that-does-not-exist","missing",(char *)NULL);
+        _exit(errno==ENOENT?127:126);
+    }
+    CHECK(waitpid(p,&status,0)==p);
+    CHECK(WIFEXITED(status) && WEXITSTATUS(status)==127);
+    return 0;
+}
 static void run(const char *name,int (*fn)(void))
 {
     pid_t p=fork();int status=-1;
@@ -216,7 +289,9 @@ int main(void)
     run("libc usleep and clock_nanosleep remain confined",libc_sleep);
     run("rseq fallback does not poison later sleep",rseq_fallback);
     run("cap bounds and faccessat2 probes do not poison later sleep",modern_probe_fallbacks);
-    run("restricted vfork exec uses the kernel fallback",vfork_exec);
+    run("restricted vfork shares memory and suspends its parent",vfork_shared_exit);
+    run("restricted vfork releases its parent after exec",vfork_exec);
+    run("restricted vfork releases its parent after failed exec and exit",vfork_exec_failure);
     printf("CLOCK_SLEEP cases=%u failures=%u\n",cases,failures);
     return failures!=0;
 }

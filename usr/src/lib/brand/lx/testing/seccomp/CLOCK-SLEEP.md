@@ -21,12 +21,12 @@ The amd64 faccessat2 probe returns ENOSYS without marking strict mode, so
 glibc can fall back to faccessat. Other out-of-range syscalls remain strict
 failures.
 
-Restricted processes also keep vfork inside the kernel. LX implements that
-call with fork semantics: the child receives a private address space and the
-parent is not suspended until child exec or exit. This is sufficient for the
-shell and libc exec pattern without permitting entry into the legacy usermode
-emulator. An unguarded process with a pending child PID namespace retains the
-existing EOPNOTSUPP result.
+Restricted processes also keep vfork inside the kernel. The LX path now uses
+the native illumos vfork implementation. The child shares the parent's address
+space and the parent remains suspended until the child calls exec or exits.
+LX consumes the native vfork wait inside the brand dispatcher because the
+active syscall is Linux vfork rather than native forksys. An unguarded process
+with a pending child PID namespace retains the existing EOPNOTSUPP result.
 
 The implementation reuses the native LWP delay condition variable and
 signal-aware timed waits. It supports relative and absolute REALTIME,
@@ -53,12 +53,12 @@ process clock identifiers therefore remain compatibility gaps.
 
 The static and dynamic clock_sleep probes install NNP and an allow-all
 seccomp filter before every case, forcing use of the kernel path. Each has
-21 cases covering clock/timespec validation, error ordering, ignored flags,
+23 cases covering clock/timespec validation, error ordering, ignored flags,
 unused remainder pointers, minimum elapsed time, past/absolute deadlines,
 signal interruption, SA_RESTART, bad remainder pointers, very large intervals,
 aliased arguments, libc usleep/clock_nanosleep, the rseq fallback and the
-capability/faccessat2 startup probes. A vfork/exec case covers the restricted
-kernel fallback. Linux controls pass 21+21.
+capability/faccessat2 startup probes. The vfork cases verify shared private
+memory, parent suspension, successful exec and failed exec followed by exit.
 
 clock_sleep32.S is a standalone i386 executable. On Linux it installs an
 allow-all filter. Its --lx mode requires the existing i386 filter installation
