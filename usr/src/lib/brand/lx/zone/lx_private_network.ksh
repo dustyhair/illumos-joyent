@@ -289,6 +289,8 @@ remove_deployment()
 	if nat_rules_present; then
 		cleanup_failed "private-network NAT rules remain active"
 	else
+		ipnat -F -S "$subnet" ||
+		    cleanup_failed "cannot flush NAT sessions for $subnet"
 		rm -f "$directory"/ipnat-*.rules
 	fi
 	for rules in "$directory"/ipf-*.rules; do
@@ -369,6 +371,8 @@ quiesce()
 		done
 	fi
 	nat_rules_present && die "private-network NAT rules remain active"
+	ipnat -F -S "$subnet" ||
+	    die "cannot quiesce NAT sessions for $subnet"
 	for rules in "$directory"/ipf-*.rules; do
 		[[ -f "$rules" ]] || continue
 		if filter_rules_present "$rules"; then

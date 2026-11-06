@@ -3,13 +3,15 @@
 .\" location.
 .\" Portions Copyright (c) 2008, Sun Microsystems Inc. All Rights Reserved.
 .\" Portions Copyright (c) 2013, Joyent, Inc. All Rights Reserved.
-.TH IPNAT 8 "Oct 30, 2013"
+.\" Portions Copyright 2026 Jonathan Wagner.
+.TH IPNAT 8 "Nov 5, 2026"
 .SH NAME
 ipnat \- user interface to the NAT subsystem
 .SH SYNOPSIS
 .LP
 .nf
-\fBipnat\fR [\fB-CdFhlnRrsv\fR] [\fB-G\fR | \fB-z\fR \fIzonename\fR] \fB-f\fR \fIfilename\fR
+\fBipnat\fR [\fB-CdFhlnRrsv\fR] [\fB-S\fR \fIaddress/prefix\fR]
+    [\fB-G\fR | \fB-z\fR \fIzonename\fR] [\fB-f\fR \fIfilename\fR]
 .fi
 
 .SH DESCRIPTION
@@ -61,6 +63,16 @@ processes each one.
 .RS 15n
 Delete all active entries in the current NAT translation table (currently
 active NAT mappings).
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fB-S\fR \fIaddress/prefix\fR\fR
+.ad
+.RS 15n
+Limit \fB-F\fR to active IPv4 NAT mappings whose original internal address
+belongs to the specified prefix. This option requires \fB-F\fR.
 .RE
 
 .sp

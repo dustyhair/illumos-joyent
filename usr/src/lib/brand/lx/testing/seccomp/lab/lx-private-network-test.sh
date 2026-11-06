@@ -132,6 +132,9 @@ ipnat:-r\ -f\ *)
 	rules=${!#}
 	remove_rules "$rules" "$MOCK_NAT_RULES"
 	;;
+ipnat:-F\ -S\ *)
+	[[ ${MOCK_FAIL_NAT_FLUSH:-0} == 0 ]] || exit 1
+	;;
 ipnat:-f\ *)
 	[[ ${MOCK_FAIL_IPNAT:-0} == 0 ]] || exit 1
 	rules=${!#}
@@ -183,8 +186,8 @@ if grep -q 'mdb-input:.*/W' "$MOCK_LOG"; then
 	printf '%s\n' 'controller wrote an experimental kernel gate' >&2
 	exit 1
 fi
-if grep -q '^ipnat:-F' "$MOCK_LOG"; then
-	printf '%s\n' 'controller flushed the global NAT session table' >&2
+if grep -q '^ipnat:-F$' "$MOCK_LOG"; then
+	printf '%s\n' 'controller flushed every NAT session' >&2
 	exit 1
 fi
 
@@ -214,6 +217,15 @@ MOCK_ZONE_STATUS=running "$controller" status "$MOCK_ZONE" |
     grep -q 'health=ready'
 export MOCK_ZONE_STATUS=installed
 before_delete=$(grep -c '^dladm:delete-vnic' "$MOCK_LOG" || true)
+set +o errexit
+MOCK_FAIL_NAT_FLUSH=1 "$controller" quiesce "$MOCK_ZONE" "$MOCK_ZONEPATH" \
+    > "$work/flush-failure.out" 2>&1
+flush_status=$?
+set -o errexit
+[[ $flush_status != 0 ]]
+grep -q "cannot quiesce NAT sessions for 10.88.0.0/24" \
+    "$work/flush-failure.out"
+grep -q "^phase='ready'$" "$state/state"
 "$controller" quiesce "$MOCK_ZONE" "$MOCK_ZONEPATH"
 after_delete=$(grep -c '^dladm:delete-vnic' "$MOCK_LOG" || true)
 [[ $after_delete == "$before_delete" ]]
@@ -223,6 +235,8 @@ grep -q "^phase='quiesced'$" "$state/state"
 [[ -f "$config" ]]
 ! grep -q '10.88.0.0/24' "$MOCK_FILTER_RULES"
 ! grep -q '10.88.0.0/24' "$MOCK_NAT_RULES"
+grep -q '^ipnat:-F -S 10.88.0.0/24$' "$MOCK_LOG"
+! grep -q '^ipnat:-F$' "$MOCK_LOG"
 "$controller" cleanup "$MOCK_ZONE" "$MOCK_ZONEPATH"
 [[ ! -e "$state" ]]
 [[ ! -e "$config" ]]

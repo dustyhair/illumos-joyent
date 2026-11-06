@@ -9,6 +9,7 @@
  * Use is subject to license terms.
  *
  * Copyright (c) 2014, Joyent, Inc.  All rights reserved.
+ * Copyright 2026 Jonathan Wagner.
  */
 
 #include <stdio.h>
@@ -76,8 +77,9 @@ extern char	thishost[MAXHOSTNAMELEN];
 extern	char	*optarg;
 
 void	dostats __P((int, natstat_t *, int, int));
-void	flushtable __P((int, int));
+void	flushtable __P((int, int, natflush_t *));
 void	usage __P((char *));
+int	parseprefix __P((char *, natflush_t *));
 int	main __P((int, char *[]));
 void	showhostmap __P((natstat_t *nsp));
 void	natstat_dead __P((natstat_t *, char *));
@@ -90,7 +92,7 @@ void
 usage(char *name)
 {
 	fprintf(stderr, "Usage: %s [-CdFhlnrRsv] [-f filename]", name);
-	fprintf(stderr, " [-G|-z zonename]\n");
+	fprintf(stderr, " [-S address/prefix] [-G|-z zonename]\n");
 	exit(1);
 }
 
@@ -100,6 +102,7 @@ main(int argc, char *argv[])
 {
 	char *file, *core, *kernel;
 	natstat_t ns, *nsp;
+	natflush_t filter, *filterp;
 	int fd, c, mode;
 	ipfobj_t obj;
 
@@ -110,8 +113,9 @@ main(int argc, char *argv[])
 	core = NULL;
 	kernel = NULL;
 	mode = O_RDWR;
+	filterp = NULL;
 
-	while ((c = getopt(argc, argv, "CdFf:G:hlM:N:nrRsvz:")) != -1)
+	while ((c = getopt(argc, argv, "CdFf:G:hlM:N:nrRsS:vz:")) != -1)
 		switch (c) {
 		case 'C' :
 			opts |= OPT_CLEAR;
@@ -155,6 +159,11 @@ main(int argc, char *argv[])
 			opts |= OPT_STAT;
 			mode = O_RDONLY;
 			break;
+		case 'S' :
+			if (parseprefix(optarg, &filter) != 0)
+				exit(1);
+			filterp = &filter;
+			break;
 		case 'v' :
 			opts |= OPT_VERBOSE;
 			break;
@@ -164,6 +173,9 @@ main(int argc, char *argv[])
 		default :
 			usage(argv[0]);
 		}
+
+	if (filterp != NULL && (opts & OPT_FLUSH) == 0)
+		usage(argv[0]);
 
 	initparse();
 
@@ -221,7 +233,7 @@ main(int argc, char *argv[])
 	}
 
 	if (opts & (OPT_FLUSH|OPT_CLEAR))
-		flushtable(fd, opts);
+		flushtable(fd, opts, filterp);
 	if (file) {
 		ipnat_parsefile(fd, ipnat_addrule, ioctl, file);
 	}
@@ -389,21 +401,71 @@ showhostmap(natstat_t *nsp)
 }
 
 
+int
+parseprefix(char *text, natflush_t *filter)
+{
+	char buffer[INET_ADDRSTRLEN + 4], *end, *slash;
+	struct in_addr address;
+	long prefix;
+
+	if (strlcpy(buffer, text, sizeof (buffer)) >= sizeof (buffer)) {
+		fprintf(stderr, "IPv4 prefix is too long: %s\n", text);
+		return (-1);
+	}
+	slash = strchr(buffer, '/');
+	if (slash == NULL) {
+		prefix = 32;
+	} else {
+		*slash++ = '\0';
+		errno = 0;
+		prefix = strtol(slash, &end, 10);
+		if (errno != 0 || *slash == '\0' || *end != '\0' ||
+		    prefix < 0 || prefix > 32) {
+			fprintf(stderr, "invalid IPv4 prefix length: %s\n",
+			    text);
+			return (-1);
+		}
+	}
+	if (inet_pton(AF_INET, buffer, &address) != 1) {
+		fprintf(stderr, "invalid IPv4 address: %s\n", text);
+		return (-1);
+	}
+	bzero(filter, sizeof (*filter));
+	if (ntomask(4, prefix, &filter->nf_mask) != 0)
+		return (-1);
+	filter->nf_addr = address.s_addr & filter->nf_mask;
+	return (0);
+}
+
+
 /*
  * Issue an ioctl to flush either the NAT rules table or the active mapping
  * table or both.
  */
 void
-flushtable(int fd, int opts)
+flushtable(int fd, int opts, natflush_t *filter)
 {
 	int n = 0;
 
 	if (opts & OPT_FLUSH) {
-		n = FLUSH_TABLE_ALL;
-		if (!(opts & OPT_DONOTHING) && ioctl(fd, SIOCIPFFL, &n) == -1)
-			perror("ioctl(SIOCFLNAT)");
-		else
-			printf("%d entries flushed from NAT table\n", n);
+		if (filter != NULL) {
+			if (!(opts & OPT_DONOTHING) &&
+			    ioctl(fd, SIOCIPFNF, filter) == -1) {
+				perror("ioctl(SIOCIPFNF)");
+				exit(1);
+			} else {
+				printf("%u entries flushed from NAT table\n",
+				    filter->nf_removed);
+			}
+		} else {
+			n = FLUSH_TABLE_ALL;
+			if (!(opts & OPT_DONOTHING) &&
+			    ioctl(fd, SIOCIPFFL, &n) == -1)
+				perror("ioctl(SIOCFLNAT)");
+			else
+				printf("%d entries flushed from NAT table\n",
+				    n);
+		}
 	}
 
 	if (opts & OPT_CLEAR) {

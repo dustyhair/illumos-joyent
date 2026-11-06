@@ -8,6 +8,7 @@
  *
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2026 Jonathan Wagner.
  */
 
 #ifndef	__IP_NAT_H__
@@ -27,11 +28,13 @@
 #define	SIOCRMNAT	_IOW('r', 61, struct ipfobj)
 #define	SIOCGNATS	_IOWR('r', 62, struct ipfobj)
 #define	SIOCGNATL	_IOWR('r', 63, struct ipfobj)
+#define	SIOCIPFNF	_IOWR('r', 100, struct natflush)
 #else
 #define	SIOCADNAT	_IOW(r, 60, struct ipfobj)
 #define	SIOCRMNAT	_IOW(r, 61, struct ipfobj)
 #define	SIOCGNATS	_IOWR(r, 62, struct ipfobj)
 #define	SIOCGNATL	_IOWR(r, 63, struct ipfobj)
+#define	SIOCIPFNF	_IOWR(r, 100, struct natflush)
 #endif
 
 #undef	LARGE_NAT	/* define this if you're setting up a system to NAT
@@ -275,6 +278,13 @@ typedef	struct	ipnat	{
 #define	USABLE_PORTS	(65536 - MAPBLK_MINPORT)
 
 #define	IPN_CMPSIZ	(sizeof (ipnat_t) - offsetof(ipnat_t, in_flags))
+
+typedef struct natflush {
+	u_32_t	nf_addr;
+	u_32_t	nf_mask;
+	u_32_t	nf_removed;
+	u_32_t	nf_pad;
+} natflush_t;
 
 typedef	struct	natlookup {
 	i6addr_t	nl_inipaddr;

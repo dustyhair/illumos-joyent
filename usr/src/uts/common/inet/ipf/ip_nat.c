@@ -5,6 +5,7 @@
  *
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2026 Jonathan Wagner.
  */
 
 #if defined(KERNEL) || defined(_KERNEL)
@@ -163,6 +164,7 @@ static	void	nat_mssclamp __P((tcphdr_t *, u_32_t, u_short *));
 static	int	nat_getnext __P((ipftoken_t *, ipfgeniter_t *, ipf_stack_t *));
 static	int	nat_iterator __P((ipftoken_t *, ipfgeniter_t *, ipf_stack_t *));
 static	int	nat_flushtable __P((int, ipf_stack_t *));
+static	int	nat_flushprefix __P((natflush_t *, ipf_stack_t *));
 
 #define NAT_HAS_L4_CHANGED(n)	\
  	(((n)->nat_flags & (IPN_TCPUDPICMP)) && \
@@ -811,6 +813,35 @@ ipf_stack_t *ifs;
 		if (getlock) {
 			RWLOCK_EXIT(&ifs->ifs_ipf_nat);
 		}
+		break;
+	    }
+	case SIOCIPFNF :
+	    {
+		natflush_t filter;
+
+		if (!(mode & FWRITE)) {
+			error = EPERM;
+			break;
+		}
+		error = BCOPYIN(data, &filter, sizeof(filter));
+		if (error != 0) {
+			error = EFAULT;
+			break;
+		}
+		if ((filter.nf_addr & ~filter.nf_mask) != 0) {
+			error = EINVAL;
+			break;
+		}
+
+		if (getlock)
+			WRITE_ENTER(&ifs->ifs_ipf_nat);
+		filter.nf_removed = nat_flushprefix(&filter, ifs);
+		if (getlock)
+			RWLOCK_EXIT(&ifs->ifs_ipf_nat);
+
+		error = BCOPYOUT(&filter, data, sizeof(filter));
+		if (error != 0)
+			error = EFAULT;
 		break;
 	    }
 	case SIOCIPFFL :	/* old SIOCFLNAT & SIOCCNATL */
@@ -5804,6 +5835,42 @@ ipf_stack_t *ifs;
 
         SPL_X(s);
         return (removed);
+}
+
+
+/* ---------------------------------------------------------------------- */
+/* Function:    nat_flushprefix                                           */
+/* Returns:     int - number of entries removed                           */
+/* Parameters:  filter(I) - original IPv4 source prefix to remove         */
+/*              ifs       - ipf stack instance                            */
+/* Write Locks: ipf_nat                                                   */
+/*                                                                        */
+/* Remove active NAT sessions whose untranslated internal address belongs */
+/* to one IPv4 prefix.                                                     */
+/* ---------------------------------------------------------------------- */
+static int nat_flushprefix(filter, ifs)
+natflush_t *filter;
+ipf_stack_t *ifs;
+{
+	nat_t *nat, *natn;
+	int removed;
+	SPL_INT(s);
+
+	removed = 0;
+	SPL_NET(s);
+	natn = ifs->ifs_nat_instances;
+	while ((nat = natn) != NULL) {
+		natn = nat->nat_next;
+		if (nat->nat_v != 4)
+			continue;
+		if ((nat->nat_inip.s_addr & filter->nf_mask) !=
+		    filter->nf_addr)
+			continue;
+		if (nat_delete(nat, NL_FLUSH, ifs) == 0)
+			removed++;
+	}
+	SPL_X(s);
+	return (removed);
 }
 
 
