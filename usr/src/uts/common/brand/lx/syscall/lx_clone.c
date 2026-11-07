@@ -626,11 +626,15 @@ lx_kernel_fork(int nr, uintptr_t *args)
 	lx_lwp_data_t *lwpd = ttolxlwp(curthread);
 	uint_t allowed = LX_CSIGNAL | LX_CLONE_NEWUSER | LX_CLONE_NEWNS |
 	    LX_CLONE_NEWPID | LX_CLONE_NEWIPC | LX_CLONE_NEWNET |
+	    LX_CLONE_VM | LX_CLONE_VFORK |
 	    LX_CLONE_PARENT_SETTID |
 	    LX_CLONE_CHILD_SETTID | LX_CLONE_CHILD_CLEARTID;
 	pid_t pid = -1;
 	int piderror = 0;
 	boolean_t unsupported, pidconflict;
+	boolean_t clonevfork = nr == 56 &&
+	    (flags & (LX_CLONE_VM | LX_CLONE_VFORK)) ==
+	    (LX_CLONE_VM | LX_CLONE_VFORK);
 	lx_pidns_t *pidns = NULL, *viewer = NULL;
 
 	VERIFY(lx_kernel_restricted(p) || lx_pidns_children(p) != NULL ||
@@ -654,10 +658,18 @@ lx_kernel_fork(int nr, uintptr_t *args)
 		return (set_errno(EINVAL));
 	if (nr == 56 && args[0] == flags &&
 	    (flags & LX_CLONE_THREAD) != 0) {
+		if ((flags & LX_CLONE_VFORK) != 0)
+			return (set_errno(EINVAL));
 		if (pd->l_pidns_children != NULL)
 			return (set_errno(EINVAL));
 		return (lx_kernel_thread(flags, args));
 	}
+	if (nr == 56 && (flags & (LX_CLONE_VM | LX_CLONE_VFORK)) != 0 &&
+	    !clonevfork)
+		return (set_errno(EINVAL));
+	if (clonevfork &&
+	    (flags & ~(LX_CSIGNAL | LX_CLONE_VM | LX_CLONE_VFORK)) != 0)
+		return (set_errno(EINVAL));
 	if (nr == 56 && (args[0] != flags || (flags & ~allowed) != 0))
 		return (set_errno(EINVAL));
 	if ((flags & LX_CSIGNAL) != 0 &&
@@ -718,17 +730,22 @@ lx_kernel_fork(int nr, uintptr_t *args)
 			goto cleanup;
 	}
 
-	pid = (pid_t)forksys(nr == 58 ? 2 : 0,
+	pid = (pid_t)forksys(nr == 58 || clonevfork ? 2 : 0,
 	    (flags & LX_CSIGNAL) == 0 ? FORK_NOSIGCHLD : 0);
-	if (nr == 58 && pid > 0) {
+	if ((nr == 58 || clonevfork) && pid > 0) {
 		/*
 		 * forksys(2) arranges for native post_syscall() to call
 		 * vfwait().  This call did not enter through SYS_forksys, so
 		 * wait here and consume T_VFPARENT before returning to the
-		 * brand dispatcher.  Use the native PID; namespace translation
-		 * follows.
+		 * brand dispatcher.  Native vfork keeps every sibling LWP
+		 * suspended until vfwait() returns.  Linux suspends only the
+		 * calling thread.  Resume siblings before waiting.
+		 * PID namespace translation follows.
 		 */
 		VERIFY((curthread->t_flag & T_VFPARENT) != 0);
+		mutex_enter(&p->p_lock);
+		continuelwps(p);
+		mutex_exit(&p->p_lock);
 		vfwait(pid);
 		curthread->t_flag &= ~T_VFPARENT;
 	}

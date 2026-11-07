@@ -5,9 +5,13 @@
 #include <limits.h>
 #include <linux/filter.h>
 #include <linux/seccomp.h>
+#include <pthread.h>
+#include <sched.h>
 #include <signal.h>
+#include <spawn.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/prctl.h>
 #include <sys/mman.h>
@@ -29,6 +33,7 @@
 #define CHECK(x) do { if (!(x)) { fprintf(stderr,"line %d: %s errno=%d\n",__LINE__,#x,errno); return 1; } } while (0)
 static unsigned cases, failures;
 static volatile sig_atomic_t caught;
+extern char **environ;
 static void handler(int sig) { (void)sig; caught++; }
 static int64_t mono(void)
 {
@@ -187,13 +192,31 @@ static long raw_read(int fd, void *buf, size_t len)
         : "rcx", "r11", "memory");
     return result;
 }
-static void raw_exit(int status)
+static void __attribute__((noreturn)) raw_exit(int status)
 {
     __asm__ volatile("syscall"
         :
         : "a" ((long)SYS_exit), "D" ((long)status)
         : "rcx", "r11", "memory");
     __builtin_unreachable();
+}
+static long raw_getpid(void)
+{
+    long result;
+    __asm__ volatile("syscall"
+        : "=a" (result)
+        : "a" ((long)SYS_getpid)
+        : "rcx", "r11", "memory");
+    return result;
+}
+static long raw_kill(pid_t pid, int signal)
+{
+    long result;
+    __asm__ volatile("syscall"
+        : "=a" (result)
+        : "a" ((long)SYS_kill), "D" ((long)pid), "S" ((long)signal)
+        : "rcx", "r11", "memory");
+    return result;
 }
 static int vfork_shared_exit(void)
 {
@@ -250,25 +273,190 @@ static int vfork_exec_failure(void)
     CHECK(WIFEXITED(status) && WEXITSTATUS(status)==127);
     return 0;
 }
+static volatile unsigned long vfork_thread_progress;
+static volatile unsigned vfork_thread_child;
+static volatile unsigned vfork_thread_stop;
+static volatile unsigned vfork_thread_sent;
+static volatile unsigned char vfork_thread_source;
+static int vfork_thread_gate;
+static void *vfork_sibling(void *unused)
+{
+    char byte='t';
+
+    (void)unused;
+    while(!__atomic_load_n(&vfork_thread_stop,__ATOMIC_ACQUIRE)) {
+        __atomic_add_fetch(&vfork_thread_progress,1,__ATOMIC_RELAXED);
+        if(!__atomic_load_n(&vfork_thread_sent,__ATOMIC_RELAXED) &&
+            __atomic_load_n(&vfork_thread_child,__ATOMIC_ACQUIRE) &&
+            write(vfork_thread_gate,&byte,1)==1) {
+            __atomic_store_n(&vfork_thread_sent,1,__ATOMIC_RELEASE);
+        }
+    }
+    return NULL;
+}
+static int vfork_multithreaded(void)
+{
+    pthread_t thread;
+    unsigned long before, after;
+    struct timespec delay={0,500000000};
+    int gate[2], status, watchdog_status;
+    pid_t child, watchdog;
+
+    CHECK(pipe(gate)==0);
+    watchdog=fork();
+    CHECK(watchdog>=0);
+    if(watchdog==0) {
+        char byte='w';
+        close(gate[0]);
+        if(syscall(SYS_nanosleep,&delay,NULL)!=0 ||
+            write(gate[1],&byte,1)!=1) _exit(1);
+        _exit(0);
+    }
+    vfork_thread_progress=0;
+    vfork_thread_child=0;
+    vfork_thread_stop=0;
+    vfork_thread_sent=0;
+    vfork_thread_source=0;
+    vfork_thread_gate=gate[1];
+    CHECK(pthread_create(&thread,NULL,vfork_sibling,NULL)==0);
+    while(__atomic_load_n(&vfork_thread_progress,__ATOMIC_RELAXED)<1000)
+        sched_yield();
+    before=__atomic_load_n(&vfork_thread_progress,__ATOMIC_RELAXED);
+    child=vfork();
+    CHECK(child>=0);
+    if(child==0) {
+        char byte;
+        __atomic_store_n(&vfork_thread_child,1,__ATOMIC_RELEASE);
+        if(raw_read(gate[0],&byte,1)!=1) raw_exit(125);
+        __atomic_store_n(&vfork_thread_source,(unsigned char)byte,
+            __ATOMIC_RELEASE);
+        raw_exit(0);
+    }
+    after=__atomic_load_n(&vfork_thread_progress,__ATOMIC_RELAXED);
+    __atomic_store_n(&vfork_thread_stop,1,__ATOMIC_RELEASE);
+    CHECK(pthread_join(thread,NULL)==0);
+    CHECK(waitpid(child,&status,0)==child);
+    CHECK(WIFEXITED(status) && WEXITSTATUS(status)==0);
+    CHECK(waitpid(watchdog,&watchdog_status,0)==watchdog);
+    close(gate[0]);
+    close(gate[1]);
+    CHECK(WIFEXITED(watchdog_status) && WEXITSTATUS(watchdog_status)==0);
+    CHECK(__atomic_load_n(&vfork_thread_source,__ATOMIC_ACQUIRE)=='t');
+    CHECK(__atomic_load_n(&vfork_thread_sent,__ATOMIC_ACQUIRE)==1);
+    CHECK(after>before);
+    return 0;
+}
+static int vfork_signal_exit(void)
+{
+    int status;
+    pid_t p=vfork();
+    CHECK(p>=0);
+    if(p==0) {
+        if(raw_kill((pid_t)raw_getpid(),SIGKILL)!=0) raw_exit(125);
+        raw_exit(126);
+    }
+    CHECK(waitpid(p,&status,0)==p);
+    CHECK(WIFSIGNALED(status) && WTERMSIG(status)==SIGKILL);
+    return 0;
+}
+static int spawn_exec(void)
+{
+    char *const argv[]={"true",NULL};
+    int error, status;
+    pid_t child;
+
+    error=posix_spawn(&child,"/bin/true",NULL,NULL,argv,environ);
+    errno=error;
+    CHECK(error==0);
+    CHECK(waitpid(child,&status,0)==child);
+    CHECK(WIFEXITED(status) && WEXITSTATUS(status)==0);
+    return 0;
+}
+static int confine(void)
+{
+    struct sock_filter insn=BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW);
+    struct sock_fprog program={1,&insn};
+
+    if(prctl(PR_SET_NO_NEW_PRIVS,1,0,0,0)!=0 ||
+        prctl(PR_SET_SECCOMP,SECCOMP_MODE_FILTER,&program)!=0) return 1;
+    return 0;
+}
+static int vfork_stress(unsigned long iterations)
+{
+    volatile unsigned long i;
+
+    for(i=0;i<iterations;i++) {
+        int status, expected;
+        pid_t child=vfork();
+        if(child<0) return 1;
+        if(child==0) {
+            switch(i%4) {
+            case 0:
+                raw_exit(42);
+            case 1:
+                execl("/bin/true","true",(char *)NULL);
+                raw_exit(126);
+            case 2:
+                execl("/file-that-does-not-exist","missing",
+                    (char *)NULL);
+                raw_exit(errno==ENOENT?127:126);
+            default:
+                if(raw_kill((pid_t)raw_getpid(),SIGKILL)!=0)
+                    raw_exit(125);
+                raw_exit(126);
+            }
+        }
+        if(waitpid(child,&status,0)!=child) return 1;
+        expected=i%4;
+        if((expected==0 && (!WIFEXITED(status) ||
+            WEXITSTATUS(status)!=42)) ||
+            (expected==1 && (!WIFEXITED(status) ||
+            WEXITSTATUS(status)!=0)) ||
+            (expected==2 && (!WIFEXITED(status) ||
+            WEXITSTATUS(status)!=127)) ||
+            (expected==3 && (!WIFSIGNALED(status) ||
+            WTERMSIG(status)!=SIGKILL))) return 1;
+    }
+    return 0;
+}
 static void run(const char *name,int (*fn)(void))
 {
     pid_t p=fork();int status=-1;
     if(p==0) {
         /* Arm before confinement; alarm's existing libc path is unrelated. */
         alarm(5);
-        struct sock_filter insn=BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW);
-        struct sock_fprog program={1,&insn};
-        if(prctl(PR_SET_NO_NEW_PRIVS,1,0,0,0)!=0 ||
-            prctl(PR_SET_SECCOMP,SECCOMP_MODE_FILTER,&program)!=0) _exit(2);
+        if(confine()!=0) _exit(2);
         _exit(fn());
     }
     int ok=p>0 && waitpid(p,&status,0)==p && WIFEXITED(status) && WEXITSTATUS(status)==0;
     printf("%s %s status=%#x\n",ok?"PASS":"FAIL",name,status);
     cases++;failures+=!ok;
 }
-int main(void)
+int main(int argc, char **argv)
 {
+    unsigned long iterations;
+
     setvbuf(stdout,NULL,_IOLBF,0);
+    if(argc==3 && strcmp(argv[1],"--vfork-stress")==0) {
+        char *end;
+        errno=0;
+        iterations=strtoul(argv[2],&end,10);
+        if(errno!=0 || *end!='\0' || iterations==0 || iterations>1000000) {
+            fprintf(stderr,"invalid vfork stress iteration count\n");
+            return 2;
+        }
+        alarm(300);
+        if(confine()!=0 || vfork_stress(iterations)!=0) {
+            printf("VFORK_STRESS iterations=%lu failures=1\n",iterations);
+            return 1;
+        }
+        printf("VFORK_STRESS iterations=%lu failures=0\n",iterations);
+        return 0;
+    }
+    if(argc!=1) {
+        fprintf(stderr,"usage: %s [--vfork-stress iterations]\n",argv[0]);
+        return 2;
+    }
     run("clock and timespec validation; unused flags and remainder",validation);
     run("relative realtime uses elapsed time",rel_rt);
     run("relative monotonic sleep",rel_mono);
@@ -292,6 +480,9 @@ int main(void)
     run("restricted vfork shares memory and suspends its parent",vfork_shared_exit);
     run("restricted vfork releases its parent after exec",vfork_exec);
     run("restricted vfork releases its parent after failed exec and exit",vfork_exec_failure);
+    run("restricted vfork suspends only the calling thread",vfork_multithreaded);
+    run("restricted vfork releases its parent after child signal",vfork_signal_exit);
+    run("libc posix_spawn remains confined",spawn_exec);
     printf("CLOCK_SLEEP cases=%u failures=%u\n",cases,failures);
     return failures!=0;
 }

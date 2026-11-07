@@ -27,6 +27,10 @@ space and the parent remains suspended until the child calls exec or exits.
 LX consumes the native vfork wait inside the brand dispatcher because the
 active syscall is Linux vfork rather than native forksys. An unguarded process
 with a pending child PID namespace retains the existing EOPNOTSUPP result.
+Native illumos vfork suspends every parent LWP. The LX dispatcher resumes
+sibling LWPs before it waits so Linux vfork suspends only the calling thread.
+The same path accepts clone with CLONE_VM, CLONE_VFORK and SIGCHLD, which is
+the process creation sequence used by current glibc posix_spawn.
 
 The implementation reuses the native LWP delay condition variable and
 signal-aware timed waits. It supports relative and absolute REALTIME,
@@ -53,12 +57,15 @@ process clock identifiers therefore remain compatibility gaps.
 
 The static and dynamic clock_sleep probes install NNP and an allow-all
 seccomp filter before every case, forcing use of the kernel path. Each has
-23 cases covering clock/timespec validation, error ordering, ignored flags,
+26 cases covering clock/timespec validation, error ordering, ignored flags,
 unused remainder pointers, minimum elapsed time, past/absolute deadlines,
 signal interruption, SA_RESTART, bad remainder pointers, very large intervals,
 aliased arguments, libc usleep/clock_nanosleep, the rseq fallback and the
 capability/faccessat2 startup probes. The vfork cases verify shared private
-memory, parent suspension, successful exec and failed exec followed by exit.
+memory, parent suspension, successful exec, failed exec followed by exit,
+child signal death, sibling-thread progress and libc posix_spawn. The
+`--vfork-stress N` mode cycles N times through direct exit, successful exec,
+failed exec and signal death under the same allow-all seccomp filter.
 
 clock_sleep32.S is a standalone i386 executable. On Linux it installs an
 allow-all filter. Its --lx mode requires the existing i386 filter installation
