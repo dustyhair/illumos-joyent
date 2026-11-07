@@ -32,6 +32,35 @@ sibling LWPs before it waits so Linux vfork suspends only the calling thread.
 The same path accepts clone with CLONE_VM, CLONE_VFORK and SIGCHLD, which is
 the process creation sequence used by current glibc posix_spawn.
 
+Restricted amd64 processes now handle ftruncate in the kernel. The older
+handler called native libc, which strict namespace and seccomp policy does
+not allow. The kernel path grows and shrinks regular files, preserves the
+file-size resource limit and mandatory-lock checks, and matches Linux errors
+for invalid, non-regular and read-only descriptors.
+
+The restricted amd64 signal path accepts and preserves SA_EXPOSE_TAGBITS.
+That Linux flag is a no-op on amd64 because its fault addresses have no tag
+bits, but rejecting it prevents current Chromium Crashpad from installing its
+signal handlers.
+
+Restricted amd64 rt_sigtimedwait now translates the Linux signal set and
+siginfo layout around the native signal-wait machinery. It consumes matching
+blocked signals in the kernel and preserves Linux timeout and size errors.
+The rt_tgsigqueueinfo path likewise translates queued Linux siginfo and uses
+the existing LX thread-group and permission checks before kernel delivery.
+
+Linux inotify calls now use the native illumos inotify device from the kernel
+path. Restricted processes can create blocking or nonblocking instances, add
+and remove file or directory watches, and receive the native Linux-compatible
+event stream without entering the emulation library. The native driver's
+private add-watch ioctls now honor FKIOCTL so trusted kernel callers can use
+the same interface as libc.
+
+Restricted processes now perform fsync and fdatasync directly through the
+vnode interface. The kernel path preserves Linux's EINVAL result for character
+devices and FIFOs and avoids entering the emulation library during Chromium
+profile persistence.
+
 The implementation reuses the native LWP delay condition variable and
 signal-aware timed waits. It supports relative and absolute REALTIME,
 MONOTONIC and BOOTTIME sleeps. BOOTTIME uses lx's existing monotonic clock
@@ -57,13 +86,27 @@ process clock identifiers therefore remain compatibility gaps.
 
 The static and dynamic clock_sleep probes install NNP and an allow-all
 seccomp filter before every case, forcing use of the kernel path. Each has
-26 cases covering clock/timespec validation, error ordering, ignored flags,
+35 cases covering clock/timespec validation, error ordering, ignored flags,
 unused remainder pointers, minimum elapsed time, past/absolute deadlines,
 signal interruption, SA_RESTART, bad remainder pointers, very large intervals,
 aliased arguments, libc usleep/clock_nanosleep, the rseq fallback and the
 capability/faccessat2 startup probes. The vfork cases verify shared private
 memory, parent suspension, successful exec, failed exec followed by exit,
 child signal death, sibling-thread progress and libc posix_spawn. The
+ftruncate case grows and shrinks a regular file and checks negative lengths,
+non-regular descriptors and read-only descriptors. The signal-action case
+uses the raw ABI to verify that SA_EXPOSE_TAGBITS is accepted and retained. The
+signal-wait cases check queued-signal consumption, timeout and set-size errors,
+plus thread-directed queued siginfo and its value.
+The inotify cases check both constructors, descriptor flags, directory watch
+creation, event delivery and watch removal. A failed watch on a missing path
+must return ENOENT without closing an existing descriptor. The sync case covers
+regular-file fsync and fdatasync plus Linux descriptor errors. A 32-thread
+clone/epoll burst
+exercises task-credential publication while another thread repeatedly enters
+the native inotify device lookup and its temporary kernel credential. The
+proc task-directory case holds two worker threads and verifies that the link
+count includes all three visible tasks plus the fixed dot entries. The
 `--vfork-stress N` mode cycles N times through direct exit, successful exec,
 failed exec and signal death under the same allow-all seccomp filter.
 

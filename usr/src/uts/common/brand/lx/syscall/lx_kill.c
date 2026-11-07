@@ -35,6 +35,7 @@
 #include <sys/brand.h>
 #include <sys/lx_brand.h>
 #include <sys/lx_syscalls.h>
+#include <sys/lx_siginfo.h>
 #include <sys/lx_pidns.h>
 #include <lx_signum.h>
 #include <sys/contract/process_impl.h>
@@ -385,49 +386,30 @@ lx_helper_rt_sigqueueinfo(pid_t tgid, int sig, siginfo_t *uinfo)
  * Unlike the above function, this handles all system calls to rt_tgsigqueue
  * regardless of si_code.
  */
-int
-lx_helper_rt_tgsigqueueinfo(pid_t tgid, pid_t tid, int sig, siginfo_t *uinfo)
+static int
+lx_rt_tgsigqueueinfo_common(pid_t tgid, pid_t tid, int sig,
+    const siginfo_t *kinfo)
 {
 	int err;
 	proc_t *p = NULL;
 	proc_t *cp = curproc;
 	kthread_t *t;
 	sigqueue_t *sqp = NULL;
-	siginfo_t kinfo;
 	lx_pidns_t *ns = lx_pidns_active(cp);
 	pid_t backing_tid, backing_tgid;
-
-	bzero(&kinfo, sizeof (kinfo));
-#ifdef _SYSCALL32_IMPL
-	if (get_udatamodel() == DATAMODEL_ILP32) {
-		siginfo32_t info32;
-
-		if (copyin(uinfo, &info32, sizeof (info32)) != 0)
-			return (set_errno(EFAULT));
-		kinfo.si_code = info32.si_code;
-		kinfo.si_errno = info32.si_errno;
-		kinfo.si_pid = info32.si_pid;
-		kinfo.si_uid = info32.si_uid;
-		kinfo.si_value.sival_ptr =
-		    (void *)(uintptr_t)(uint32_t)info32.si_value.sival_ptr;
-	} else
-#endif
-	if (copyin(uinfo, &kinfo, sizeof (kinfo)) != 0) {
-		return (set_errno(EFAULT));
-	}
 
 	if (tgid <= 0 || tid <= 0)
 		return (set_errno(EINVAL));
 
 	/* Reserved codes may only be supplied to the calling thread. */
-	if ((kinfo.si_code >= 0 || kinfo.si_code == SI_LWP) &&
+	if ((kinfo->si_code >= 0 || kinfo->si_code == SI_LWP) &&
 	    tid != lx_gettid())
 		return (set_errno(EPERM));
 
 	/* Accept only codes supported by the existing usermode conversion. */
-	if (kinfo.si_code < 0 && kinfo.si_code != SI_LWP &&
-	    kinfo.si_code != SI_QUEUE && kinfo.si_code != SI_TIMER &&
-	    kinfo.si_code != SI_ASYNCIO && kinfo.si_code != SI_MESGQ)
+	if (kinfo->si_code < 0 && kinfo->si_code != SI_LWP &&
+	    kinfo->si_code != SI_QUEUE && kinfo->si_code != SI_TIMER &&
+	    kinfo->si_code != SI_ASYNCIO && kinfo->si_code != SI_MESGQ)
 		return (set_errno(EINVAL));
 	backing_tid = lx_signal_backing(ns, tid);
 	backing_tgid = lx_signal_backing(ns, tgid);
@@ -464,12 +446,12 @@ lx_helper_rt_tgsigqueueinfo(pid_t tgid, pid_t tid, int sig, siginfo_t *uinfo)
 
 	if (sig != 0) {
 		sqp->sq_info.si_signo = sig;
-		sqp->sq_info.si_code = kinfo.si_code;
-		sqp->sq_info.si_errno = kinfo.si_errno;
+		sqp->sq_info.si_code = kinfo->si_code;
+		sqp->sq_info.si_errno = kinfo->si_errno;
 		/* Linux permits supplied sender metadata for queued signals. */
-		sqp->sq_info.si_pid = kinfo.si_pid;
-		sqp->sq_info.si_uid = kinfo.si_uid;
-		sqp->sq_info.si_value = kinfo.si_value;
+		sqp->sq_info.si_pid = kinfo->si_pid;
+		sqp->sq_info.si_uid = kinfo->si_uid;
+		sqp->sq_info.si_value = kinfo->si_value;
 		sqp->sq_info.si_ctid = PRCTID(cp);
 		sqp->sq_info.si_zoneid = getzoneid();
 		/* sigaddqa consumes the queue, including ignored signals. */
@@ -483,4 +465,75 @@ errout:
 		mutex_exit(&p->p_lock);
 	siginfofree(sqp);
 	return (set_errno(err));
+}
+
+int
+lx_helper_rt_tgsigqueueinfo(pid_t tgid, pid_t tid, int sig, siginfo_t *uinfo)
+{
+	siginfo_t kinfo;
+
+	bzero(&kinfo, sizeof (kinfo));
+#ifdef _SYSCALL32_IMPL
+	if (get_udatamodel() == DATAMODEL_ILP32) {
+		siginfo32_t info32;
+
+		if (copyin(uinfo, &info32, sizeof (info32)) != 0)
+			return (set_errno(EFAULT));
+		kinfo.si_code = info32.si_code;
+		kinfo.si_errno = info32.si_errno;
+		kinfo.si_pid = info32.si_pid;
+		kinfo.si_uid = info32.si_uid;
+		kinfo.si_value.sival_ptr =
+		    (void *)(uintptr_t)(uint32_t)info32.si_value.sival_ptr;
+	} else
+#endif
+	if (copyin(uinfo, &kinfo, sizeof (kinfo)) != 0) {
+		return (set_errno(EFAULT));
+	}
+	return (lx_rt_tgsigqueueinfo_common(tgid, tid, sig, &kinfo));
+}
+
+long
+lx_rt_tgsigqueueinfo(pid_t tgid, pid_t tid, int lx_sig, lx_siginfo_t *uinfo)
+{
+	lx_siginfo_t linfo;
+	siginfo_t kinfo;
+	int sig, code;
+
+	if (copyin(uinfo, &linfo, sizeof (linfo)) != 0)
+		return (set_errno(EFAULT));
+	if (lx_sig < 0 || lx_sig > LX_NSIG ||
+	    (sig = ltos_signo[lx_sig]) < 0)
+		sig = -1;
+	if (linfo.lsi_code >= 0) {
+		code = linfo.lsi_code;
+	} else {
+		switch (linfo.lsi_code) {
+		case LX_SI_TKILL:
+			code = SI_LWP;
+			break;
+		case LX_SI_QUEUE:
+			code = SI_QUEUE;
+			break;
+		case LX_SI_TIMER:
+			code = SI_TIMER;
+			break;
+		case LX_SI_ASYNCIO:
+			code = SI_ASYNCIO;
+			break;
+		case LX_SI_MESGQ:
+			code = SI_MESGQ;
+			break;
+		default:
+			return (set_errno(EINVAL));
+		}
+	}
+	bzero(&kinfo, sizeof (kinfo));
+	kinfo.si_signo = sig;
+	kinfo.si_errno = linfo.lsi_errno;
+	kinfo.si_code = code;
+	kinfo.si_pid = linfo.lsi_pid;
+	kinfo.si_uid = linfo.lsi_uid;
+	kinfo.si_value = linfo.lsi_value;
+	return (lx_rt_tgsigqueueinfo_common(tgid, tid, sig, &kinfo));
 }

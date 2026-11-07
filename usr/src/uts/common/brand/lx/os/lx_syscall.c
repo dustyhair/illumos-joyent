@@ -787,7 +787,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"swapoff",	lx_swapoff,		0,		1}, /* 115 */
 	{"sysinfo",	lx_sysinfo32,		0,		1}, /* 116 */
 	{"ipc",		NULL,			0,		5}, /* 117 */
-	{"fsync",	NULL,			0,		1}, /* 118 */
+	{"fsync",	lx_fsync,		0,		1}, /* 118 */
 	{"sigreturn",	NULL,			0,		1}, /* 119 */
 	{"clone",	NULL,			0,		5}, /* 120 */
 	{"setdomainname", lx_setdomainname,	0,		2}, /* 121 */
@@ -817,7 +817,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"readv",	lx_readv,		0,		3}, /* 145 */
 	{"writev",	lx_writev,		0,		3}, /* 146 */
 	{"getsid",	lx_getsid,		0,		1}, /* 147 */
-	{"fdatasync",	NULL,			0,		1}, /* 148 */
+	{"fdatasync",	lx_fdatasync,		0,		1}, /* 148 */
 	{"sysctl",	NULL,			0,		1}, /* 149 */
 	{"mlock",	lx_mlock,		0,		2}, /* 150 */
 	{"munlock",	lx_munlock,		0,		2}, /* 151 */
@@ -964,9 +964,9 @@ lx_sysent_t lx_sysent32[] = {
 	{"keyctl",	NULL,			NOSYS_NULL,	0}, /* 288 */
 	{"ioprio_set",	lx_ioprio_set,		0,		3}, /* 289 */
 	{"ioprio_get",	lx_ioprio_get,		0,		2}, /* 290 */
-	{"inotify_init", NULL,			0,		0}, /* 291 */
-	{"inotify_add_watch", NULL,		0,		3}, /* 292 */
-	{"inotify_rm_watch", NULL,		0,		2}, /* 293 */
+	{"inotify_init", lx_inotify_init,	0,		0}, /* 291 */
+	{"inotify_add_watch", lx_inotify_add_watch, 0,		3}, /* 292 */
+	{"inotify_rm_watch", lx_inotify_rm_watch, 0,		2}, /* 293 */
 	{"migrate_pages", NULL,			NOSYS_NULL,	0}, /* 294 */
 	{"openat",	lx_openat,		0,		4}, /* 295 */
 	{"mkdirat",	lx_mkdirat,		0,		3}, /* 296 */
@@ -1005,7 +1005,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"epoll_create1", lx_epoll_create1,	0,		1}, /* 329 */
 	{"dup3",	lx_dup3,		0,		3}, /* 330 */
 	{"pipe2",	lx_pipe2,		0,		2}, /* 331 */
-	{"inotify_init1", NULL,			0,		1}, /* 332 */
+	{"inotify_init1", lx_inotify_init1,	0,		1}, /* 332 */
 	{"preadv",	lx_preadv32,		0,		5}, /* 333 */
 	{"pwritev",	lx_pwritev32,		0,		5}, /* 334 */
 	{"rt_tgsigqueueinfo", NULL,		0,		4}, /* 335 */
@@ -1114,10 +1114,10 @@ lx_sysent_t lx_sysent64[] = {
 	{"msgctl",	NULL,			0,		3}, /* 71 */
 	{"fcntl",	lx_fcntl64,		0,		3}, /* 72 */
 	{"flock",	lx_flock,		0,		2}, /* 73 */
-	{"fsync",	NULL,			0,		1}, /* 74 */
-	{"fdatasync",	NULL,			0,		1}, /* 75 */
+	{"fsync",	lx_fsync,		0,		1}, /* 74 */
+	{"fdatasync",	lx_fdatasync,		0,		1}, /* 75 */
 	{"truncate",	NULL,			0,		2}, /* 76 */
-	{"ftruncate",	NULL,			0,		2}, /* 77 */
+	{"ftruncate",	lx_ftruncate,		0,		2}, /* 77 */
 	{"getdents",	lx_getdents_64,		0,		3}, /* 78 */
 	{"getcwd",	lx_getcwd,		0,		2}, /* 79 */
 	{"chdir",	lx_chdir,		0,		1}, /* 80 */
@@ -1293,9 +1293,9 @@ lx_sysent_t lx_sysent64[] = {
 	{"keyctl",	NULL,			NOSYS_NULL,	0}, /* 250 */
 	{"ioprio_set",	lx_ioprio_set,		0,		3}, /* 251 */
 	{"ioprio_get",	lx_ioprio_get,		0,		2}, /* 252 */
-	{"inotify_init", NULL,			0,		0}, /* 253 */
-	{"inotify_add_watch", NULL,		0,		3}, /* 254 */
-	{"inotify_rm_watch", NULL,		0,		2}, /* 255 */
+	{"inotify_init", lx_inotify_init,	0,		0}, /* 253 */
+	{"inotify_add_watch", lx_inotify_add_watch, 0,		3}, /* 254 */
+	{"inotify_rm_watch", lx_inotify_rm_watch, 0,		2}, /* 255 */
 	{"migrate_pages", NULL,			NOSYS_NULL,	0}, /* 256 */
 	{"openat",	lx_openat,		0,		4}, /* 257 */
 	{"mkdirat",	lx_mkdirat,		0,		3}, /* 258 */
@@ -1334,10 +1334,10 @@ lx_sysent_t lx_sysent64[] = {
 	{"epoll_create1", lx_epoll_create1,	0,		1}, /* 291 */
 	{"dup3",	lx_dup3,		0,		3}, /* 292 */
 	{"pipe2",	lx_pipe2,		0,		2}, /* 293 */
-	{"inotify_init1", NULL,			0,		1}, /* 294 */
+	{"inotify_init1", lx_inotify_init1,	0,		1}, /* 294 */
 	{"preadv",	lx_preadv,		0,		4}, /* 295 */
 	{"pwritev",	lx_pwritev,		0,		4}, /* 296 */
-	{"rt_tgsigqueueinfo", NULL,		0,		4}, /* 297 */
+	{"rt_tgsigqueueinfo", lx_rt_tgsigqueueinfo,	0,	4}, /* 297 */
 	{"perf_event_open", NULL,		NOSYS_NULL,	0}, /* 298 */
 	{"recvmmsg",	lx_recvmmsg,		0,		5}, /* 299 */
 	{"fanotify_init", NULL,			NOSYS_NULL,	0}, /* 300 */

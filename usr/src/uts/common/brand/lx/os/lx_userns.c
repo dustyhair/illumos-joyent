@@ -1147,7 +1147,7 @@ lx_userns_publish(kthread_t *task, cred_t *replacement)
 	lx_userns_native_t *data;
 	lx_caps_t zero = { 0 }, part;
 	uid_t oldruid, newruid;
-	boolean_t counted;
+	boolean_t counted, rescan;
 
 	VERIFY(MUTEX_NOT_HELD(&p->p_lock));
 	VERIFY((ptolxproc(p)->l_flags & LX_PROC_USERNS) != 0);
@@ -1204,6 +1204,44 @@ retry:
 		crfree(base);
 		goto retry;
 	}
+	rescan = B_FALSE;
+	t = p->p_tlist;
+	if (t != NULL) {
+		do {
+			const lx_userns_native_t *member;
+			cred_t *member_cred;
+
+			if ((t->t_proc_flag & TP_KTHREAD) != 0)
+				continue;
+			member_cred = t == task ? replacement : t->t_cred;
+			member = (void *)crgetbrand(member_cred);
+			if (member == NULL ||
+			    member->un_cred.bc_brand != &lx_brand ||
+			    member->un_namespace != data->un_namespace) {
+				rescan = B_TRUE;
+				break;
+			}
+			VERIFY0(lx_userns_caps_get(member_cred, &part));
+			data->un_caps.lc_effective |= part.lc_effective;
+			data->un_caps.lc_permitted |= part.lc_permitted;
+			data->un_caps.lc_inheritable |= part.lc_inheritable;
+			data->un_caps.lc_bounding |= part.lc_bounding;
+			data->un_caps.lc_ambient |= part.lc_ambient;
+		} while ((t = t->t_forw) != p->p_tlist);
+	}
+	if (rescan) {
+		mutex_exit(&p->p_crlock);
+		mutex_exit(&p->p_lock);
+		if (counted) {
+			mutex_enter(&pidlock);
+			upcount_dec(newruid, crgetzoneid(base));
+			mutex_exit(&pidlock);
+		}
+		crfree(summary);
+		crfree(identity);
+		crfree(base);
+		goto retry;
+	}
 	old_task = task->t_cred;
 	if (crgetuid(old_task) != crgetuid(replacement) ||
 	    crgetgid(old_task) != crgetgid(replacement)) {
@@ -1212,25 +1250,6 @@ retry:
 	}
 	crhold(replacement);
 	task->t_cred = replacement;
-	t = p->p_tlist;
-	if (t != NULL) {
-		do {
-			const lx_userns_native_t *member;
-
-			if ((t->t_proc_flag & TP_KTHREAD) != 0)
-				continue;
-			member = (void *)crgetbrand(t->t_cred);
-			VERIFY(member != NULL &&
-			    member->un_cred.bc_brand == &lx_brand &&
-			    member->un_namespace == data->un_namespace);
-			VERIFY0(lx_userns_caps_get(t->t_cred, &part));
-			data->un_caps.lc_effective |= part.lc_effective;
-			data->un_caps.lc_permitted |= part.lc_permitted;
-			data->un_caps.lc_inheritable |= part.lc_inheritable;
-			data->un_caps.lc_bounding |= part.lc_bounding;
-			data->un_caps.lc_ambient |= part.lc_ambient;
-		} while ((t = t->t_forw) != p->p_tlist);
-	}
 	old_process = p->p_cred;
 	p->p_cred = summary;
 	mutex_exit(&p->p_crlock);

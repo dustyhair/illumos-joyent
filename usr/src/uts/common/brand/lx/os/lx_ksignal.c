@@ -10,6 +10,8 @@
 #include <sys/errno.h>
 #include <sys/user.h>
 #include <sys/schedctl.h>
+#include <sys/time.h>
+#include <sys/condvar_impl.h>
 #include <sys/proc.h>
 #include <sys/signal.h>
 #include <sys/siginfo.h>
@@ -29,8 +31,8 @@
 
 #define	LXK_MAXDEPTH 32
 #define	LXK_SUPPORTED_FLAGS (LXK_SA_NOCLDSTOP | LXK_SA_NOCLDWAIT | \
-    LXK_SA_SIGINFO | LXK_SA_RESTORER | LXK_SA_ONSTACK | LXK_SA_RESTART | \
-    LXK_SA_NODEFER | LXK_SA_RESETHAND)
+    LXK_SA_SIGINFO | LXK_SA_EXPOSE_TAGBITS | LXK_SA_RESTORER | \
+    LXK_SA_ONSTACK | LXK_SA_RESTART | LXK_SA_NODEFER | LXK_SA_RESETHAND)
 
 CTASSERT(sizeof (lx_ksigaction_t) == 32);
 CTASSERT(sizeof (lx_kstack_t) == 24);
@@ -197,6 +199,7 @@ lxk_sigaction(uintptr_t sig, uintptr_t ap, uintptr_t op, uintptr_t size)
 		act.flags &= 0xffffffffULL;
 		if ((act.flags & ~LXK_SUPPORTED_FLAGS) != 0)
 			return (set_errno(EINVAL));
+		/* SA_EXPOSE_TAGBITS is a no-op on amd64. */
 		lxk_setmask(act.mask, &mask);
 		if (act.flags & LXK_SA_NOCLDSTOP) flags |= SA_NOCLDSTOP;
 		if (act.flags & LXK_SA_NOCLDWAIT) flags |= SA_NOCLDWAIT;
@@ -284,6 +287,87 @@ lxk_sigaltstack(uintptr_t ap, uintptr_t op)
 	if (op != 0 && copyout(&old, (void *)op, sizeof (old)) != 0)
 		return (set_errno(EFAULT));
 	return (0);
+}
+
+static long
+lxk_sigtimedwait(uintptr_t setp, uintptr_t infop, uintptr_t timeoutp,
+    uintptr_t size)
+{
+	proc_t *p = curproc;
+	kthread_t *t = curthread;
+	klwp_t *lwp = ttolwp(t);
+	k_sigset_t set, oldmask;
+	timespec_t timeout, *deadline = NULL;
+	k_siginfo_t info, *sip;
+	uint64_t bits;
+	int error = 0, result, timecheck = 0;
+
+	if (size != 8)
+		return (set_errno(EINVAL));
+	if (copyin((void *)setp, &bits, sizeof (bits)) != 0)
+		return (set_errno(EFAULT));
+	lxk_setmask(bits, &set);
+	if (sigisempty(&set))
+		return (set_errno(EINVAL));
+	if (timeoutp != 0) {
+		timespec_t now;
+
+		if (copyin((void *)timeoutp, &timeout, sizeof (timeout)) != 0)
+			return (set_errno(EFAULT));
+		if (itimerspecfix(&timeout))
+			return (set_errno(EINVAL));
+		timecheck = timechanged;
+		gethrestime(&now);
+		timespecadd(&timeout, &now);
+		deadline = &timeout;
+	}
+	t->t_sigwait = set;
+	mutex_enter(&p->p_lock);
+	schedctl_finish_sigblock(t);
+	oldmask = t->t_hold;
+	sigdiffset(&t->t_hold, &t->t_sigwait);
+	while ((result = cv_waituntil_sig(&t->t_delay_cv, &p->p_lock,
+	    deadline, timecheck)) > 0)
+		continue;
+	if (result == -1)
+		error = EAGAIN;
+	t->t_hold = oldmask;
+	t->t_sig_check = 1;
+	if (error != 0) {
+		mutex_exit(&p->p_lock);
+		sigemptyset(&t->t_sigwait);
+		return (set_errno(error));
+	}
+	if (lwp->lwp_cursig == 0 ||
+	    !sigismember(&t->t_sigwait, lwp->lwp_cursig)) {
+		mutex_exit(&p->p_lock);
+		sigemptyset(&t->t_sigwait);
+		return (set_errno(EINTR));
+	}
+	if (lwp->lwp_curinfo != NULL) {
+		sip = &lwp->lwp_curinfo->sq_info;
+	} else {
+		sip = &info;
+		bzero(sip, sizeof (*sip));
+		sip->si_signo = lwp->lwp_cursig;
+		sip->si_code = SI_NOINFO;
+	}
+	lwp->lwp_ru.nsignals++;
+	result = lwp->lwp_cursig;
+	DTRACE_PROC2(signal__clear, int, result, ksiginfo_t *, sip);
+	lwp->lwp_cursig = 0;
+	lwp->lwp_extsig = 0;
+	mutex_exit(&p->p_lock);
+	if (infop != 0)
+		error = stol_ksiginfo_copyout(sip, (void *)infop);
+	if (lwp->lwp_curinfo != NULL) {
+		siginfofree(lwp->lwp_curinfo);
+		lwp->lwp_curinfo = NULL;
+	}
+	sigemptyset(&t->t_sigwait);
+	if (error != 0)
+		return (-1);
+	return (lx_stol_signo(result, LX_SIGKILL));
 }
 
 /* -1 delegates to the existing native signal bridge; 0 is a bad frame. */
@@ -543,6 +627,9 @@ lx_sig_kernel_syscall(klwp_t *lwp, int nr, uintptr_t *args, long *result)
 		    !lx_kernel_restricted(curproc))
 			return (B_FALSE);
 		*result = lxk_sigreturn(lwp);
+		break;
+	case 128:
+		*result = lxk_sigtimedwait(args[0], args[1], args[2], args[3]);
 		break;
 	case 131:
 		*result = lxk_sigaltstack(args[0], args[1]);

@@ -40,6 +40,81 @@ extern int flock_check(vnode_t *, flock64_t *, offset_t, offset_t);
 	LX_FALLOC_FL_COLLAPSE_RANGE)
 
 long
+lx_ftruncate(int fd, uintptr_t raw_length)
+{
+	off_t length = (off_t)raw_length;
+	file_t *fp;
+	vnode_t *vp;
+	flock64_t bf;
+	vattr_t vattr;
+	u_offset_t begin;
+	ssize_t range;
+	boolean_t in_crit = B_FALSE;
+	int error = 0;
+
+	if (length < 0)
+		return (set_errno(EINVAL));
+	if ((fp = getf(fd)) == NULL)
+		return (set_errno(EBADF));
+
+	vp = fp->f_vnode;
+	if (vp->v_type != VREG) {
+		error = EINVAL;
+		goto done;
+	}
+	/* Linux reports EINVAL for a valid descriptor not open for writing. */
+	if ((fp->f_flag & FWRITE) == 0) {
+		error = EINVAL;
+		goto done;
+	}
+
+	vattr.va_mask = AT_SIZE;
+	if ((error = VOP_GETATTR(vp, &vattr, 0, CRED(), NULL)) != 0)
+		goto done;
+	if (vattr.va_size < length && length > curproc->p_fsz_ctl) {
+		error = EFBIG;
+		goto done;
+	}
+
+	bzero(&bf, sizeof (bf));
+	bf.l_whence = 0;
+	bf.l_start = length;
+	bf.l_len = 0;
+	if ((error = flock_check(vp, &bf, fp->f_offset, MAXOFF_T)) != 0)
+		goto done;
+
+	if (nbl_need_check(vp)) {
+		nbl_start_crit(vp, RW_READER);
+		in_crit = B_TRUE;
+		vattr.va_mask = AT_SIZE;
+		if ((error = VOP_GETATTR(vp, &vattr, 0, CRED(), NULL)) != 0)
+			goto done;
+		if (length > vattr.va_size) {
+			begin = vattr.va_size;
+			range = length - vattr.va_size;
+		} else {
+			begin = length;
+			range = vattr.va_size - length;
+		}
+		if (nbl_conflict(vp, NBL_WRITE, begin, range, 0, NULL)) {
+			error = EACCES;
+			goto done;
+		}
+	}
+
+	error = VOP_SPACE(vp, F_FREESP, &bf, fp->f_flag, fp->f_offset,
+	    fp->f_cred, NULL);
+
+done:
+	if (in_crit)
+		nbl_end_crit(vp);
+	releasef(fd);
+	if (error != 0)
+		return (set_errno(error));
+	return (0);
+}
+
+long
 lx_fallocate(int fd, int mode, off_t offset, off_t len)
 {
 	int error = 0;

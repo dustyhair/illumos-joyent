@@ -1235,6 +1235,8 @@ stol_ksiginfo_copyout(k_siginfo_t *sip, void *ulxsip)
 	default:
 		lsi.lsi_pid = lx_siginfo_pid(sip->si_pid);
 		lsi.lsi_uid = LX_UID32_TO_UID16(sip->si_uid);
+		if (SI_CANQUEUE(sip->si_code))
+			lsi.lsi_value = sip->si_value;
 	}
 
 	if (copyout(&lsi, ulxsip, sizeof (lsi)) != 0) {
@@ -1283,6 +1285,8 @@ stol_ksiginfo32_copyout(k_siginfo_t *sip, void *ulxsip)
 	default:
 		lsi.lsi_pid = lx_siginfo_pid(sip->si_pid);
 		lsi.lsi_uid = LX_UID32_TO_UID16(sip->si_uid);
+		if (SI_CANQUEUE(sip->si_code))
+			lsi.lsi_value.sival_int = sip->si_value.sival_int;
 	}
 
 	if (copyout(&lsi, ulxsip, sizeof (lsi)) != 0) {

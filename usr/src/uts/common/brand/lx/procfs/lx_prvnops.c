@@ -2852,9 +2852,9 @@ lxpr_count_tasks(proc_t *p)
 		do {
 			lx_lwp_data_t *lwpd = ttolxlwp(t);
 			/* Don't count aio kernel worker threads */
-			if ((t->t_proc_flag & TP_KTHREAD) != 0 &&
-			    lwpd != NULL &&
-			    (lwpd->br_lwp_flags & BR_AIO_LWP) == 0) {
+			if ((t->t_proc_flag & TP_KTHREAD) == 0 ||
+			    (lwpd != NULL &&
+			    (lwpd->br_lwp_flags & BR_AIO_LWP) == 0)) {
 				cnt++;
 			}
 

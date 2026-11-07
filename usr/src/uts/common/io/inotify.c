@@ -49,6 +49,7 @@
 #include <sys/sysmacros.h>
 #include <sys/cyclic.h>
 #include <sys/filio.h>
+#include <sys/file.h>
 
 struct inotify_state;
 struct inotify_kevent;
@@ -1269,7 +1270,8 @@ inotify_ioctl(dev_t dev, int cmd, intptr_t arg, int md, cred_t *cr, int *rv)
 		inotify_addwatch_t addwatch;
 		file_t *fp;
 
-		if (copyin((void *)arg, &addwatch, sizeof (addwatch)) != 0)
+		if (ddi_copyin((void *)arg, &addwatch, sizeof (addwatch),
+		    md) != 0)
 			return (EFAULT);
 
 		if ((fp = getf(addwatch.inaw_fd)) == NULL)
@@ -1286,11 +1288,18 @@ inotify_ioctl(dev_t dev, int cmd, intptr_t arg, int md, cred_t *cr, int *rv)
 		inotify_addchild_t addchild;
 		char name[MAXPATHLEN];
 
-		if (copyin((void *)arg, &addchild, sizeof (addchild)) != 0)
+		if (ddi_copyin((void *)arg, &addchild, sizeof (addchild),
+		    md) != 0)
 			return (EFAULT);
 
-		if (copyinstr(addchild.inac_name, name, MAXPATHLEN, NULL) != 0)
+		if ((md & FKIOCTL) != 0) {
+			if (strlcpy(name, addchild.inac_name,
+			    sizeof (name)) >= sizeof (name))
+				return (ENAMETOOLONG);
+		} else if (copyinstr(addchild.inac_name, name,
+		    sizeof (name), NULL) != 0) {
 			return (EFAULT);
+		}
 
 		if ((fp = getf(addchild.inac_fd)) == NULL)
 			return (EBADF);

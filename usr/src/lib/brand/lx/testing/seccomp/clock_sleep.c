@@ -14,7 +14,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/prctl.h>
+#include <sys/epoll.h>
 #include <sys/mman.h>
+#include <sys/inotify.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -31,6 +34,13 @@
 #endif
 
 #define CHECK(x) do { if (!(x)) { fprintf(stderr,"line %d: %s errno=%d\n",__LINE__,#x,errno); return 1; } } while (0)
+#define LX_TEST_SA_EXPOSE_TAGBITS 0x00000800UL
+struct lx_test_sigaction {
+    uintptr_t handler;
+    unsigned long flags;
+    uintptr_t restorer;
+    uint64_t mask;
+};
 static unsigned cases, failures;
 static volatile sig_atomic_t caught;
 extern char **environ;
@@ -146,6 +156,262 @@ static int libc_sleep(void)
     CHECK(usleep(1000)==0 && mono()-start>=1000000);
     struct timespec t={0,1000000};
     CHECK(clock_nanosleep(CLOCK_MONOTONIC,0,&t,NULL)==0);
+    return 0;
+}
+static int confined_ftruncate(void)
+{
+    char path[]="/tmp/lx-ftruncate-XXXXXX";
+    char readpath[]="/tmp/lx-ftruncate-read-XXXXXX";
+    struct stat st;
+    int fd=mkstemp(path);
+
+    CHECK(fd>=0 && unlink(path)==0);
+    CHECK(ftruncate(fd,65568)==0);
+    CHECK(fstat(fd,&st)==0 && st.st_size==65568);
+    CHECK(ftruncate(fd,17)==0);
+    CHECK(fstat(fd,&st)==0 && st.st_size==17);
+    errno=0;
+    CHECK(ftruncate(fd,(off_t)-1)==-1 && errno==EINVAL);
+    CHECK(close(fd)==0);
+
+    fd=open("/dev/null",O_WRONLY);
+    CHECK(fd>=0);
+    errno=0;
+    CHECK(ftruncate(fd,1)==-1 && errno==EINVAL);
+    CHECK(close(fd)==0);
+
+    fd=mkstemp(readpath);
+    CHECK(fd>=0 && close(fd)==0);
+    fd=open(readpath,O_RDONLY);
+    CHECK(fd>=0 && unlink(readpath)==0);
+    errno=0;
+    CHECK(ftruncate(fd,1)==-1 && errno==EINVAL);
+    CHECK(close(fd)==0);
+    return 0;
+}
+static int confined_fsync(void)
+{
+    char path[]="/tmp/lx-fsync-XXXXXX";
+    int fd=mkstemp(path);
+
+    CHECK(fd>=0 && unlink(path)==0);
+    CHECK(write(fd,"data",4)==4);
+    CHECK(fsync(fd)==0 && fdatasync(fd)==0);
+    CHECK(close(fd)==0);
+    fd=open("/dev/null",O_WRONLY);
+    CHECK(fd>=0);
+    errno=0;
+    CHECK(fsync(fd)==-1 && errno==EINVAL);
+    errno=0;
+    CHECK(fdatasync(fd)==-1 && errno==EINVAL);
+    CHECK(close(fd)==0);
+    errno=0;
+    CHECK(fdatasync(-1)==-1 && errno==EBADF);
+    return 0;
+}
+static int confined_sigaction_expose_tagbits(void)
+{
+    struct sigaction sa={0};
+    struct lx_test_sigaction action, observed;
+
+    sa.sa_handler=handler;
+    CHECK(sigemptyset(&sa.sa_mask)==0);
+    CHECK(sigaction(SIGUSR2,&sa,NULL)==0);
+    CHECK(syscall(SYS_rt_sigaction,SIGUSR2,NULL,&action,8)==0);
+    action.flags|=LX_TEST_SA_EXPOSE_TAGBITS;
+    CHECK(syscall(SYS_rt_sigaction,SIGUSR2,&action,NULL,8)==0);
+    memset(&observed,0,sizeof(observed));
+    CHECK(syscall(SYS_rt_sigaction,SIGUSR2,NULL,&observed,8)==0);
+    CHECK((observed.flags&LX_TEST_SA_EXPOSE_TAGBITS)!=0);
+    return 0;
+}
+static int confined_sigtimedwait(void)
+{
+    struct timespec timeout={1,0}, zero={0,0};
+    sigset_t set, old;
+    siginfo_t info;
+    uint64_t bits=1ULL<<(SIGUSR2-1);
+
+    CHECK(sigemptyset(&set)==0 && sigaddset(&set,SIGUSR2)==0);
+    CHECK(pthread_sigmask(SIG_BLOCK,&set,&old)==0);
+    CHECK(kill(getpid(),SIGUSR2)==0);
+    memset(&info,0,sizeof(info));
+    CHECK(syscall(SYS_rt_sigtimedwait,&bits,&info,&timeout,8)==SIGUSR2);
+    CHECK(info.si_signo==SIGUSR2);
+    errno=0;
+    CHECK(syscall(SYS_rt_sigtimedwait,&bits,&info,&zero,8)==-1 &&
+        errno==EAGAIN);
+    errno=0;
+    CHECK(syscall(SYS_rt_sigtimedwait,&bits,&info,&zero,7)==-1 &&
+        errno==EINVAL);
+    CHECK(pthread_sigmask(SIG_SETMASK,&old,NULL)==0);
+    return 0;
+}
+static int confined_tgsigqueueinfo(void)
+{
+    struct timespec timeout={1,0};
+    sigset_t set, old;
+    siginfo_t sent, received;
+    uint64_t bits=1ULL<<(SIGUSR1-1);
+
+    CHECK(sigemptyset(&set)==0 && sigaddset(&set,SIGUSR1)==0);
+    CHECK(pthread_sigmask(SIG_BLOCK,&set,&old)==0);
+    memset(&sent,0,sizeof(sent));
+    sent.si_signo=SIGUSR1;
+    sent.si_code=SI_QUEUE;
+    sent.si_pid=getpid();
+    sent.si_uid=getuid();
+    sent.si_value.sival_int=0x12345678;
+    CHECK(syscall(SYS_rt_tgsigqueueinfo,getpid(),syscall(SYS_gettid),
+        SIGUSR1,&sent)==0);
+    memset(&received,0,sizeof(received));
+    CHECK(syscall(SYS_rt_sigtimedwait,&bits,&received,&timeout,8)==SIGUSR1);
+    CHECK(received.si_signo==SIGUSR1);
+    CHECK(received.si_value.sival_int==0x12345678);
+    CHECK(pthread_sigmask(SIG_SETMASK,&old,NULL)==0);
+    return 0;
+}
+static int confined_inotify(void)
+{
+    char dir[]="/tmp/lx-inotify-XXXXXX", path[128], events[4096];
+    struct inotify_event *event;
+    ssize_t len;
+    int fd, file, wd, flags, found=0;
+    size_t pos;
+
+    fd=inotify_init();
+    CHECK(fd>=0 && close(fd)==0);
+    fd=inotify_init1(IN_NONBLOCK|IN_CLOEXEC);
+    CHECK(fd>=0);
+    flags=fcntl(fd,F_GETFL);
+    CHECK(flags>=0 && (flags&O_NONBLOCK)!=0);
+    flags=fcntl(fd,F_GETFD);
+    CHECK(flags>=0 && (flags&FD_CLOEXEC)!=0);
+    CHECK(mkdtemp(dir)!=NULL);
+    wd=inotify_add_watch(fd,dir,IN_CREATE|IN_CLOSE_WRITE|IN_DELETE);
+    CHECK(wd>=0);
+    CHECK(snprintf(path,sizeof(path),"%s/file",dir)>0);
+    file=open(path,O_CREAT|O_WRONLY|O_EXCL,0600);
+    CHECK(file>=0 && write(file,"x",1)==1 && close(file)==0);
+    len=read(fd,events,sizeof(events));
+    CHECK(len>0);
+    for(pos=0;pos<(size_t)len;pos+=sizeof(*event)+event->len) {
+        event=(struct inotify_event *)(events+pos);
+        CHECK(sizeof(*event)+event->len<=(size_t)len-pos);
+        if(event->wd==wd && (event->mask&IN_CREATE)!=0 &&
+            event->len!=0 && strcmp(event->name,"file")==0) found=1;
+    }
+    CHECK(found);
+    CHECK(inotify_rm_watch(fd,wd)==0);
+    CHECK(close(fd)==0 && unlink(path)==0 && rmdir(dir)==0);
+    return 0;
+}
+static int confined_inotify_missing_path(void)
+{
+    char path[]="/tmp/lx-inotify-missing-XXXXXX";
+    int fd, stderr_flags;
+
+    CHECK(mkdtemp(path)!=NULL);
+    CHECK(rmdir(path)==0);
+    stderr_flags=fcntl(STDERR_FILENO,F_GETFD);
+    CHECK(stderr_flags>=0);
+    fd=inotify_init1(IN_CLOEXEC);
+    CHECK(fd>=0);
+    errno=0;
+    CHECK(inotify_add_watch(fd,path,IN_CREATE)==-1 && errno==ENOENT);
+    CHECK(fcntl(STDERR_FILENO,F_GETFD)==stderr_flags);
+    CHECK(close(fd)==0);
+    return 0;
+}
+static pthread_barrier_t task_nlink_barrier;
+static void *task_nlink_worker(void *unused)
+{
+    int error;
+
+    (void)unused;
+    error=pthread_barrier_wait(&task_nlink_barrier);
+    if(error!=0 && error!=PTHREAD_BARRIER_SERIAL_THREAD)
+        return (void *)(uintptr_t)1;
+    error=pthread_barrier_wait(&task_nlink_barrier);
+    if(error!=0 && error!=PTHREAD_BARRIER_SERIAL_THREAD)
+        return (void *)(uintptr_t)1;
+    return NULL;
+}
+static int proc_task_nlink(void)
+{
+    pthread_t threads[2];
+    struct stat st;
+    void *result;
+    int error;
+    size_t i;
+
+    CHECK(pthread_barrier_init(&task_nlink_barrier,NULL,3)==0);
+    for(i=0;i<2;i++)
+        CHECK(pthread_create(&threads[i],NULL,task_nlink_worker,NULL)==0);
+    error=pthread_barrier_wait(&task_nlink_barrier);
+    CHECK(error==0 || error==PTHREAD_BARRIER_SERIAL_THREAD);
+    CHECK(stat("/proc/self/task",&st)==0);
+    CHECK(st.st_nlink==5);
+    error=pthread_barrier_wait(&task_nlink_barrier);
+    CHECK(error==0 || error==PTHREAD_BARRIER_SERIAL_THREAD);
+    for(i=0;i<2;i++) {
+        CHECK(pthread_join(threads[i],&result)==0);
+        CHECK(result==NULL);
+    }
+    CHECK(pthread_barrier_destroy(&task_nlink_barrier)==0);
+    return 0;
+}
+static pthread_barrier_t clone_barrier;
+static volatile unsigned clone_inotify_stop;
+static volatile unsigned long clone_inotify_progress;
+static void *clone_inotify_worker(void *unused)
+{
+    (void)unused;
+    while(!__atomic_load_n(&clone_inotify_stop,__ATOMIC_ACQUIRE)) {
+        int fd=inotify_init();
+
+        if(fd<0 || close(fd)!=0) return (void *)(uintptr_t)1;
+        __atomic_add_fetch(&clone_inotify_progress,1,__ATOMIC_RELEASE);
+    }
+    return NULL;
+}
+static void *clone_epoll_worker(void *unused)
+{
+    int fd, error;
+
+    (void)unused;
+    error=pthread_barrier_wait(&clone_barrier);
+    if(error!=0 && error!=PTHREAD_BARRIER_SERIAL_THREAD)
+        return (void *)(uintptr_t)1;
+    fd=epoll_create1(EPOLL_CLOEXEC);
+    if(fd<0 || close(fd)!=0) return (void *)(uintptr_t)1;
+    return NULL;
+}
+static int clone_epoll_burst(void)
+{
+    pthread_t threads[32], inotify_thread;
+    void *result;
+    int error;
+    size_t i;
+
+    clone_inotify_stop=0;
+    clone_inotify_progress=0;
+    CHECK(pthread_create(&inotify_thread,NULL,clone_inotify_worker,NULL)==0);
+    while(__atomic_load_n(&clone_inotify_progress,__ATOMIC_ACQUIRE)<10)
+        sched_yield();
+    CHECK(pthread_barrier_init(&clone_barrier,NULL,33)==0);
+    for(i=0;i<32;i++)
+        CHECK(pthread_create(&threads[i],NULL,clone_epoll_worker,NULL)==0);
+    error=pthread_barrier_wait(&clone_barrier);
+    CHECK(error==0 || error==PTHREAD_BARRIER_SERIAL_THREAD);
+    for(i=0;i<32;i++) {
+        CHECK(pthread_join(threads[i],&result)==0);
+        CHECK(result==NULL);
+    }
+    __atomic_store_n(&clone_inotify_stop,1,__ATOMIC_RELEASE);
+    CHECK(pthread_join(inotify_thread,&result)==0);
+    CHECK(result==NULL);
+    CHECK(pthread_barrier_destroy(&clone_barrier)==0);
     return 0;
 }
 static int rseq_fallback(void)
@@ -475,6 +741,18 @@ int main(int argc, char **argv)
     run("huge realtime absolute deadline does not overflow",huge_rt);
     run("request and remainder may alias",alias_rem);
     run("libc usleep and clock_nanosleep remain confined",libc_sleep);
+    run("restricted ftruncate grows and shrinks a regular file",confined_ftruncate);
+    run("restricted fsync and fdatasync synchronize regular files",confined_fsync);
+    run("restricted rt_sigaction accepts SA_EXPOSE_TAGBITS",confined_sigaction_expose_tagbits);
+    run("restricted rt_sigtimedwait consumes blocked signals",
+        confined_sigtimedwait);
+    run("restricted rt_tgsigqueueinfo queues thread signals",
+        confined_tgsigqueueinfo);
+    run("restricted inotify creates watches and delivers events",confined_inotify);
+    run("failed inotify watch preserves existing descriptors",
+        confined_inotify_missing_path);
+    run("proc task link count includes visible threads",proc_task_nlink);
+    run("restricted concurrent clone and epoll publication",clone_epoll_burst);
     run("rseq fallback does not poison later sleep",rseq_fallback);
     run("cap bounds and faccessat2 probes do not poison later sleep",modern_probe_fallbacks);
     run("restricted vfork shares memory and suspends its parent",vfork_shared_exit);

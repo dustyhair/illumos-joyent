@@ -17,10 +17,40 @@
 #include <sys/types.h>
 #include <sys/errno.h>
 #include <sys/file.h>
+#include <sys/fdsync.h>
 #include <sys/vfs.h>
 #include <sys/vnode.h>
 #include <sys/lx_impl.h>
 #include <sys/lx_brand.h>
+
+static long
+lx_fsync_common(int fd, int flag)
+{
+	file_t *fp;
+	int error;
+
+	if ((fp = getf(fd)) == NULL)
+		return (set_errno(EBADF));
+	if (fp->f_vnode->v_type == VCHR || fp->f_vnode->v_type == VFIFO) {
+		error = EINVAL;
+	} else {
+		error = VOP_FSYNC(fp->f_vnode, flag, fp->f_cred, NULL);
+	}
+	releasef(fd);
+	return (error == 0 ? 0 : set_errno(error));
+}
+
+long
+lx_fsync(int fd)
+{
+	return (lx_fsync_common(fd, FSYNC));
+}
+
+long
+lx_fdatasync(int fd)
+{
+	return (lx_fsync_common(fd, FDSYNC));
+}
 
 long
 lx_syncfs(int fd)
