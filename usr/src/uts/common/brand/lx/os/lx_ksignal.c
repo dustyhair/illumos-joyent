@@ -290,6 +290,34 @@ lxk_sigaltstack(uintptr_t ap, uintptr_t op)
 }
 
 static long
+lxk_sigsuspend(uintptr_t setp, uintptr_t size)
+{
+	proc_t *p = curproc;
+	kthread_t *t = curthread;
+	klwp_t *lwp = ttolwp(t);
+	k_sigset_t set;
+	uint64_t bits;
+
+	if (size != sizeof (bits))
+		return (set_errno(EINVAL));
+	if (copyin((void *)setp, &bits, sizeof (bits)) != 0)
+		return (set_errno(EFAULT));
+	lxk_setmask(bits, &set);
+
+	mutex_enter(&p->p_lock);
+	schedctl_finish_sigblock(t);
+	lwp->lwp_sigoldmask = t->t_hold;
+	t->t_hold = set;
+	t->t_sig_check = 1;
+	t->t_flag |= T_TOMASK;
+	while (cv_wait_sig_swap(&t->t_delay_cv, &p->p_lock))
+		;
+	mutex_exit(&p->p_lock);
+
+	return (set_errno(EINTR));
+}
+
+static long
 lxk_sigtimedwait(uintptr_t setp, uintptr_t infop, uintptr_t timeoutp,
     uintptr_t size)
 {
@@ -630,6 +658,9 @@ lx_sig_kernel_syscall(klwp_t *lwp, int nr, uintptr_t *args, long *result)
 		break;
 	case 128:
 		*result = lxk_sigtimedwait(args[0], args[1], args[2], args[3]);
+		break;
+	case 130:
+		*result = lxk_sigsuspend(args[0], args[1]);
 		break;
 	case 131:
 		*result = lxk_sigaltstack(args[0], args[1]);
