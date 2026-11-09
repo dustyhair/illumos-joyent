@@ -665,6 +665,7 @@ stol_sockaddr_copyout(struct sockaddr *inaddr, socklen_t inlen,
 		if (inaddr->sa_data[0] == '\0') {
 			bzero(&buf, sizeof (buf));
 			inlen = sizeof (inaddr->sa_family);
+			size = inlen;
 		}
 		break;
 
@@ -4499,6 +4500,16 @@ lx_getname_common(lx_getname_type_t type, int sockfd, void *np, int *nlp)
 		err = socket_getpeername(so, name, &namelen, B_FALSE, CRED());
 	} else {
 		err = socket_getsockname(so, name, &namelen, CRED());
+	}
+
+	/*
+	 * sockfs represents an unnamed AF_UNIX peer with a zero-length
+	 * address.  Linux returns the address family for unnamed local
+	 * sockets, so supply it before translating the address.
+	 */
+	if (err == 0 && namelen == 0 && so->so_family == AF_UNIX) {
+		name->sa_family = AF_UNIX;
+		namelen = sizeof (name->sa_family);
 	}
 
 	if (err == 0) {
