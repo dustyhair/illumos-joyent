@@ -26,6 +26,7 @@
  * Copyright 2022 Joyent, Inc.
  * Copyright 2024 Carlos Neira <cneirabustos@gmail.com>
  * Copyright 2024 MNX Cloud, Inc.
+ * Copyright 2026 Jonathan Wagner.
  */
 
 #include <sys/errno.h>
@@ -42,6 +43,7 @@
 #include <sys/sunddi.h>
 #include <sys/cred.h>
 #include <sys/zone.h>
+#include <sys/netstack.h>
 #include <sys/ucred.h>
 #include <sys/model.h>
 #include <sys/brand.h>
@@ -58,6 +60,8 @@
 #include <netinet/igmp.h>
 #include <netinet/icmp6.h>
 #include <inet/cc.h>
+#include <inet/ip.h>
+#include <inet/ip_if.h>
 #include <inet/tcp_impl.h>
 #include <lx_errno.h>
 
@@ -67,6 +71,8 @@
 #include <sys/lx_socket.h>
 #include <sys/lx_types.h>
 #include <sys/lx_impl.h>
+#include <sys/lx_misc.h>
+#include <sys/lx_netns.h>
 #include <sys/time.h>
 
 /* From uts/common/fs/sockfs/socksyscalls.c */
@@ -2904,7 +2910,7 @@ static const lx_sockopt_map_t ltos_socket_sockopts[LX_SO_BPF_EXTENSIONS + 1] = {
 	{ OPTNOTSUP, 0 },		/* SO_SECURITY_AUTHENTICATION	*/
 	{ OPTNOTSUP, 0 },		/* SO_SECURITY_ENCRYPTION_TRANSPORT */
 	{ OPTNOTSUP, 0 },		/* SO_SECURITY_ENCRYPTION_NETWORK */
-	{ OPTNOTSUP, 0 },		/* SO_BINDTODEVICE		*/
+	{ OPTNOTSUP, 0 },		/* SO_BINDTODEVICE - in code	*/
 	{ SO_ATTACH_FILTER, 0 },	/* SO_ATTACH_FILTER		*/
 	{ SO_DETACH_FILTER, 0 },	/* SO_DETACH_FILTER		*/
 	{ OPTNOTSUP, 0 },		/* SO_PEERNAME			*/
@@ -3592,6 +3598,72 @@ fail:
 }
 
 static int
+lx_sockopt_bound_if_native(sonode_t *so, int *level, int *optname,
+    boolean_t *isv6)
+{
+	switch (so->so_family) {
+	case AF_INET:
+		*level = IPPROTO_IP;
+		*optname = IP_BOUND_IF;
+		*isv6 = B_FALSE;
+		return (0);
+	case AF_INET6:
+		*level = IPPROTO_IPV6;
+		*optname = IPV6_BOUND_IF;
+		*isv6 = B_TRUE;
+		return (0);
+	default:
+		return (ENOPROTOOPT);
+	}
+}
+
+static int
+lx_setsockopt_bindtodevice(sonode_t *so, const void *optval,
+    socklen_t optlen)
+{
+	char name[IFNAMSIZ];
+	netstack_t *ns;
+	ill_t *ill;
+	socklen_t len;
+	uint_t ifindex = 0, oldindex = 0;
+	boolean_t isv6;
+	int level, native_opt, error;
+
+	if ((error = lx_sockopt_bound_if_native(so, &level, &native_opt,
+	    &isv6)) != 0)
+		return (error);
+
+	bzero(name, sizeof (name));
+	if (optlen != 0) {
+		bcopy(optval, name, MIN(optlen, sizeof (name) - 1));
+		lx_ifname_convert(name, LX_IF_TONATIVE);
+	}
+	if (name[0] != '\0') {
+		if ((ns = netstack_get_current()) == NULL)
+			return (ENXIO);
+		ill = ill_lookup_on_name(name, B_FALSE, isv6, NULL,
+		    ns->netstack_ip);
+		if (ill == NULL) {
+			netstack_rele(ns);
+			return (ENODEV);
+		}
+		ifindex = ill->ill_phyint->phyint_ifindex;
+		ill_refrele(ill);
+		netstack_rele(ns);
+	}
+
+	len = sizeof (oldindex);
+	if ((error = socket_getsockopt(so, level, native_opt, &oldindex,
+	    &len, 0, CRED())) != 0)
+		return (error);
+	if (oldindex != 0 && !lx_netns_bind_allowed(CRED()))
+		return (EPERM);
+
+	return (socket_setsockopt(so, level, native_opt, &ifindex,
+	    sizeof (ifindex), CRED()));
+}
+
+static int
 lx_setsockopt_socket(sonode_t *so, int optname, void *optval, socklen_t optlen)
 {
 	int error;
@@ -3604,6 +3676,9 @@ lx_setsockopt_socket(sonode_t *so, int optname, void *optval, socklen_t optlen)
 	case LX_SO_BSDCOMPAT:
 		/* Linux ignores this option. */
 		return (0);
+
+	case LX_SO_BINDTODEVICE:
+		return (lx_setsockopt_bindtodevice(so, optval, optlen));
 
 	case LX_SO_TIMESTAMP:
 		/*
@@ -3977,6 +4052,46 @@ out:
 }
 
 static int
+lx_getsockopt_bindtodevice(sonode_t *so, void *optval, socklen_t *optlen)
+{
+	char name[IFNAMSIZ];
+	netstack_t *ns;
+	ill_t *ill;
+	socklen_t len = sizeof (uint_t);
+	uint_t ifindex;
+	boolean_t isv6;
+	int level, native_opt, error;
+
+	if ((error = lx_sockopt_bound_if_native(so, &level, &native_opt,
+	    &isv6)) != 0)
+		return (error);
+	if ((error = socket_getsockopt(so, level, native_opt, &ifindex,
+	    &len, 0, CRED())) != 0)
+		return (error);
+	if (ifindex == 0) {
+		*optlen = 0;
+		return (0);
+	}
+	if (*optlen < IFNAMSIZ)
+		return (EINVAL);
+	if ((ns = netstack_get_current()) == NULL)
+		return (ENXIO);
+	ill = ill_lookup_on_ifindex(ifindex, isv6, ns->netstack_ip);
+	if (ill == NULL) {
+		netstack_rele(ns);
+		return (ENODEV);
+	}
+	(void) strlcpy(name, ill->ill_name, sizeof (name));
+	ill_refrele(ill);
+	netstack_rele(ns);
+	lx_ifname_convert(name, LX_IF_FROMNATIVE);
+	len = strlen(name) + 1;
+	bcopy(name, optval, len);
+	*optlen = len;
+	return (0);
+}
+
+static int
 lx_getsockopt_socket(sonode_t *so, int optname, void *optval,
     socklen_t *optlen)
 {
@@ -3986,6 +4101,9 @@ lx_getsockopt_socket(sonode_t *so, int optname, void *optval,
 	lx_socket_aux_data_t *sad;
 
 	switch (optname) {
+	case LX_SO_BINDTODEVICE:
+		return (lx_getsockopt_bindtodevice(so, optval, optlen));
+
 	case LX_SO_PROTOCOL:
 		/*
 		 * We need to special-case netlink and AF_UNIX too.

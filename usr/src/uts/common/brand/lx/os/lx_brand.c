@@ -29,6 +29,7 @@
  * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
  * Copyright 2024 MNX Cloud, Inc.
  * Copyright 2025 Edgecast Cloud LLC.
+ * Copyright 2026 Jonathan Wagner.
  */
 
 /*
@@ -1395,6 +1396,7 @@ lx_free_brand_data(zone_t *zone)
 {
 	lx_zone_data_t *data = ztolxzd(zone);
 	ASSERT(data != NULL);
+	lx_netns_tun_fini(zone);
 	mutex_enter(&data->lxzd_lock);
 	lx_audit_fini(zone);
 	if (data->lxzd_ioctl_sock != NULL) {

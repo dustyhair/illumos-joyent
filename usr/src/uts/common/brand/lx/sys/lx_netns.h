@@ -40,6 +40,15 @@ extern void lx_netns_rele(lx_netns_t *);
 extern struct netstack *lx_netns_stack(lx_netns_t *);
 extern struct netstack *lx_netns_current(struct proc *);
 extern boolean_t lx_netns_configure_allowed(const struct cred *);
+extern boolean_t lx_netns_tun_configure_allowed(const struct cred *);
+extern boolean_t lx_netns_bind_allowed(const struct cred *);
+extern void lx_netns_tun_link_reset(const char *);
+extern void lx_netns_tun_link_set(const char *, boolean_t);
+extern boolean_t lx_netns_tun_link_is_up(const char *);
+extern int lx_netns_tun_route_defer(const char *, uint32_t, uint32_t);
+extern boolean_t lx_netns_tun_route_take(const char *, uint32_t *, uint32_t *);
+extern boolean_t lx_netns_tun_route_cancel(const char *, uint32_t, uint32_t);
+extern void lx_netns_tun_fini(struct zone *);
 
 #ifdef __cplusplus
 }

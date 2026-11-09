@@ -53,6 +53,7 @@
 #include <inet/ip_if.h>
 #include <sys/dkio.h>
 #include <sys/sdt.h>
+#include <sys/zone.h>
 
 /*
  * Linux ioctl types
@@ -110,6 +111,9 @@
 #define	LX_FIONCLEX		0x5450
 #define	LX_FIOCLEX		0x5451
 #define	LX_FIOASYNC		0x5452
+#define	LX_TUNSETIFF		0x400454ca
+#define	LX_TUNGETFEATURES	0x800454cf
+#define	LX_TUNGETIFF		0x800454d2
 #define	LX_FIOSETOWN		0x8901
 #define	LX_SIOCSPGRP		0x8902
 #define	LX_FIOGETOWN		0x8903
@@ -192,6 +196,27 @@
 
 #define	FLUSER(fp)	fp->f_flag | get_udatamodel()
 #define	FLFAKE(fp)	fp->f_flag | FKIOCTL
+
+#define	LX_TUN_DRV		"tun"
+#define	LX_TUN_IFF_TUN		0x0001
+#define	LX_TUN_IFF_NO_PI	0x1000
+#define	LX_TUN_IFF_VNET_HDR	0x4000
+
+#define	TUNLXNEWIFF		(('T' << 16) | 0x0003)
+#define	TUNLXPLUMBIFF		(('T' << 16) | 0x0004)
+#define	TUNLXGETIFF		(('T' << 16) | 0x0005)
+
+typedef struct lx_tun_ifreq {
+	char		ltifr_name[IFNAMSIZ];
+	uint16_t	ltifr_flags;
+} lx_tun_ifreq_t;
+
+typedef struct tun_lx_ifreq {
+	char		tlx_name[IFNAMSIZ];
+	uint16_t	tlx_flags;
+	int32_t		tlx_ppa;
+	zoneid_t	tlx_zoneid;
+} tun_lx_ifreq_t;
 
 /*
  * LX_NCC must be different from LX_NCCS since while the termio and termios
@@ -503,6 +528,108 @@ ict_pass(file_t *fp, int cmd, intptr_t arg, int lxcmd)
 	error = VOP_IOCTL(fp->f_vnode, cmd, arg, FLUSER(fp), fp->f_cred, &rv,
 	    NULL);
 	return ((error != 0) ? set_errno(error) : 0);
+}
+
+static int
+ict_tun_stream_ioctl(file_t *fp, int cmd, tun_lx_ifreq_t *req)
+{
+	struct strioctl istr;
+	int error, rv;
+
+	istr.ic_cmd = cmd;
+	istr.ic_len = sizeof (*req);
+	istr.ic_timout = 15;
+	istr.ic_dp = (char *)req;
+	error = VOP_IOCTL(fp->f_vnode, I_STR, (intptr_t)&istr, FLFAKE(fp),
+	    kcred, &rv, NULL);
+	return (error);
+}
+
+/* ARGSUSED */
+static int
+ict_tunsetiff(file_t *fp, int cmd, intptr_t arg, int lxcmd)
+{
+	lx_tun_ifreq_t lxreq;
+	tun_lx_ifreq_t req;
+	major_t major = ddi_name_to_major(LX_TUN_DRV);
+	int error;
+
+	if (major == DDI_MAJOR_T_NONE ||
+	    getmajor(fp->f_vnode->v_rdev) != major)
+		return (set_errno(ENOTTY));
+	if (!lx_netns_tun_configure_allowed(CRED()))
+		return (set_errno(EPERM));
+	if (copyin((void *)arg, &lxreq, sizeof (lxreq)) != 0)
+		return (set_errno(EFAULT));
+	if (lxreq.ltifr_flags != (LX_TUN_IFF_TUN | LX_TUN_IFF_NO_PI) &&
+	    lxreq.ltifr_flags != (LX_TUN_IFF_TUN | LX_TUN_IFF_NO_PI |
+	    LX_TUN_IFF_VNET_HDR))
+		return (set_errno(EINVAL));
+
+	bzero(&req, sizeof (req));
+	(void) strlcpy(req.tlx_name, lxreq.ltifr_name,
+	    sizeof (req.tlx_name));
+	/*
+	 * wireguard-go requests VNET_HDR before checking the flags actually
+	 * provided by the interface.  The LX TUN path transports complete IP
+	 * packets and does not provide virtio offloads, so negotiate that
+	 * optional request down to the packet format we support.  TUNGETIFF
+	 * reports the resulting flags and the caller selects its non-offload
+	 * path.
+	 */
+	req.tlx_flags = LX_TUN_IFF_TUN | LX_TUN_IFF_NO_PI;
+	req.tlx_zoneid = crgetzoneid(CRED());
+	if ((error = ict_tun_stream_ioctl(fp, TUNLXNEWIFF, &req)) != 0)
+		return (set_errno(error));
+	lx_netns_tun_link_reset(req.tlx_name);
+	if ((error = ict_tun_stream_ioctl(fp, TUNLXPLUMBIFF, &req)) != 0)
+		return (set_errno(error));
+
+	(void) strlcpy(lxreq.ltifr_name, req.tlx_name,
+	    sizeof (lxreq.ltifr_name));
+	lxreq.ltifr_flags = req.tlx_flags;
+	if (copyout(&lxreq, (void *)arg, sizeof (lxreq)) != 0)
+		return (set_errno(EFAULT));
+	return (0);
+}
+
+/* ARGSUSED */
+static int
+ict_tungetiff(file_t *fp, int cmd, intptr_t arg, int lxcmd)
+{
+	lx_tun_ifreq_t lxreq;
+	tun_lx_ifreq_t req;
+	major_t major = ddi_name_to_major(LX_TUN_DRV);
+	int error;
+
+	if (major == DDI_MAJOR_T_NONE ||
+	    getmajor(fp->f_vnode->v_rdev) != major)
+		return (set_errno(ENOTTY));
+	bzero(&req, sizeof (req));
+	if ((error = ict_tun_stream_ioctl(fp, TUNLXGETIFF, &req)) != 0)
+		return (set_errno(error));
+	bzero(&lxreq, sizeof (lxreq));
+	(void) strlcpy(lxreq.ltifr_name, req.tlx_name,
+	    sizeof (lxreq.ltifr_name));
+	lxreq.ltifr_flags = req.tlx_flags;
+	if (copyout(&lxreq, (void *)arg, sizeof (lxreq)) != 0)
+		return (set_errno(EFAULT));
+	return (0);
+}
+
+/* ARGSUSED */
+static int
+ict_tungetfeatures(file_t *fp, int cmd, intptr_t arg, int lxcmd)
+{
+	uint32_t features = LX_TUN_IFF_TUN | LX_TUN_IFF_NO_PI;
+	major_t major = ddi_name_to_major(LX_TUN_DRV);
+
+	if (major == DDI_MAJOR_T_NONE ||
+	    getmajor(fp->f_vnode->v_rdev) != major)
+		return (set_errno(ENOTTY));
+	if (copyout(&features, (void *)arg, sizeof (features)) != 0)
+		return (set_errno(EFAULT));
+	return (0);
 }
 
 /* ARGSUSED */
@@ -1684,6 +1811,9 @@ static lx_ioc_cmd_translator_t lx_ioc_xlate_fd[] = {
 	LX_IOC_CMD_TRANSLATOR_FILTER(FIONBIO,	ict_fionbio)
 	LX_IOC_CMD_TRANSLATOR_FILTER(FIONREAD,	ict_fionread)
 	LX_IOC_CMD_TRANSLATOR_PASS(FIOASYNC)
+	LX_IOC_CMD_TRANSLATOR_CUSTOM(LX_TUNSETIFF,	ict_tunsetiff)
+	LX_IOC_CMD_TRANSLATOR_CUSTOM(LX_TUNGETFEATURES,	ict_tungetfeatures)
+	LX_IOC_CMD_TRANSLATOR_CUSTOM(LX_TUNGETIFF,	ict_tungetiff)
 
 	/* streams related */
 	LX_IOC_CMD_TRANSLATOR_PASS(TCXONC)

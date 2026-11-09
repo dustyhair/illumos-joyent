@@ -25,6 +25,7 @@
 #define	LX_CAP_SETUID	7
 #define	LX_CAP_SETPCAP	8
 #define	LX_CAP_NET_ADMIN	12
+#define	LX_CAP_NET_RAW	13
 #define	LX_CAP_SYS_ADMIN	21
 #define	LX_CAP_SYS_NICE	23
 #define	LX_CAP_SYS_RESOURCE	24

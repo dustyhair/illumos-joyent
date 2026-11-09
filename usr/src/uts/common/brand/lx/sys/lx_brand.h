@@ -701,6 +701,9 @@ typedef struct lx_zone_data {
 	struct lx_audit_state *lxzd_audit_state; /* zone's audit state */
 	struct lx_userns *lxzd_userns;		/* initial user namespace */
 	struct lx_mntns_budget *lxzd_mntns_budget;
+	uint32_t lxzd_tun_link_up;		/* Linux TUN IFF_UP state */
+	struct lx_tun_route *lxzd_tun_routes;	/* deferred interface routes */
+	uint_t lxzd_tun_route_count;
 } lx_zone_data_t;
 
 /* LWP br_lwp_flags values */

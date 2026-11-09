@@ -12,6 +12,7 @@
 /*
  * Copyright 2018 Joyent, Inc.
  * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2026 Jonathan Wagner.
  */
 
 /*
@@ -70,6 +71,7 @@
 #define	LX_NETLINK_NLM_F_ROOT			0x100
 #define	LX_NETLINK_NLM_F_MATCH			0x200
 #define	LX_NETLINK_NLM_F_ATOMIC			0x400
+#define	LX_NETLINK_NLM_F_REPLACE		0x100
 #define	LX_NETLINK_NLM_F_EXCL			0x200
 #define	LX_NETLINK_NLM_F_CREATE			0x400
 
@@ -265,6 +267,8 @@
 #define	LX_IFF_MASTER		(1<<10)
 #define	LX_IFF_SLAVE		(1<<11)
 #define	LX_IFF_MULTICAST	(1<<12)
+
+#define	LX_ARPHRD_NONE		0xfffe
 #define	LX_IFF_PORTSEL		(1<<13)
 #define	LX_IFF_AUTOMEDIA	(1<<14)
 #define	LX_IFF_DYNAMIC		(1<<15)
@@ -1116,6 +1120,7 @@ lx_netlink_getlink_lifreq(lx_netlink_reply_t *reply, struct lifreq *lifr)
 	struct sockaddr hwaddr;
 	int hwaddr_size;
 	boolean_t is_loopback;
+	boolean_t is_tun;
 
 	struct {
 		int native;
@@ -1178,6 +1183,11 @@ lx_netlink_getlink_lifreq(lx_netlink_reply_t *reply, struct lifreq *lifr)
 		if (lifr->lifr_flags & flags[i].native)
 			ifi.lxnl_ifi_flags |= flags[i].lx;
 	}
+	is_tun = strncmp(lifr->lifr_name, "tun", 3) == 0 &&
+	    (lifr->lifr_flags & (IFF_POINTOPOINT | IFF_NOARP)) ==
+	    (IFF_POINTOPOINT | IFF_NOARP);
+	if (is_tun && lx_netns_tun_link_is_up(lifr->lifr_name))
+		ifi.lxnl_ifi_flags |= LX_IFF_UP;
 
 	/*
 	 * Query the datalink address.
@@ -1186,14 +1196,19 @@ lx_netlink_getlink_lifreq(lx_netlink_reply_t *reply, struct lifreq *lifr)
 	 */
 	sdl = (struct sockaddr_dl *)&lifr->lifr_addr;
 	bzero(sdl, sizeof (*sdl));
-	if (!is_loopback) {
+	if (is_tun) {
+		bzero(&hwaddr, sizeof (hwaddr));
+		hwaddr.sa_family = LX_ARPHRD_NONE;
+		hwaddr_size = 0;
+	} else if (!is_loopback) {
 		(void) lx_netlink_reply_ioctl(reply, SIOCGLIFHWADDR, lifr);
 	} else {
 		/* Simulate an empty hwaddr for loopback */
 		sdl->sdl_type = DL_LOOP;
 		sdl->sdl_alen = ETHERADDRL;
 	}
-	lx_stol_hwaddr(sdl, &hwaddr, &hwaddr_size);
+	if (!is_tun)
+		lx_stol_hwaddr(sdl, &hwaddr, &hwaddr_size);
 
 	ifi.lxnl_ifi_type = hwaddr.sa_family;
 	lx_netlink_reply_msg(reply, &ifi, sizeof (lx_netlink_ifinfomsg_t));
@@ -1305,16 +1320,107 @@ lx_netlink_reply_eachfamily(lx_netlink_reply_t *reply,
 	}
 }
 
-/*ARGSUSED*/
+static int lx_netlink_index_lifreq(lx_netlink_sock_t *, uint32_t,
+    boolean_t, struct lifreq *);
+
 static int
 lx_netlink_getlink(lx_netlink_sock_t *lxsock, lx_netlink_hdr_t *hdr, mblk_t *mp)
 {
+	lx_netlink_attr_t *attrs[LX_NETLINK_IFLA_MAX];
+	lx_netlink_attr_t *nameattr = NULL;
+	lx_netlink_ifinfomsg_t *ifi;
+	lx_netlink_ifinfomsg_t ifi_storage;
+	struct lifreq lifr;
+	unsigned int nattrs = sizeof (attrs) / sizeof (attrs[0]);
 	lx_netlink_reply_t *reply;
+	int error, i;
 
 	reply = lx_netlink_reply(lxsock, hdr, LX_NETLINK_RTM_NEWLINK);
 
 	if (reply == NULL)
 		return (ENOMEM);
+	if (hdr->lxnh_len == LXNLMSG_HDRLEN + sizeof (uint8_t) &&
+	    MBLKL(mp) >= hdr->lxnh_len &&
+	    hdr->lxnh_flags == (LX_NETLINK_NLM_F_REQUEST |
+	    LX_NETLINK_NLM_F_ROOT | LX_NETLINK_NLM_F_MATCH)) {
+		/*
+		 * Linux accepts rtgenmsg as the payload for interface
+		 * dumps.  Some modern consumers use this compact form
+		 * rather than a full ifinfomsg.
+		 */
+		bzero(&ifi_storage, sizeof (ifi_storage));
+		ifi_storage.lxnl_ifi_family =
+		    *(uint8_t *)(mp->b_rptr + LXNLMSG_HDRLEN);
+		ifi = &ifi_storage;
+		nattrs = 0;
+	} else if (lx_netlink_parse_msg_attrs(mp, (void **)&ifi,
+	    sizeof (*ifi), attrs, &nattrs) != 0) {
+		reply->lxnr_errno = EINVAL;
+		lx_netlink_reply_done(reply);
+		return (0);
+	}
+	for (i = 0; i < nattrs; i++) {
+		if (attrs[i]->lxna_type == LX_NETLINK_IFLA_IFNAME) {
+			if (nameattr != NULL) {
+				reply->lxnr_errno = EINVAL;
+				lx_netlink_reply_done(reply);
+				return (0);
+			}
+			nameattr = attrs[i];
+		}
+	}
+	if (nameattr != NULL) {
+		size_t len;
+		char name[LIFNAMSIZ];
+		ldi_handle_t handles[] = {
+			lxsock->lxns_iphandle,
+			lxsock->lxns_ip6handle,
+			NULL
+		};
+		ldi_handle_t *handle;
+
+		if (nameattr->lxna_len <= LXATTR_HDRLEN) {
+			reply->lxnr_errno = EINVAL;
+			lx_netlink_reply_done(reply);
+			return (0);
+		}
+		len = nameattr->lxna_len - LXATTR_HDRLEN;
+		if (len > sizeof (name) ||
+		    strnlen(LXATTR_PAYLOAD(nameattr), len) == len) {
+			reply->lxnr_errno = EINVAL;
+			lx_netlink_reply_done(reply);
+			return (0);
+		}
+		bzero(&lifr, sizeof (lifr));
+		(void) strlcpy(name, LXATTR_PAYLOAD(nameattr), sizeof (name));
+		lx_ifname_convert(name, LX_IF_TONATIVE);
+		(void) strlcpy(lifr.lifr_name, name, sizeof (lifr.lifr_name));
+		error = ENODEV;
+		for (handle = handles; *handle != NULL; handle++) {
+			if (ldi_ioctl(*handle, SIOCGLIFINDEX, (intptr_t)&lifr,
+			    FKIOCTL, kcred, NULL) == 0) {
+				lxsock->lxns_current = *handle;
+				error = 0;
+				break;
+			}
+		}
+		if (error == 0)
+			lx_netlink_getlink_lifreq(reply, &lifr);
+		else
+			reply->lxnr_errno = error;
+		lx_netlink_reply_done(reply);
+		return (0);
+	}
+	if (ifi->lxnl_ifi_index != 0) {
+		error = lx_netlink_index_lifreq(lxsock,
+		    ifi->lxnl_ifi_index, B_FALSE, &lifr);
+		if (error == 0)
+			lx_netlink_getlink_lifreq(reply, &lifr);
+		else
+			reply->lxnr_errno = error;
+		lx_netlink_reply_done(reply);
+		return (0);
+	}
 
 	lx_netlink_reply_eachfamily(reply, lx_netlink_getlink_lifreq, B_TRUE);
 	lx_netlink_reply_done(reply);
@@ -1433,11 +1539,74 @@ lx_netlink_index_lifreq(lx_netlink_sock_t *lxsock, uint32_t index,
 	return (0);
 }
 
+static boolean_t
+lx_netlink_tun_allowed(lx_netlink_sock_t *lxsock, struct lifreq *lifr)
+{
+	uint64_t flags;
+
+	if (!lx_netns_tun_configure_allowed(CRED()) ||
+	    strncmp(lifr->lifr_name, "tun", 3) != 0)
+		return (B_FALSE);
+	if (ldi_ioctl(lxsock->lxns_current, SIOCGLIFFLAGS,
+	    (intptr_t)lifr, FKIOCTL, kcred, NULL) != 0)
+		return (B_FALSE);
+	flags = lifr->lifr_flags;
+	return ((flags & (IFF_POINTOPOINT | IFF_NOARP)) ==
+	    (IFF_POINTOPOINT | IFF_NOARP));
+}
+
 static int
 lx_netlink_private_error(lx_netlink_sock_t *lxsock,
     lx_netlink_hdr_t *hdr, int error)
 {
 	return (lx_netlink_reply_error(lxsock, hdr, error));
+}
+
+static int
+lx_netlink_tun_routes_apply(lx_netlink_sock_t *lxsock, const char *name)
+{
+	struct sockaddr_in *sin;
+	struct lifreq lifr;
+	netstack_t *ns;
+	ill_t *ill;
+	ipaddr_t gateway;
+	uint32_t dst, mask;
+	int error = 0, flags;
+
+	bzero(&lifr, sizeof (lifr));
+	(void) strlcpy(lifr.lifr_name, name, sizeof (lifr.lifr_name));
+	if ((error = ldi_ioctl(lxsock->lxns_iphandle, SIOCGLIFADDR,
+	    (intptr_t)&lifr, FKIOCTL, kcred, NULL)) != 0)
+		return (error);
+	sin = (struct sockaddr_in *)&lifr.lifr_addr;
+	if (sin->sin_family != AF_INET ||
+	    sin->sin_addr.s_addr == INADDR_ANY)
+		return (EADDRNOTAVAIL);
+	gateway = sin->sin_addr.s_addr;
+	if ((ns = netstack_get_current()) == NULL)
+		return (ENXIO);
+	ill = ill_lookup_on_name((char *)name, B_FALSE, B_FALSE, NULL,
+	    ns->netstack_ip);
+	if (ill == NULL) {
+		netstack_rele(ns);
+		return (ENODEV);
+	}
+	while (lx_netns_tun_route_take(name, &dst, &mask)) {
+		flags = RTF_UP | RTF_STATIC;
+		if (mask == UINT32_MAX)
+			flags |= RTF_HOST;
+		error = ip_rt_add(dst, mask, gateway, 0, flags, ill, NULL,
+		    B_FALSE, NULL, ns->netstack_ip, ALL_ZONES);
+		if (error == EEXIST)
+			error = 0;
+		if (error != 0) {
+			(void) lx_netns_tun_route_defer(name, dst, mask);
+			break;
+		}
+	}
+	ill_refrele(ill);
+	netstack_rele(ns);
+	return (error);
 }
 
 static int
@@ -1451,13 +1620,14 @@ lx_netlink_newaddr(lx_netlink_sock_t *lxsock, lx_netlink_hdr_t *hdr,
 	struct lifreq lifr;
 	uint32_t addr, mask;
 	unsigned int nattrs = sizeof (attrs) / sizeof (attrs[0]);
+	boolean_t is_tun;
+	uint16_t expected_flags;
 	int error, i;
 
-	if (!lx_netns_configure_allowed(CRED()))
-		return (lx_netlink_private_error(lxsock, hdr, EPERM));
-	if (hdr->lxnh_flags != (LX_NETLINK_NLM_F_REQUEST |
-	    LX_NETLINK_NLM_F_ACK | LX_NETLINK_NLM_F_EXCL |
-	    LX_NETLINK_NLM_F_CREATE) ||
+	expected_flags = LX_NETLINK_NLM_F_REQUEST | LX_NETLINK_NLM_F_ACK |
+	    LX_NETLINK_NLM_F_CREATE;
+	if ((hdr->lxnh_flags != (expected_flags | LX_NETLINK_NLM_F_EXCL) &&
+	    hdr->lxnh_flags != (expected_flags | LX_NETLINK_NLM_F_REPLACE)) ||
 	    lx_netlink_parse_msg_attrs(mp, (void **)&ifa, sizeof (*ifa),
 	    attrs, &nattrs) != 0 || ifa->lxnl_ifa_family != LX_AF_INET ||
 	    ifa->lxnl_ifa_prefixlen > 32 ||
@@ -1509,6 +1679,10 @@ lx_netlink_newaddr(lx_netlink_sock_t *lxsock, lx_netlink_hdr_t *hdr,
 	if ((error = lx_netlink_index_lifreq(lxsock,
 	    ifa->lxnl_ifa_index, B_FALSE, &lifr)) != 0)
 		return (lx_netlink_private_error(lxsock, hdr, error));
+	is_tun = lx_netlink_tun_allowed(lxsock, &lifr);
+	if (!lx_netns_configure_allowed(CRED()) &&
+	    !is_tun)
+		return (lx_netlink_private_error(lxsock, hdr, EPERM));
 
 	sin = (struct sockaddr_in *)&lifr.lifr_addr;
 	sin->sin_family = AF_INET;
@@ -1523,6 +1697,31 @@ lx_netlink_newaddr(lx_netlink_sock_t *lxsock, lx_netlink_hdr_t *hdr,
 	if ((error = ldi_ioctl(lxsock->lxns_iphandle, SIOCSLIFADDR,
 	    (intptr_t)&lifr, FKIOCTL, kcred, NULL)) != 0)
 		return (lx_netlink_private_error(lxsock, hdr, error));
+	if (is_tun) {
+		if (address != NULL)
+			bcopy(LXATTR_PAYLOAD(address), &addr, sizeof (addr));
+		sin->sin_addr.s_addr = addr;
+		if ((error = ldi_ioctl(lxsock->lxns_iphandle,
+		    SIOCSLIFDSTADDR, (intptr_t)&lifr, FKIOCTL, kcred,
+		    NULL)) != 0)
+			return (lx_netlink_private_error(lxsock, hdr, error));
+		if (lx_netns_tun_link_is_up(lifr.lifr_name)) {
+			if ((error = ldi_ioctl(lxsock->lxns_iphandle,
+			    SIOCGLIFFLAGS, (intptr_t)&lifr, FKIOCTL, kcred,
+			    NULL)) != 0)
+				return (lx_netlink_private_error(lxsock, hdr,
+				    error));
+			lifr.lifr_flags |= IFF_UP;
+			if ((error = ldi_ioctl(lxsock->lxns_iphandle,
+			    SIOCSLIFFLAGS, (intptr_t)&lifr, FKIOCTL, kcred,
+			    NULL)) != 0)
+				return (lx_netlink_private_error(lxsock, hdr,
+				    error));
+		}
+		if ((error = lx_netlink_tun_routes_apply(lxsock,
+		    lifr.lifr_name)) != 0)
+			return (lx_netlink_private_error(lxsock, hdr, error));
+	}
 	return (lx_netlink_reply_ack(lxsock, hdr));
 }
 
@@ -1672,15 +1871,16 @@ lx_netlink_newlink(lx_netlink_sock_t *lxsock, lx_netlink_hdr_t *hdr,
 	uint16_t create_flags = LX_NETLINK_NLM_F_REQUEST |
 	    LX_NETLINK_NLM_F_ACK | LX_NETLINK_NLM_F_EXCL |
 	    LX_NETLINK_NLM_F_CREATE;
+	boolean_t is_tun;
 	int error, i;
 
-	if (!lx_netns_configure_allowed(CRED()))
-		return (lx_netlink_private_error(lxsock, hdr, EPERM));
 	if (hdr->lxnh_type == LX_NETLINK_RTM_NEWLINK &&
 	    hdr->lxnh_flags == create_flags) {
 		char name[LIFNAMSIZ];
 		size_t len, namelen;
 
+		if (!lx_netns_configure_allowed(CRED()))
+			return (lx_netlink_private_error(lxsock, hdr, EPERM));
 		if (lx_netlink_parse_msg_attrs(mp, (void **)&ifi,
 		    sizeof (*ifi), attrs, &nattrs) != 0 ||
 		    ifi->lxnl_ifi_family != AF_UNSPEC ||
@@ -1719,6 +1919,9 @@ lx_netlink_newlink(lx_netlink_sock_t *lxsock, lx_netlink_hdr_t *hdr,
 	if ((error = lx_netlink_index_lifreq(lxsock,
 	    ifi->lxnl_ifi_index, B_FALSE, &lifr)) != 0)
 		return (lx_netlink_private_error(lxsock, hdr, error));
+	is_tun = lx_netlink_tun_allowed(lxsock, &lifr);
+	if (!lx_netns_configure_allowed(CRED()) && !is_tun)
+		return (lx_netlink_private_error(lxsock, hdr, EPERM));
 	if ((error = ldi_ioctl(lxsock->lxns_iphandle, SIOCGLIFFLAGS,
 	    (intptr_t)&lifr, FKIOCTL, kcred, NULL)) != 0)
 		return (lx_netlink_private_error(lxsock, hdr, error));
@@ -1727,8 +1930,23 @@ lx_netlink_newlink(lx_netlink_sock_t *lxsock, lx_netlink_hdr_t *hdr,
 	else
 		lifr.lifr_flags &= ~IFF_UP;
 	if ((error = ldi_ioctl(lxsock->lxns_iphandle, SIOCSLIFFLAGS,
-	    (intptr_t)&lifr, FKIOCTL, kcred, NULL)) != 0)
-		return (lx_netlink_private_error(lxsock, hdr, error));
+	    (intptr_t)&lifr, FKIOCTL, kcred, NULL)) != 0) {
+		struct sockaddr_in *sin;
+
+		if (error != EINVAL || !is_tun ||
+		    (ifi->lxnl_ifi_flags & LX_IFF_UP) == 0)
+			return (lx_netlink_private_error(lxsock, hdr, error));
+		if ((error = ldi_ioctl(lxsock->lxns_iphandle,
+		    SIOCGLIFDSTADDR, (intptr_t)&lifr, FKIOCTL, kcred,
+		    NULL)) != 0)
+			return (lx_netlink_private_error(lxsock, hdr, error));
+		sin = (struct sockaddr_in *)&lifr.lifr_addr;
+		if (sin->sin_family != AF_INET ||
+		    sin->sin_addr.s_addr != INADDR_ANY)
+			return (lx_netlink_private_error(lxsock, hdr, EINVAL));
+	}
+	lx_netns_tun_link_set(lifr.lifr_name,
+	    (ifi->lxnl_ifi_flags & LX_IFF_UP) != 0);
 	return (lx_netlink_reply_ack(lxsock, hdr));
 }
 
@@ -1747,16 +1965,15 @@ lx_netlink_route_change(lx_netlink_sock_t *lxsock,
 	uint32_t oif = 0, table = LX_ROUTE_TABLE_MAIN;
 	unsigned int nattrs = sizeof (attrs) / sizeof (attrs[0]);
 	uint16_t expected_flags;
+	boolean_t is_tun = B_FALSE;
 	int error, flags, i;
 
-	if (!lx_netns_configure_allowed(CRED()))
-		return (lx_netlink_private_error(lxsock, hdr, EPERM));
 	expected_flags = LX_NETLINK_NLM_F_REQUEST | LX_NETLINK_NLM_F_ACK;
-	if (add) {
-		expected_flags |= LX_NETLINK_NLM_F_EXCL |
-		    LX_NETLINK_NLM_F_CREATE;
-	}
-	if (hdr->lxnh_flags != expected_flags ||
+	if ((!add && hdr->lxnh_flags != expected_flags) ||
+	    (add && hdr->lxnh_flags != (expected_flags |
+	    LX_NETLINK_NLM_F_CREATE | LX_NETLINK_NLM_F_EXCL) &&
+	    hdr->lxnh_flags != (expected_flags | LX_NETLINK_NLM_F_CREATE |
+	    LX_NETLINK_NLM_F_REPLACE)) ||
 	    lx_netlink_parse_msg_attrs(mp, (void **)&rtm, sizeof (*rtm),
 	    attrs, &nattrs) != 0 || rtm->rtm_family != LX_AF_INET ||
 	    rtm->rtm_dst_len > 32 || rtm->rtm_src_len != 0 ||
@@ -1767,8 +1984,11 @@ lx_netlink_route_change(lx_netlink_sock_t *lxsock,
 	    rtm->rtm_protocol != LX_RTPROT_BOOT &&
 	    rtm->rtm_protocol != LX_RTPROT_STATIC) ||
 	    (rtm->rtm_scope != LX_RTSCOPE_UNIVERSE &&
-	    rtm->rtm_scope != LX_RTSCOPE_LINK) ||
-	    rtm->rtm_type != LX_RTN_UNICAST || rtm->rtm_flags != 0) {
+	    rtm->rtm_scope != LX_RTSCOPE_LINK &&
+	    (add || rtm->rtm_scope != LX_RTSCOPE_NOWHERE)) ||
+	    (rtm->rtm_type != LX_RTN_UNICAST &&
+	    (add || rtm->rtm_type != LX_RTN_UNSPEC)) ||
+	    rtm->rtm_flags != 0) {
 		return (lx_netlink_private_error(lxsock, hdr, EINVAL));
 	}
 
@@ -1813,6 +2033,16 @@ lx_netlink_route_change(lx_netlink_sock_t *lxsock,
 		bcopy(LXATTR_PAYLOAD(dstattr), &dst, sizeof (dst));
 	if (gwattr != NULL)
 		bcopy(LXATTR_PAYLOAD(gwattr), &gateway, sizeof (gateway));
+	if (!lx_netns_configure_allowed(CRED())) {
+		if (gwattr != NULL || oif == 0)
+			return (lx_netlink_private_error(lxsock, hdr, EPERM));
+		if ((error = lx_netlink_index_lifreq(lxsock, oif, B_FALSE,
+		    &lifr)) != 0)
+			return (lx_netlink_private_error(lxsock, hdr, error));
+		is_tun = lx_netlink_tun_allowed(lxsock, &lifr);
+		if (!is_tun)
+			return (lx_netlink_private_error(lxsock, hdr, EPERM));
+	}
 	mask = rtm->rtm_dst_len == 0 ? 0 :
 	    htonl(UINT32_MAX << (32 - rtm->rtm_dst_len));
 	/*
@@ -1831,9 +2061,22 @@ lx_netlink_route_change(lx_netlink_sock_t *lxsock,
 			return (lx_netlink_private_error(lxsock, hdr, error));
 		sin = (struct sockaddr_in *)&lifr.lifr_addr;
 		if (sin->sin_family != AF_INET ||
-		    sin->sin_addr.s_addr == INADDR_ANY)
+		    sin->sin_addr.s_addr == INADDR_ANY) {
+			if (is_tun && add) {
+				error = lx_netns_tun_route_defer(lifr.lifr_name,
+				    dst, mask);
+				if (error == 0)
+					return (lx_netlink_reply_ack(lxsock,
+					    hdr));
+				return (lx_netlink_private_error(lxsock, hdr,
+				    error));
+			}
+			if (is_tun && !add && lx_netns_tun_route_cancel(
+			    lifr.lifr_name, dst, mask))
+				return (lx_netlink_reply_ack(lxsock, hdr));
 			return (lx_netlink_private_error(lxsock, hdr,
 			    EADDRNOTAVAIL));
+		}
 		gateway = sin->sin_addr.s_addr;
 	}
 
@@ -1860,6 +2103,9 @@ lx_netlink_route_change(lx_netlink_sock_t *lxsock,
 	if (ill != NULL)
 		ill_refrele(ill);
 	netstack_rele(ns);
+	if (error == EEXIST && add &&
+	    (hdr->lxnh_flags & LX_NETLINK_NLM_F_REPLACE) != 0)
+		error = 0;
 	if (error != 0)
 		return (lx_netlink_private_error(lxsock, hdr, error));
 	return (lx_netlink_reply_ack(lxsock, hdr));
@@ -1984,23 +2230,35 @@ lx_netlink_getroute(lx_netlink_sock_t *lxsock, lx_netlink_hdr_t *hdr,
 	bzero(&ctx, sizeof (ctx));
 	ctx.lgrtctx_max_attr = LX_NETLINK_MAX_RTA;
 
-	if (lx_netlink_parse_msg_attrs(mp, (void **)&rtmsgp,
-	    rtmsg_size, ctx.lgrtctx_attrs, &ctx.lgrtctx_max_attr) != 0) {
-		return (EPROTO);
-	}
-
-	/*
-	 * Older version of libnetlink send a truncated rtmsg struct for
-	 * certain RTM_GETROUTE queries.  We must detect this condition and
-	 * truncate our input to prevent later confusion.
-	 */
-	if (curproc->p_zone->zone_brand == &lx_brand &&
-	    lx_kern_release_cmp(curproc->p_zone, "2.6.32") <= 0 &&
-	    rtmsgp->rtm_dst_len == 0) {
-		rtmsg_size = sizeof (rtmsg.rtm_family);
-	}
 	bzero(&rtmsg, sizeof (rtmsg));
-	bcopy(rtmsgp, &rtmsg, rtmsg_size);
+	if (hdr->lxnh_len == LXNLMSG_HDRLEN + sizeof (uint8_t) &&
+	    MBLKL(mp) >= hdr->lxnh_len &&
+	    hdr->lxnh_flags == (LX_NETLINK_NLM_F_REQUEST |
+	    LX_NETLINK_NLM_F_ROOT | LX_NETLINK_NLM_F_MATCH)) {
+		/* Linux also accepts rtgenmsg for route-table dumps. */
+		rtmsg.rtm_family =
+		    *(uint8_t *)(mp->b_rptr + LXNLMSG_HDRLEN);
+		ctx.lgrtctx_max_attr = 0;
+	} else {
+		if (lx_netlink_parse_msg_attrs(mp, (void **)&rtmsgp,
+		    rtmsg_size, ctx.lgrtctx_attrs,
+		    &ctx.lgrtctx_max_attr) != 0) {
+			return (EPROTO);
+		}
+
+		/*
+		 * Older versions of libnetlink send a truncated rtmsg
+		 * struct for certain RTM_GETROUTE queries.  We must detect
+		 * this condition and truncate our input to prevent later
+		 * confusion.
+		 */
+		if (curproc->p_zone->zone_brand == &lx_brand &&
+		    lx_kern_release_cmp(curproc->p_zone, "2.6.32") <= 0 &&
+		    rtmsgp->rtm_dst_len == 0) {
+			rtmsg_size = sizeof (rtmsg.rtm_family);
+		}
+		bcopy(rtmsgp, &rtmsg, rtmsg_size);
+	}
 	ctx.lgrtctx_rtmsg = &rtmsg;
 
 	/* If RTA_DST was passed, it effects later decisions */

@@ -120,6 +120,7 @@
 	<device match="ipsync" ip-type="exclusive" />
 	<device match="keysock" ip-type="exclusive" />
 	<device match="net/*" ip-type="exclusive" />
+	<device match="tun" ip-type="exclusive" />
 	<device match="rawip" ip-type="exclusive" />
 	<device match="rawip6" ip-type="exclusive" />
 	<device match="rts" ip-type="exclusive" />

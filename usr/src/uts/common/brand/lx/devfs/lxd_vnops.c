@@ -518,8 +518,30 @@ lxd_lookup(vnode_t *dvp, char *nm, vnode_t **vpp, struct pathname *pnp,
 	/*
 	 * Do the normal lookup
 	 */
-	if ((error = VOP_LOOKUP(realdvp, nm, &vp, pnp, flags, rdir, cr,
-	    ct, direntflags, realpnp)) != 0) {
+	error = VOP_LOOKUP(realdvp, nm, &vp, pnp, flags, rdir, cr, ct,
+	    direntflags, realpnp);
+	if (error == ENOENT && strcmp(nm, "tun") == 0) {
+		vnode_t *netvp;
+		vnode_t *realrootvp = REALVP(LDNTOV(lxdm->lxdm_rootnode));
+		boolean_t netdir = B_FALSE;
+
+		/*
+		 * /dev/net is an sdev directory populated after lxd mounts, so
+		 * a platform-profile alias cannot live in it.  If the zone
+		 * profile grants /dev/tun, provide Linux's /dev/net/tun
+		 * spelling lazily.
+		 */
+		if (VOP_LOOKUP(realrootvp, "net", &netvp, NULL, 0, NULL, cr,
+		    ct, NULL, NULL) == 0) {
+			netdir = VN_CMP(realdvp, netvp);
+			VN_RELE(netvp);
+		}
+		if (netdir) {
+			error = VOP_LOOKUP(realrootvp, "tun", &vp, NULL, 0,
+			    NULL, cr, ct, NULL, NULL);
+		}
+	}
+	if (error != 0) {
 		vp = NULL;
 		goto out;
 	}
