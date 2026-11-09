@@ -480,6 +480,14 @@ pwr_handler(int sig)
 }
 
 static int
+pwr_query(void)
+{
+	struct sigaction sa;
+
+	return (sigaction(SIGPWR, NULL, &sa) != 0);
+}
+
+static int
 pwr_reset(void)
 {
 	struct sigaction sa;
@@ -614,7 +622,8 @@ main(void)
 	RUN(handler_policy, 0);
 	RUN(sse_preservation, 0);
 	RUN(avx_preservation, 0);
-	RUN(read_eintr, 0); RUN(read_restart, 0); RUN(pwr_reset, SIGPWR);
+	RUN(read_eintr, 0); RUN(read_restart, 0); RUN(pwr_query, 0);
+	RUN(pwr_reset, SIGPWR);
 	RUN(user_segv_info, 0); RUN(fault_recovery, 0);
 	if (is_lx) {
 		RUN(bad_cs, SIGSEGV); RUN(bad_ss, SIGSEGV);
