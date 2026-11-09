@@ -2417,7 +2417,7 @@ void
 lx_block_all_signals()
 {
 	while (syscall(SYS_brand, B_BLOCK_ALL_SIGS) != 0 && errno == EAGAIN)
-		yield();
+		(void) syscall(SYS_yield);
 }
 
 void

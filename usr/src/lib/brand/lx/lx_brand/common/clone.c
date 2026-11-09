@@ -60,6 +60,14 @@
 #define	IS_VFORK(f)	(((f) & CLONE_VFORK) == CLONE_VFORK)
 
 /*
+ * A vfork child shares the parent's native stack until it switches to the
+ * reserved child stack gap.  Keep the signal-handler snapshot off that
+ * stack.  lx_block_all_signals() serialises vfork calls in this process, so
+ * only one caller can use this storage at a time.
+ */
+static lx_sighandlers_t lx_vfork_sighandlers;
+
+/*
  * This is dicey.  This seems to be an internal glibc structure, and not
  * part of any external interface.  Thus, it is subject to change without
  * notice.  FWIW, clone(2) itself seems to be an internal (or at least
@@ -406,12 +414,13 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4, uintptr_t p5)
 		if (flags & LX_CLONE_VFORK) {
 			lx_block_all_signals();
 		} else {
+			VERIFY0(sigfillset(&sigmask));
+			if (sigprocmask(SIG_BLOCK, &sigmask, &osigmask) < 0)
+				return (-errno);
 			_sigoff();
 		}
 		lx_stack_prefork();
 		if (flags & LX_CLONE_VFORK) {
-			lx_sighandlers_t saved;
-
 			/*
 			 * Because we keep our signal disposition at user-land
 			 * (and in memory), we must prevent it from being
@@ -423,12 +432,12 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4, uintptr_t p5)
 			 * with because we know that we aren't executing
 			 * concurrently with our child.
 			 */
-			lx_sighandlers_save(&saved);
+			lx_sighandlers_save(&lx_vfork_sighandlers);
 			lx_tsd->lxtsd_is_vforked++;
 			rval = vforkx(fork_flags);
 			if (rval != 0) {
 				lx_tsd->lxtsd_is_vforked--;
-				lx_sighandlers_restore(&saved);
+				lx_sighandlers_restore(&lx_vfork_sighandlers);
 			}
 		} else {
 			rval = forkx(fork_flags);
@@ -465,6 +474,8 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4, uintptr_t p5)
 			if (flags & LX_CLONE_VFORK) {
 				lx_unblock_all_signals();
 			} else {
+				ucp->uc_sigmask = osigmask;
+				ucp->uc_flags |= UC_SIGMASK;
 				_sigon();
 			}
 
@@ -591,6 +602,8 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4, uintptr_t p5)
 		if (flags & LX_CLONE_VFORK) {
 			lx_unblock_all_signals();
 		} else {
+			ucp->uc_sigmask = osigmask;
+			ucp->uc_flags |= UC_SIGMASK;
 			_sigon();
 		}
 
@@ -699,9 +712,14 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4, uintptr_t p5)
 	}
 
 	/*
-	 * Release any pending signals
+	 * Keep signals blocked until B_EMULATION_DONE switches back to the
+	 * Linux stack.  Restoring the mask here can deliver a pending signal
+	 * while this thread is still on its native emulation stack.  Record the
+	 * original mask in the return context so setcontext(2) restores it as
+	 * part of the stack-mode transition.
 	 */
-	(void) sigprocmask(SIG_SETMASK, &osigmask, NULL);
+	ucp->uc_sigmask = osigmask;
+	ucp->uc_flags |= UC_SIGMASK;
 
 	/*
 	 * Wait for the child to be created and have its tid assigned.
