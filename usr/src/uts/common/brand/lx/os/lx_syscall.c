@@ -467,12 +467,8 @@ lx_syscall_enter(int entry)
 		}
 	}
 
-	if (syscall_num == 58 && lx_pidns_children(curproc) != NULL) {
-		ret = set_errno(EOPNOTSUPP);
-		lx_syscall_return(lwp, syscall_num, ret);
-		return (0);
-	}
-	if (lx_kernel_restricted(curproc) && syscall_num == 58) {
+	if ((lx_kernel_restricted(curproc) ||
+	    lx_pidns_children(curproc) != NULL) && syscall_num == 58) {
 		ret = lx_kernel_fork(syscall_num, args);
 		lx_syscall_return(lwp, syscall_num, ret);
 		return (0);

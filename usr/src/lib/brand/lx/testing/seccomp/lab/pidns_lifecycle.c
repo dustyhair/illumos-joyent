@@ -29,6 +29,7 @@
 } while (0)
 
 static volatile sig_atomic_t caught;
+static volatile sig_atomic_t vfork_shared;
 
 static void
 handler(int sig)
@@ -109,6 +110,25 @@ inside(const char *procpath, pid_t outer)
 	CHECK(pthread_create(&thread, NULL, worker, NULL) == 0 &&
 	    pthread_join(thread, &result) == 0 && result == NULL,
 	    "pthread-identities");
+	vfork_shared = 0;
+	CHECK((child = vfork()) >= 0, "vfork-exec");
+	if (child == 0) {
+		vfork_shared = 1;
+		(void) execl("/bin/true", "true", (char *)NULL);
+		_exit(127);
+	}
+	CHECK(vfork_shared == 1 && waitpid(child, &status, 0) == child &&
+	    WIFEXITED(status) && WEXITSTATUS(status) == 0,
+	    "vfork-exec-and-shared-address-space");
+	vfork_shared = 0;
+	CHECK((child = vfork()) >= 0, "vfork-exit");
+	if (child == 0) {
+		vfork_shared = 2;
+		_exit(41);
+	}
+	CHECK(vfork_shared == 2 && waitpid(child, &status, 0) == child &&
+	    WIFEXITED(status) && WEXITSTATUS(status) == 41,
+	    "vfork-exit-and-shared-address-space");
 	CHECK(pipe(release) == 0 && (child = fork()) >= 0,
 	    "fork-orphan-parent");
 	if (child == 0) {
