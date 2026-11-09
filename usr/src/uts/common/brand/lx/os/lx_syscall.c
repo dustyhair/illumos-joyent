@@ -1319,11 +1319,11 @@ lx_sysent_t lx_sysent64[] = {
 	{"utimensat",	NULL,			0,		4}, /* 280 */
 	{"epoll_pwait",	lx_epoll_pwait,		0,		5}, /* 281 */
 	{"signalfd",	NULL,			0,		3}, /* 282 */
-	{"timerfd_create", NULL,		0,		2}, /* 283 */
+	{"timerfd_create", lx_timerfd_create_kernel,	0,	2}, /* 283 */
 	{"eventfd",	lx_eventfd,		0,		1}, /* 284 */
 	{"fallocate",	lx_fallocate,		0,		4}, /* 285 */
-	{"timerfd_settime", NULL,		0,		4}, /* 286 */
-	{"timerfd_gettime", NULL,		0,		2}, /* 287 */
+	{"timerfd_settime", lx_timerfd_settime_kernel,	0,	4}, /* 286 */
+	{"timerfd_gettime", lx_timerfd_gettime_kernel,	0,	2}, /* 287 */
 	{"accept4",	lx_accept4,		0,		4}, /* 288 */
 	{"signalfd4",	NULL,			0,		4}, /* 289 */
 	{"eventfd2",	lx_eventfd2,		0,		2}, /* 290 */

@@ -43,6 +43,12 @@ typedef struct lx_mntns_state {
 	refstr_t *lms_cwdname;
 } lx_mntns_state_t;
 
+typedef enum lx_mntns_propagation {
+	LX_MNTNS_PROP_PRIVATE,
+	LX_MNTNS_PROP_SLAVE,
+	LX_MNTNS_PROP_SHARED
+} lx_mntns_propagation_t;
+
 extern boolean_t lx_mntns_entry_enabled(void);
 extern boolean_t lx_mntns_proc_at_root(struct proc *);
 extern int lx_mntns_entry_prepare(cred_t *, vnode_t *, vnode_t *,
@@ -68,15 +74,20 @@ extern int lx_mntns_view_clone(lx_mntns_view_t *, cred_t *, cred_t *,
 extern int lx_mntns_vnodetopath(vnode_t *, char *, size_t, cred_t *);
 extern int lx_mntns_pivot(lx_mntns_view_t *, const char *, const char *,
     cred_t *);
-extern int lx_mntns_mount_unmount(lx_mntns_view_t *, const char *, cred_t *);
-extern int lx_mntns_mount_detach(lx_mntns_view_t *, const char *, cred_t *);
-extern int lx_mntns_mount_private(lx_mntns_view_t *, const char *, cred_t *);
+extern int lx_mntns_mount_unmount(lx_mntns_view_t *, const char *, boolean_t,
+    cred_t *);
+extern int lx_mntns_mount_detach(lx_mntns_view_t *, const char *, boolean_t,
+    cred_t *);
+extern int lx_mntns_mount_propagation(lx_mntns_view_t *, const char *,
+    lx_mntns_propagation_t, cred_t *);
 extern int lx_mntns_mount_readonly(lx_mntns_view_t *, const char *, uint_t,
     cred_t *);
 extern int lx_mntns_mount_tmpfs(lx_mntns_view_t *, const char *, const char *,
     uid_t, gid_t, cred_t *);
 extern int lx_mntns_mount_proc(lx_mntns_view_t *, const char *, const char *,
     int, cred_t *);
+extern int lx_mntns_mount_move(lx_mntns_view_t *, const char *, const char *,
+    cred_t *);
 extern int lx_mntns_mount_bind(lx_mntns_view_t *, const char *,
     const char *, boolean_t, boolean_t, cred_t *);
 extern int lx_mntns_view_bind(lx_mntns_view_t *, vnode_t *, const char *,

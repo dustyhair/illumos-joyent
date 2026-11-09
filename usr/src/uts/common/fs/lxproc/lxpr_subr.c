@@ -382,6 +382,9 @@ lxpr_getnode(vnode_t *dp, lxpr_nodetype_t type, proc_t *p, int fd)
 	vp = lxpnp->lxpr_vnode;
 	vn_reinit(vp);
 	vp->v_flag = VNOCACHE|VNOMAP|VNOSWAP|VNOMOUNT;
+	/* Fixed proc entries must retain vnode identity while overmounted. */
+	if (p == NULL)
+		vp->v_flag &= ~VNOCACHE;
 	vp->v_vfsp = dp->v_vfsp;
 
 	/*

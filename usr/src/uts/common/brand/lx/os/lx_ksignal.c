@@ -22,6 +22,10 @@
 #include <sys/fp.h>
 #include <sys/debug.h>
 #include <sys/stddef.h>
+#include <sys/file.h>
+#include <sys/fcntl.h>
+#include <sys/vnode.h>
+#include <sys/signalfd.h>
 #include <sys/lx_brand.h>
 #include <sys/lx_misc.h>
 #include <sys/lx_signal.h>
@@ -634,6 +638,74 @@ bad:
 	return (0);
 }
 
+/*
+ * signalfd is implemented by a native clone device whose data format is
+ * already Linux-compatible.  Construct or update that descriptor in the
+ * kernel so a mount-namespace process never has to enter the unrestricted
+ * userspace brand emulation path.
+ */
+static long
+lxk_signalfd4(int fd, uintptr_t maskp, size_t size, int flags)
+{
+	static char path[] = "/dev/signalfd";
+	lx_sigset_t lset;
+	k_sigset_t kset;
+	sigset_t uset;
+	file_t *fp;
+	vnode_t *vp;
+	int error, mode, rval = 0, newfd = -1;
+
+	if (size != sizeof (lset))
+		return (set_errno(EINVAL));
+	if (copyin((void *)maskp, &lset, sizeof (lset)) != 0)
+		return (set_errno(EFAULT));
+	lx_ltos_sigset(&lset, &kset);
+	sigktou(&kset, &uset);
+
+	if (fd != -1) {
+		if ((fp = getf(fd)) == NULL)
+			return (set_errno(EBADF));
+		error = VOP_IOCTL(fp->f_vnode, SIGNALFDIOC_MASK,
+		    (intptr_t)&uset, fp->f_flag | FKIOCTL, CRED(), &rval, NULL);
+		releasef(fd);
+		return (error == 0 ? fd : set_errno(error));
+	}
+
+	if ((flags & ~(SFD_NONBLOCK | SFD_CLOEXEC)) != 0)
+		return (set_errno(EINVAL));
+	mode = FREAD;
+	if ((flags & SFD_NONBLOCK) != 0)
+		mode |= FNONBLOCK;
+	if ((error = falloc(NULL, mode, &fp, &newfd)) != 0)
+		return (set_errno(error));
+	if ((error = vn_openat(path, UIO_SYSSPACE, mode, 0, &vp, CRCREAT,
+	    PTOU(curproc)->u_cmask, NULL, newfd)) != 0) {
+		setf(newfd, NULL);
+		unfalloc(fp);
+		return (set_errno(error == ENOENT ? ENODEV : error));
+	}
+	if ((vp->v_flag & VDUP) != 0) {
+		(void) VOP_CLOSE(vp, mode, 1, 0, CRED(), NULL);
+		VN_RELE(vp);
+		setf(newfd, NULL);
+		unfalloc(fp);
+		return (set_errno(ENODEV));
+	}
+	fp->f_vnode = vp;
+	mutex_exit(&fp->f_tlock);
+	setf(newfd, fp);
+	if ((flags & SFD_CLOEXEC) != 0)
+		f_setfd_or(newfd, FD_CLOEXEC);
+
+	error = VOP_IOCTL(vp, SIGNALFDIOC_MASK, (intptr_t)&uset,
+	    mode | FKIOCTL, CRED(), &rval, NULL);
+	if (error != 0) {
+		(void) closeandsetf(newfd, NULL);
+		return (set_errno(error));
+	}
+	return (newfd);
+}
+
 boolean_t
 lx_sig_kernel_syscall(klwp_t *lwp, int nr, uintptr_t *args, long *result)
 {
@@ -668,6 +740,12 @@ lx_sig_kernel_syscall(klwp_t *lwp, int nr, uintptr_t *args, long *result)
 		break;
 	case 131:
 		*result = lxk_sigaltstack(args[0], args[1]);
+		break;
+	case 282:
+		*result = lxk_signalfd4(args[0], args[1], args[2], 0);
+		break;
+	case 289:
+		*result = lxk_signalfd4(args[0], args[1], args[2], args[3]);
 		break;
 	default:
 		return (B_FALSE);

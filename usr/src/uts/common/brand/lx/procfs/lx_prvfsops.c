@@ -223,14 +223,14 @@ lxpr_mount(vfs_t *vfsp, vnode_t *mvp, mounta_t *uap, cred_t *cr)
 	 */
 	vfs_setresource(vfsp, "lxproc", 0);
 
-	lxpr_mnt = kmem_alloc(sizeof (*lxpr_mnt), KM_SLEEP);
-	lxpr_mnt->lxprm_pidns = NULL;
+	lxpr_mnt = kmem_zalloc(sizeof (*lxpr_mnt), KM_SLEEP);
 
 	if ((err = ldi_ident_from_mod(&modlinkage, &li)) != 0) {
 		kmem_free(lxpr_mnt, sizeof (*lxpr_mnt));
 		return (err);
 	}
 	lxpr_mnt->lxprm_li = li;
+	mutex_init(&lxpr_mnt->lxprm_lock, NULL, MUTEX_DEFAULT, NULL);
 
 	mutex_enter(&lxpr_mount_lock);
 
@@ -242,6 +242,8 @@ lxpr_mount(vfs_t *vfsp, vnode_t *mvp, mounta_t *uap, cred_t *cr)
 	    (mvp->v_count > 1 || (mvp->v_flag & VROOT))) {
 		mutex_exit(&mvp->v_lock);
 		mutex_exit(&lxpr_mount_lock);
+		mutex_destroy(&lxpr_mnt->lxprm_lock);
+		ldi_ident_release(lxpr_mnt->lxprm_li);
 		kmem_free(lxpr_mnt, sizeof ((*lxpr_mnt)));
 		return (EBUSY);
 	}
@@ -278,8 +280,8 @@ static int
 lxpr_unmount(vfs_t *vfsp, int flag, cred_t *cr)
 {
 	lxpr_mnt_t *lxpr_mnt = (lxpr_mnt_t *)vfsp->vfs_data;
-	vnode_t *vp;
-	int count;
+	vnode_t *fixed[LXPR_NFILES], *vp;
+	int count, i;
 
 	ASSERT(lxpr_mnt != NULL);
 	vp = LXPTOV(lxpr_mnt->lxprm_node);
@@ -302,6 +304,17 @@ lxpr_unmount(vfs_t *vfsp, int flag, cred_t *cr)
 		return (ENOTSUP);
 	}
 
+	/* Drop the mount's fixed-node cache before testing root references. */
+	mutex_enter(&lxpr_mnt->lxprm_lock);
+	lxpr_mnt->lxprm_dying = B_TRUE;
+	bcopy(lxpr_mnt->lxprm_fixed, fixed, sizeof (fixed));
+	bzero(lxpr_mnt->lxprm_fixed, sizeof (lxpr_mnt->lxprm_fixed));
+	mutex_exit(&lxpr_mnt->lxprm_lock);
+	for (i = 0; i < LXPR_NFILES; i++) {
+		if (fixed[i] != NULL)
+			VN_RELE(fixed[i]);
+	}
+
 	/*
 	 * Ensure that no vnodes are in use on this mount point.
 	 */
@@ -309,6 +322,9 @@ lxpr_unmount(vfs_t *vfsp, int flag, cred_t *cr)
 	count = vp->v_count;
 	mutex_exit(&vp->v_lock);
 	if (count > 1) {
+		mutex_enter(&lxpr_mnt->lxprm_lock);
+		lxpr_mnt->lxprm_dying = B_FALSE;
+		mutex_exit(&lxpr_mnt->lxprm_lock);
 		mutex_exit(&lxpr_mount_lock);
 		return (EBUSY);
 	}
@@ -328,6 +344,7 @@ lxpr_unmount(vfs_t *vfsp, int flag, cred_t *cr)
 	if (lxpr_mnt->lxprm_pidns != NULL)
 		lx_pidns_rele(lxpr_mnt->lxprm_pidns);
 
+	mutex_destroy(&lxpr_mnt->lxprm_lock);
 	ldi_ident_release(lxpr_mnt->lxprm_li);
 
 	kmem_free(lxpr_mnt, sizeof (*lxpr_mnt));

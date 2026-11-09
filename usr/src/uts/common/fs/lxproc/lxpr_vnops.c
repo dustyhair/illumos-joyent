@@ -417,17 +417,14 @@ static int
 lxpr_close(vnode_t *vp, int flag, int count, offset_t offset, cred_t *cr,
     caller_context_t *ct)
 {
-	lxpr_node_t	*lxpr = VTOLXP(vp);
-	lxpr_nodetype_t	type = lxpr->lxpr_type;
-
 	/*
 	 * we should never get here because the close is done on the realvp
 	 * for these nodes
 	 */
-	ASSERT(type != LXPR_PID_FD_FD &&
-	    type != LXPR_PID_CURDIR &&
-	    type != LXPR_PID_ROOTDIR &&
-	    type != LXPR_PID_EXE);
+	ASSERT(VTOLXP(vp)->lxpr_type != LXPR_PID_FD_FD &&
+	    VTOLXP(vp)->lxpr_type != LXPR_PID_CURDIR &&
+	    VTOLXP(vp)->lxpr_type != LXPR_PID_ROOTDIR &&
+	    VTOLXP(vp)->lxpr_type != LXPR_PID_EXE);
 
 	return (0);
 }
@@ -2340,15 +2337,49 @@ static vnode_t *
 lxpr_lookup_common(vnode_t *dp, char *comp, proc_t *p,
     lxpr_dirent_t *dirtab, int dirtablen)
 {
-	lxpr_node_t *lxpnp;
+	lxpr_mnt_t *mnt = VTOLXPM(dp);
+	lxpr_node_t *lxpnp, *newnode;
+	vnode_t *vp;
 	int count;
 
 	for (count = 0; count < dirtablen; count++) {
 		if (strcmp(dirtab[count].d_name, comp) == 0) {
-			lxpnp = lxpr_getnode(dp, dirtab[count].d_type, p, 0);
-			dp = LXPTOV(lxpnp);
-			ASSERT(dp != NULL);
-			return (dp);
+			if (p != NULL) {
+				lxpnp = lxpr_getnode(dp, dirtab[count].d_type,
+				    p, 0);
+				return (LXPTOV(lxpnp));
+			}
+			mutex_enter(&mnt->lxprm_lock);
+			if (mnt->lxprm_dying) {
+				mutex_exit(&mnt->lxprm_lock);
+				return (NULL);
+			}
+			vp = mnt->lxprm_fixed[dirtab[count].d_type];
+			if (vp != NULL)
+				VN_HOLD(vp);
+			mutex_exit(&mnt->lxprm_lock);
+			if (vp != NULL)
+				return (vp);
+			newnode = lxpr_getnode(dp, dirtab[count].d_type,
+			    NULL, 0);
+			vp = LXPTOV(newnode);
+			mutex_enter(&mnt->lxprm_lock);
+			if (mnt->lxprm_dying) {
+				mutex_exit(&mnt->lxprm_lock);
+				lxpr_freenode(newnode);
+				return (NULL);
+			}
+			if (mnt->lxprm_fixed[dirtab[count].d_type] == NULL) {
+				VN_HOLD(vp);
+				mnt->lxprm_fixed[dirtab[count].d_type] = vp;
+				mutex_exit(&mnt->lxprm_lock);
+				return (vp);
+			}
+			lxpnp = VTOLXP(mnt->lxprm_fixed[dirtab[count].d_type]);
+			VN_HOLD(LXPTOV(lxpnp));
+			mutex_exit(&mnt->lxprm_lock);
+			lxpr_freenode(newnode);
+			return (LXPTOV(lxpnp));
 		}
 	}
 	return (NULL);
@@ -2556,21 +2587,20 @@ lxpr_readdir(vnode_t *dp, uio_t *uiop, cred_t *cr, int *eofp,
     caller_context_t *ct, int flags)
 {
 	lxpr_node_t *lxpnp = VTOLXP(dp);
-	lxpr_nodetype_t type = lxpnp->lxpr_type;
 	ssize_t uresid;
 	off_t uoffset;
 	int error;
 
 	ASSERT(dp->v_type == VDIR);
-	ASSERT(type < LXPR_NFILES);
+	ASSERT(lxpnp->lxpr_type < LXPR_NFILES);
 
 	/*
 	 * we should never get here because the readdir
 	 * is done on the realvp for these nodes
 	 */
-	ASSERT(type != LXPR_PID_FD_FD &&
-	    type != LXPR_PID_CURDIR &&
-	    type != LXPR_PID_ROOTDIR);
+	ASSERT(lxpnp->lxpr_type != LXPR_PID_FD_FD &&
+	    lxpnp->lxpr_type != LXPR_PID_CURDIR &&
+	    lxpnp->lxpr_type != LXPR_PID_ROOTDIR);
 
 	/*
 	 * restrict readdir permission to owner or root

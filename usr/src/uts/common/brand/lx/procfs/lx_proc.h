@@ -238,6 +238,7 @@ typedef enum lxpr_nodetype {
 	LXPR_SYS_KERNEL_CAPLCAP,	/* /proc/sys/kernel/cap_last_cap */
 	LXPR_SYS_KERNEL_COREPATT,	/* /proc/sys/kernel/core_pattern */
 	LXPR_SYS_KERNEL_HOSTNAME,	/* /proc/sys/kernel/hostname */
+	LXPR_SYS_KERNEL_DOMAINNAME,	/* /proc/sys/kernel/domainname */
 	LXPR_SYS_KERNEL_OVERFLOWUID,	/* /proc/sys/kernel/overflowuid */
 	LXPR_SYS_KERNEL_OVERFLOWGID,	/* /proc/sys/kernel/overflowgid */
 	LXPR_SYS_KERNEL_MSGMAX,	/* /proc/sys/kernel/msgmax */
@@ -354,6 +355,9 @@ typedef struct lxpr_mnt {
 	struct zone	*lxprm_zone;	/* zone for this mount */
 	lx_pidns_t	*lxprm_pidns;	/* PID view selected at mount */
 	ldi_ident_t	lxprm_li;	/* ident for ldi */
+	kmutex_t	lxprm_lock;	/* protects fixed vnode identities */
+	boolean_t	lxprm_dying;	/* blocks cache refill during unmount */
+	vnode_t		*lxprm_fixed[LXPR_NFILES];
 } lxpr_mnt_t;
 
 extern vnodeops_t	*lxpr_vnodeops;

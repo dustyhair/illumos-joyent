@@ -454,6 +454,9 @@ lx_mnt_private_tmpfs(lx_mntns_view_t *view, const char *target, char *data,
 		if (value == NULL || value[1] == '\0')
 			return (EINVAL);
 		*value++ = '\0';
+		/* illumos tmpfs has no inode-count limit to translate. */
+		if (strcmp(word, "nr_inodes") == 0)
+			continue;
 		if (!ISDIGIT(*value) || ddi_strtoull(value, &end,
 		    strcmp(word, "mode") == 0 ? 8 : 0, &number) != 0)
 			return (EINVAL);
@@ -517,8 +520,6 @@ lx_mnt_private_tmpfs(lx_mntns_view_t *view, const char *target, char *data,
 				if (gid == UINT32_MAX ||
 				    !VALID_GID(gid, curzone))
 					return (EINVAL);
-			} else if (strcmp(word, "nr_inodes") == 0) {
-				return (EOPNOTSUPP);
 			} else {
 				return (EINVAL);
 			}
@@ -550,17 +551,18 @@ lx_mnt_private_mount(lx_mntns_view_t *view, const char *sourcep,
 	char *source, *target, *type, *options;
 	char byte;
 	uint_t propagation;
-	boolean_t change, bind, remount;
+	boolean_t change, bind, move, remount;
 	int error;
 
 	/* Old mount callers, including bwrap, still send the magic prefix. */
 	if ((flags & LX_MS_MGC_MSK) == LX_MS_MGC_VAL)
 		flags &= ~LX_MS_MGC_MSK;
 
-	propagation = flags & (LX_MS_PRIVATE | LX_MS_SLAVE);
+	propagation = flags & (LX_MS_PRIVATE | LX_MS_SLAVE | LX_MS_SHARED);
 	bind = (flags & LX_MS_BIND) != 0;
+	move = (flags & LX_MS_MOVE) != 0;
 	remount = bind && (flags & LX_MS_REMOUNT) != 0;
-	change = !bind && propagation != 0;
+	change = !bind && !move && propagation != 0;
 	if (!lx_mntns_entry_enabled())
 		return (lx_mntns_view_capable(view, CRED()) ?
 		    EOPNOTSUPP : EPERM);
@@ -570,10 +572,13 @@ lx_mnt_private_mount(lx_mntns_view_t *view, const char *sourcep,
 		    LX_MS_RELATIME)) != 0)
 			return (lx_mntns_view_capable(view, CRED()) ?
 			    EOPNOTSUPP : EPERM);
+	} else if (move) {
+		if ((flags & ~(LX_MS_MOVE | LX_MS_SILENT)) != 0)
+			return (EINVAL);
 	} else if (change) {
-		if (propagation == (LX_MS_PRIVATE | LX_MS_SLAVE) ||
-		    (flags & ~(LX_MS_PRIVATE | LX_MS_SLAVE | LX_MS_REC |
-		    LX_MS_SILENT)) != 0)
+		if ((propagation & (propagation - 1)) != 0 ||
+		    (flags & ~(LX_MS_PRIVATE | LX_MS_SLAVE | LX_MS_SHARED |
+		    LX_MS_REC | LX_MS_SILENT)) != 0)
 			return (EINVAL);
 	} else if (bind ?
 	    (flags & ~(LX_MS_BIND | LX_MS_REC | LX_MS_RDONLY | LX_MS_NOSUID |
@@ -599,16 +604,31 @@ lx_mnt_private_mount(lx_mntns_view_t *view, const char *sourcep,
 		error = EFAULT;
 		goto out;
 	}
-	if (!bind && !change && datap != NULL &&
+	if (!bind && !move && !change && datap != NULL &&
 	    (error = lx_mnt_copyin_arg(datap, options, MAX_MNTOPT_STR)) != 0)
 		goto out;
 	if ((error = lx_mnt_copyin_arg(targetp, target, MAXPATHLEN)) != 0)
 		goto out;
 	if (!lx_mntns_view_capable(view, CRED()))
 		error = EPERM;
-	else if (change)
-		error = lx_mntns_mount_private(view, target, CRED());
-	else if (remount) {
+	else if (move) {
+		if (sourcep == NULL)
+			error = EINVAL;
+		else
+			error = lx_mntns_mount_move(view, source, target,
+			    CRED());
+	} else if (change) {
+		lx_mntns_propagation_t mode;
+
+		if (propagation == LX_MS_PRIVATE)
+			mode = LX_MNTNS_PROP_PRIVATE;
+		else if (propagation == LX_MS_SLAVE)
+			mode = LX_MNTNS_PROP_SLAVE;
+		else
+			mode = LX_MNTNS_PROP_SHARED;
+		error = lx_mntns_mount_propagation(view, target, mode,
+		    CRED());
+	} else if (remount) {
 		uint_t policy = 0;
 
 		if (flags & LX_MS_RDONLY)
@@ -980,12 +1000,16 @@ out:
 
 #define	LX_MNT_FORCE	0x1
 #define	LX_MNT_DETACH	0x2
+#define	LX_UMOUNT_NOFOLLOW	0x8
 
 static int
 lx_mnt_private_umount(lx_mntns_view_t *view, const char *pathp, int flags)
 {
 	char *path;
+	boolean_t nofollow = (flags & LX_UMOUNT_NOFOLLOW) != 0;
 	int error;
+
+	flags &= ~LX_UMOUNT_NOFOLLOW;
 
 	if (!lx_mntns_entry_enabled()) {
 		return (lx_mntns_view_capable(view, CRED()) ?
@@ -997,9 +1021,11 @@ lx_mnt_private_umount(lx_mntns_view_t *view, const char *pathp, int flags)
 		if (!lx_mntns_view_capable(view, CRED()))
 			error = EPERM;
 		else if (flags == 0)
-			error = lx_mntns_mount_unmount(view, path, CRED());
+			error = lx_mntns_mount_unmount(view, path, nofollow,
+			    CRED());
 		else if (flags == LX_MNT_DETACH)
-			error = lx_mntns_mount_detach(view, path, CRED());
+			error = lx_mntns_mount_detach(view, path, nofollow,
+			    CRED());
 		else if (flags == LX_MNT_FORCE)
 			error = EOPNOTSUPP;
 		else

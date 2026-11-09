@@ -246,6 +246,7 @@ static void lxpr_read_sys_fs_pipe_max(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_sys_kernel_caplcap(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_sys_kernel_corepatt(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_sys_kernel_hostname(lxpr_node_t *, lxpr_uiobuf_t *);
+static void lxpr_read_sys_kernel_domainname(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_sys_kernel_overflowuid(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_sys_kernel_overflowgid(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_sys_kernel_msgmax(lxpr_node_t *, lxpr_uiobuf_t *);
@@ -597,6 +598,7 @@ static lxpr_dirent_t sys_kerneldir[] = {
 	{ LXPR_SYS_KERNEL_CAPLCAP,	"cap_last_cap" },
 	{ LXPR_SYS_KERNEL_COREPATT,	"core_pattern" },
 	{ LXPR_SYS_KERNEL_HOSTNAME,	"hostname" },
+	{ LXPR_SYS_KERNEL_DOMAINNAME,	"domainname" },
 	{ LXPR_SYS_KERNEL_OVERFLOWUID,	"overflowuid" },
 	{ LXPR_SYS_KERNEL_OVERFLOWGID,	"overflowgid" },
 	{ LXPR_SYS_KERNEL_MSGMAX,	"msgmax" },
@@ -1042,6 +1044,7 @@ static void (*lxpr_read_function[])() = {
 	lxpr_read_sys_kernel_caplcap,	/* /proc/sys/kernel/cap_last_cap */
 	lxpr_read_sys_kernel_corepatt,	/* /proc/sys/kernel/core_pattern */
 	lxpr_read_sys_kernel_hostname,	/* /proc/sys/kernel/hostname */
+	lxpr_read_sys_kernel_domainname, /* /proc/sys/kernel/domainname */
 	lxpr_read_sys_kernel_overflowuid,  /* /proc/sys/kernel/overflowuid */
 	lxpr_read_sys_kernel_overflowgid,  /* /proc/sys/kernel/overflowgid */
 	lxpr_read_sys_kernel_msgmax,	/* /proc/sys/kernel/msgmax */
@@ -1227,6 +1230,7 @@ static vnode_t *(*lxpr_lookup_function[])() = {
 	lxpr_lookup_not_a_dir,		/* /proc/sys/kernel/cap_last_cap */
 	lxpr_lookup_not_a_dir,		/* /proc/sys/kernel/core_pattern */
 	lxpr_lookup_not_a_dir,		/* /proc/sys/kernel/hostname */
+	lxpr_lookup_not_a_dir,		/* /proc/sys/kernel/domainname */
 	lxpr_lookup_not_a_dir,		/* /proc/sys/kernel/overflowuid */
 	lxpr_lookup_not_a_dir,		/* /proc/sys/kernel/overflowgid */
 	lxpr_lookup_not_a_dir,		/* /proc/sys/kernel/msgmax */
@@ -1412,6 +1416,7 @@ static int (*lxpr_readdir_function[])() = {
 	lxpr_readdir_not_a_dir,		/* /proc/sys/kernel/cap_last_cap */
 	lxpr_readdir_not_a_dir,		/* /proc/sys/kernel/core_pattern */
 	lxpr_readdir_not_a_dir,		/* /proc/sys/kernel/hostname */
+	lxpr_readdir_not_a_dir,		/* /proc/sys/kernel/domainname */
 	lxpr_readdir_not_a_dir,		/* /proc/sys/kernel/overflowuid */
 	lxpr_readdir_not_a_dir,		/* /proc/sys/kernel/overflowgid */
 	lxpr_readdir_not_a_dir,		/* /proc/sys/kernel/msgmax */
@@ -1892,7 +1897,7 @@ lxpr_read_pid_coredump_filter(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
  */
 static int
 lxpr_write_pid_coredump_filter(lxpr_node_t *lxpnp, uio_t *uiop, cred_t *cr,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	lx_proc_data_t *pd;
 	ulong_t filter;
@@ -2587,7 +2592,6 @@ lxpr_enumerate_mounts(zone_t *zone)
 static uint_t
 lxpr_get_mountid(zone_t *zone, vfs_t *match_vfsp)
 {
-	lx_zone_data_t *lxzd = ztolxzd(zone);
 	vfs_t *vfsp, *vfslist;
 	uint_t mount_id;
 
@@ -2598,8 +2602,8 @@ lxpr_get_mountid(zone_t *zone, vfs_t *match_vfsp)
 	mount_id = 15;
 
 	ASSERT(zone != global_zone);
-	ASSERT(lxzd != NULL);
-	ASSERT(lxzd->lxzd_vdisks != NULL);
+	ASSERT(ztolxzd(zone) != NULL);
+	ASSERT(ztolxzd(zone)->lxzd_vdisks != NULL);
 
 	if (zone->zone_rootvp->v_vfsp == match_vfsp)
 		return (mount_id);
@@ -5265,6 +5269,13 @@ lxpr_read_sys_kernel_hostname(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	lxpr_uiobuf_printf(uiobuf, "%s\n", uts_nodename());
 }
 
+static void
+lxpr_read_sys_kernel_domainname(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
+{
+	ASSERT(lxpnp->lxpr_type == LXPR_SYS_KERNEL_DOMAINNAME);
+	lxpr_uiobuf_printf(uiobuf, "%s\n", LXPTOZ(lxpnp)->zone_domain);
+}
+
 /*
  * lxpr_read_sys_kernel_overflowuid(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf):
  *
@@ -5496,11 +5507,10 @@ lxpr_read_sys_kernel_rand_uuid(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	 * Each read from this read-only file should return a new
 	 * random 128-bit UUID string in the standard UUID format.
 	 */
-	zone_t *zone = LXPTOZ(lxpnp);
 	char uuid[UUID_PRINTABLE_STRING_LENGTH];
 
 	ASSERT(lxpnp->lxpr_type == LXPR_SYS_KERNEL_RAND_UUID);
-	ASSERT(zone->zone_brand == &lx_brand);
+	ASSERT(LXPTOZ(lxpnp)->zone_brand == &lx_brand);
 
 	lxpr_gen_uuid(uuid, sizeof (uuid));
 
@@ -7076,15 +7086,49 @@ static vnode_t *
 lxpr_lookup_common(vnode_t *dp, char *comp, proc_t *p,
     lxpr_dirent_t *dirtab, int dirtablen)
 {
-	lxpr_node_t *lxpnp;
+	lxpr_mnt_t *mnt = VTOLXPM(dp);
+	lxpr_node_t *lxpnp, *newnode;
+	vnode_t *vp;
 	int count;
 
 	for (count = 0; count < dirtablen; count++) {
 		if (strcmp(dirtab[count].d_name, comp) == 0) {
-			lxpnp = lxpr_getnode(dp, dirtab[count].d_type, p, 0);
-			dp = LXPTOV(lxpnp);
-			ASSERT(dp != NULL);
-			return (dp);
+			if (p != NULL) {
+				lxpnp = lxpr_getnode(dp, dirtab[count].d_type,
+				    p, 0);
+				return (LXPTOV(lxpnp));
+			}
+			mutex_enter(&mnt->lxprm_lock);
+			if (mnt->lxprm_dying) {
+				mutex_exit(&mnt->lxprm_lock);
+				return (NULL);
+			}
+			vp = mnt->lxprm_fixed[dirtab[count].d_type];
+			if (vp != NULL)
+				VN_HOLD(vp);
+			mutex_exit(&mnt->lxprm_lock);
+			if (vp != NULL)
+				return (vp);
+			newnode = lxpr_getnode(dp, dirtab[count].d_type,
+			    NULL, 0);
+			vp = LXPTOV(newnode);
+			mutex_enter(&mnt->lxprm_lock);
+			if (mnt->lxprm_dying) {
+				mutex_exit(&mnt->lxprm_lock);
+				lxpr_freenode(newnode);
+				return (NULL);
+			}
+			if (mnt->lxprm_fixed[dirtab[count].d_type] == NULL) {
+				VN_HOLD(vp);
+				mnt->lxprm_fixed[dirtab[count].d_type] = vp;
+				mutex_exit(&mnt->lxprm_lock);
+				return (vp);
+			}
+			lxpnp = VTOLXP(mnt->lxprm_fixed[dirtab[count].d_type]);
+			VN_HOLD(LXPTOV(lxpnp));
+			mutex_exit(&mnt->lxprm_lock);
+			lxpr_freenode(newnode);
+			return (LXPTOV(lxpnp));
 		}
 	}
 	return (NULL);

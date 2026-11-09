@@ -272,7 +272,7 @@ remove_deployment()
 	typeset directory=$1 expected_zone=$2 link rules
 	typeset -i cleanup_errors=0
 
-	[[ -f "$directory/state" ]] || return
+	[[ -f "$directory/state" ]] || return 0
 	# shellcheck disable=SC1090,SC1091
 	. "$directory/state"
 	[[ "$saved_zone" == "$expected_zone" ]] ||
@@ -357,7 +357,7 @@ quiesce()
 	[[ "$zonepath" =~ ^/[A-Za-z0-9_./-]+$ ]] ||
 	    die "cannot determine a safe zone path"
 	directory=$(runtime_directory "$zone")
-	[[ -f "$directory/state" ]] || return
+	[[ -f "$directory/state" ]] || return 0
 	# shellcheck disable=SC1090,SC1091
 	. "$directory/state"
 	[[ "$saved_zone" == "$zone" ]] ||

@@ -95,6 +95,7 @@ static volatile uint_t lx_mntns_nviews;
 
 static int lx_mntns_destroy(lx_mntns_view_t *, cred_t *);
 static int lx_mntns_tree_fini(lx_mntns_view_t *, cred_t *);
+static int lx_mntns_attach(vnode_t *, vfs_t *, boolean_t);
 static void lx_mntns_reap(void *);
 static void lx_mntns_retire(lx_mntns_view_t *);
 
@@ -592,7 +593,8 @@ lx_mntns_bind_locked(lx_mntns_view_t *view, vnode_t *source,
 {
 	lx_mntns_mount_t *mount;
 	const char *options;
-	int error;
+	boolean_t private_target;
+	int error, flags;
 
 	ASSERT(MUTEX_HELD(&view->lv_lock));
 	if (view->lv_nmounts >= LX_MNTNS_MAX_MOUNTS)
@@ -602,6 +604,7 @@ lx_mntns_bind_locked(lx_mntns_view_t *view, vnode_t *source,
 	    ((covered->v_type == VDIR) != (source->v_type == VDIR))))
 		return (EINVAL);
 	mount = kmem_zalloc(sizeof (*mount), KM_SLEEP);
+	private_target = (covered->v_flag & VNOMOUNT) != 0;
 	/* Keep noexec when binding a source from another view. */
 	if (ptmxalias)
 		options = (source->v_vfsp->vfs_flag & VFS_NOEXEC) != 0 ?
@@ -609,11 +612,28 @@ lx_mntns_bind_locked(lx_mntns_view_t *view, vnode_t *source,
 	else
 		options = (source->v_vfsp->vfs_flag & VFS_NOEXEC) != 0 ?
 		    "nosub,noexec" : "nosub";
+	flags = (readonly ? MS_RDONLY : 0) |
+	    (private_target ? MS_NOSPLICE : 0);
 	error = lx_mntns_mount("lx-private-bind", path, "lofs", options,
-	    readonly ? MS_RDONLY : 0, covered, source, NULL, view->lv_cred,
-	    &mount->lm_vfs);
-	if (error == 0)
+	    flags, covered, source, NULL, view->lv_cred, &mount->lm_vfs);
+	if (error == 0 && private_target) {
+		vfs_lock_wait(mount->lm_vfs);
+		vfs_setmntpoint(mount->lm_vfs, path, 0);
+		vfs_unlock(mount->lm_vfs);
+		if ((error = VFS_ROOT(mount->lm_vfs, &mount->lm_root)) == 0)
+			error = lx_mntns_attach(covered, mount->lm_vfs, B_TRUE);
+		if (error != 0) {
+			if (mount->lm_root != NULL) {
+				VN_RELE(mount->lm_root);
+				mount->lm_root = NULL;
+			}
+			VERIFY0(dounmount(mount->lm_vfs, 0, view->lv_cred));
+			VFS_RELE(mount->lm_vfs);
+			mount->lm_vfs = NULL;
+		}
+	} else if (error == 0) {
 		error = lx_mntns_pin(mount, view->lv_cred);
+	}
 	if (error != 0) {
 		kmem_free(mount, sizeof (*mount));
 		return (error);
@@ -768,7 +788,7 @@ lx_mntns_descendant(lx_mntns_view_t *view, vfs_t *vfs, vfs_t *ancestor)
  * mount policy while exchanging the unspliced reference for a namespace one.
  */
 static int
-lx_mntns_attach(vnode_t *covered, vfs_t *vfs)
+lx_mntns_attach(vnode_t *covered, vfs_t *vfs, boolean_t allow_vnomount)
 {
 	ulong_t saved, mask = VFS_RDONLY | VFS_NOSETUID | VFS_NODEVICES |
 	    VFS_NOMNTTAB;
@@ -778,7 +798,8 @@ lx_mntns_attach(vnode_t *covered, vfs_t *vfs)
 	mount_in_progress(curzone);
 	if ((error = vn_vfswlock(covered)) != 0)
 		goto out;
-	if (vn_mountedvfs(covered) != NULL || (covered->v_flag & VNOMOUNT)) {
+	if (vn_mountedvfs(covered) != NULL ||
+	    (!allow_vnomount && (covered->v_flag & VNOMOUNT))) {
 		error = (covered->v_flag & VNOMOUNT) ? EINVAL : EBUSY;
 		vn_vfsunlock(covered);
 		goto out;
@@ -896,7 +917,7 @@ lx_mntns_rbind_locked(lx_mntns_view_t *view, vnode_t *from,
 	base->lm_root = stage->lv_root;
 	base->lm_path = refstr_alloc(destination);
 	base->lm_order = view->lv_next_order;
-	if ((error = lx_mntns_attach(covered, stage->lv_vfs)) != 0)
+	if ((error = lx_mntns_attach(covered, stage->lv_vfs, B_FALSE)) != 0)
 		goto out;
 	base->lm_next = view->lv_mounts;
 	if (stage->lv_mounts != NULL) {
@@ -941,12 +962,12 @@ out:
 /*
  * Every allowed constructor creates private mounts: LOFS grafts use nosub,
  * tmpfs is a new instance, and copies replay into distinct mount objects.
- * Shared/unbindable creation is rejected. There is no peer or master link.
- * Both PRIVATE and SLAVE therefore preserve the existing private state,
- * recursively as well. Validate the authority and exact mountpoint anyway.
+ * There is no peer or master link, so PRIVATE, SLAVE, and SHARED all preserve
+ * the existing isolated state. Validate the operation and exact mountpoint.
  */
 int
-lx_mntns_mount_private(lx_mntns_view_t *view, const char *target, cred_t *actor)
+lx_mntns_mount_propagation(lx_mntns_view_t *view, const char *target,
+    lx_mntns_propagation_t propagation, cred_t *actor)
 {
 	vnode_t *vp = NULL;
 	int error;
@@ -954,6 +975,10 @@ lx_mntns_mount_private(lx_mntns_view_t *view, const char *target, cred_t *actor)
 	if (!lx_mntns_entry_enabled() ||
 	    !lx_mntns_view_capable(view, actor))
 		return (EPERM);
+	if (propagation != LX_MNTNS_PROP_PRIVATE &&
+	    propagation != LX_MNTNS_PROP_SLAVE &&
+	    propagation != LX_MNTNS_PROP_SHARED)
+		return (EINVAL);
 	mutex_enter(&view->lv_lock);
 	error = lookupname((char *)target, UIO_SYSSPACE, FOLLOW, NULL, &vp);
 	if (error == 0 &&
@@ -1379,7 +1404,7 @@ lx_mntns_retire(lx_mntns_view_t *view)
 /* Destroy one visible leaf mount while retaining the rest of the view. */
 int
 lx_mntns_mount_unmount(lx_mntns_view_t *view, const char *target,
-    cred_t *actor)
+    boolean_t nofollow, cred_t *actor)
 {
 	lx_mntns_mount_t *mount, *scan, **link;
 	vnode_t *vp = NULL;
@@ -1390,9 +1415,14 @@ lx_mntns_mount_unmount(lx_mntns_view_t *view, const char *target,
 	    !lx_mntns_view_capable(view, actor))
 		return (EPERM);
 	mutex_enter(&view->lv_lock);
-	if ((error = lookupname((char *)target, UIO_SYSSPACE, FOLLOW,
+	if ((error = lookupname((char *)target, UIO_SYSSPACE,
+	    nofollow ? NO_FOLLOW : FOLLOW,
 	    NULL, &vp)) != 0)
 		goto out;
+	if (vp->v_type == VLNK) {
+		error = EINVAL;
+		goto out;
+	}
 	for (link = &view->lv_mounts; (mount = *link) != NULL;
 	    link = &mount->lm_next) {
 		if (vp == mount->lm_root &&
@@ -1447,7 +1477,8 @@ out:
  * Records remain in reverse creation order for eventual native dounmount.
  */
 int
-lx_mntns_mount_detach(lx_mntns_view_t *view, const char *target, cred_t *actor)
+lx_mntns_mount_detach(lx_mntns_view_t *view, const char *target,
+    boolean_t nofollow, cred_t *actor)
 {
 	lx_mntns_unlink_t *list;
 	lx_mntns_mount_t *mount;
@@ -1461,9 +1492,14 @@ lx_mntns_mount_detach(lx_mntns_view_t *view, const char *target, cred_t *actor)
 	    !lx_mntns_view_capable(view, actor))
 		return (EPERM);
 	mutex_enter(&view->lv_lock);
-	if ((error = lookupname((char *)target, UIO_SYSSPACE, FOLLOW,
+	if ((error = lookupname((char *)target, UIO_SYSSPACE,
+	    nofollow ? NO_FOLLOW : FOLLOW,
 	    NULL, &vp)) != 0)
 		goto out;
+	if (vp->v_type == VLNK) {
+		error = EINVAL;
+		goto out;
+	}
 	for (mount = view->lv_mounts; mount != NULL; mount = mount->lm_next) {
 		if (vp == mount->lm_root &&
 		    mount->lm_vfs->vfs_vnodecovered != NULL) {
@@ -1518,6 +1554,198 @@ out:
 	return (error);
 }
 
+/* Move one mounted subtree without replacing its filesystem instances. */
+int
+lx_mntns_mount_move(lx_mntns_view_t *view, const char *source,
+    const char *target, cred_t *actor)
+{
+	lx_mntns_mount_t *mount = NULL, *next, *scan;
+	lx_mntns_mount_t **records = NULL;
+	refstr_t **names = NULL, *prefix = NULL;
+	vnode_t *from = NULL, *covered = NULL, *oldcovered = NULL;
+	vfs_t *vfs;
+	char *sourcepath, *targetpath, *name;
+	const char *path, *suffix;
+	size_t sourcelen, count = 0, i, capacity;
+	ulong_t saved, mask = VFS_RDONLY | VFS_NOSETUID | VFS_NODEVICES |
+	    VFS_NOMNTTAB;
+	int flags, error;
+	boolean_t old_locked = B_FALSE, target_locked = B_FALSE;
+
+	if (source == NULL || target == NULL || source[0] != '/' ||
+	    target[0] != '/')
+		return (EINVAL);
+	if (!lx_mntns_entry_enabled() ||
+	    !lx_mntns_view_capable(view, actor))
+		return (EPERM);
+	sourcepath = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+	targetpath = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+	name = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+	mutex_enter(&view->lv_lock);
+	if ((error = lookupname((char *)source, UIO_SYSSPACE, FOLLOW,
+	    NULL, &from)) != 0 ||
+	    (error = lookupname((char *)target, UIO_SYSSPACE, FOLLOW,
+	    NULL, &covered)) != 0)
+		goto out;
+	if (!lx_mntns_owns(view, from) || !lx_mntns_owns(view, covered)) {
+		error = EINVAL;
+		goto out;
+	}
+	for (scan = view->lv_mounts; scan != NULL; scan = scan->lm_next) {
+		if (scan->lm_root == from &&
+		    scan->lm_vfs->vfs_vnodecovered != NULL) {
+			mount = scan;
+			break;
+		}
+	}
+	if (mount == NULL || !(from->v_flag & VROOT)) {
+		error = from == view->lv_root ? EOPNOTSUPP : EINVAL;
+		goto out;
+	}
+	if (covered == view->lv_root) {
+		error = EOPNOTSUPP;
+		goto out;
+	}
+	if ((from->v_type == VDIR) != (covered->v_type == VDIR)) {
+		error = ENOTDIR;
+		goto out;
+	}
+	if ((error = lx_mntns_path_locked(view, from, actor,
+	    sourcepath)) != 0 ||
+	    (error = lx_mntns_path_locked(view, covered, actor,
+	    targetpath)) != 0)
+		goto out;
+	sourcelen = strlen(sourcepath);
+	if (strcmp(sourcepath, targetpath) == 0 ||
+	    (strncmp(targetpath, sourcepath, sourcelen) == 0 &&
+	    targetpath[sourcelen] == '/')) {
+		error = EINVAL;
+		goto out;
+	}
+	vfs = mount->lm_vfs;
+	if (lx_mntns_descendant(view, covered->v_vfsp, vfs)) {
+		error = EINVAL;
+		goto out;
+	}
+	capacity = view->lv_nmounts;
+	records = kmem_zalloc(capacity * sizeof (*records), KM_SLEEP);
+	names = kmem_zalloc(capacity * sizeof (*names), KM_SLEEP);
+	for (scan = view->lv_mounts; scan != NULL; scan = scan->lm_next) {
+		if (scan->lm_vfs->vfs_vnodecovered == NULL ||
+		    !lx_mntns_descendant(view, scan->lm_vfs, vfs))
+			continue;
+		path = refstr_value(scan->lm_path);
+		if (strncmp(path, sourcepath, sourcelen) != 0 ||
+		    (path[sourcelen] != '\0' && path[sourcelen] != '/')) {
+			error = EAGAIN;
+			goto out;
+		}
+		suffix = path + sourcelen;
+		if (snprintf(name, MAXPATHLEN, "%s%s", targetpath,
+		    suffix) >= MAXPATHLEN) {
+			error = ENAMETOOLONG;
+			goto out;
+		}
+		records[count] = scan;
+		names[count++] = refstr_alloc(name);
+	}
+	if (count == 0) {
+		error = EAGAIN;
+		goto out;
+	}
+	if (mount->lm_prefix == NULL)
+		prefix = vfs_getmntpoint(vfs);
+	VN_HOLD(oldcovered = vfs->vfs_vnodecovered);
+	if (oldcovered == covered) {
+		error = EINVAL;
+		goto out;
+	}
+	zone_hold(curzone);
+	mount_in_progress(curzone);
+	if ((error = vn_vfswlock(oldcovered)) != 0)
+		goto unlock;
+	old_locked = B_TRUE;
+	if ((error = vn_vfswlock(covered)) != 0)
+		goto unlock;
+	target_locked = B_TRUE;
+	if (vn_mountedvfs(covered) != NULL || (covered->v_flag & VNOMOUNT)) {
+		error = (covered->v_flag & VNOMOUNT) ? EINVAL : EBUSY;
+		goto unlock;
+	}
+	vfs_lock_wait(vfs);
+	if (vfs->vfs_vnodecovered != oldcovered) {
+		vfs_unlock(vfs);
+		error = EAGAIN;
+		goto unlock;
+	}
+	saved = vfs->vfs_flag;
+	flags = MS_NOMNTTAB;
+	if (saved & VFS_RDONLY)
+		flags |= MS_RDONLY;
+	if ((saved & (VFS_NOSETUID | VFS_NODEVICES)) ==
+	    (VFS_NOSETUID | VFS_NODEVICES))
+		flags |= MS_NOSUID;
+	(void) dnlc_purge_vfsp(vfs, 0);
+	dnlc_purge_vp(covered);
+	vfs_detach(vfs);
+	vfs_lock_wait(vfs);
+	vfs_setmntpoint(vfs, targetpath, 0);
+	vfs_add(covered, vfs, flags);
+	vfs->vfs_flag = (vfs->vfs_flag & ~mask) | (saved & mask);
+	vfs_unlock(vfs);
+	/* Exchange the retained detached hold for the new splice hold. */
+	VFS_RELE(vfs);
+	if (mount->lm_prefix == NULL) {
+		mount->lm_prefix = prefix;
+		prefix = NULL;
+	}
+	for (i = 0; i < count; i++) {
+		refstr_rele(records[i]->lm_path);
+		records[i]->lm_path = names[i];
+		names[i] = NULL;
+	}
+	/* A move is the newest publication, including when it stacks mounts. */
+	for (i = count; i > 0; i--)
+		records[i - 1]->lm_order = view->lv_next_order++;
+	scan = view->lv_mounts;
+	view->lv_mounts = NULL;
+	while (scan != NULL) {
+		next = scan->lm_next;
+		lx_mntns_insert_ordered(view, scan);
+		scan = next;
+	}
+	error = 0;
+unlock:
+	if (target_locked)
+		vn_vfsunlock(covered);
+	if (old_locked)
+		vn_vfsunlock(oldcovered);
+	mount_completed(curzone);
+	zone_rele(curzone);
+out:
+	if (oldcovered != NULL)
+		VN_RELE(oldcovered);
+	if (covered != NULL)
+		VN_RELE(covered);
+	if (from != NULL)
+		VN_RELE(from);
+	if (prefix != NULL)
+		refstr_rele(prefix);
+	if (names != NULL) {
+		for (i = 0; i < capacity; i++) {
+			if (names[i] != NULL)
+				refstr_rele(names[i]);
+		}
+		kmem_free(names, capacity * sizeof (*names));
+		kmem_free(records, capacity * sizeof (*records));
+	}
+	mutex_exit(&view->lv_lock);
+	kmem_free(name, MAXPATHLEN);
+	kmem_free(targetpath, MAXPATHLEN);
+	kmem_free(sourcepath, MAXPATHLEN);
+	return (error);
+}
+
 /*
  * Public bind. Resolve both operands with the actor's root,
  * cwd and credentials, then pass held vnodes to domount. The kernel mount
@@ -1548,8 +1776,13 @@ lx_mntns_mount_bind(lx_mntns_view_t *view, const char *source,
 		error = EINVAL;
 		goto out;
 	}
-	error = lookupname((char *)target, UIO_SYSSPACE, FOLLOW, NULL,
-	    &covered);
+	if (target[0] == '/') {
+		error = lx_mntns_lookup_at(view->lv_root, target, actor,
+		    &covered);
+	} else {
+		error = lookupname((char *)target, UIO_SYSSPACE, FOLLOW, NULL,
+		    &covered);
+	}
 	if (error != 0)
 		goto out;
 	if (!lx_mntns_owns(view, covered)) {

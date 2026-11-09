@@ -201,10 +201,12 @@ timerfd_poll(dev_t dev, short events, int anyyet, short *reventsp,
 }
 
 static int
-timerfd_copyin(uintptr_t addr, itimerspec_t *dest)
+timerfd_copyin(uintptr_t addr, itimerspec_t *dest, int md)
 {
-	if (get_udatamodel() == DATAMODEL_NATIVE) {
-		if (copyin((void *)addr, dest, sizeof (itimerspec_t)) != 0)
+	if ((md & FKIOCTL) != 0 ||
+	    get_udatamodel() == DATAMODEL_NATIVE) {
+		if (ddi_copyin((void *)addr, dest, sizeof (itimerspec_t),
+		    md) != 0)
 			return (EFAULT);
 	} else {
 		itimerspec32_t dest32;
@@ -225,10 +227,12 @@ timerfd_copyin(uintptr_t addr, itimerspec_t *dest)
 }
 
 static int
-timerfd_copyout(itimerspec_t *src, uintptr_t addr)
+timerfd_copyout(itimerspec_t *src, uintptr_t addr, int md)
 {
-	if (get_udatamodel() == DATAMODEL_NATIVE) {
-		if (copyout(src, (void *)addr, sizeof (itimerspec_t)) != 0)
+	if ((md & FKIOCTL) != 0 ||
+	    get_udatamodel() == DATAMODEL_NATIVE) {
+		if (ddi_copyout(src, (void *)addr, sizeof (itimerspec_t),
+		    md) != 0)
 			return (EFAULT);
 	} else {
 		itimerspec32_t src32;
@@ -309,7 +313,7 @@ timerfd_ioctl(dev_t dev, int cmd, intptr_t arg, int md, cred_t *cr, int *rv)
 		if (err != 0)
 			return (err);
 
-		if ((err = timerfd_copyout(&when, arg)) != 0)
+		if ((err = timerfd_copyout(&when, arg, md)) != 0)
 			return (err);
 
 		return (0);
@@ -318,10 +322,11 @@ timerfd_ioctl(dev_t dev, int cmd, intptr_t arg, int md, cred_t *cr, int *rv)
 	case TIMERFDIOC_SETTIME: {
 		timerfd_settime_t st;
 
-		if (copyin((void *)arg, &st, sizeof (st)) != 0)
+		if (ddi_copyin((void *)arg, &st, sizeof (st), md) != 0)
 			return (EFAULT);
 
-		if ((err = timerfd_copyin(st.tfd_settime_value, &when)) != 0)
+		if ((err = timerfd_copyin(st.tfd_settime_value, &when,
+		    md)) != 0)
 			return (err);
 
 		it = timerfd_itimer_lock(state);
@@ -376,7 +381,8 @@ timerfd_ioctl(dev_t dev, int cmd, intptr_t arg, int md, cred_t *cr, int *rv)
 		if (err != 0 || st.tfd_settime_ovalue == 0)
 			return (err);
 
-		if ((err = timerfd_copyout(&oval, st.tfd_settime_ovalue)) != 0)
+		if ((err = timerfd_copyout(&oval, st.tfd_settime_ovalue,
+		    md)) != 0)
 			return (err);
 
 		return (0);

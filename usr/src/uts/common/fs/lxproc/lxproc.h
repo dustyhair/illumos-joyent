@@ -244,6 +244,9 @@ typedef struct lxpr_mnt {
 	lxpr_node_t	*lxprm_node;	/* node at root of proc mount */
 	struct zone	*lxprm_zone;	/* zone for this mount */
 	ldi_ident_t	lxprm_li;	/* ident for ldi */
+	kmutex_t	lxprm_lock;	/* protects fixed vnode identities */
+	boolean_t	lxprm_dying;	/* blocks cache refill during unmount */
+	vnode_t		*lxprm_fixed[LXPR_NFILES];
 } lxpr_mnt_t;
 
 extern vnodeops_t	*lxpr_vnodeops;

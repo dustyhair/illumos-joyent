@@ -33,10 +33,17 @@
 #include <sys/systm.h>
 #include <sys/cmn_err.h>
 #include <sys/brand.h>
+#include <sys/user.h>
+#include <sys/file.h>
+#include <sys/fcntl.h>
+#include <sys/vnode.h>
+#include <sys/timerfd.h>
 #include <sys/lx_brand.h>
 #include <sys/lx_impl.h>
 #include <sys/int_limits.h>
 #include <lx_signum.h>
+
+static char lx_timerfd_path[] = "/dev/timerfd";
 
 /*
  * From "uts/common/os/timer.c":
@@ -749,4 +756,96 @@ lx_clock_nanosleep(int clock, int flags, timespec_t *rqtp, timespec_t *rmtp)
 			return (set_errno(EFAULT));
 	}
 	return (set_errno(EINTR));
+}
+
+long
+lx_timerfd_create_kernel(int clock, int flags)
+{
+	file_t *fp;
+	vnode_t *vp;
+	int error, fd, mode, rval = 0;
+
+	if (clock != 0 && clock != TIMERFD_MONOTONIC)
+		return (set_errno(EINVAL));
+	if ((flags & ~(TFD_NONBLOCK | TFD_CLOEXEC)) != 0)
+		return (set_errno(EINVAL));
+	mode = FREAD | FWRITE;
+	if ((flags & TFD_NONBLOCK) != 0)
+		mode |= FNONBLOCK;
+	if ((error = falloc(NULL, mode, &fp, &fd)) != 0)
+		return (set_errno(error));
+	if ((error = vn_openat(lx_timerfd_path, UIO_SYSSPACE, mode, 0, &vp,
+	    CRCREAT, PTOU(curproc)->u_cmask, NULL, fd)) != 0) {
+		setf(fd, NULL);
+		unfalloc(fp);
+		return (set_errno(error == ENOENT ? ENOTSUP : error));
+	}
+	if ((vp->v_flag & VDUP) != 0) {
+		(void) VOP_CLOSE(vp, mode, 1, 0, CRED(), NULL);
+		VN_RELE(vp);
+		setf(fd, NULL);
+		unfalloc(fp);
+		return (set_errno(ENOTSUP));
+	}
+	fp->f_vnode = vp;
+	mutex_exit(&fp->f_tlock);
+	setf(fd, fp);
+	if ((flags & TFD_CLOEXEC) != 0)
+		f_setfd_or(fd, FD_CLOEXEC);
+	error = VOP_IOCTL(vp, TIMERFDIOC_CREATE, clock, mode | FKIOCTL,
+	    CRED(), &rval, NULL);
+	if (error != 0) {
+		(void) closeandsetf(fd, NULL);
+		return (set_errno(error));
+	}
+	return (fd);
+}
+
+long
+lx_timerfd_settime_kernel(int fd, int flags, uintptr_t valuep,
+    uintptr_t oldp)
+{
+	itimerspec_t value, old;
+	timerfd_settime_t st;
+	file_t *fp;
+	int error, rval = 0;
+
+	if ((flags & ~(TFD_TIMER_ABSTIME | TFD_TIMER_CANCEL_ON_SET)) != 0)
+		return (set_errno(EINVAL));
+	if (copyin((void *)valuep, &value, sizeof (value)) != 0)
+		return (set_errno(EFAULT));
+	st.tfd_settime_flags = flags;
+	st.tfd_settime_value = (uintptr_t)&value;
+	st.tfd_settime_ovalue = oldp == 0 ? 0 : (uintptr_t)&old;
+	if ((fp = getf(fd)) == NULL)
+		return (set_errno(EBADF));
+	error = VOP_IOCTL(fp->f_vnode, TIMERFDIOC_SETTIME, (intptr_t)&st,
+	    fp->f_flag | FKIOCTL, CRED(), &rval, NULL);
+	releasef(fd);
+	if (error != 0)
+		return (set_errno(error == ENOTTY || error == ENXIO ?
+		    EINVAL : error));
+	if (oldp != 0 && copyout(&old, (void *)oldp, sizeof (old)) != 0)
+		return (set_errno(EFAULT));
+	return (0);
+}
+
+long
+lx_timerfd_gettime_kernel(int fd, uintptr_t valuep)
+{
+	itimerspec_t value;
+	file_t *fp;
+	int error, rval = 0;
+
+	if ((fp = getf(fd)) == NULL)
+		return (set_errno(EBADF));
+	error = VOP_IOCTL(fp->f_vnode, TIMERFDIOC_GETTIME,
+	    (intptr_t)&value, fp->f_flag | FKIOCTL, CRED(), &rval, NULL);
+	releasef(fd);
+	if (error != 0)
+		return (set_errno(error == ENOTTY || error == ENXIO ?
+		    EINVAL : error));
+	if (copyout(&value, (void *)valuep, sizeof (value)) != 0)
+		return (set_errno(EFAULT));
+	return (0);
 }
