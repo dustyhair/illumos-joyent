@@ -488,6 +488,17 @@ pwr_query(void)
 }
 
 static int
+pwr_replace(void)
+{
+	struct sigaction sa, old;
+
+	(void) memset(&sa, 0, sizeof (sa));
+	sa.sa_handler = SIG_DFL;
+	return (sigaction(SIGPWR, &sa, &old) != 0 ||
+	    old.sa_handler != SIG_DFL);
+}
+
+static int
 pwr_reset(void)
 {
 	struct sigaction sa;
@@ -623,6 +634,7 @@ main(void)
 	RUN(sse_preservation, 0);
 	RUN(avx_preservation, 0);
 	RUN(read_eintr, 0); RUN(read_restart, 0); RUN(pwr_query, 0);
+	RUN(pwr_replace, 0);
 	RUN(pwr_reset, SIGPWR);
 	RUN(user_segv_info, 0); RUN(fault_recovery, 0);
 	if (is_lx) {

@@ -213,10 +213,14 @@ lxk_sigaction(uintptr_t sig, uintptr_t ap, uintptr_t op, uintptr_t size)
 		old = pd->l_sigacts[sig];
 	} else {
 		if (op != 0 && PTOU(p)->u_signal[native - 1] != SIG_DFL &&
-		    PTOU(p)->u_signal[native - 1] != SIG_IGN) {
+		    PTOU(p)->u_signal[native - 1] != SIG_IGN &&
+		    sig != LX_SIGPWR) {
 			mutex_exit(&p->p_lock);
 			return (set_errno(EOPNOTSUPP));
 		}
+		/*
+		 * The legacy SIGPWR bridge represents Linux's default action.
+		 */
 		bzero(&old, sizeof (old));
 		if (PTOU(p)->u_signal[native - 1] == SIG_IGN)
 			old.handler = 1;
@@ -644,18 +648,6 @@ lx_sig_kernel_syscall(klwp_t *lwp, int nr, uintptr_t *args, long *result)
 	case 13:
 		if (args[0] > 0 && args[0] <= LX_NSIG &&
 		    ltos_signo[args[0]] < 0 && !lx_kernel_restricted(curproc))
-			return (B_FALSE);
-		/*
-		 * An unrestricted process keeps SIGPWR on the legacy userland
-		 * signal bridge because its native and Linux default actions
-		 * differ.  Exec clears the kernel action record before
-		 * lx_siginit installs that bridge.  Leave an unowned SIGPWR
-		 * query with the established owner until a restricted process,
-		 * or a recorded kernel action, takes ownership.
-		 */
-		if (args[0] == LX_SIGPWR && args[1] == 0 &&
-		    !lx_kernel_restricted(curproc) &&
-		    (pd->l_sigvalid & (1ULL << (LX_SIGPWR - 1))) == 0)
 			return (B_FALSE);
 		*result = lxk_sigaction(args[0], args[1], args[2], args[3]);
 		break;
