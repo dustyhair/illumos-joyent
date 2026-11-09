@@ -149,6 +149,7 @@ extern void lx_stack_postfork(void);
 
 extern void lx_block_all_signals();
 extern void lx_unblock_all_signals();
+extern void lx_unblock_all_signals_on_return();
 extern int lx_all_signals_blocked();
 
 /*

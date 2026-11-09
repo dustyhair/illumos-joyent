@@ -472,7 +472,7 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4, uintptr_t p5)
 			 * Re-enable signal delivery in the parent process.
 			 */
 			if (flags & LX_CLONE_VFORK) {
-				lx_unblock_all_signals();
+				lx_unblock_all_signals_on_return();
 			} else {
 				ucp->uc_sigmask = osigmask;
 				ucp->uc_flags |= UC_SIGMASK;
@@ -568,11 +568,6 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4, uintptr_t p5)
 			}
 
 			/*
-			 * Re-enable signal delivery in the child process.
-			 */
-			lx_unblock_all_signals();
-
-			/*
 			 * Stop for ptrace if required.
 			 */
 			lx_ptrace_stop_if_option(ptrace_event, B_TRUE, 0, NULL);
@@ -582,7 +577,8 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4, uintptr_t p5)
 			 * vfork(2) context.
 			 */
 			LX_EMULATE_RETURN(&vforkuc, LX_SYS_clone, 0, 0);
-			(void) syscall(SYS_brand, B_EMULATION_DONE, &vforkuc,
+			(void) syscall(SYS_brand,
+			    B_EMULATION_DONE_UNBLOCK_ALL_SIGS, &vforkuc,
 			    LX_SYS_clone, 0, 0);
 
 			assert(0);
@@ -600,7 +596,7 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4, uintptr_t p5)
 		 * Re-enable signal delivery in the child process.
 		 */
 		if (flags & LX_CLONE_VFORK) {
-			lx_unblock_all_signals();
+			lx_unblock_all_signals_on_return();
 		} else {
 			ucp->uc_sigmask = osigmask;
 			ucp->uc_flags |= UC_SIGMASK;

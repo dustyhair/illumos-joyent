@@ -44,6 +44,8 @@ typedef enum lx_exit_type {
 typedef struct lx_tsd {
 	/* per-thread flag set on parent vfork, cleared on thread resume */
 	int		lxtsd_is_vforked;
+	/* release the process-wide vfork signal gate during return */
+	int		lxtsd_unblock_all_signals;
 	lx_exit_type_t	lxtsd_exit;
 	int		lxtsd_exit_status;
 	ucontext_t	lxtsd_exit_context;

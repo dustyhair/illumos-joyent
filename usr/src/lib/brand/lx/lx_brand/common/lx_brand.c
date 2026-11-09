@@ -352,6 +352,7 @@ lx_emulate(ucontext_t *ucp, int syscall_num, uintptr_t *args)
 {
 	long emu_ret;
 	int emu_errno = 0;
+	lx_tsd_t *lxtsd = lx_get_tsd();
 
 	LX_EMULATE_ENTER(ucp, syscall_num, args);
 	lx_debug("lx_emulate(%p, %d, [%p, %p, %p, %p, %p, %p])\n",
@@ -395,8 +396,17 @@ lx_emulate(ucontext_t *ucp, int syscall_num, uintptr_t *args)
 	LX_EMULATE_RETURN(ucp, syscall_num, emu_ret, emu_errno);
 	lx_debug("\tlx_emulate(%d) done (ret %ld / 0x%p ; errno %d)",
 	    syscall_num, emu_ret, emu_ret, emu_errno);
-	(void) syscall(SYS_brand, B_EMULATION_DONE, ucp, syscall_num, emu_ret,
-	    emu_errno);
+	if (lxtsd->lxtsd_unblock_all_signals != 0) {
+		lxtsd->lxtsd_unblock_all_signals = 0;
+		(void) syscall(SYS_brand, B_EMULATION_DONE_UNBLOCK_ALL_SIGS,
+		    ucp, syscall_num, emu_ret, emu_errno);
+
+		/* The brand call returns only on failure. */
+		lxtsd->lxtsd_unblock_all_signals = 1;
+	} else {
+		(void) syscall(SYS_brand, B_EMULATION_DONE, ucp, syscall_num,
+		    emu_ret, emu_errno);
+	}
 
 	assert(!"cannot be returned here");
 }

@@ -1911,7 +1911,11 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		 */
 		return (lx_runexe(lwp, (void *)arg1));
 
-	case B_EMULATION_DONE:
+	case B_EMULATION_DONE_UNBLOCK_ALL_SIGS:
+	case B_EMULATION_DONE: {
+		boolean_t unblock_all =
+		    cmd == B_EMULATION_DONE_UNBLOCK_ALL_SIGS;
+
 		/*
 		 * B_EMULATION_DONE subcommand:
 		 * arg1 = ucontext_t * to restore
@@ -1941,6 +1945,18 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		}
 
 		/*
+		 * The restored context returns to the Linux stack.  Release the
+		 * vfork signal gate here.  Pending signals arrive only after
+		 * the kernel completes the stack transition.
+		 */
+		if (unblock_all) {
+			mutex_enter(&p->p_lock);
+			pd = ptolxproc(p);
+			pd->l_block_all_signals = 0;
+			mutex_exit(&p->p_lock);
+		}
+
+		/*
 		 * The saved Linux context has been restored.  We handle the
 		 * return value or errno with code common to the in-kernel
 		 * system call emulation.
@@ -1955,6 +1971,7 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		lx_syscall_return(ttolwp(curthread), (int)arg2, (long)arg3);
 
 		return (0);
+	}
 
 	case B_EXIT_AS_SIG:
 		code = CLD_KILLED;

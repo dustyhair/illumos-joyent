@@ -2426,6 +2426,12 @@ lx_unblock_all_signals()
 	(void) syscall(SYS_brand, B_UNBLOCK_ALL_SIGS);
 }
 
+void
+lx_unblock_all_signals_on_return()
+{
+	lx_get_tsd()->lxtsd_unblock_all_signals = 1;
+}
+
 int
 lx_all_signals_blocked()
 {

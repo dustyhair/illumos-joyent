@@ -138,7 +138,7 @@ lx_vfork(void)
 	switch (ret) {
 	case -1:
 		lx_stack_postfork();
-		lx_unblock_all_signals();
+		lx_unblock_all_signals_on_return();
 		return (-errno);
 
 	case 0:
@@ -158,8 +158,6 @@ lx_vfork(void)
 		lx_debug("\tvfork native stack sp %p",
 		    vforkuc.uc_brand_data[1]);
 
-		lx_unblock_all_signals();
-
 		/* Stop for ptrace if required. */
 		lx_ptrace_stop_if_option(LX_PTRACE_O_TRACEVFORK, B_TRUE, 0,
 		    NULL);
@@ -169,8 +167,8 @@ lx_vfork(void)
 		 * context.
 		 */
 		LX_EMULATE_RETURN(&vforkuc, LX_SYS_vfork, 0, 0);
-		(void) syscall(SYS_brand, B_EMULATION_DONE, &vforkuc,
-		    LX_SYS_vfork, 0, 0);
+		(void) syscall(SYS_brand, B_EMULATION_DONE_UNBLOCK_ALL_SIGS,
+		    &vforkuc, LX_SYS_vfork, 0, 0);
 
 		VERIFY(0);
 		return (0);
@@ -178,9 +176,9 @@ lx_vfork(void)
 	default:
 		/* parent - child should have exited or exec-ed by now */
 		lx_stack_postfork();
-		lx_unblock_all_signals();
 		lx_ptrace_stop_if_option(LX_PTRACE_O_TRACEVFORK, B_FALSE,
 		    (ulong_t)ret, NULL);
+		lx_unblock_all_signals_on_return();
 		return (ret);
 	}
 }
