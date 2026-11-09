@@ -3669,7 +3669,6 @@ lx_setsockopt_socket(sonode_t *so, int optname, void *optval, socklen_t optlen)
 	int error;
 	lx_proto_opts_t sockopts_tbl = PROTO_SOCKOPTS(ltos_socket_sockopts);
 	struct lx_bpf_program *lbp;
-	int *intval;
 	struct bpf_program bp;
 
 	switch (optname) {
