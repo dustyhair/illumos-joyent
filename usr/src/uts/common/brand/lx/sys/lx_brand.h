@@ -493,6 +493,7 @@ typedef struct lx_ptrace_accord {
 	kmutex_t		lxpa_lock;
 	uint_t			lxpa_refcnt;
 	lx_accord_flags_t	lxpa_flags;
+	pid_t			lxpa_tracer_pid;
 
 	/*
 	 * The tracer must hold "pidlock" while clearing these fields for
