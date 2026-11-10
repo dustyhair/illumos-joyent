@@ -101,6 +101,60 @@ find_event_device(const char *wanted_name, char *path, size_t path_size)
 }
 
 static void
+read_text(const char *path, char *buffer, size_t size)
+{
+	ssize_t got;
+	int fd;
+
+	fd = open(path, O_RDONLY);
+	if (fd < 0)
+		fail(path);
+	do {
+		got = read(fd, buffer, size - 1);
+	} while (got < 0 && errno == EINTR);
+	if (got < 0)
+		fail(path);
+	buffer[got] = '\0';
+	(void) close(fd);
+}
+
+static void
+check_sysfs(const char *sysname, const char *event_path,
+    const char *wanted_name)
+{
+	const char *event_name = strrchr(event_path, '/');
+	char path[128];
+	char text[256];
+	char target[256];
+	ssize_t size;
+
+	check(event_name != NULL, "event path has no basename");
+	event_name++;
+	(void) snprintf(path, sizeof (path), "/sys/class/input/%s", sysname);
+	size = readlink(path, target, sizeof (target) - 1);
+	if (size < 0)
+		fail("read input class link");
+	target[size] = '\0';
+	check(strstr(target, "/devices/virtual/input/") != NULL,
+	    "input class link has an unexpected target");
+	(void) snprintf(path, sizeof (path), "/sys/class/input/%s/name",
+	    sysname);
+	read_text(path, text, sizeof (text));
+	check(strncmp(text, wanted_name, strlen(wanted_name)) == 0,
+	    "sysfs input name mismatch");
+	(void) snprintf(path, sizeof (path), "/sys/class/input/%s/dev",
+	    event_name);
+	read_text(path, text, sizeof (text));
+	check(strncmp(text, "13:", 3) == 0,
+	    "sysfs event device number mismatch");
+	(void) snprintf(path, sizeof (path),
+	    "/sys/class/input/%s/capabilities/key", sysname);
+	read_text(path, text, sizeof (text));
+	check(text[0] != '\0' && strcmp(text, "0\n") != 0,
+	    "sysfs key capabilities are empty");
+}
+
+static void
 write_key(int value)
 {
 	struct input_event events[] = {
@@ -215,6 +269,7 @@ main(void)
 	check(major(st.st_rdev) == 13 && minor(st.st_rdev) >= 64 &&
 	    minor(st.st_rdev) < 64 + EVENT_LIMIT,
 	    "event device has the wrong Linux device number");
+	check_sysfs(sysname, event_path, device_name);
 
 	if (ioctl(event_fd, EVIOCGVERSION, &version) != 0)
 		fail("EVIOCGVERSION");

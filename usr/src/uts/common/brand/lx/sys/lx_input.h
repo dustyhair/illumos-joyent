@@ -89,6 +89,26 @@ typedef struct lx_input_absinfo {
 	int32_t lia_resolution;
 } lx_input_absinfo_t;
 
+/* Device description snapshot returned to other LX kernel modules. */
+typedef struct lx_input_config {
+	lx_input_id_t lic_id;
+	char lic_name[LX_INPUT_NAME_SIZE];
+	char lic_phys[LX_INPUT_PHYS_SIZE];
+	char lic_uniq[LX_INPUT_UNIQ_SIZE];
+	uint32_t lic_ff_effects_max;
+	uint8_t lic_evbits[LX_INPUT_BITS(LX_EV_MAX)];
+	uint8_t lic_keybits[LX_INPUT_BITS(LX_KEY_MAX)];
+	uint8_t lic_relbits[LX_INPUT_BITS(LX_REL_MAX)];
+	uint8_t lic_absbits[LX_INPUT_BITS(LX_ABS_MAX)];
+	uint8_t lic_mscbits[LX_INPUT_BITS(LX_MSC_MAX)];
+	uint8_t lic_swbits[LX_INPUT_BITS(LX_SW_MAX)];
+	uint8_t lic_ledbits[LX_INPUT_BITS(LX_LED_MAX)];
+	uint8_t lic_sndbits[LX_INPUT_BITS(LX_SND_MAX)];
+	uint8_t lic_ffbits[LX_INPUT_BITS(LX_FF_MAX)];
+	uint8_t lic_propbits[LX_INPUT_BITS(LX_INPUT_PROP_MAX)];
+	lx_input_absinfo_t lic_absinfo[LX_ABS_MAX + 1];
+} lx_input_config_t;
+
 typedef struct lx_uinput_setup {
 	lx_input_id_t lus_id;
 	char lus_name[LX_INPUT_NAME_SIZE];
@@ -180,6 +200,10 @@ typedef struct lx_input_event64 {
 
 #define	LX_EV_VERSION		0x010001
 #define	LX_UINPUT_VERSION	5
+
+#ifdef _KERNEL
+extern boolean_t lx_input_get_config(zoneid_t, uint_t, lx_input_config_t *);
+#endif
 
 #ifdef __cplusplus
 }

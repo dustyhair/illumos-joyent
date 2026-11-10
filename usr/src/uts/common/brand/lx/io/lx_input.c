@@ -55,25 +55,6 @@ typedef struct lx_input_event {
 	int32_t lie_value;
 } lx_input_event_t;
 
-typedef struct lx_input_config {
-	lx_input_id_t lic_id;
-	char lic_name[LX_INPUT_NAME_SIZE];
-	char lic_phys[LX_INPUT_PHYS_SIZE];
-	char lic_uniq[LX_INPUT_UNIQ_SIZE];
-	uint32_t lic_ff_effects_max;
-	uint8_t lic_evbits[LX_INPUT_BITS(LX_EV_MAX)];
-	uint8_t lic_keybits[LX_INPUT_BITS(LX_KEY_MAX)];
-	uint8_t lic_relbits[LX_INPUT_BITS(LX_REL_MAX)];
-	uint8_t lic_absbits[LX_INPUT_BITS(LX_ABS_MAX)];
-	uint8_t lic_mscbits[LX_INPUT_BITS(LX_MSC_MAX)];
-	uint8_t lic_swbits[LX_INPUT_BITS(LX_SW_MAX)];
-	uint8_t lic_ledbits[LX_INPUT_BITS(LX_LED_MAX)];
-	uint8_t lic_sndbits[LX_INPUT_BITS(LX_SND_MAX)];
-	uint8_t lic_ffbits[LX_INPUT_BITS(LX_FF_MAX)];
-	uint8_t lic_propbits[LX_INPUT_BITS(LX_INPUT_PROP_MAX)];
-	lx_input_absinfo_t lic_absinfo[LX_ABS_MAX + 1];
-} lx_input_config_t;
-
 struct lx_input_device;
 
 typedef struct lx_input_client {
@@ -205,6 +186,28 @@ lx_input_device_lookup(zoneid_t zoneid, uint_t slot)
 	}
 
 	return (NULL);
+}
+
+boolean_t
+lx_input_get_config(zoneid_t zoneid, uint_t slot, lx_input_config_t *config)
+{
+	lx_input_device_t *device;
+
+	if (slot >= LX_INPUT_EVENT_COUNT)
+		return (B_FALSE);
+
+	mutex_enter(&lx_input_lock);
+	device = lx_input_device_lookup(zoneid, slot);
+	if (device == NULL) {
+		mutex_exit(&lx_input_lock);
+		return (B_FALSE);
+	}
+	mutex_enter(&device->lid_lock);
+	if (config != NULL)
+		*config = device->lid_config;
+	mutex_exit(&device->lid_lock);
+	mutex_exit(&lx_input_lock);
+	return (B_TRUE);
 }
 
 static void
