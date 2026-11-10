@@ -203,6 +203,9 @@ typedef struct lx_input_event64 {
 
 #ifdef _KERNEL
 extern boolean_t lx_input_get_config(zoneid_t, uint_t, lx_input_config_t *);
+extern int lx_input_trigger_uevent(zoneid_t, uint_t, boolean_t,
+    const char *);
+extern int lx_input_trigger_uinput_uevent(zoneid_t, const char *);
 #endif
 
 #ifdef __cplusplus

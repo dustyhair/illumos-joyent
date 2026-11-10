@@ -24,6 +24,8 @@ extern "C" {
 
 #ifdef _KERNEL
 extern void lx_netlink_input_uevent(zoneid_t, const char *, uint_t);
+extern void lx_netlink_input_parent_uevent(zoneid_t, const char *, uint_t);
+extern void lx_netlink_uinput_uevent(zoneid_t, const char *);
 #endif
 
 #ifdef __cplusplus
