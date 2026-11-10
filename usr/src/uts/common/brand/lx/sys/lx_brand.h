@@ -188,6 +188,9 @@ typedef enum lx_ptrace_options {
 #define	AT_SUN_BRAND_LX_CLKTCK		AT_SUN_BRAND_AUX3
 #define	AT_SUN_BRAND_LX_SYSINFO_EHDR	AT_SUN_BRAND_AUX4
 
+/* Aux vector containing the i386 vDSO syscall entry point */
+#define	AT_SYSINFO	32
+
 /* Aux vectors containing real/effective user/group IDs */
 #define	AT_LX_UID		11
 #define	AT_LX_EUID		12
@@ -365,8 +368,9 @@ typedef struct lx_proc_data {
 	/* Linux process personality */
 	unsigned int l_personality;
 
-	/* VDSO location */
+	/* VDSO location and i386 syscall entry point */
 	uintptr_t l_vdso;
+	uintptr_t l_vdso_sysinfo;
 
 	/* mremap anon cache */
 	kmutex_t l_remap_anoncache_lock;
