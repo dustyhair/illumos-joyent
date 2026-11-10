@@ -37,6 +37,7 @@ user = root
 
 [/opt/os-tests/tests/eventfd.32]
 [/opt/os-tests/tests/eventfd.64]
+[/opt/os-tests/tests/map32-gap.64]
 
 [/opt/os-tests/tests/odirectory.32]
 [/opt/os-tests/tests/odirectory.64]

@@ -769,12 +769,14 @@ map_addr_proc(
 	caddr_t base;
 	size_t slen;
 	size_t align_amount;
+	uint_t gapflags = AH_HI;
 
 	ASSERT32(userlimit == as->a_userlimit);
 
 	base = p->p_brkbase;
 	if (p->p_model == DATAMODEL_NATIVE) {
 		if (userlimit < as->a_userlimit) {
+			gapflags |= AH_NOCACHE;
 			/*
 			 * This happens when a program wants to map
 			 * something in a range that's accessible to a
@@ -854,8 +856,13 @@ map_addr_proc(
 	 * Look for a large enough hole starting below userlimit.
 	 * After finding it, use the upper part.
 	 */
-	if (as_gap_aligned(as, len, &base, &slen, AH_HI, NULL, align_amount,
-	    PAGESIZE, off) == 0) {
+	/*
+	 * The gap cache does not record the upper bound of its search.  Do not
+	 * use or populate it for a restricted MAP_32BIT search, or its low hint
+	 * could incorrectly cap a later full-width search and produce ENOMEM.
+	 */
+	if (as_gap_aligned(as, len, &base, &slen, gapflags, NULL,
+	    align_amount, PAGESIZE, off) == 0) {
 		caddr_t as_addr;
 
 		/*
