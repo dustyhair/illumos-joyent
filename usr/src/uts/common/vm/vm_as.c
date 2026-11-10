@@ -1872,6 +1872,7 @@ as_gap_aligned(struct as *as, size_t minlen, caddr_t *basep, size_t *lenp,
 	struct seg *lseg, *hseg;
 	caddr_t lo, hi;
 	int forward;
+	boolean_t use_cache = (flags & AH_NOCACHE) == 0;
 	caddr_t save_base;
 	size_t save_len;
 	size_t save_minlen;
@@ -1929,7 +1930,7 @@ retry:
 		 * If allocating at least as much as the last allocation,
 		 * use a_lastgap's base as a better estimate of hibound.
 		 */
-		if (as->a_lastgap &&
+		if (use_cache && as->a_lastgap &&
 		    minlen >= as->a_lastgap->s_size &&
 		    hibound >= as->a_lastgap->s_base)
 			hibound = as->a_lastgap->s_base;
@@ -1980,12 +1981,14 @@ retry:
 		    minlen, forward ? AH_LO : AH_HI, align, redzone, off) &&
 		    ((flags & AH_CONTAIN) == 0 ||
 		    (*basep <= addr && *basep + *lenp > addr))) {
-			if (!forward)
-				as->a_lastgap = hseg;
-			if (hseg != NULL)
-				as->a_lastgaphl = hseg;
-			else
-				as->a_lastgaphl = lseg;
+			if (use_cache) {
+				if (!forward)
+					as->a_lastgap = hseg;
+				if (hseg != NULL)
+					as->a_lastgaphl = hseg;
+				else
+					as->a_lastgaphl = lseg;
+			}
 			AS_LOCK_EXIT(as);
 			return (0);
 		}

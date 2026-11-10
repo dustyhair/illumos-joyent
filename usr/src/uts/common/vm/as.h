@@ -219,6 +219,7 @@ enum as_cbdelete_rc {
 #define	AH_LO		0x0	/* find lowest hole */
 #define	AH_HI		0x1	/* find highest hole */
 #define	AH_CONTAIN	0x2	/* hole must contain `addr' */
+#define	AH_NOCACHE	0x4	/* neither use nor update gap hints */
 
 extern struct as kas;		/* kernel's address space */
 
