@@ -18,5 +18,5 @@ Run it as a user that can open `/dev/uinput`:
 
 The test creates a virtual keyboard, finds its evdev node by name, verifies
 Linux device numbers, sysfs discovery data, and capability ioctls, sends
-events to two clients, checks exclusive grabs, destroys the device, and
-verifies hangup behavior.
+events to two clients, checks zone-local netlink hotplug notifications and
+exclusive grabs, destroys the device, and verifies hangup behavior.

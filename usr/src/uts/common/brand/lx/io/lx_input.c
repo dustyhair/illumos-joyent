@@ -42,6 +42,7 @@
 #include <sys/brand.h>
 #include <sys/lx_brand.h>
 #include <sys/lx_input.h>
+#include <sys/lx_netlink.h>
 #include <sys/modctl.h>
 
 #define	LX_INPUT_QUEUE_SIZE	256
@@ -245,6 +246,8 @@ lx_input_device_destroy(lx_input_handle_t *handle)
 	lx_input_client_t *client;
 	lx_input_device_t *device = handle->lih_device;
 	boolean_t free_device;
+	zoneid_t zoneid;
+	uint_t slot;
 
 	if (device == NULL)
 		return;
@@ -253,6 +256,8 @@ lx_input_device_destroy(lx_input_handle_t *handle)
 	mutex_enter(&device->lid_lock);
 
 	ASSERT(!device->lid_dead);
+	zoneid = device->lid_zoneid;
+	slot = device->lid_slot;
 	list_remove(&lx_input_devices, device);
 	device->lid_dead = B_TRUE;
 	handle->lih_device = NULL;
@@ -268,6 +273,7 @@ lx_input_device_destroy(lx_input_handle_t *handle)
 
 	if (free_device)
 		lx_input_device_free(device);
+	lx_netlink_input_uevent(zoneid, "remove", slot);
 }
 
 static int
@@ -307,6 +313,7 @@ lx_input_device_create(lx_input_handle_t *handle)
 	list_insert_tail(&lx_input_devices, device);
 	handle->lih_device = device;
 	mutex_exit(&lx_input_lock);
+	lx_netlink_input_uevent(device->lid_zoneid, "add", device->lid_slot);
 
 	return (0);
 }
