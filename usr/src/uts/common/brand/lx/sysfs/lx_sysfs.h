@@ -105,6 +105,9 @@ typedef enum lxsys_nodetype {
 	LXSYS_DEV_SYS_NODE,	/* /sys/devices/system/node/node0/<info> */
 	LXSYS_CLASS_INPUT,	/* /sys/class/input/<device>		*/
 	LXSYS_DEV_INPUT,	/* /sys/devices/virtual/input/<device>	*/
+	LXSYS_CLASS_MISC,	/* /sys/class/misc/<device>		*/
+	LXSYS_DEV_MISC,		/* /sys/devices/virtual/misc/<device>	*/
+	LXSYS_DEV_CHAR,		/* /sys/dev/char/<major>:<minor>	*/
 	LXSYS_MAXTYPE,		/* type limit				*/
 } lxsys_nodetype_t;
 

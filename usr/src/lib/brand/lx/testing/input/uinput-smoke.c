@@ -95,11 +95,12 @@ open_uevent_socket(void)
 
 static bool
 uevent_matches(const char *buffer, size_t size, const char *action,
-    const char *devname)
+    const char *field, const char *value)
 {
 	const char *position = buffer;
 	bool found_action = false;
-	bool found_device = false;
+	bool found_value = false;
+	size_t field_length = strlen(field);
 
 	while (position < buffer + size && *position != '\0') {
 		size_t length = strnlen(position, buffer + size - position);
@@ -109,16 +110,18 @@ uevent_matches(const char *buffer, size_t size, const char *action,
 		if (strncmp(position, "ACTION=", 7) == 0 &&
 		    strcmp(position + 7, action) == 0)
 			found_action = true;
-		if (strncmp(position, "DEVNAME=", 8) == 0 &&
-		    strcmp(position + 8, devname) == 0)
-			found_device = true;
+		if (strncmp(position, field, field_length) == 0 &&
+		    position[field_length] == '=' &&
+		    strcmp(position + field_length + 1, value) == 0)
+			found_value = true;
 		position += length + 1;
 	}
-	return (found_action && found_device);
+	return (found_action && found_value);
 }
 
 static void
-wait_uevent(int fd, const char *action, const char *devname)
+wait_uevent_field(int fd, const char *action, const char *field,
+    const char *value)
 {
 	unsigned int attempt;
 
@@ -140,11 +143,17 @@ wait_uevent(int fd, const char *action, const char *devname)
 		} while (size < 0 && errno == EINTR);
 		if (size < 0)
 			fail("receive kobject uevent");
-		if (uevent_matches(buffer, (size_t)size, action, devname))
+		if (uevent_matches(buffer, (size_t)size, action, field, value))
 			return;
 	}
 	errno = ETIMEDOUT;
 	fail("matching kobject uevent");
+}
+
+static void
+wait_uevent(int fd, const char *action, const char *devname)
+{
+	wait_uevent_field(fd, action, "DEVNAME", devname);
 }
 
 static int
@@ -194,14 +203,72 @@ read_text(const char *path, char *buffer, size_t size)
 }
 
 static void
+trigger_uevent(const char *path, const char *action)
+{
+	ssize_t size = (ssize_t)strlen(action);
+	ssize_t written;
+	int fd;
+
+	fd = open(path, O_WRONLY);
+	if (fd < 0)
+		fail(path);
+	do {
+		written = write(fd, action, (size_t)size);
+	} while (written < 0 && errno == EINTR);
+	if (written != size)
+		fail(path);
+	(void) close(fd);
+}
+
+static void
+check_uinput_sysfs(int uevent_fd)
+{
+	char target[256];
+	char text[256];
+	ssize_t size;
+
+	size = readlink("/sys/class/misc/uinput", target,
+	    sizeof (target) - 1);
+	if (size < 0)
+		fail("read uinput class link");
+	target[size] = '\0';
+	check(strcmp(target, "../../devices/virtual/misc/uinput") == 0,
+	    "uinput class link has an unexpected target");
+	size = readlink("/sys/class/misc/uinput/subsystem", target,
+	    sizeof (target) - 1);
+	if (size < 0)
+		fail("read uinput subsystem link");
+	target[size] = '\0';
+	check(strcmp(target, "../../../../class/misc") == 0,
+	    "uinput subsystem link has an unexpected target");
+	read_text("/sys/class/misc/uinput/dev", text, sizeof (text));
+	check(strcmp(text, "10:223\n") == 0,
+	    "uinput sysfs device number mismatch");
+	read_text("/sys/class/misc/uinput/uevent", text, sizeof (text));
+	check(strstr(text, "DEVNAME=uinput\n") != NULL,
+	    "uinput sysfs uevent data is incomplete");
+	size = readlink("/sys/dev/char/10:223", target,
+	    sizeof (target) - 1);
+	if (size < 0)
+		fail("read uinput dev char link");
+	target[size] = '\0';
+	check(strcmp(target, "../../devices/virtual/misc/uinput") == 0,
+	    "uinput dev char link has an unexpected target");
+
+	trigger_uevent("/sys/class/misc/uinput/uevent", "change\n");
+	wait_uevent(uevent_fd, "change", "uinput");
+}
+
+static void
 check_sysfs(const char *sysname, const char *event_path,
-    const char *wanted_name)
+    const char *wanted_name, int uevent_fd, unsigned int event_minor)
 {
 	const char *event_name = strrchr(event_path, '/');
 	char path[128];
 	char text[256];
 	char target[256];
 	ssize_t size;
+	int fd;
 
 	check(event_name != NULL, "event path has no basename");
 	event_name++;
@@ -227,6 +294,43 @@ check_sysfs(const char *sysname, const char *event_path,
 	read_text(path, text, sizeof (text));
 	check(text[0] != '\0' && strcmp(text, "0\n") != 0,
 	    "sysfs key capabilities are empty");
+
+	(void) snprintf(path, sizeof (path), "/sys/dev/char/13:%u",
+	    event_minor);
+	size = readlink(path, target, sizeof (target) - 1);
+	if (size < 0)
+		fail("read event dev char link");
+	target[size] = '\0';
+	check(strstr(target, "/devices/virtual/input/") != NULL,
+	    "event dev char link has an unexpected target");
+	(void) snprintf(path, sizeof (path),
+	    "/sys/class/input/%s/subsystem", event_name);
+	size = readlink(path, target, sizeof (target) - 1);
+	if (size < 0)
+		fail("read event subsystem link");
+	target[size] = '\0';
+	check(strstr(target, "/class/input") != NULL,
+	    "event subsystem link has an unexpected target");
+
+	(void) snprintf(path, sizeof (path),
+	    "/sys/class/input/%s/uevent", event_name);
+	trigger_uevent(path, "change\n");
+	wait_uevent(uevent_fd, "change", event_path + strlen("/dev/"));
+
+	(void) snprintf(path, sizeof (path),
+	    "/sys/class/input/%s/uevent", sysname);
+	trigger_uevent(path, "change\n");
+	(void) snprintf(text, sizeof (text),
+	    "/devices/virtual/input/%s", sysname);
+	wait_uevent_field(uevent_fd, "change", "DEVPATH", text);
+
+	fd = open(path, O_WRONLY);
+	if (fd < 0)
+		fail("open input uevent for invalid action");
+	errno = 0;
+	check(write(fd, "invalid\n", 8) < 0 && errno == EINVAL,
+	    "invalid uevent action was accepted");
+	(void) close(fd);
 }
 
 static void
@@ -308,6 +412,7 @@ main(void)
 	check(S_ISCHR(st.st_mode), "/dev/uinput is not a character device");
 	check(major(st.st_rdev) == 10 && minor(st.st_rdev) == 223,
 	    "/dev/uinput has the wrong Linux device number");
+	check_uinput_sysfs(uevent_fd);
 
 	uinput_fd = open("/dev/uinput", O_WRONLY | O_NONBLOCK);
 	if (uinput_fd < 0)
@@ -356,7 +461,8 @@ main(void)
 	check(major(st.st_rdev) == 13 && minor(st.st_rdev) >= 64 &&
 	    minor(st.st_rdev) < 64 + EVENT_LIMIT,
 	    "event device has the wrong Linux device number");
-	check_sysfs(sysname, event_path, device_name);
+	check_sysfs(sysname, event_path, device_name, uevent_fd,
+	    (unsigned int)minor(st.st_rdev));
 
 	if (ioctl(event_fd, EVIOCGVERSION, &version) != 0)
 		fail("EVIOCGVERSION");

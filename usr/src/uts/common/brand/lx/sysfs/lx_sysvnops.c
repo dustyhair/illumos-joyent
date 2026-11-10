@@ -57,6 +57,7 @@ static int lxsys_open(vnode_t **, int, cred_t *, caller_context_t *);
 static int lxsys_close(vnode_t *, int, int, offset_t, cred_t *,
     caller_context_t *);
 static int lxsys_read(vnode_t *, uio_t *, int, cred_t *, caller_context_t *);
+static int lxsys_write(vnode_t *, uio_t *, int, cred_t *, caller_context_t *);
 static int lxsys_getattr(vnode_t *, vattr_t *, int, cred_t *,
     caller_context_t *);
 static int lxsys_access(vnode_t *, int, int, cred_t *, caller_context_t *);
@@ -80,6 +81,9 @@ static vnode_t *lxsys_lookup_devices_syscpuinfo(lxsys_node_t *, char *);
 static vnode_t *lxsys_lookup_devices_sysnode(lxsys_node_t *, char *);
 static vnode_t *lxsys_lookup_class_input(lxsys_node_t *, char *);
 static vnode_t *lxsys_lookup_devices_input(lxsys_node_t *, char *);
+static vnode_t *lxsys_lookup_class_misc(lxsys_node_t *, char *);
+static vnode_t *lxsys_lookup_devices_misc(lxsys_node_t *, char *);
+static vnode_t *lxsys_lookup_dev_char(lxsys_node_t *, char *);
 
 static int lxsys_read_static(lxsys_node_t *, lxsys_uiobuf_t *);
 static int lxsys_read_devices_virtual_net(lxsys_node_t *, lxsys_uiobuf_t *);
@@ -87,6 +91,7 @@ static int lxsys_read_devices_zfs_block(lxsys_node_t *, lxsys_uiobuf_t *);
 static int lxsys_read_devices_syscpu(lxsys_node_t *, lxsys_uiobuf_t *);
 static int lxsys_read_devices_sysnode(lxsys_node_t *, lxsys_uiobuf_t *);
 static int lxsys_read_devices_input(lxsys_node_t *, lxsys_uiobuf_t *);
+static int lxsys_read_devices_misc(lxsys_node_t *, lxsys_uiobuf_t *);
 
 static int lxsys_readdir_devices_syscpu(lxsys_node_t *, uio_t *, int *);
 static int lxsys_readdir_devices_syscpuinfo(lxsys_node_t *, uio_t *, int *);
@@ -98,11 +103,17 @@ static int lxsys_readdir_blockdir(lxsys_node_t *, uio_t *, int *);
 static int lxsys_readdir_devices_zfsdir(lxsys_node_t *, uio_t *, int *);
 static int lxsys_readdir_class_input(lxsys_node_t *, uio_t *, int *);
 static int lxsys_readdir_devices_input(lxsys_node_t *, uio_t *, int *);
+static int lxsys_readdir_class_misc(lxsys_node_t *, uio_t *, int *);
+static int lxsys_readdir_devices_misc(lxsys_node_t *, uio_t *, int *);
+static int lxsys_readdir_dev_char(lxsys_node_t *, uio_t *, int *);
 
 static int lxsys_readlink_class_net(lxsys_node_t *, char *, size_t);
 static int lxsys_readlink_block(lxsys_node_t *, char *, size_t);
 static int lxsys_readlink_class_input(lxsys_node_t *, char *, size_t);
 static int lxsys_readlink_devices_input(lxsys_node_t *, char *, size_t);
+static int lxsys_readlink_class_misc(lxsys_node_t *, char *, size_t);
+static int lxsys_readlink_devices_misc(lxsys_node_t *, char *, size_t);
+static int lxsys_readlink_dev_char(lxsys_node_t *, char *, size_t);
 
 /*
  * The lx /sys vnode operations vector
@@ -111,6 +122,7 @@ const fs_operation_def_t lxsys_vnodeops_template[] = {
 	VOPNAME_OPEN,		{ .vop_open = lxsys_open },
 	VOPNAME_CLOSE,		{ .vop_close = lxsys_close },
 	VOPNAME_READ,		{ .vop_read = lxsys_read },
+	VOPNAME_WRITE,		{ .vop_write = lxsys_write },
 	VOPNAME_GETATTR,	{ .vop_getattr = lxsys_getattr },
 	VOPNAME_ACCESS,		{ .vop_access = lxsys_access },
 	VOPNAME_LOOKUP,		{ .vop_lookup = lxsys_lookup },
@@ -166,6 +178,10 @@ static void lxsys_format_cpu(char *, int, lxsys_cpu_state_t);
  * - 0x0d: /sys/bus
  * - 0x0e: /sys/class/input
  * - 0x0f: /sys/devices/virtual/input
+ * - 0x10: /sys/dev
+ * - 0x11: /sys/dev/char
+ * - 0x12: /sys/class/misc
+ * - 0x13: /sys/devices/virtual/misc
  *
  * Dynamic /sys/class/net/<interface> symlinks will use an INSTANCE derived
  * from the corresonding ifindex.
@@ -211,7 +227,11 @@ static void lxsys_format_cpu(char *, int, lxsys_cpu_state_t);
 #define	LXSYS_INST_BUSDIR			0xd
 #define	LXSYS_INST_CLASS_INPUTDIR		0xe
 #define	LXSYS_INST_DEVICES_VIRTUAL_INPUTDIR	0xf
-#define	LXSYS_INST_MAX		LXSYS_INST_DEVICES_VIRTUAL_INPUTDIR
+#define	LXSYS_INST_DEVDIR			0x10
+#define	LXSYS_INST_DEV_CHARDIR			0x11
+#define	LXSYS_INST_CLASS_MISCDIR		0x12
+#define	LXSYS_INST_DEVICES_VIRTUAL_MISCDIR	0x13
+#define	LXSYS_INST_MAX		LXSYS_INST_DEVICES_VIRTUAL_MISCDIR
 
 /*
  * These are of dynamic type (LXSYS_DEV_SYS_CPU), but essentially fixed
@@ -247,6 +267,10 @@ static int dyn_ino_type [] = {
 	0,				/* LXSYS_INST_BUSDIR */
 	LXSYS_CLASS_INPUT,		/* LXSYS_INST_CLASS_INPUTDIR */
 	LXSYS_DEV_INPUT,		/* LXSYS_INST_DEV_VIRTUAL_INPUTDIR */
+	0,				/* LXSYS_INST_DEVDIR */
+	LXSYS_DEV_CHAR,		/* LXSYS_INST_DEV_CHARDIR */
+	LXSYS_CLASS_MISC,		/* LXSYS_INST_CLASS_MISCDIR */
+	LXSYS_DEV_MISC,		/* LXSYS_INST_DEV_VIRTUAL_MISCDIR */
 };
 #define	DYN_INO_LEN \
 	(sizeof (dyn_ino_type) / sizeof ((dyn_ino_type)[0]))
@@ -258,12 +282,17 @@ static lxsys_dirent_t dirlist_root[] = {
 	{ LXSYS_INST_BLOCKDIR,		"block" },
 	{ LXSYS_INST_BUSDIR,		"bus" },
 	{ LXSYS_INST_CLASSDIR,		"class" },
+	{ LXSYS_INST_DEVDIR,		"dev" },
 	{ LXSYS_INST_DEVICESDIR,	"devices" },
 	{ LXSYS_INST_FSDIR,		"fs" }
 };
 static lxsys_dirent_t dirlist_class[] = {
 	{ LXSYS_INST_CLASS_INPUTDIR,	"input" },
+	{ LXSYS_INST_CLASS_MISCDIR,	"misc" },
 	{ LXSYS_INST_CLASS_NETDIR,	"net" }
+};
+static lxsys_dirent_t dirlist_dev[] = {
+	{ LXSYS_INST_DEV_CHARDIR,	"char" }
 };
 static lxsys_dirent_t dirlist_fs[] = {
 	{ LXSYS_INST_FS_CGROUPDIR,	"cgroup" }
@@ -275,6 +304,7 @@ static lxsys_dirent_t dirlist_devices[] = {
 };
 static lxsys_dirent_t dirlist_devices_virtual[] = {
 	{ LXSYS_INST_DEVICES_VIRTUAL_INPUTDIR,	"input" },
+	{ LXSYS_INST_DEVICES_VIRTUAL_MISCDIR,	"misc" },
 	{ LXSYS_INST_DEVICES_VIRTUAL_NETDIR,	"net" }
 };
 
@@ -304,6 +334,7 @@ static lxsys_dirent_t dirlist_devices_system[] = {
 #define	LXSYS_ENDP_INPUT_CAPDIR		6
 #define	LXSYS_ENDP_INPUT_EVENTDIR	7
 #define	LXSYS_ENDP_INPUT_UEVENT		8
+#define	LXSYS_ENDP_INPUT_SUBSYSTEM	9
 #define	LXSYS_ENDP_INPUT_ID_BUS		10
 #define	LXSYS_ENDP_INPUT_ID_VENDOR	11
 #define	LXSYS_ENDP_INPUT_ID_PRODUCT	12
@@ -320,9 +351,18 @@ static lxsys_dirent_t dirlist_devices_system[] = {
 #define	LXSYS_ENDP_INPUT_EVENT_DEV	40
 #define	LXSYS_ENDP_INPUT_EVENT_UEVENT	41
 #define	LXSYS_ENDP_INPUT_EVENT_DEVICE	42
+#define	LXSYS_ENDP_INPUT_EVENT_SUBSYSTEM	43
 
 #define	LXSYS_CLASS_INPUT_ENDPOINT(slot)	((slot) * 2 + 1)
 #define	LXSYS_CLASS_EVENT_ENDPOINT(slot)	((slot) * 2 + 2)
+
+#define	LXSYS_MISC_UINPUT_INSTANCE	1
+#define	LXSYS_ENDP_MISC_DEV		1
+#define	LXSYS_ENDP_MISC_UEVENT		2
+#define	LXSYS_ENDP_MISC_SUBSYSTEM	3
+
+#define	LXSYS_CHAR_UINPUT_INSTANCE	1
+#define	LXSYS_CHAR_EVENT_INSTANCE(slot)	((slot) + 2)
 
 static lxsys_dirent_t dirlist_devices_virtual_net[] = {
 	{ LXSYS_ENDP_NET_ADDRESS,	"address" },
@@ -349,6 +389,7 @@ static lxsys_dirent_t dirlist_devices_input[] = {
 	{ LXSYS_ENDP_INPUT_NAME,		"name" },
 	{ LXSYS_ENDP_INPUT_PHYS,		"phys" },
 	{ LXSYS_ENDP_INPUT_PROPERTIES,		"properties" },
+	{ LXSYS_ENDP_INPUT_SUBSYSTEM,		"subsystem" },
 	{ LXSYS_ENDP_INPUT_UEVENT,		"uevent" },
 	{ LXSYS_ENDP_INPUT_UNIQ,		"uniq" }
 };
@@ -375,7 +416,14 @@ static lxsys_dirent_t dirlist_devices_input_cap[] = {
 static lxsys_dirent_t dirlist_devices_input_event[] = {
 	{ LXSYS_ENDP_INPUT_EVENT_DEV,		"dev" },
 	{ LXSYS_ENDP_INPUT_EVENT_DEVICE,	"device" },
+	{ LXSYS_ENDP_INPUT_EVENT_SUBSYSTEM,	"subsystem" },
 	{ LXSYS_ENDP_INPUT_EVENT_UEVENT,	"uevent" }
+};
+
+static lxsys_dirent_t dirlist_devices_misc_uinput[] = {
+	{ LXSYS_ENDP_MISC_DEV,			"dev" },
+	{ LXSYS_ENDP_MISC_SUBSYSTEM,		"subsystem" },
+	{ LXSYS_ENDP_MISC_UEVENT,		"uevent" }
 };
 
 #define	SYSDIRLISTSZ(l)	(sizeof (l) / sizeof ((l)[0]))
@@ -384,13 +432,17 @@ static lxsys_dirent_t dirlist_devices_input_event[] = {
 static lxsys_dirlookup_t lxsys_dirlookup[] = {
 	SYSDLENT(LXSYS_INST_ROOT, dirlist_root),
 	SYSDLENT(LXSYS_INST_CLASSDIR, dirlist_class),
+	SYSDLENT(LXSYS_INST_DEVDIR, dirlist_dev),
 	SYSDLENT(LXSYS_INST_FSDIR, dirlist_fs),
 	{ LXSYS_INST_FS_CGROUPDIR, NULL, 0 },
 	SYSDLENT(LXSYS_INST_DEVICESDIR, dirlist_devices),
 	SYSDLENT(LXSYS_INST_DEVICES_SYSTEMDIR, dirlist_devices_system),
 	SYSDLENT(LXSYS_INST_DEVICES_VIRTUALDIR, dirlist_devices_virtual),
 	{ LXSYS_INST_CLASS_INPUTDIR, NULL, 0 },
+	{ LXSYS_INST_CLASS_MISCDIR, NULL, 0 },
 	{ LXSYS_INST_DEVICES_VIRTUAL_INPUTDIR, NULL, 0 },
+	{ LXSYS_INST_DEVICES_VIRTUAL_MISCDIR, NULL, 0 },
+	{ LXSYS_INST_DEV_CHARDIR, NULL, 0 },
 	SYSDLENT(LXSYS_INST_DEVICES_SYSNODE, dirlist_devices_sysnode),
 	{ LXSYS_INST_BUSDIR, NULL, 0 },
 };
@@ -411,6 +463,9 @@ static vnode_t *(*lxsys_lookup_function[LXSYS_MAXTYPE])() = {
 	lxsys_lookup_devices_sysnode,		/* LXSYS_DEV_SYS_NODE	*/
 	lxsys_lookup_class_input,		/* LXSYS_CLASS_INPUT	*/
 	lxsys_lookup_devices_input,		/* LXSYS_DEV_INPUT	*/
+	lxsys_lookup_class_misc,		/* LXSYS_CLASS_MISC	*/
+	lxsys_lookup_devices_misc,		/* LXSYS_DEV_MISC	*/
+	lxsys_lookup_dev_char,			/* LXSYS_DEV_CHAR	*/
 };
 
 /*
@@ -428,6 +483,9 @@ static int (*lxsys_readdir_function[LXSYS_MAXTYPE])() = {
 	lxsys_readdir_devices_sysnode,		/* LXSYS_DEV_SYS_NODE	*/
 	lxsys_readdir_class_input,		/* LXSYS_CLASS_INPUT	*/
 	lxsys_readdir_devices_input,		/* LXSYS_DEV_INPUT	*/
+	lxsys_readdir_class_misc,		/* LXSYS_CLASS_MISC	*/
+	lxsys_readdir_devices_misc,		/* LXSYS_DEV_MISC	*/
+	lxsys_readdir_dev_char,			/* LXSYS_DEV_CHAR	*/
 };
 
 /*
@@ -445,6 +503,9 @@ static int (*lxsys_read_function[LXSYS_MAXTYPE])() = {
 	lxsys_read_devices_sysnode,		/* LXSYS_DEV_SYS_NODE	*/
 	NULL,					/* LXSYS_CLASS_INPUT	*/
 	lxsys_read_devices_input,		/* LXSYS_DEV_INPUT	*/
+	NULL,					/* LXSYS_CLASS_MISC	*/
+	lxsys_read_devices_misc,		/* LXSYS_DEV_MISC	*/
+	NULL,					/* LXSYS_DEV_CHAR	*/
 };
 
 /*
@@ -462,6 +523,9 @@ static int (*lxsys_readlink_function[LXSYS_MAXTYPE])() = {
 	NULL,					/* LXSYS_DEV_SYS_NODE	*/
 	lxsys_readlink_class_input,		/* LXSYS_CLASS_INPUT	*/
 	lxsys_readlink_devices_input,		/* LXSYS_DEV_INPUT	*/
+	lxsys_readlink_class_misc,		/* LXSYS_CLASS_MISC	*/
+	lxsys_readlink_devices_misc,		/* LXSYS_DEV_MISC	*/
+	lxsys_readlink_dev_char,		/* LXSYS_DEV_CHAR	*/
 };
 
 /*
@@ -561,16 +625,47 @@ lxsys_ino_get_type(ino_t ino)
 			    endpoint == LXSYS_ENDP_INPUT_CAPDIR ||
 			    endpoint == LXSYS_ENDP_INPUT_EVENTDIR)
 				break;
-			if (endpoint == LXSYS_ENDP_INPUT_EVENT_DEVICE)
+			if (endpoint == LXSYS_ENDP_INPUT_SUBSYSTEM ||
+			    endpoint == LXSYS_ENDP_INPUT_EVENT_DEVICE ||
+			    endpoint == LXSYS_ENDP_INPUT_EVENT_SUBSYSTEM)
 				return (VLNK);
 			if (endpoint != 0)
 				return (VREG);
+			break;
+		case LXSYS_CLASS_MISC:
+			if (instance != 0)
+				return (VLNK);
+			break;
+		case LXSYS_DEV_MISC:
+			if (endpoint == LXSYS_ENDP_MISC_SUBSYSTEM)
+				return (VLNK);
+			if (endpoint != 0)
+				return (VREG);
+			break;
+		case LXSYS_DEV_CHAR:
+			if (instance != 0)
+				return (VLNK);
 			break;
 		default:
 			break;
 		}
 	}
 	return (VDIR);
+}
+
+static boolean_t
+lxsys_is_uevent_node(lxsys_node_t *lnp)
+{
+	if (lnp->lxsys_type == LXSYS_DEV_MISC &&
+	    lnp->lxsys_instance == LXSYS_MISC_UINPUT_INSTANCE &&
+	    lnp->lxsys_endpoint == LXSYS_ENDP_MISC_UEVENT)
+		return (B_TRUE);
+	if (lnp->lxsys_type == LXSYS_DEV_INPUT &&
+	    lnp->lxsys_instance != 0 &&
+	    (lnp->lxsys_endpoint == LXSYS_ENDP_INPUT_UEVENT ||
+	    lnp->lxsys_endpoint == LXSYS_ENDP_INPUT_EVENT_UEVENT))
+		return (B_TRUE);
+	return (B_FALSE);
 }
 
 /*
@@ -580,11 +675,13 @@ lxsys_ino_get_type(ino_t ino)
 static int
 lxsys_open(vnode_t **vpp, int flag, cred_t *cr, caller_context_t *ct)
 {
-	/*
-	 * We only allow reading in this file system
-	 */
-	if (flag & FWRITE)
-		return (EROFS);
+	vnode_t *vp = *vpp;
+
+	if ((flag & FWRITE) != 0) {
+		if (!lxsys_is_uevent_node(VTOLXS(vp)))
+			return (EROFS);
+		return (lxsys_access(vp, VWRITE, 0, cr, ct));
+	}
 
 	return (0);
 }
@@ -635,6 +732,44 @@ lxsys_read(vnode_t *vp, uio_t *uiop, int ioflag, cred_t *cr,
 	}
 
 	return (error);
+}
+
+/* ARGSUSED */
+static int
+lxsys_write(vnode_t *vp, uio_t *uiop, int ioflag, cred_t *cr,
+    caller_context_t *ct)
+{
+	lxsys_node_t *lnp = VTOLXS(vp);
+	char action[32];
+	size_t size;
+	uint_t slot;
+	int error;
+
+	if (!lxsys_is_uevent_node(lnp))
+		return (EROFS);
+	if ((error = lxsys_access(vp, VWRITE, 0, cr, ct)) != 0)
+		return (error);
+	if (uiop->uio_offset != 0 || uiop->uio_resid == 0 ||
+	    uiop->uio_resid >= sizeof (action))
+		return (EINVAL);
+
+	size = uiop->uio_resid;
+	if ((error = uiomove(action, size, UIO_WRITE, uiop)) != 0)
+		return (error);
+	while (size > 0 && (action[size - 1] == '\n' ||
+	    action[size - 1] == '\r'))
+		size--;
+	if (size == 0)
+		return (EINVAL);
+	action[size] = '\0';
+
+	if (lnp->lxsys_type == LXSYS_DEV_MISC)
+		return (lx_input_trigger_uinput_uevent(
+		    LXSTOZ(lnp)->zone_id, action));
+
+	slot = lnp->lxsys_instance - 1;
+	return (lx_input_trigger_uevent(LXSTOZ(lnp)->zone_id, slot,
+	    lnp->lxsys_endpoint == LXSYS_ENDP_INPUT_UEVENT, action));
 }
 
 /*
@@ -807,11 +942,20 @@ lxsys_lookup_static(lxsys_node_t *ldp, char *comp)
 			case LXSYS_INST_CLASS_INPUTDIR:
 				node_type = LXSYS_CLASS_INPUT;
 				break;
+			case LXSYS_INST_CLASS_MISCDIR:
+				node_type = LXSYS_CLASS_MISC;
+				break;
+			case LXSYS_INST_DEV_CHARDIR:
+				node_type = LXSYS_DEV_CHAR;
+				break;
 			case LXSYS_INST_DEVICES_VIRTUAL_NETDIR:
 				node_type = LXSYS_DEV_NET;
 				break;
 			case LXSYS_INST_DEVICES_VIRTUAL_INPUTDIR:
 				node_type = LXSYS_DEV_INPUT;
+				break;
+			case LXSYS_INST_DEVICES_VIRTUAL_MISCDIR:
+				node_type = LXSYS_DEV_MISC;
 				break;
 			case LXSYS_INST_DEVICES_ZFSDIR:
 				node_type = LXSYS_DEV_ZFS;
@@ -929,7 +1073,13 @@ lxsys_input_child(lxsys_node_t *ldp, uint_t endpoint, vtype_t type)
 	lnp = lxsys_getnode(ldp->lxsys_vnode, LXSYS_DEV_INPUT,
 	    ldp->lxsys_instance, endpoint);
 	lnp->lxsys_vnode->v_type = type;
-	lnp->lxsys_mode = type == VLNK ? 0777 : 0444;
+	if (type == VLNK)
+		lnp->lxsys_mode = 0777;
+	else if (endpoint == LXSYS_ENDP_INPUT_UEVENT ||
+	    endpoint == LXSYS_ENDP_INPUT_EVENT_UEVENT)
+		lnp->lxsys_mode = 0644;
+	else
+		lnp->lxsys_mode = 0444;
 	return (lnp->lxsys_vnode);
 }
 
@@ -947,7 +1097,11 @@ lxsys_input_named_child(lxsys_node_t *ldp, char *comp,
 			    entries[i].d_idnum == LXSYS_ENDP_INPUT_CAPDIR)
 				type = VDIR;
 			else if (entries[i].d_idnum ==
-			    LXSYS_ENDP_INPUT_EVENT_DEVICE)
+			    LXSYS_ENDP_INPUT_SUBSYSTEM ||
+			    entries[i].d_idnum ==
+			    LXSYS_ENDP_INPUT_EVENT_DEVICE ||
+			    entries[i].d_idnum ==
+			    LXSYS_ENDP_INPUT_EVENT_SUBSYSTEM)
 				type = VLNK;
 			return (lxsys_input_child(ldp, entries[i].d_idnum,
 			    type));
@@ -1004,6 +1158,91 @@ lxsys_lookup_devices_input(lxsys_node_t *ldp, char *comp)
 	}
 
 	return (NULL);
+}
+
+static vnode_t *
+lxsys_lookup_class_misc(lxsys_node_t *ldp, char *comp)
+{
+	lxsys_node_t *lnp;
+
+	if (ldp->lxsys_instance != 0 || ldp->lxsys_endpoint != 0 ||
+	    strcmp(comp, "uinput") != 0)
+		return (NULL);
+	lnp = lxsys_getnode(ldp->lxsys_vnode, LXSYS_CLASS_MISC,
+	    LXSYS_MISC_UINPUT_INSTANCE, 0);
+	lnp->lxsys_vnode->v_type = VLNK;
+	lnp->lxsys_mode = 0777;
+	return (lnp->lxsys_vnode);
+}
+
+static vnode_t *
+lxsys_lookup_devices_misc(lxsys_node_t *ldp, char *comp)
+{
+	lxsys_node_t *lnp;
+	uint_t i;
+
+	if (ldp->lxsys_instance == 0) {
+		if (strcmp(comp, "uinput") != 0)
+			return (NULL);
+		lnp = lxsys_getnode(ldp->lxsys_vnode, LXSYS_DEV_MISC,
+		    LXSYS_MISC_UINPUT_INSTANCE, 0);
+		return (lnp->lxsys_vnode);
+	}
+	if (ldp->lxsys_instance != LXSYS_MISC_UINPUT_INSTANCE ||
+	    ldp->lxsys_endpoint != 0)
+		return (NULL);
+
+	for (i = 0; i < SYSDIRLISTSZ(dirlist_devices_misc_uinput); i++) {
+		if (strcmp(comp, dirlist_devices_misc_uinput[i].d_name) == 0) {
+			uint_t endpoint =
+			    dirlist_devices_misc_uinput[i].d_idnum;
+
+			lnp = lxsys_getnode(ldp->lxsys_vnode, LXSYS_DEV_MISC,
+			    ldp->lxsys_instance, endpoint);
+			if (endpoint == LXSYS_ENDP_MISC_SUBSYSTEM) {
+				lnp->lxsys_vnode->v_type = VLNK;
+				lnp->lxsys_mode = 0777;
+			} else {
+				lnp->lxsys_vnode->v_type = VREG;
+				lnp->lxsys_mode =
+				    endpoint == LXSYS_ENDP_MISC_UEVENT ?
+				    0644 : 0444;
+			}
+			return (lnp->lxsys_vnode);
+		}
+	}
+	return (NULL);
+}
+
+static vnode_t *
+lxsys_lookup_dev_char(lxsys_node_t *ldp, char *comp)
+{
+	lxsys_node_t *lnp;
+	char *end;
+	ulong_t minor;
+	uint_t instance;
+	uint_t slot;
+
+	if (ldp->lxsys_instance != 0 || ldp->lxsys_endpoint != 0)
+		return (NULL);
+	if (strcmp(comp, "10:223") == 0) {
+		instance = LXSYS_CHAR_UINPUT_INSTANCE;
+	} else {
+		if (strncmp(comp, "13:", 3) != 0 || comp[3] == '\0' ||
+		    ddi_strtoul(comp + 3, &end, 10, &minor) != 0 ||
+		    *end != '\0' || minor < LX_INPUT_LINUX_EVENT_BASE ||
+		    minor >= LX_INPUT_LINUX_EVENT_BASE + LX_INPUT_EVENT_COUNT)
+			return (NULL);
+		slot = (uint_t)minor - LX_INPUT_LINUX_EVENT_BASE;
+		if (!lx_input_get_config(LXSTOZ(ldp)->zone_id, slot, NULL))
+			return (NULL);
+		instance = LXSYS_CHAR_EVENT_INSTANCE(slot);
+	}
+
+	lnp = lxsys_getnode(ldp->lxsys_vnode, LXSYS_DEV_CHAR, instance, 0);
+	lnp->lxsys_vnode->v_type = VLNK;
+	lnp->lxsys_mode = 0777;
+	return (lnp->lxsys_vnode);
 }
 
 static vnode_t *
@@ -1528,6 +1767,29 @@ lxsys_read_devices_input(lxsys_node_t *lnp, lxsys_uiobuf_t *luio)
 
 	lxsys_input_bitmap(luio, bits, size);
 	return (0);
+}
+
+static int
+lxsys_read_devices_misc(lxsys_node_t *lnp, lxsys_uiobuf_t *luio)
+{
+	if (lnp->lxsys_instance != LXSYS_MISC_UINPUT_INSTANCE)
+		return (EIO);
+
+	switch (lnp->lxsys_endpoint) {
+	case LXSYS_ENDP_MISC_DEV:
+		lxsys_uiobuf_printf(luio, "%u:%u\n",
+		    LX_INPUT_LINUX_UINPUT_MAJOR,
+		    LX_INPUT_LINUX_UINPUT_MINOR);
+		return (0);
+	case LXSYS_ENDP_MISC_UEVENT:
+		lxsys_uiobuf_printf(luio, "MAJOR=%u\nMINOR=%u\n",
+		    LX_INPUT_LINUX_UINPUT_MAJOR,
+		    LX_INPUT_LINUX_UINPUT_MINOR);
+		lxsys_uiobuf_printf(luio, "DEVNAME=uinput\n");
+		return (0);
+	default:
+		return (EISDIR);
+	}
 }
 
 static void
@@ -2195,6 +2457,125 @@ lxsys_readdir_devices_input(lxsys_node_t *lnp, uio_t *uiop, int *eofp)
 }
 
 static int
+lxsys_readdir_single(lxsys_node_t *lnp, uio_t *uiop, int *eofp,
+    const char *name, lxsys_nodetype_t type, uint_t instance)
+{
+	longlong_t bp[DIRENT64_RECLEN(LXSNSIZ) / sizeof (longlong_t)];
+	dirent64_t *dirent = (dirent64_t *)bp;
+	ssize_t original;
+	int error;
+	int reclen;
+	int skip;
+
+	original = uiop->uio_resid;
+	error = lxsys_readdir_common(lnp, uiop, eofp, NULL, 0);
+	if (error != 0 || *eofp == 0)
+		return (error);
+	skip = (uiop->uio_offset / LXSYS_SDSIZE) - 2;
+	if (skip > 0) {
+		*eofp = 1;
+		return (0);
+	}
+
+	bzero(bp, sizeof (bp));
+	(void) strlcpy(dirent->d_name, name, sizeof (dirent->d_name));
+	dirent->d_ino = lxsys_inode(type, instance, 0);
+	reclen = DIRENT64_RECLEN(strlen(dirent->d_name));
+	if (reclen > uiop->uio_resid) {
+		if (uiop->uio_resid == original)
+			return (EINVAL);
+		*eofp = 0;
+		return (0);
+	}
+	if ((error = lxsys_dirent_out(dirent, reclen, uiop)) != 0)
+		return (error);
+	*eofp = 1;
+	return (0);
+}
+
+static int
+lxsys_readdir_class_misc(lxsys_node_t *lnp, uio_t *uiop, int *eofp)
+{
+	if (lnp->lxsys_instance != 0 || lnp->lxsys_endpoint != 0)
+		return (ENOTDIR);
+	return (lxsys_readdir_single(lnp, uiop, eofp, "uinput",
+	    LXSYS_CLASS_MISC, LXSYS_MISC_UINPUT_INSTANCE));
+}
+
+static int
+lxsys_readdir_devices_misc(lxsys_node_t *lnp, uio_t *uiop, int *eofp)
+{
+	if (lnp->lxsys_instance == 0) {
+		return (lxsys_readdir_single(lnp, uiop, eofp, "uinput",
+		    LXSYS_DEV_MISC, LXSYS_MISC_UINPUT_INSTANCE));
+	}
+	if (lnp->lxsys_instance == LXSYS_MISC_UINPUT_INSTANCE &&
+	    lnp->lxsys_endpoint == 0) {
+		return (lxsys_readdir_subdir(lnp, uiop, eofp,
+		    dirlist_devices_misc_uinput,
+		    SYSDIRLISTSZ(dirlist_devices_misc_uinput)));
+	}
+	return (ENOTDIR);
+}
+
+static int
+lxsys_readdir_dev_char(lxsys_node_t *lnp, uio_t *uiop, int *eofp)
+{
+	longlong_t bp[DIRENT64_RECLEN(LXSNSIZ) / sizeof (longlong_t)];
+	dirent64_t *dirent = (dirent64_t *)bp;
+	ssize_t original;
+	int error;
+	int skip;
+	uint_t entry;
+
+	if (lnp->lxsys_instance != 0 || lnp->lxsys_endpoint != 0)
+		return (ENOTDIR);
+	original = uiop->uio_resid;
+	error = lxsys_readdir_common(lnp, uiop, eofp, NULL, 0);
+	if (error != 0 || *eofp == 0)
+		return (error);
+	skip = (uiop->uio_offset / LXSYS_SDSIZE) - 2;
+	bzero(bp, sizeof (bp));
+
+	for (entry = 0; entry <= LX_INPUT_EVENT_COUNT; entry++) {
+		uint_t instance;
+		int reclen;
+
+		if (entry == 0) {
+			(void) strlcpy(dirent->d_name, "10:223",
+			    sizeof (dirent->d_name));
+			instance = LXSYS_CHAR_UINPUT_INSTANCE;
+		} else {
+			uint_t slot = entry - 1;
+
+			if (!lx_input_get_config(LXSTOZ(lnp)->zone_id, slot,
+			    NULL))
+				continue;
+			(void) snprintf(dirent->d_name, sizeof (dirent->d_name),
+			    "13:%u", LX_INPUT_LINUX_EVENT_BASE + slot);
+			instance = LXSYS_CHAR_EVENT_INSTANCE(slot);
+		}
+		if (skip > 0) {
+			skip--;
+			continue;
+		}
+		dirent->d_ino = lxsys_inode(LXSYS_DEV_CHAR, instance, 0);
+		reclen = DIRENT64_RECLEN(strlen(dirent->d_name));
+		if (reclen > uiop->uio_resid) {
+			if (uiop->uio_resid == original)
+				return (EINVAL);
+			*eofp = 0;
+			return (0);
+		}
+		if ((error = lxsys_dirent_out(dirent, reclen, uiop)) != 0)
+			return (error);
+	}
+
+	*eofp = 1;
+	return (0);
+}
+
+static int
 lxsys_readdir_class_netdir(lxsys_node_t *lnp, uio_t *uiop, int *eofp)
 {
 	if (lnp->lxsys_type != LXSYS_CLASS_NET ||
@@ -2603,9 +2984,59 @@ lxsys_readlink_class_input(lxsys_node_t *lnp, char *buf, size_t len)
 static int
 lxsys_readlink_devices_input(lxsys_node_t *lnp, char *buf, size_t len)
 {
-	if (lnp->lxsys_endpoint != LXSYS_ENDP_INPUT_EVENT_DEVICE)
+	switch (lnp->lxsys_endpoint) {
+	case LXSYS_ENDP_INPUT_SUBSYSTEM:
+		(void) strlcpy(buf, "../../../../class/input", len);
+		return (0);
+	case LXSYS_ENDP_INPUT_EVENT_DEVICE:
+		(void) strlcpy(buf, "..", len);
+		return (0);
+	case LXSYS_ENDP_INPUT_EVENT_SUBSYSTEM:
+		(void) strlcpy(buf, "../../../../../class/input", len);
+		return (0);
+	default:
 		return (EINVAL);
-	(void) strlcpy(buf, "..", len);
+	}
+}
+
+static int
+lxsys_readlink_class_misc(lxsys_node_t *lnp, char *buf, size_t len)
+{
+	if (lnp->lxsys_instance != LXSYS_MISC_UINPUT_INSTANCE ||
+	    lnp->lxsys_endpoint != 0)
+		return (EINVAL);
+	(void) strlcpy(buf, "../../devices/virtual/misc/uinput", len);
+	return (0);
+}
+
+static int
+lxsys_readlink_devices_misc(lxsys_node_t *lnp, char *buf, size_t len)
+{
+	if (lnp->lxsys_instance != LXSYS_MISC_UINPUT_INSTANCE ||
+	    lnp->lxsys_endpoint != LXSYS_ENDP_MISC_SUBSYSTEM)
+		return (EINVAL);
+	(void) strlcpy(buf, "../../../../class/misc", len);
+	return (0);
+}
+
+static int
+lxsys_readlink_dev_char(lxsys_node_t *lnp, char *buf, size_t len)
+{
+	uint_t slot;
+
+	if (lnp->lxsys_endpoint != 0 || lnp->lxsys_instance == 0)
+		return (EINVAL);
+	if (lnp->lxsys_instance == LXSYS_CHAR_UINPUT_INSTANCE) {
+		(void) strlcpy(buf, "../../devices/virtual/misc/uinput", len);
+		return (0);
+	}
+
+	slot = lnp->lxsys_instance - 2;
+	if (slot >= LX_INPUT_EVENT_COUNT ||
+	    !lx_input_get_config(LXSTOZ(lnp)->zone_id, slot, NULL))
+		return (EINVAL);
+	(void) snprintf(buf, len,
+	    "../../devices/virtual/input/input%u/event%u", slot, slot);
 	return (0);
 }
 

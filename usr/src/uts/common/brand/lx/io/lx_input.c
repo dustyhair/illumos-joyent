@@ -211,6 +211,46 @@ lx_input_get_config(zoneid_t zoneid, uint_t slot, lx_input_config_t *config)
 	return (B_TRUE);
 }
 
+static boolean_t
+lx_input_uevent_action_valid(const char *action)
+{
+	static const char *valid[] = {
+		"add", "remove", "change", "move", "online", "offline",
+		"bind", "unbind"
+	};
+	uint_t i;
+
+	for (i = 0; i < sizeof (valid) / sizeof (valid[0]); i++) {
+		if (strcmp(action, valid[i]) == 0)
+			return (B_TRUE);
+	}
+	return (B_FALSE);
+}
+
+int
+lx_input_trigger_uevent(zoneid_t zoneid, uint_t slot, boolean_t parent,
+    const char *action)
+{
+	if (!lx_input_uevent_action_valid(action))
+		return (EINVAL);
+	if (!lx_input_get_config(zoneid, slot, NULL))
+		return (ENODEV);
+	if (parent)
+		lx_netlink_input_parent_uevent(zoneid, action, slot);
+	else
+		lx_netlink_input_uevent(zoneid, action, slot);
+	return (0);
+}
+
+int
+lx_input_trigger_uinput_uevent(zoneid_t zoneid, const char *action)
+{
+	if (!lx_input_uevent_action_valid(action))
+		return (EINVAL);
+	lx_netlink_uinput_uevent(zoneid, action);
+	return (0);
+}
+
 static void
 lx_input_device_free(lx_input_device_t *device)
 {

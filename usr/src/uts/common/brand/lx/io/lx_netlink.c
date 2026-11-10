@@ -2773,6 +2773,22 @@ lx_netlink_uevent_add(char **position, size_t *remaining,
 	return (B_TRUE);
 }
 
+static void
+lx_netlink_uevent_broadcast(zoneid_t zoneid, const char *message, size_t size)
+{
+	lx_netlink_sock_t *sock;
+
+	mutex_enter(&lx_netlink_lock);
+	for (sock = lx_netlink_head; sock != NULL; sock = sock->lxns_next) {
+		if (sock->lxns_proto != LX_NETLINK_KOBJECT_UEVENT ||
+		    sock->lxns_zoneid != zoneid ||
+		    (sock->lxns_groups & 1) == 0 || sock->lxns_upcalls == NULL)
+			continue;
+		(void) lx_netlink_uevent_send(sock, message, size);
+	}
+	mutex_exit(&lx_netlink_lock);
+}
+
 void
 lx_netlink_input_uevent(zoneid_t zoneid, const char *action, uint_t slot)
 {
@@ -2781,10 +2797,8 @@ lx_netlink_input_uevent(zoneid_t zoneid, const char *action, uint_t slot)
 	size_t remaining = sizeof (message);
 	size_t size;
 	uint64_t sequence;
-	lx_netlink_sock_t *sock;
 
-	if (slot >= LX_INPUT_EVENT_COUNT || (strcmp(action, "add") != 0 &&
-	    strcmp(action, "remove") != 0))
+	if (slot >= LX_INPUT_EVENT_COUNT)
 		return;
 	sequence = atomic_inc_64_nv(&lx_netlink_uevent_seq);
 	if (!lx_netlink_uevent_add(&position, &remaining,
@@ -2805,16 +2819,63 @@ lx_netlink_input_uevent(zoneid_t zoneid, const char *action, uint_t slot)
 	    (u_longlong_t)sequence))
 		return;
 	size = position - message;
+	lx_netlink_uevent_broadcast(zoneid, message, size);
+}
 
-	mutex_enter(&lx_netlink_lock);
-	for (sock = lx_netlink_head; sock != NULL; sock = sock->lxns_next) {
-		if (sock->lxns_proto != LX_NETLINK_KOBJECT_UEVENT ||
-		    sock->lxns_zoneid != zoneid ||
-		    (sock->lxns_groups & 1) == 0 || sock->lxns_upcalls == NULL)
-			continue;
-		(void) lx_netlink_uevent_send(sock, message, size);
-	}
-	mutex_exit(&lx_netlink_lock);
+void
+lx_netlink_input_parent_uevent(zoneid_t zoneid, const char *action,
+    uint_t slot)
+{
+	char message[384];
+	char *position = message;
+	size_t remaining = sizeof (message);
+	size_t size;
+	uint64_t sequence;
+
+	if (slot >= LX_INPUT_EVENT_COUNT)
+		return;
+	sequence = atomic_inc_64_nv(&lx_netlink_uevent_seq);
+	if (!lx_netlink_uevent_add(&position, &remaining,
+	    "%s@/devices/virtual/input/input%u", action, slot) ||
+	    !lx_netlink_uevent_add(&position, &remaining, "ACTION=%s",
+	    action) ||
+	    !lx_netlink_uevent_add(&position, &remaining,
+	    "DEVPATH=/devices/virtual/input/input%u", slot) ||
+	    !lx_netlink_uevent_add(&position, &remaining, "SUBSYSTEM=input") ||
+	    !lx_netlink_uevent_add(&position, &remaining, "SEQNUM=%llu",
+	    (u_longlong_t)sequence))
+		return;
+	size = position - message;
+	lx_netlink_uevent_broadcast(zoneid, message, size);
+}
+
+void
+lx_netlink_uinput_uevent(zoneid_t zoneid, const char *action)
+{
+	char message[384];
+	char *position = message;
+	size_t remaining = sizeof (message);
+	size_t size;
+	uint64_t sequence;
+
+	sequence = atomic_inc_64_nv(&lx_netlink_uevent_seq);
+	if (!lx_netlink_uevent_add(&position, &remaining,
+	    "%s@/devices/virtual/misc/uinput", action) ||
+	    !lx_netlink_uevent_add(&position, &remaining, "ACTION=%s",
+	    action) ||
+	    !lx_netlink_uevent_add(&position, &remaining,
+	    "DEVPATH=/devices/virtual/misc/uinput") ||
+	    !lx_netlink_uevent_add(&position, &remaining, "SUBSYSTEM=misc") ||
+	    !lx_netlink_uevent_add(&position, &remaining, "MAJOR=%u",
+	    LX_INPUT_LINUX_UINPUT_MAJOR) ||
+	    !lx_netlink_uevent_add(&position, &remaining, "MINOR=%u",
+	    LX_INPUT_LINUX_UINPUT_MINOR) ||
+	    !lx_netlink_uevent_add(&position, &remaining, "DEVNAME=uinput") ||
+	    !lx_netlink_uevent_add(&position, &remaining, "SEQNUM=%llu",
+	    (u_longlong_t)sequence))
+		return;
+	size = position - message;
+	lx_netlink_uevent_broadcast(zoneid, message, size);
 }
 
 /*ARGSUSED*/
