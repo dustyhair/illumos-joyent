@@ -364,6 +364,7 @@ lx_ptrace_accord_get_locked(klwp_t *lwp, lx_ptrace_accord_t **accordp,
 		 * it in from the soon-to-be tracer LWP.
 		 */
 		lxpa->lxpa_refcnt = 1;
+		lxpa->lxpa_tracer_pid = lwpd->br_pid;
 		mutex_init(&lxpa->lxpa_lock, NULL, MUTEX_DEFAULT, NULL);
 		mutex_init(&lxpa->lxpa_tracees_lock, NULL, MUTEX_DEFAULT, NULL);
 		list_create(&lxpa->lxpa_tracees, sizeof (lx_lwp_data_t),

@@ -2928,7 +2928,7 @@ lxpr_read_status_common(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf,
 	const gid_t	*groups;
 	struct as	*as;
 	char		*status;
-	pid_t		pid, ppid;
+	pid_t		pid, ppid, tracerpid = 0;
 	pid_t		tid = (lookup_id == 0) ? lxpnp->lxpr_pid : lookup_id;
 	k_sigset_t	current, ignore, handle;
 	int		i, lx_sig, lwpcnt, ngroups;
@@ -2949,6 +2949,26 @@ lxpr_read_status_common(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf,
 
 	/* Translate the pid (e.g. initpid to 1) */
 	lxpr_fixpid(lxpnp, p, &pid, &ppid);
+
+	/*
+	 * The tracee's accord pointer is protected by p_lock.  Its cached
+	 * Linux tracer PID is immutable, so no tracer LWP lookup or pidlock
+	 * acquisition is needed.  A PID namespace mount reports zero until
+	 * the accord records the tracer's complete namespace identity;
+	 * leaking an outer PID would be incorrect.
+	 */
+	if (t != NULL && p->p_brand == &lx_brand) {
+		lx_lwp_data_t *lwpd = ttolxlwp(t);
+		lx_ptrace_accord_t *accord;
+
+		if (lwpd != NULL &&
+		    (accord = lwpd->br_ptrace_tracer) != NULL &&
+		    LXPTOPIDNS(lxpnp) == NULL) {
+			tracerpid = accord->lxpa_tracer_pid;
+			if (tracerpid == LXPTOZ(lxpnp)->zone_proc_initpid)
+				tracerpid = 1;
+		}
+	}
 
 	if (t != NULL) {
 		thread_lock(t);
@@ -3059,7 +3079,7 @@ lxpr_read_status_common(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf,
 	    pid, /* thread group id - same as pid */
 	    (lookup_id == 0) ? pid : lxpnp->lxpr_desc,
 	    ppid,
-	    0,
+	    tracerpid,
 	    lx_userns_id_visible(cr, 0, crgetruid(cr)),
 	    lx_userns_id_visible(cr, 0, crgetuid(cr)),
 	    lx_userns_id_visible(cr, 0, crgetsuid(cr)),
