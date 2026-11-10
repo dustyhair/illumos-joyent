@@ -78,6 +78,39 @@
 	<device match="dtrace/*" />
 	<device match="dtrace/provider/*" />
 	<device match="eventfd" />
+	<device match="lx_uinput" name="uinput" />
+	<device match="lx_event0" name="input/event0" />
+	<device match="lx_event1" name="input/event1" />
+	<device match="lx_event2" name="input/event2" />
+	<device match="lx_event3" name="input/event3" />
+	<device match="lx_event4" name="input/event4" />
+	<device match="lx_event5" name="input/event5" />
+	<device match="lx_event6" name="input/event6" />
+	<device match="lx_event7" name="input/event7" />
+	<device match="lx_event8" name="input/event8" />
+	<device match="lx_event9" name="input/event9" />
+	<device match="lx_event10" name="input/event10" />
+	<device match="lx_event11" name="input/event11" />
+	<device match="lx_event12" name="input/event12" />
+	<device match="lx_event13" name="input/event13" />
+	<device match="lx_event14" name="input/event14" />
+	<device match="lx_event15" name="input/event15" />
+	<device match="lx_event16" name="input/event16" />
+	<device match="lx_event17" name="input/event17" />
+	<device match="lx_event18" name="input/event18" />
+	<device match="lx_event19" name="input/event19" />
+	<device match="lx_event20" name="input/event20" />
+	<device match="lx_event21" name="input/event21" />
+	<device match="lx_event22" name="input/event22" />
+	<device match="lx_event23" name="input/event23" />
+	<device match="lx_event24" name="input/event24" />
+	<device match="lx_event25" name="input/event25" />
+	<device match="lx_event26" name="input/event26" />
+	<device match="lx_event27" name="input/event27" />
+	<device match="lx_event28" name="input/event28" />
+	<device match="lx_event29" name="input/event29" />
+	<device match="lx_event30" name="input/event30" />
+	<device match="lx_event31" name="input/event31" />
 	<device match="full" />
 	<device match="inotify" />
 	<device match="ipnet" />

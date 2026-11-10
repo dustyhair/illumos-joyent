@@ -48,6 +48,7 @@
 #include <sys/dlpi.h>
 #include <sys/lx_autofs.h>
 #include <sys/lx_netns.h>
+#include <sys/lx_input.h>
 #include <sys/netstack.h>
 #include <inet/ip.h>
 #include <inet/ip_if.h>
@@ -1985,6 +1986,7 @@ lx_ioctl(int fdes, int cmd, intptr_t arg)
 	int rval = 0;
 	char *driver;
 	boolean_t nvidia_cmd;
+	boolean_t input_cmd;
 	lx_ioc_cmd_translator_t *ict = NULL;
 
 	if (cmd == LX_FIOCLEX || cmd == LX_FIONCLEX) {
@@ -2005,9 +2007,18 @@ lx_ioctl(int fdes, int cmd, intptr_t arg)
 	    ((uint32_t)cmd & 0xc000ff00U) == 0xc0006d00U ||
 	    (cmd > 0 && cmd <= 4095) ||
 	    cmd == 0x30000001 || cmd == 0x30000002);
+	input_cmd = LX_IOC_TYPE(cmd) == LX_UINPUT_IOCTL_BASE ||
+	    LX_IOC_TYPE(cmd) == LX_EVDEV_IOCTL_BASE;
 	driver = NULL;
-	if (nvidia_cmd && fp->f_vnode->v_type == VCHR) {
+	if ((nvidia_cmd || input_cmd) && fp->f_vnode->v_type == VCHR) {
 		driver = ddi_major_to_name(getmajor(fp->f_vnode->v_rdev));
+	}
+	if (input_cmd && driver != NULL &&
+	    strcmp(driver, LX_INPUT_DRV) == 0) {
+		error = VOP_IOCTL(fp->f_vnode, cmd, arg, FLUSER(fp), CRED(),
+		    &rval, NULL);
+		releasef(fdes);
+		return (error != 0 ? set_errno(error) : rval);
 	}
 	if (driver != NULL && (strcmp(driver, "nvidia") == 0 ||
 	    strcmp(driver, "nvidia_modeset") == 0 ||

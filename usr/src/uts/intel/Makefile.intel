@@ -520,7 +520,7 @@ DRV_KMODS	+= sol_umad
 #	Brand modules
 #
 BRAND_KMODS	+= sn1_brand s10_brand lx_brand
-DRV_KMODS	+= lx_systrace lx_ptm lx_netlink
+DRV_KMODS	+= lx_systrace lx_ptm lx_netlink lx_input
 
 #
 #	Exec Class Modules (/kernel/exec):

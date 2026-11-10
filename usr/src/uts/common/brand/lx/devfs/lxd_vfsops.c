@@ -73,6 +73,7 @@
 #include <sys/ddi.h>
 #include <sys/lx_brand.h>
 #include <sys/lx_ptm.h>
+#include <sys/lx_input.h>
 #include <sys/lx_impl.h>
 
 #include "lxd.h"
@@ -150,6 +151,7 @@ static struct modlinkage modlinkage = {
  */
 static void lxd_pts_devt_translator(dev_t, dev_t *);
 static void lxd_ptm_devt_translator(dev_t, dev_t *);
+static void lxd_input_devt_translator(dev_t, dev_t *);
 
 static kmutex_t			lxd_xlate_lock;
 static boolean_t		lxd_xlate_initialized = B_FALSE;
@@ -179,6 +181,7 @@ lxd_devt_translator_t lxd_devt_translators[] = {
 	{ "zcons",	0, DTT_LIST,	(uintptr_t)&lxd_mtranslator_zcons },
 	{ LX_PTM_DRV,	0, DTT_CUSTOM,	(uintptr_t)lxd_ptm_devt_translator },
 	{ "pts",	0, DTT_CUSTOM,	(uintptr_t)lxd_pts_devt_translator },
+	{ LX_INPUT_DRV,	0, DTT_CUSTOM,	(uintptr_t)lxd_input_devt_translator },
 	{ NULL,		0, DTT_INVALID,	(uintptr_t)NULL }
 };
 
@@ -857,4 +860,21 @@ static void
 lxd_ptm_devt_translator(dev_t dev, dev_t *jdev)
 {
 	*jdev = LX_MAKEDEVICE(LX_PTM_MAJOR, LX_PTM_MINOR);
+}
+
+static void
+lxd_input_devt_translator(dev_t dev, dev_t *jdev)
+{
+	minor_t type = LX_INPUT_MINOR_TYPE(getminor(dev));
+
+	if (type == LX_INPUT_MINOR_UINPUT) {
+		*jdev = LX_MAKEDEVICE(LX_INPUT_LINUX_UINPUT_MAJOR,
+		    LX_INPUT_LINUX_UINPUT_MINOR);
+		return;
+	}
+
+	ASSERT(type >= LX_INPUT_MINOR_EVENT_BASE);
+	ASSERT(type <= LX_INPUT_MINOR_EVENT_LAST);
+	*jdev = LX_MAKEDEVICE(LX_INPUT_LINUX_EVENT_MAJOR,
+	    LX_INPUT_LINUX_EVENT_BASE + type - LX_INPUT_MINOR_EVENT_BASE);
 }
