@@ -65,10 +65,13 @@ __vdso_sys_time(timespec_t *tp)
 	SET_SIZE(__vdso_sys_gettimeofday)
 
 	ENTRY_NP(__vdso_sys_time)
+	/* A signal can interrupt this frame while the syscall is in flight. */
+	.cfi_startproc
 	movl	$LX_SYS_time, %eax
 	movl	0x4(%esp), %ebx
 	int	$0x80
 	ret
+	.cfi_endproc
 	SET_SIZE(__vdso_sys_time)
 
 	ENTRY_NP(__vsyscall)
