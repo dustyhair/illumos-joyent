@@ -23,6 +23,7 @@
  */
 
 #include <sys/strsubr.h>
+#include <sys/varargs.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 #include <sys/sunddi.h>
@@ -51,6 +52,9 @@
 #include <sys/dlpi.h>
 #include <sys/policy.h>
 #include <sys/ddi.h>
+#include <sys/atomic.h>
+#include <sys/lx_input.h>
+#include <sys/lx_netlink.h>
 #include <net/route.h>
 #include <inet/ip_if.h>
 
@@ -434,6 +438,7 @@ typedef struct lx_netlink_sock {
 	uint32_t lxns_groups;			/* group subscriptions */
 	uint32_t lxns_bufsize;			/* buffer size */
 	uint32_t lxns_flags;			/* socket flags */
+	zoneid_t lxns_zoneid;			/* owning LX zone */
 	kmutex_t lxns_flowctl_mtx;		/* protects lxns_flowctrled */
 	boolean_t lxns_flowctrled;		/* sock is flow-controlled */
 } lx_netlink_sock_t;
@@ -455,6 +460,7 @@ static kmutex_t lx_netlink_lock;		/* lock to protect state */
 static ldi_ident_t lx_netlink_ldi;		/* LDI handle */
 static int lx_netlink_bufsize = 4096;		/* default buffer size */
 static int lx_netlink_flowctrld;		/* # of times flow controlled */
+static uint64_t lx_netlink_uevent_seq;	/* kobject event sequence */
 
 typedef enum {
 	LXNL_BIND,
@@ -547,6 +553,22 @@ lx_netlink_setsockopt(sock_lower_handle_t handle, int level,
 	switch (option_name) {
 	case LX_NETLINK_SO_ADD_MEMBERSHIP:
 	case LX_NETLINK_SO_DROP_MEMBERSHIP:
+		{
+			uint32_t group;
+			uint32_t bit;
+
+			if (optlen != sizeof (group))
+				return (EINVAL);
+			group = *(const uint32_t *)optval;
+			if (group == 0 || group > 32)
+				return (EINVAL);
+			bit = 1U << (group - 1);
+			if (option_name == LX_NETLINK_SO_ADD_MEMBERSHIP)
+				lxsock->lxns_groups |= bit;
+			else
+				lxsock->lxns_groups &= ~bit;
+			return (0);
+		}
 	case LX_NETLINK_SO_PKTINFO:
 	case LX_NETLINK_SO_BROADCAST_ERROR:
 	case LX_NETLINK_SO_NO_ENOBUFS:
@@ -2686,11 +2708,113 @@ lx_netlink_kobject_uevent(lx_netlink_sock_t *lxsock,
     lx_netlink_hdr_t *hdr, mblk_t *mp)
 {
 	/*
-	 * For udev, we just silently accept all writes and never actually
-	 * reply with anything -- which appears to be sufficient for things
-	 * to work.
+	 * Accept userspace writes without a reply.  Kernel-generated input
+	 * notifications are delivered separately by lx_netlink_input_uevent().
 	 */
 	return (0);
+}
+
+static int
+lx_netlink_uevent_send(lx_netlink_sock_t *lxsock, const char *message,
+    size_t size)
+{
+	lx_netlink_sockaddr_t *lxsa;
+	struct T_unitdata_ind *tunit;
+	mblk_t *mp;
+	mblk_t *mp1;
+	int error;
+
+	if ((mp = allocb(size, 0)) == NULL)
+		return (ENOMEM);
+	bcopy(message, mp->b_wptr, size);
+	mp->b_wptr += size;
+	if ((mp1 = lx_netlink_alloc_mp1(lxsock)) == NULL) {
+		freeb(mp);
+		return (ENOMEM);
+	}
+	/* LINTED: E_BAD_PTR_CAST_ALIGN */
+	tunit = (struct T_unitdata_ind *)mp1->b_rptr;
+	/* LINTED: E_BAD_PTR_CAST_ALIGN */
+	lxsa = (lx_netlink_sockaddr_t *)((caddr_t)tunit + sizeof (*tunit));
+	lxsa->lxnl_groups = 1;
+	mp1->b_cont = mp;
+
+	mutex_enter(&lxsock->lxns_flowctl_mtx);
+	if (lxsock->lxns_flowctrled) {
+		mutex_exit(&lxsock->lxns_flowctl_mtx);
+		freemsg(mp1);
+		return (ENOSPC);
+	}
+	lxsock->lxns_upcalls->su_recv(lxsock->lxns_uphandle, mp1,
+	    msgdsize(mp1), 0, &error, NULL);
+	if (error == ENOSPC) {
+		lxsock->lxns_flowctrled = B_TRUE;
+		lx_netlink_flowctrld++;
+		error = 0;
+	}
+	mutex_exit(&lxsock->lxns_flowctl_mtx);
+	return (error);
+}
+
+static boolean_t
+lx_netlink_uevent_add(char **position, size_t *remaining,
+    const char *format, ...)
+{
+	va_list args;
+	int length;
+
+	va_start(args, format);
+	length = vsnprintf(*position, *remaining, format, args);
+	va_end(args);
+	if (length < 0 || (size_t)length >= *remaining)
+		return (B_FALSE);
+	*position += length + 1;
+	*remaining -= length + 1;
+	return (B_TRUE);
+}
+
+void
+lx_netlink_input_uevent(zoneid_t zoneid, const char *action, uint_t slot)
+{
+	char message[512];
+	char *position = message;
+	size_t remaining = sizeof (message);
+	size_t size;
+	uint64_t sequence;
+	lx_netlink_sock_t *sock;
+
+	if (slot >= LX_INPUT_EVENT_COUNT || (strcmp(action, "add") != 0 &&
+	    strcmp(action, "remove") != 0))
+		return;
+	sequence = atomic_inc_64_nv(&lx_netlink_uevent_seq);
+	if (!lx_netlink_uevent_add(&position, &remaining,
+	    "%s@/devices/virtual/input/input%u/event%u", action, slot,
+	    slot) ||
+	    !lx_netlink_uevent_add(&position, &remaining, "ACTION=%s",
+	    action) ||
+	    !lx_netlink_uevent_add(&position, &remaining,
+	    "DEVPATH=/devices/virtual/input/input%u/event%u", slot, slot) ||
+	    !lx_netlink_uevent_add(&position, &remaining, "SUBSYSTEM=input") ||
+	    !lx_netlink_uevent_add(&position, &remaining, "MAJOR=%u",
+	    LX_INPUT_LINUX_EVENT_MAJOR) ||
+	    !lx_netlink_uevent_add(&position, &remaining, "MINOR=%u",
+	    LX_INPUT_LINUX_EVENT_BASE + slot) ||
+	    !lx_netlink_uevent_add(&position, &remaining,
+	    "DEVNAME=input/event%u", slot) ||
+	    !lx_netlink_uevent_add(&position, &remaining, "SEQNUM=%llu",
+	    (u_longlong_t)sequence))
+		return;
+	size = position - message;
+
+	mutex_enter(&lx_netlink_lock);
+	for (sock = lx_netlink_head; sock != NULL; sock = sock->lxns_next) {
+		if (sock->lxns_proto != LX_NETLINK_KOBJECT_UEVENT ||
+		    sock->lxns_zoneid != zoneid ||
+		    (sock->lxns_groups & 1) == 0 || sock->lxns_upcalls == NULL)
+			continue;
+		(void) lx_netlink_uevent_send(sock, message, size);
+	}
+	mutex_exit(&lx_netlink_lock);
 }
 
 /*ARGSUSED*/
@@ -2900,6 +3024,7 @@ lx_netlink_create(int family, int type, int proto,
 	lxsock->lxns_ip6handle = handle6;
 	lxsock->lxns_bufsize = lx_netlink_bufsize;
 	lxsock->lxns_proto = proto;
+	lxsock->lxns_zoneid = crgetzoneid(credp);
 	mutex_init(&lxsock->lxns_flowctl_mtx, NULL, MUTEX_DEFAULT, NULL);
 
 	mutex_enter(&lx_netlink_lock);

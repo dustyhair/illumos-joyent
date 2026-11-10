@@ -24,7 +24,7 @@ ALL_TARGET = $(BINARY) $(SRC_CONFILE)
 INSTALL_TARGET = $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 
 CPPFLAGS += -I$(UTSBASE)/common/brand/lx
-LDFLAGS += -Nbrand/lx_brand
+LDFLAGS += -Nbrand/lx_brand -Nsocketmod/lx_netlink
 
 .KEEP_STATE:
 

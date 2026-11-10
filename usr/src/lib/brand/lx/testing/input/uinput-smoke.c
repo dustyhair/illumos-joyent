@@ -15,12 +15,14 @@
 
 #include <sys/ioctl.h>
 #include <sys/poll.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
 
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/input.h>
+#include <linux/netlink.h>
 #include <linux/uinput.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -70,6 +72,79 @@ bit_is_set(const unsigned long *bits, unsigned int bit)
 {
 	return ((bits[bit / BITS_PER_LONG] &
 	    (1UL << (bit % BITS_PER_LONG))) != 0);
+}
+
+static int
+open_uevent_socket(void)
+{
+	struct sockaddr_nl address;
+	int fd;
+
+	fd = socket(AF_NETLINK, SOCK_DGRAM | SOCK_CLOEXEC,
+	    NETLINK_KOBJECT_UEVENT);
+	if (fd < 0)
+		fail("open kobject uevent socket");
+	(void) memset(&address, 0, sizeof (address));
+	address.nl_family = AF_NETLINK;
+	address.nl_pid = (uint32_t)getpid();
+	address.nl_groups = 1;
+	if (bind(fd, (struct sockaddr *)&address, sizeof (address)) != 0)
+		fail("bind kobject uevent socket");
+	return (fd);
+}
+
+static bool
+uevent_matches(const char *buffer, size_t size, const char *action,
+    const char *devname)
+{
+	const char *position = buffer;
+	bool found_action = false;
+	bool found_device = false;
+
+	while (position < buffer + size && *position != '\0') {
+		size_t length = strnlen(position, buffer + size - position);
+
+		if (length == (size_t)(buffer + size - position))
+			break;
+		if (strncmp(position, "ACTION=", 7) == 0 &&
+		    strcmp(position + 7, action) == 0)
+			found_action = true;
+		if (strncmp(position, "DEVNAME=", 8) == 0 &&
+		    strcmp(position + 8, devname) == 0)
+			found_device = true;
+		position += length + 1;
+	}
+	return (found_action && found_device);
+}
+
+static void
+wait_uevent(int fd, const char *action, const char *devname)
+{
+	unsigned int attempt;
+
+	for (attempt = 0; attempt < 20; attempt++) {
+		struct pollfd pfd = { .fd = fd, .events = POLLIN };
+		char buffer[2048];
+		ssize_t size;
+		int result;
+
+		do {
+			result = poll(&pfd, 1, 100);
+		} while (result < 0 && errno == EINTR);
+		if (result < 0)
+			fail("poll kobject uevent socket");
+		if (result == 0)
+			continue;
+		do {
+			size = recv(fd, buffer, sizeof (buffer), 0);
+		} while (size < 0 && errno == EINTR);
+		if (size < 0)
+			fail("receive kobject uevent");
+		if (uevent_matches(buffer, (size_t)size, action, devname))
+			return;
+	}
+	errno = ETIMEDOUT;
+	fail("matching kobject uevent");
 }
 
 static int
@@ -215,14 +290,19 @@ main(void)
 	char event_path[64];
 	char name[UINPUT_MAX_NAME_SIZE];
 	char sysname[64];
+	char uevent_devname[64];
 	int version;
 	int queued;
 	int event_fd;
 	int second_fd;
+	int uevent_fd;
 	int clock_id = CLOCK_MONOTONIC;
+	unsigned long sys_slot;
+	char *sys_end;
 
 	if (atexit(cleanup) != 0)
 		fail("atexit");
+	uevent_fd = open_uevent_socket();
 	if (stat("/dev/uinput", &st) != 0)
 		fail("stat /dev/uinput");
 	check(S_ISCHR(st.st_mode), "/dev/uinput is not a character device");
@@ -256,6 +336,13 @@ main(void)
 		fail("UI_GET_SYSNAME");
 	check(strncmp(sysname, "input", 5) == 0,
 	    "unexpected uinput sysname");
+	errno = 0;
+	sys_slot = strtoul(sysname + 5, &sys_end, 10);
+	check(errno == 0 && *sys_end == '\0' && sys_slot < EVENT_LIMIT,
+	    "invalid uinput sysname slot");
+	(void) snprintf(uevent_devname, sizeof (uevent_devname),
+	    "input/event%lu", sys_slot);
+	wait_uevent(uevent_fd, "add", uevent_devname);
 
 	event_fd = find_event_device(device_name, event_path,
 	    sizeof (event_path));
@@ -322,6 +409,7 @@ main(void)
 	if (ioctl(uinput_fd, UI_DEV_DESTROY) != 0)
 		fail("UI_DEV_DESTROY");
 	device_created = false;
+	wait_uevent(uevent_fd, "remove", uevent_devname);
 	pfd.fd = event_fd;
 	pfd.events = 0;
 	pfd.revents = 0;
@@ -335,6 +423,7 @@ main(void)
 
 	(void) close(second_fd);
 	(void) close(event_fd);
+	(void) close(uevent_fd);
 	(void) printf("PASS: %s (%s, %s)\n", device_name, sysname,
 	    event_path);
 	return (EXIT_SUCCESS);
