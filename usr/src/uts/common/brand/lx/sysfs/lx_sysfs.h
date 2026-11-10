@@ -103,6 +103,8 @@ typedef enum lxsys_nodetype {
 	LXSYS_DEV_SYS_CPU,	/* /sys/devices/system/cpu/<cpu>	*/
 	LXSYS_DEV_SYS_CPUINFO,	/* /sys/devices/system/cpu/cpuN/<info>	*/
 	LXSYS_DEV_SYS_NODE,	/* /sys/devices/system/node/node0/<info> */
+	LXSYS_CLASS_INPUT,	/* /sys/class/input/<device>		*/
+	LXSYS_DEV_INPUT,	/* /sys/devices/virtual/input/<device>	*/
 	LXSYS_MAXTYPE,		/* type limit				*/
 } lxsys_nodetype_t;
 
