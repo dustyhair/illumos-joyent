@@ -478,7 +478,7 @@ lx_syscall_enter(int entry)
 	if (lx_kernel_restricted(curproc) && syscall_num == 59) {
 		error = exec_common((const char *)args[0],
 		    (const char **)args[1], (const char **)args[2],
-		    NULL, EBA_NONE);
+		    NULL, EBA_NONE, UIO_USERSPACE);
 		if (error != 0) {
 			(void) set_errno(error);
 			lx_syscall_return(lwp, syscall_num, -1);
