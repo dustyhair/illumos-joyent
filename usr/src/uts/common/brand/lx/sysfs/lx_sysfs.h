@@ -13,8 +13,8 @@
  * Copyright 2017 Joyent, Inc.
  */
 
-#ifndef	_LXSYSFS_H
-#define	_LXSYSFS_H
+#ifndef	_LX_SYSFS_H
+#define	_LX_SYSFS_H
 
 #ifdef	__cplusplus
 extern "C" {
@@ -200,4 +200,4 @@ extern void lxsys_uiobuf_printf(lxsys_uiobuf_t *uiobuf, const char *fmt, ...);
 #define	toupper(x)	(islower(x) ? (x) - 'a' + 'A' : (x))
 #endif
 
-#endif /* _LXSYSFS_H */
+#endif /* _LX_SYSFS_H */
