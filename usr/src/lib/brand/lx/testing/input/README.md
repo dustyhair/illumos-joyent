@@ -10,12 +10,14 @@ Compile them with:
 ```sh
 cc -std=gnu11 -Wall -Wextra -Werror -O2 -o uinput-smoke uinput-smoke.c
 cc -std=gnu11 -Wall -Wextra -Werror -O2 -o input-abi input-abi.c
+cc -std=gnu11 -Wall -Wextra -Werror -O2 -o input-clock input-clock.c
 ```
 
 Run them as a user that can open `/dev/uinput`:
 
 ```sh
 ./input-abi
+./input-clock
 ./uinput-smoke
 ```
 
@@ -24,6 +26,12 @@ Run them as a user that can open `/dev/uinput`:
 both uinput and evdev. It also enumerates the misc, input, virtual-device, and
 device-number sysfs directories, rejects empty names, and verifies that the
 enumerated entries resolve through their public symlinks.
+
+`input-clock` checks the Linux clock identifiers accepted by
+`EVIOCSCLOCKID`. It verifies realtime, monotonic, and boottime timestamps on
+separate evdev clients, rejects unsupported identifiers without changing the
+selected clock, and checks that a clock change replaces queued events with
+`SYN_DROPPED` before reporting events in the new clock domain.
 
 `uinput-smoke` creates a virtual keyboard, finds its evdev node by name, verifies
 Linux device numbers, sysfs discovery data, and capability ioctls, sends

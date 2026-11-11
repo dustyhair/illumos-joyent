@@ -48,6 +48,11 @@
 #define	LX_INPUT_QUEUE_SIZE	256
 #define	LX_INPUT_MAX_COPY	(1U << LX_IOC_SIZEBITS)
 
+/* Linux clock identifiers accepted by EVIOCSCLOCKID. */
+#define	LX_INPUT_CLOCK_REALTIME	0
+#define	LX_INPUT_CLOCK_MONOTONIC	1
+#define	LX_INPUT_CLOCK_BOOTTIME	7
+
 typedef struct lx_input_event {
 	int64_t lie_sec;
 	int64_t lie_usec;
@@ -63,7 +68,7 @@ typedef struct lx_input_client {
 	struct lx_input_device *lic_device;
 	kcondvar_t lic_cv;
 	pollhead_t lic_pollhead;
-	clockid_t lic_clock;
+	int lic_clock;
 	boolean_t lic_grabbed;
 	uint_t lic_head;
 	uint_t lic_count;
@@ -361,7 +366,8 @@ lx_input_device_create(lx_input_handle_t *handle)
 static void
 lx_input_event_time(lx_input_client_t *client, lx_input_event_t *event)
 {
-	if (client->lic_clock == CLOCK_MONOTONIC) {
+	if (client->lic_clock == LX_INPUT_CLOCK_MONOTONIC ||
+	    client->lic_clock == LX_INPUT_CLOCK_BOOTTIME) {
 		hrtime_t now = gethrtime();
 
 		event->lie_sec = now / NANOSEC;
@@ -567,7 +573,7 @@ lx_input_open(dev_t *devp, int flag __unused, int otyp, cred_t *cr)
 	} else {
 		client = kmem_zalloc(sizeof (*client), KM_SLEEP);
 		cv_init(&client->lic_cv, NULL, CV_DEFAULT, NULL);
-		client->lic_clock = CLOCK_REALTIME;
+		client->lic_clock = LX_INPUT_CLOCK_REALTIME;
 
 		mutex_enter(&lx_input_lock);
 		device = lx_input_device_lookup(zoneid,
@@ -974,15 +980,32 @@ lx_evdev_ioctl(lx_input_handle_t *handle, uint32_t cmd, intptr_t arg,
 		return (error);
 	}
 	if (cmd == LX_EVIOCSCLOCKID) {
-		clockid_t clock;
+		lx_input_event_t dropped;
+		int clock;
 
 		mutex_exit(&device->lid_lock);
 		if (ddi_copyin((void *)arg, &clock, sizeof (clock), mode) != 0)
 			return (EFAULT);
-		if (clock != CLOCK_REALTIME && clock != CLOCK_MONOTONIC)
+		if (clock != LX_INPUT_CLOCK_REALTIME &&
+		    clock != LX_INPUT_CLOCK_MONOTONIC &&
+		    clock != LX_INPUT_CLOCK_BOOTTIME)
 			return (EINVAL);
 		mutex_enter(&device->lid_lock);
-		client->lic_clock = clock;
+		if (device->lid_dead) {
+			mutex_exit(&device->lid_lock);
+			return (ENODEV);
+		}
+		if (client->lic_clock != clock) {
+			client->lic_clock = clock;
+			if (client->lic_count != 0) {
+				client->lic_head = 0;
+				client->lic_count = 0;
+				bzero(&dropped, sizeof (dropped));
+				dropped.lie_type = LX_EV_SYN;
+				dropped.lie_code = LX_SYN_DROPPED;
+				lx_input_client_enqueue(client, &dropped);
+			}
+		}
 		mutex_exit(&device->lid_lock);
 		return (0);
 	}
