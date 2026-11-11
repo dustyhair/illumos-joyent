@@ -102,6 +102,7 @@ case "$MACH" in
 	# It depends on the build machine being an x86
 	#
 	cat <<-EOM
+	type=ddi_pseudo;name=efi	\M0
 	EOM
 	;;
   "sparc" )
