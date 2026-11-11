@@ -11,6 +11,7 @@
 
 /*
  * Copyright 2016 Joyent, Inc.
+ * Copyright 2026 Jonathan Wagner.
  */
 
 #include <sys/types.h>
@@ -24,6 +25,7 @@
 #include <sys/mode.h>
 #include <sys/stat.h>
 #include <sys/lx_brand.h>
+#include <sys/lx_input.h>
 #include <sys/lx_userns.h>
 #include <sys/lx_fcntl.h>
 #include <sys/lx_types.h>
@@ -181,6 +183,7 @@ lx_stat_common(vnode_t *vp, cred_t *cr, void *outp, lx_stat_fmt_t fmt,
 	int error, flags;
 	char *driver;
 	minor_t nvidia_node;
+	minor_t input_type;
 
 	/*
 	 * When symlink following is desired, the ATTR_REAL flag is necessary
@@ -205,19 +208,38 @@ lx_stat_common(vnode_t *vp, cred_t *cr, void *outp, lx_stat_fmt_t fmt,
 	}
 
 	lx_stat_xlate_dev(&vattr);
-	/*
-	 * NVIDIA's Linux userspace expects the frontend character devices at
-	 * major 195.  The native driver may have a different assigned major;
-	 * report the Linux ABI number without changing the device used by VOPs.
-	 * Opened native devices use a clone minor with the original node number
-	 * in its low 16 bits, so stat(path) and fstat(fd) must use the same
-	 * node.
-	 */
-	nvidia_node = getminor(vp->v_rdev) & 0xffffU;
-	if (vp->v_type == VCHR && nvidia_node <= 255 &&
-	    (driver = ddi_major_to_name(getmajor(vp->v_rdev))) != NULL &&
-	    strcmp(driver, "nvidia") == 0) {
-		vattr.va_rdev = LX_MAKEDEVICE(195, nvidia_node);
+	if (vp->v_type == VCHR &&
+	    (driver = ddi_major_to_name(getmajor(vp->v_rdev))) != NULL) {
+		/*
+		 * lx devfs translates the named input nodes.  Once the driver
+		 * returns a cloned vnode, however, fstat reaches us with the
+		 * native major and a per-open minor.  Recover the device type
+		 * from the low minor bits so stat(path) and fstat(fd) report the
+		 * same Linux device number.
+		 */
+		if (strcmp(driver, LX_INPUT_DRV) == 0) {
+			input_type = LX_INPUT_MINOR_TYPE(getminor(vp->v_rdev));
+			if (input_type == LX_INPUT_MINOR_UINPUT) {
+				vattr.va_rdev = LX_MAKEDEVICE(
+				    LX_INPUT_LINUX_UINPUT_MAJOR,
+				    LX_INPUT_LINUX_UINPUT_MINOR);
+			} else if (input_type >= LX_INPUT_MINOR_EVENT_BASE &&
+			    input_type <= LX_INPUT_MINOR_EVENT_LAST) {
+				vattr.va_rdev = LX_MAKEDEVICE(
+				    LX_INPUT_LINUX_EVENT_MAJOR,
+				    LX_INPUT_LINUX_EVENT_BASE + input_type -
+				    LX_INPUT_MINOR_EVENT_BASE);
+			}
+		}
+
+		/*
+		 * NVIDIA clone minors retain the original frontend node in the
+		 * low 16 bits.  Report Linux major 195 without changing the
+		 * device used by VOPs.
+		 */
+		nvidia_node = getminor(vp->v_rdev) & 0xffffU;
+		if (nvidia_node <= 255 && strcmp(driver, "nvidia") == 0)
+			vattr.va_rdev = LX_MAKEDEVICE(195, nvidia_node);
 	}
 	vattr.va_uid = lx_userns_id_visible(CRED(), 0, vattr.va_uid);
 	vattr.va_gid = lx_userns_id_visible(CRED(), 1, vattr.va_gid);

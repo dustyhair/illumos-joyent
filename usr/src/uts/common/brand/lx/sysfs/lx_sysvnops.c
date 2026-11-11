@@ -2379,15 +2379,15 @@ lxsys_readdir_input_list(lxsys_node_t *lnp, uio_t *uiop, int *eofp,
 			}
 			if (class_entries) {
 				(void) snprintf(dirent->d_name,
-				    sizeof (dirent->d_name), "%s%u",
+				    LXSNSIZ, "%s%u",
 				    entry == 0 ? "input" : "event", slot);
 				dirent->d_ino = lxsys_inode(LXSYS_CLASS_INPUT,
 				    0, entry == 0 ?
 				    LXSYS_CLASS_INPUT_ENDPOINT(slot) :
 				    LXSYS_CLASS_EVENT_ENDPOINT(slot));
 			} else {
-				(void) snprintf(dirent->d_name,
-				    sizeof (dirent->d_name), "input%u", slot);
+				(void) snprintf(dirent->d_name, LXSNSIZ,
+				    "input%u", slot);
 				dirent->d_ino = lxsys_inode(LXSYS_DEV_INPUT,
 				    slot + 1, 0);
 			}
@@ -2478,7 +2478,7 @@ lxsys_readdir_single(lxsys_node_t *lnp, uio_t *uiop, int *eofp,
 	}
 
 	bzero(bp, sizeof (bp));
-	(void) strlcpy(dirent->d_name, name, sizeof (dirent->d_name));
+	(void) strlcpy(dirent->d_name, name, LXSNSIZ);
 	dirent->d_ino = lxsys_inode(type, instance, 0);
 	reclen = DIRENT64_RECLEN(strlen(dirent->d_name));
 	if (reclen > uiop->uio_resid) {
@@ -2542,8 +2542,7 @@ lxsys_readdir_dev_char(lxsys_node_t *lnp, uio_t *uiop, int *eofp)
 		int reclen;
 
 		if (entry == 0) {
-			(void) strlcpy(dirent->d_name, "10:223",
-			    sizeof (dirent->d_name));
+			(void) strlcpy(dirent->d_name, "10:223", LXSNSIZ);
 			instance = LXSYS_CHAR_UINPUT_INSTANCE;
 		} else {
 			uint_t slot = entry - 1;
@@ -2551,7 +2550,7 @@ lxsys_readdir_dev_char(lxsys_node_t *lnp, uio_t *uiop, int *eofp)
 			if (!lx_input_get_config(LXSTOZ(lnp)->zone_id, slot,
 			    NULL))
 				continue;
-			(void) snprintf(dirent->d_name, sizeof (dirent->d_name),
+			(void) snprintf(dirent->d_name, LXSNSIZ,
 			    "13:%u", LX_INPUT_LINUX_EVENT_BASE + slot);
 			instance = LXSYS_CHAR_EVENT_INSTANCE(slot);
 		}
