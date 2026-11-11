@@ -305,3 +305,4 @@ vr:* 0666 root sys
 xhci:* 0644 root sys
 yge:* 0666 root sys
 efi:* 0600 root sys
+lx_input:* 0666 root sys

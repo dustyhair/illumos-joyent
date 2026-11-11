@@ -103,6 +103,7 @@ case "$MACH" in
 	#
 	cat <<-EOM
 	type=ddi_pseudo;name=efi	\M0
+	type=ddi_pseudo;name=lx_input	\M0
 	EOM
 	;;
   "sparc" )
