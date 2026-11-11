@@ -16,6 +16,7 @@
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
+#include <sys/wait.h>
 
 #include <dirent.h>
 #include <errno.h>
@@ -59,6 +60,68 @@ check(bool condition, const char *what)
 		errno = EPROTO;
 		fail(what);
 	}
+}
+
+static void
+check_uevent_action(const char *path, int flags, const char *action,
+    int wanted_error)
+{
+	ssize_t result;
+	size_t size = strlen(action);
+	int error;
+	int fd;
+
+	fd = open(path, flags);
+	if (fd < 0)
+		fail(path);
+	errno = 0;
+	result = write(fd, action, size);
+	error = errno;
+	if (close(fd) != 0)
+		fail("close sysfs uevent");
+
+	if (wanted_error == 0) {
+		check(result == (ssize_t)size,
+		    "valid sysfs uevent action failed");
+	} else {
+		check(result < 0 && error == wanted_error,
+		    "invalid sysfs uevent action returned the wrong error");
+	}
+}
+
+static void
+check_readonly_open(const char *path, int flags)
+{
+	int error;
+	int fd;
+
+	errno = 0;
+	fd = open(path, flags);
+	error = errno;
+	if (fd >= 0)
+		(void) close(fd);
+	check(fd < 0 && (error == EACCES || error == EROFS),
+	    "read-only sysfs attribute accepted a writable open");
+}
+
+static void
+check_shell_redirect(const char *path)
+{
+	int status;
+	pid_t child;
+
+	child = fork();
+	if (child < 0)
+		fail("fork sysfs shell redirect");
+	if (child == 0) {
+		(void) execl("/bin/sh", "sh", "-c",
+		    "printf 'change\\n' > \"$1\"", "sh", path, NULL);
+		_exit(127);
+	}
+	if (waitpid(child, &status, 0) != child)
+		fail("waitpid sysfs shell redirect");
+	check(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+	    "shell redirect to sysfs uevent failed");
 }
 
 static void
@@ -148,7 +211,8 @@ find_event_device(const char *wanted_name, char *path, size_t path_size)
 			(void) memset(name, 0, sizeof (name));
 			if (ioctl(fd, EVIOCGNAME(sizeof (name)), name) >= 0 &&
 			    strcmp(name, wanted_name) == 0) {
-				(void) snprintf(path, path_size, "%s", candidate);
+				(void) snprintf(path, path_size, "%s",
+				    candidate);
 				return (fd);
 			}
 			(void) close(fd);
@@ -168,6 +232,8 @@ main(void)
 	char event_name[32];
 	char sysname[64];
 	char sysfs_path[256];
+	char uevent_path[256];
+	char readonly_path[256];
 	char devchar_name[32];
 	struct uinput_setup setup;
 	struct stat event_stat;
@@ -243,6 +309,19 @@ main(void)
 	    "/sys/dev/char/%s", devchar_name);
 	check_link_contains(sysfs_path, "/devices/virtual/input/");
 
+	(void) snprintf(uevent_path, sizeof (uevent_path),
+	    "/sys/class/input/%s/uevent", event_name);
+	check_uevent_action(uevent_path, O_WRONLY, "change\n", 0);
+	check_uevent_action(uevent_path, O_WRONLY | O_TRUNC, "change\n", 0);
+	check_uevent_action(uevent_path, O_WRONLY | O_TRUNC, "invalid\n",
+	    EINVAL);
+	check_shell_redirect(uevent_path);
+
+	(void) snprintf(readonly_path, sizeof (readonly_path),
+	    "/sys/class/input/%s/name", sysname);
+	check_readonly_open(readonly_path, O_WRONLY);
+	check_readonly_open(readonly_path, O_WRONLY | O_TRUNC);
+
 	if (ioctl(uinput_fd, UI_DEV_DESTROY) != 0)
 		fail("UI_DEV_DESTROY");
 	device_created = false;
@@ -250,7 +329,7 @@ main(void)
 	(void) close(uinput_fd);
 	uinput_fd = -1;
 
-	(void) printf("PASS: input stat/fstat and sysfs enumeration (%s, %s)\n",
-	    sysname, event_path);
+	(void) printf("PASS: input ABI, sysfs discovery, and uevent writes "
+	    "(%s, %s)\n", sysname, event_path);
 	return (EXIT_SUCCESS);
 }

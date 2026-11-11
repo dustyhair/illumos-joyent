@@ -25,7 +25,10 @@ Run them as a user that can open `/dev/uinput`:
 `stat` and opened-descriptor `fstat` return identical Linux device numbers for
 both uinput and evdev. It also enumerates the misc, input, virtual-device, and
 device-number sysfs directories, rejects empty names, and verifies that the
-enumerated entries resolve through their public symlinks.
+enumerated entries resolve through their public symlinks. The probe opens a
+writable `uevent` attribute with and without `O_TRUNC`, exercises a real shell
+redirect, rejects an invalid action, and confirms that ordinary attributes
+remain read-only.
 
 `input-clock` checks the Linux clock identifiers accepted by
 `EVIOCSCLOCKID`. It verifies realtime, monotonic, and boottime timestamps on
@@ -36,4 +39,5 @@ selected clock, and checks that a clock change replaces queued events with
 `uinput-smoke` creates a virtual keyboard, finds its evdev node by name, verifies
 Linux device numbers, sysfs discovery data, and capability ioctls, sends
 events to two clients, checks zone-local netlink hotplug notifications and
-exclusive grabs, destroys the device, and verifies hangup behavior.
+exclusive grabs, destroys the device, and verifies Linux's short-read `EINVAL`
+check occurs before the dead-device `ENODEV` check.

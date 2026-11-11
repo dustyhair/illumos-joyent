@@ -387,6 +387,7 @@ main(void)
 	static const char device_name[] = "lx-uinput-smoke";
 	struct uinput_setup setup;
 	struct input_id id;
+	struct input_event dead_event;
 	struct stat st;
 	unsigned long evbits[NBITS(EV_MAX)];
 	unsigned long keybits[NBITS(KEY_MAX)];
@@ -524,7 +525,11 @@ main(void)
 	check((pfd.revents & (POLLHUP | POLLERR)) != 0,
 	    "destroyed event device did not signal hangup");
 	errno = 0;
-	check(read(event_fd, &id, sizeof (id)) < 0 && errno == ENODEV,
+	check(read(event_fd, &id, sizeof (id)) < 0 && errno == EINVAL,
+	    "short evdev read did not return EINVAL");
+	errno = 0;
+	check(read(event_fd, &dead_event, sizeof (dead_event)) < 0 &&
+	    errno == ENODEV,
 	    "destroyed event device remained readable");
 
 	(void) close(second_fd);

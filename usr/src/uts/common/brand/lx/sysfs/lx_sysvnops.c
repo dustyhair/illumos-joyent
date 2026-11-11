@@ -60,6 +60,8 @@ static int lxsys_read(vnode_t *, uio_t *, int, cred_t *, caller_context_t *);
 static int lxsys_write(vnode_t *, uio_t *, int, cred_t *, caller_context_t *);
 static int lxsys_getattr(vnode_t *, vattr_t *, int, cred_t *,
     caller_context_t *);
+static int lxsys_setattr(vnode_t *, vattr_t *, int, cred_t *,
+    caller_context_t *);
 static int lxsys_access(vnode_t *, int, int, cred_t *, caller_context_t *);
 static int lxsys_lookup(vnode_t *, char *, vnode_t **,
     pathname_t *, int, vnode_t *, cred_t *, caller_context_t *, int *,
@@ -124,6 +126,7 @@ const fs_operation_def_t lxsys_vnodeops_template[] = {
 	VOPNAME_READ,		{ .vop_read = lxsys_read },
 	VOPNAME_WRITE,		{ .vop_write = lxsys_write },
 	VOPNAME_GETATTR,	{ .vop_getattr = lxsys_getattr },
+	VOPNAME_SETATTR,	{ .vop_setattr = lxsys_setattr },
 	VOPNAME_ACCESS,		{ .vop_access = lxsys_access },
 	VOPNAME_LOOKUP,		{ .vop_lookup = lxsys_lookup },
 	VOPNAME_READDIR,	{ .vop_readdir = lxsys_readdir },
@@ -796,6 +799,23 @@ lxsys_getattr(vnode_t *vp, vattr_t *vap, int flags, cred_t *cr,
 
 	vap->va_nblocks = (fsblkcnt64_t)btod(vap->va_size);
 	return (0);
+}
+
+/*
+ * Linux kernfs ignores size changes to writable synthetic attributes.  The
+ * native open path issues VOP_SETATTR before VOP_OPEN for O_TRUNC, so accept
+ * that operation for uevent files without changing their synthetic content.
+ */
+static int
+lxsys_setattr(vnode_t *vp, vattr_t *vap, int flags, cred_t *cr,
+    caller_context_t *ct)
+{
+	if (vap->va_mask != AT_SIZE)
+		return (EINVAL);
+	if (!lxsys_is_uevent_node(VTOLXS(vp)))
+		return (EROFS);
+
+	return (lxsys_access(vp, VWRITE, 0, cr, ct));
 }
 
 /*
