@@ -23,7 +23,7 @@
  * Copyright (c) 1992, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2011 Bayard G. Bell. All rights reserved.
  * Copyright (c) 2018, Joyent, Inc.
- * Copyright 2024 Oxide Computer Company
+ * Copyright 2026 Oxide Computer Company
  */
 
 /*
@@ -131,6 +131,7 @@ static void	aus_umount2(struct t_audit_data *);
 static void	aus_msgsys(struct t_audit_data *);
 static void	aus_semsys(struct t_audit_data *);
 static void	aus_close(struct t_audit_data *);
+static void	aus_close_range(struct t_audit_data *);
 static void	aus_fstatfs(struct t_audit_data *);
 static void	aus_setgid(struct t_audit_data *);
 static void	aus_setpgrp(struct t_audit_data *);
@@ -288,7 +289,7 @@ aui_setpgrp,	AUE_SETPGRP,	aus_setpgrp,	/* 39 setpgrp */
 		auf_null,	0,
 aui_null,	AUE_NULL,	aus_null,	/* 40 uucopystr */
 		auf_null,	0,
-aui_null,	AUE_NULL,	aus_null,	/* 41 (loadable) was dup */
+aui_null,	AUE_CLOSERANGE,	aus_close_range, /* 41 close_range */
 		auf_null,	0,
 aui_null,	AUE_PIPE,	aus_null,	/* 42 (loadable) pipe */
 		auf_null,	0,
@@ -466,7 +467,7 @@ aui_null,	AUE_NULL,	aus_null,	/* 123 (loadable) was xstat */
 		auf_null,	0,
 aui_null,	AUE_NULL,	aus_null,	/* 124 (loadable) was lxstat */
 		auf_null,	0,
-aui_null,	AUE_NULL,	aus_null,	/* 125 (loadable) was fxstat */
+aui_null,	AUE_NULL,	aus_null,	/* 125 upanic */
 		auf_null,	0,
 aui_null,	AUE_NULL,	aus_null,	/* 126 (loadable) was xmknod */
 		auf_null,	0,
@@ -502,7 +503,7 @@ aui_null,	AUE_SETEUID,	aus_seteuid,	/* 141 seteuid */
 		auf_null,	0,
 aui_forksys,	AUE_NULL,	aus_null,	/* 142 forksys */
 		auf_null,	0,
-aui_null,	AUE_NULL,	aus_null,	/* 143 (loadable) was fork1 */
+aui_null,	AUE_SPAWN,	aus_null,	/* 143 spawn */
 		auf_null,	0,
 aui_null,	AUE_NULL,	aus_null,	/* 144 sigwait */
 		auf_null,	0,
@@ -2049,6 +2050,22 @@ aus_close(struct t_audit_data *tad)
 
 	/* decrement file descriptor reference count */
 	releasef(fd);
+}
+
+static void
+aus_close_range(struct t_audit_data *tad __unused)
+{
+	klwp_t *clwp = ttolwp(curthread);
+
+	struct a {
+		long	low;
+		long	high;
+		long	flags;
+	} *uap = (struct a *)clwp->lwp_ap;
+
+	au_uwrite(au_to_arg32(1, "low fd", (uint32_t)uap->low));
+	au_uwrite(au_to_arg32(2, "high fd", (uint32_t)uap->high));
+	au_uwrite(au_to_arg32(3, "flags", (uint32_t)uap->flags));
 }
 
 /*ARGSUSED*/

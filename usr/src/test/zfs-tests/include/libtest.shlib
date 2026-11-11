@@ -29,6 +29,8 @@
 # Copyright 2020 Joyent, Inc.
 # Copyright (c) 2025, Klara, Inc.
 # Copyright 2024 MNX Cloud, Inc.
+# Copyright 2026 Gordon W. Ross
+# Copyright 2026 Oxide Computer Company
 #
 
 UNAME=$(uname)
@@ -1237,6 +1239,21 @@ function destroy_pool #pool
 		if poolexists "$pool" ; then
 			mtpt=$(get_prop mountpoint "$pool")
 
+			# Clear any zinject fault handlers before attempting
+			# destroy. Active handlers can cause I/O to hang
+			# indefinitely, blocking zpool destroy.
+			zinject -c all
+
+			# If pool I/O is suspended (e.g. due to injected
+			# errors), clear the error state so destroy can proceed.
+			typeset health=$(zpool list -H -o health $pool \
+			    2>/dev/null)
+			if [[ "$health" == "SUSPENDED" ]]; then
+				log_note "Pool $pool is suspended; clearing" \
+				    "before destroy."
+				zpool clear $pool
+			fi
+
 			# At times, syseventd activity can cause attempts to
 			# destroy a pool to fail with EBUSY. We retry a few
 			# times allowing failures before requiring the destroy
@@ -1254,6 +1271,12 @@ function destroy_pool #pool
 
 			[[ -d $mtpt ]] && \
 				log_must rm -rf $mtpt
+
+			if poolexists "$pool"; then
+				log_note "destroy_pool: pool '$pool' still" \
+				    "exists after destroy"
+				exit $STF_ABORTED
+			fi
 		else
 			log_note "Pool does not exist. ($pool)"
 			return 1
@@ -1754,7 +1777,7 @@ function check_pool_status # pool token keyword <verbose>
 }
 
 #
-# These 6 following functions are instance of check_pool_status()
+# The following functions are instance of check_pool_status()
 #	is_pool_resilvering - to check if the pool is resilver in progress
 #	is_pool_resilvered - to check if the pool is resilver completed
 #	is_pool_scrubbing - to check if the pool is scrub in progress
@@ -1763,6 +1786,8 @@ function check_pool_status # pool token keyword <verbose>
 #	is_pool_scrub_paused - to check if the pool has scrub paused
 #	is_pool_removing - to check if the pool is removing a vdev
 #	is_pool_removed - to check if the pool is remove completed
+#	is_pool_discarding - to check if the pool has checkpoint being discarded
+#	is_pool_suspended - to check if the pool's I/O is suspended
 #
 function is_pool_resilvering #pool <verbose>
 {
@@ -1810,6 +1835,18 @@ function is_pool_removed #pool
 {
 	check_pool_status "$1" "remove" "completed on"
 	return $?
+}
+
+function is_pool_discarding #pool
+{
+	check_pool_status "$1" "checkpoint" "discarding"
+	return $?
+}
+
+function is_pool_suspended #pool
+{
+	check_pool_status "$1" "see" "ZFS-8000-HC" ||
+	    check_pool_status "$1" "see" "ZFS-8000-JQ"
 }
 
 function wait_for_degraded

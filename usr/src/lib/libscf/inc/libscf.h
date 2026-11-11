@@ -24,6 +24,7 @@
  * Copyright (c) 2012, Joyent, Inc. All rights reserved.
  * Copyright 2016 RackTop Systems.
  * Copyright 2020 Joyent, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
 #ifndef	_LIBSCF_H
@@ -809,6 +810,19 @@ int scf_tmpl_error_prop(const scf_tmpl_error_t *, char **, char **);
 int scf_tmpl_error_value(const scf_tmpl_error_t *, char **);
 
 /*
+ * Simplified calls that operate on the service and instance.
+ */
+int smf_refresh_all_instances(scf_service_t *);
+int smf_enable_instance_by_instance(scf_instance_t *, int, const char *);
+int smf_disable_instance_by_instance(scf_instance_t *, int, const char *);
+int smf_refresh_instance_by_instance(scf_instance_t *);
+int smf_restart_instance_by_instance(scf_instance_t *);
+int smf_maintain_instance_by_instance(scf_instance_t *, int);
+int smf_degrade_instance_by_instance(scf_instance_t *, int);
+int smf_restore_instance_by_instance(scf_instance_t *);
+char *smf_get_state_by_instance(scf_instance_t *);
+
+/*
  * Simplified calls
  */
 int smf_enable_instance(const char *, int);
@@ -873,6 +887,10 @@ int smf_notify_del_params(const char *, const char *, int32_t);
  * The SMF_EXIT_NODAEMON exit status should be used when a method does not
  * need to run any persistent process. This indicates success, abandons the
  * contract, and allows dependencies to be met.
+ *
+ * The SMF_EXIT_TEMP_DISABLE exit status should be used when a method wishes
+ * to disable the service temporarily (i.e. until the next system restart or
+ * administrator intervention).
  */
 #define	SMF_EXIT_OK		  0
 #define	SMF_EXIT_NODAEMON	 94
@@ -882,6 +900,7 @@ int smf_notify_del_params(const char *, const char *, int32_t);
 #define	SMF_EXIT_MON_OFFLINE	 98
 #define	SMF_EXIT_ERR_NOSMF	 99
 #define	SMF_EXIT_ERR_PERM	100
+#define	SMF_EXIT_TEMP_DISABLE	101
 
 #ifdef	__cplusplus
 }

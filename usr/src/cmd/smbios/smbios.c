@@ -22,7 +22,7 @@
 /*
  * Copyright 2015 OmniTI Computer Consulting, Inc.  All rights reserved.
  * Copyright (c) 2018, Joyent, Inc.
- * Copyright 2025 Oxide Computer Company
+ * Copyright 2026 Oxide Computer Company
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
@@ -31,6 +31,8 @@
 #include <sys/param.h>
 #include <sys/bitext.h>
 #include <sys/hexdump.h>
+#include <sys/uuid.h>
+#include <sys/debug.h>
 
 #include <smbios.h>
 #include <alloca.h>
@@ -44,6 +46,8 @@
 #include <errno.h>
 #include <ctype.h>
 #include <libjedec.h>
+#include <priv.h>
+#include <err.h>
 
 #define	SMBIOS_SUCCESS	0
 #define	SMBIOS_ERROR	1
@@ -454,27 +458,33 @@ print_system(smbios_hdl_t *shp, FILE *fp)
 	 * provide a corrected UUID.  The specification clarified this in
 	 * version 2.7, but this was first implemented prior to that.
 	 */
-	oprintf(fp, "  UUID: ");
-	oprintf(fp, "%02x%02x%02x%02x-%02x%02x-%02x%02x-",
-	    s.smbs_uuid[0], s.smbs_uuid[1], s.smbs_uuid[2], s.smbs_uuid[3],
-	    s.smbs_uuid[4], s.smbs_uuid[5], s.smbs_uuid[6], s.smbs_uuid[7]);
-	for (i = 8; i < s.smbs_uuidlen; i++) {
-		oprintf(fp, "%02x", s.smbs_uuid[i]);
-		if (i == 9)
-			oprintf(fp, "-");
-	}
-	oprintf(fp, "\n");
+	if (s.smbs_uuid != NULL && s.smbs_uuidlen >= UUID_LEN) {
+		oprintf(fp, "  UUID: ");
+		oprintf(fp, "%02x%02x%02x%02x-%02x%02x-%02x%02x-",
+		    s.smbs_uuid[0], s.smbs_uuid[1], s.smbs_uuid[2],
+		    s.smbs_uuid[3], s.smbs_uuid[4], s.smbs_uuid[5],
+		    s.smbs_uuid[6], s.smbs_uuid[7]);
+		for (i = 8; i < s.smbs_uuidlen; i++) {
+			oprintf(fp, "%02x", s.smbs_uuid[i]);
+			if (i == 9)
+				oprintf(fp, "-");
+		}
+		oprintf(fp, "\n");
 
-	oprintf(fp, "  UUID (Endian-corrected): ");
-	oprintf(fp, "%08x-%04hx-%04hx-", *((uint_t *)&s.smbs_uuid[0]),
-	    *((ushort_t *)&s.smbs_uuid[4]),
-	    *((ushort_t *)&s.smbs_uuid[6]));
-	for (i = 8; i < s.smbs_uuidlen; i++) {
-		oprintf(fp, "%02x", s.smbs_uuid[i]);
-		if (i == 9)
-			oprintf(fp, "-");
+		oprintf(fp, "  UUID (Endian-corrected): ");
+		oprintf(fp, "%08x-%04hx-%04hx-", *((uint_t *)&s.smbs_uuid[0]),
+		    *((ushort_t *)&s.smbs_uuid[4]),
+		    *((ushort_t *)&s.smbs_uuid[6]));
+		for (i = 8; i < s.smbs_uuidlen; i++) {
+			oprintf(fp, "%02x", s.smbs_uuid[i]);
+			if (i == 9)
+				oprintf(fp, "-");
+		}
+		oprintf(fp, "\n");
+	} else {
+		oprintf(fp, "  UUID unavailable (have %u bytes)\n",
+		    s.smbs_uuidlen);
 	}
-	oprintf(fp, "\n");
 
 	desc_printf(smbios_system_wakeup_desc(s.smbs_wakeup),
 	    fp, "  Wake-Up Event: 0x%x", s.smbs_wakeup);
@@ -510,6 +520,10 @@ print_bboard(smbios_hdl_t *shp, id_t id, FILE *fp)
 
 		chdl = alloca(chdl_cnt * sizeof (id_t));
 		cnt = smbios_info_contains(shp, id, chdl_cnt, chdl);
+		if (cnt < 0) {
+			smbios_warn(shp, "failed to get contained handles");
+			return;
+		}
 		if (cnt > SMB_CONT_MAX)
 			return;
 		n = MIN(chdl_cnt, cnt);
@@ -2341,6 +2355,50 @@ usage(FILE *fp)
 	return (SMBIOS_USAGE);
 }
 
+/*
+ * We only need a subset of privileges to actually run this command. To access
+ * libraries and the driver, we need PRIV_FILE_READ. We only need
+ * PRIV_FILE_WRITE if we're writing. If a user has the DAC variant of
+ * read/write/search they can keep it.
+ */
+static void
+priv_drop(boolean_t write)
+{
+	priv_set_t *min, *eff;
+
+	if ((min = priv_allocset()) == NULL ||
+	    (eff = priv_allocset()) == NULL) {
+		err(EXIT_FAILURE, "failed to allocate privilege sets");
+	}
+
+	priv_basicset(min);
+	VERIFY0(priv_delset(min, PRIV_FILE_LINK_ANY));
+	VERIFY0(priv_delset(min, PRIV_PROC_INFO));
+	VERIFY0(priv_delset(min, PRIV_PROC_SESSION));
+	VERIFY0(priv_delset(min, PRIV_PROC_FORK));
+	VERIFY0(priv_delset(min, PRIV_NET_ACCESS));
+	VERIFY0(priv_delset(min, PRIV_PROC_EXEC));
+	VERIFY0(priv_addset(min, PRIV_FILE_DAC_READ));
+	VERIFY0(priv_addset(min, PRIV_FILE_DAC_SEARCH));
+	if (!write) {
+		VERIFY0(priv_delset(min, PRIV_FILE_WRITE));
+	} else {
+		VERIFY0(priv_addset(min, PRIV_FILE_DAC_WRITE));
+	}
+
+	if (getppriv(PRIV_EFFECTIVE, eff) != 0) {
+		err(EXIT_FAILURE, "failed to get effective privileges");
+	}
+
+	priv_intersect(min, eff);
+	if (setppriv(PRIV_SET, PRIV_PERMITTED, eff) != 0) {
+		err(EXIT_FAILURE, "failed to set privileges");
+	}
+
+	priv_freeset(min);
+	priv_freeset(eff);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -2405,6 +2463,8 @@ main(int argc, char *argv[])
 			ifile = argv[optind++];
 		}
 	}
+
+	priv_drop(ofile != NULL);
 
 	if ((shp = smbios_open(ifile, SMB_VERSION, oflags, &err)) == NULL) {
 		(void) fprintf(stderr, "%s: failed to load SMBIOS: %s\n",

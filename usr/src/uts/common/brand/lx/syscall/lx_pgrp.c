@@ -11,10 +11,12 @@
 
 /*
  * Copyright 2016 Joyent, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
 #include <sys/lx_misc.h>
 #include <sys/lx_pidns.h>
+#include <sys/pgrpsys.h>
 
 #define	LX_INIT_PGID	1
 #define	LX_INIT_SID	1
@@ -29,7 +31,7 @@ lx_getpgrp(void)
 	lx_pidns_t *ns = lx_pidns_active(curproc);
 
 	/* getpgrp() */
-	pg = setpgrp(0, 0, 0);
+	pg = setpgrp(PGRPSYS_GETPGRP, 0, 0);
 	if (ns != NULL)
 		return (lx_pidns_visible(ns, pg));
 
@@ -72,7 +74,7 @@ lx_getpgid(int pid)
 
 	/* getpgid() */
 	ttolwp(curthread)->lwp_errno = 0;
-	pg = setpgrp(4, spid, 0);
+	pg = setpgrp(PGRPSYS_GETPGID, spid, 0);
 	if (ttolwp(curthread)->lwp_errno != 0)
 		return (ttolwp(curthread)->lwp_errno);
 	if (ns != NULL)
@@ -92,7 +94,7 @@ long
 lx_setpgid(pid_t pid, pid_t pgid)
 {
 	pid_t spid, spgid;
-	int tid;
+	int tid, pg, ret;
 	lx_pidns_t *ns = lx_pidns_active(curproc);
 
 	if (pid < 0)
@@ -127,7 +129,26 @@ lx_setpgid(pid_t pid, pid_t pgid)
 		spgid = pgid;
 
 	/* setpgid() */
-	return (setpgrp(5, spid, spgid));
+	ret = setpgrp(PGRPSYS_SETPGID, spid, spgid);
+
+	if (ret == EPERM) {
+		/*
+		 * On Linux, when calling setpgid with a desired pgid that is
+		 * equal to the current pgid of the process, no error is
+		 * emitted. This differs slightly from illumos which would
+		 * return EPERM. To emulate the Linux behavior, we check
+		 * specifically for matching pgids.
+		 */
+
+		/* getpgid() */
+		ttolwp(curthread)->lwp_errno = 0;
+		pg = setpgrp(PGRPSYS_GETPGID, spid, 0);
+		if (ttolwp(curthread)->lwp_errno == 0 && spgid == pg)
+			return (0);
+		return (set_errno(EPERM));
+	}
+
+	return (ret);
 }
 
 long
@@ -159,7 +180,7 @@ lx_getsid(int pid)
 
 	/* getsid() */
 	ttolwp(curthread)->lwp_errno = 0;
-	sid = setpgrp(2, spid, 0);
+	sid = setpgrp(PGRPSYS_GETSID, spid, 0);
 	if (ttolwp(curthread)->lwp_errno != 0)
 		return (ttolwp(curthread)->lwp_errno);
 	if (ns != NULL)
@@ -184,7 +205,7 @@ lx_setsid(void)
 
 	/* setsid() */
 	ttolwp(curthread)->lwp_errno = 0;
-	sid = setpgrp(3, 0, 0);
+	sid = setpgrp(PGRPSYS_SETSID, 0, 0);
 	if (ttolwp(curthread)->lwp_errno != 0)
 		return (ttolwp(curthread)->lwp_errno);
 	if (ns != NULL)

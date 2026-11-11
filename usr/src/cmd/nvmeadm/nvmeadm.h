@@ -23,6 +23,7 @@
 #include <nvme_common.h>
 #include <nvme_reg.h>
 #include <ofmt.h>
+#include <fm/libtopo.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -71,7 +72,7 @@ struct nvmeadm_cmd {
  * features.
  */
 struct nvmeadm_feature {
-	uint8_t f_feature;
+	const char *f_feature;
 	boolean_t (*f_get)(const nvme_process_arg_t *, const nvme_feat_disc_t *,
 	    const nvmeadm_feature_t *);
 	void (*f_print)(uint32_t, void *, size_t, const nvme_identify_ctrl_t *,
@@ -100,6 +101,17 @@ struct nvme_process_arg {
 /*
  * Command-specific arguments
  */
+typedef enum {
+	NVMEADM_LIST_DEFAULT,
+	NVMEADM_LIST_CTRL,
+	NVMEADM_LIST_LOC
+} nvmeadm_list_mode_t;
+
+typedef struct {
+	nvmeadm_list_mode_t list_mode;
+	topo_hdl_t *list_topo;
+} nvmeadm_list_t;
+
 typedef struct {
 	boolean_t nll_unimpl;
 	nvme_log_disc_scope_t nll_scope;
@@ -134,6 +146,12 @@ typedef struct {
 /* Version checking */
 extern boolean_t nvme_version_check(const nvme_process_arg_t *,
     const nvme_version_t *);
+
+/* Common option parsing */
+extern long long optparse_ui_range(const char *, const char *, uint64_t,
+    uint64_t);
+extern nvme_disc_impact_t optparse_impact(char *);
+extern void *nvmeadm_fill_from_file(const char *, size_t);
 
 /* printing functions */
 extern int nvme_strlen(const char *, int);
@@ -188,6 +206,12 @@ extern void nvme_print_feat_progress(uint32_t, void *, size_t,
     const nvme_identify_ctrl_t *, const nvme_version_t *);
 extern void nvme_print_feat_host_behavior(uint32_t, void *, size_t,
     const nvme_identify_ctrl_t *, const nvme_version_t *);
+extern void nvme_print_feat_ocp_err_inj(uint32_t, void *, size_t,
+    const nvme_identify_ctrl_t *, const nvme_version_t *);
+extern void nvme_print_feat_ocp_plp_fail(uint32_t, void *, size_t,
+    const nvme_identify_ctrl_t *, const nvme_version_t *);
+extern void nvme_print_feat_ocp_plp_health(uint32_t, void *, size_t,
+    const nvme_identify_ctrl_t *, const nvme_version_t *);
 
 extern void nvmeadm_dump_hex(const uint8_t *, size_t);
 
@@ -201,9 +225,12 @@ typedef struct {
 	nvme_ns_info_t *nloa_ns;
 	const char *nloa_disk;
 	const char *nloa_state;
+	char *nloa_loc;
+	char *nloa_ap;
 } nvmeadm_list_ofmt_arg_t;
 
 extern const ofmt_field_t nvmeadm_list_ctrl_ofmt[];
+extern const ofmt_field_t nvmeadm_list_loc_ofmt[];
 extern const ofmt_field_t nvmeadm_list_nsid_ofmt[];
 
 typedef struct {
@@ -309,6 +336,11 @@ extern int do_sandisk_pcieye(const nvme_process_arg_t *);
 extern void optparse_sandisk_pcieye(nvme_process_arg_t *);
 extern void usage_sandisk_pcieye(const char *);
 
+extern int do_ocp_errinj(const nvme_process_arg_t *);
+extern void optparse_ocp_errinj(nvme_process_arg_t *);
+extern void usage_ocp_errinj(const char *);
+extern const char *nvmeadm_ocp_errinj_type_to_str(uint32_t);
+
 /*
  * This is an arbitrary maximum that we use for what we expect the likely size
  * of a log page may end up being. We use 128 MiB as a rough upper bound for
@@ -378,7 +410,12 @@ typedef enum nvmeadm_field_type_t {
 	 * is probably space padded. Either way padding is not guaranteed.
 	 */
 	NVMEADM_FT_ASCII,
-	NVMEADM_FT_ASCIIZ
+	NVMEADM_FT_ASCIIZ,
+	/*
+	 * Indicates that this data is an opaque blob that we should dump as an
+	 * array of hex bytes.
+	 */
+	NVMEADM_FT_BLOB
 } nvmeadm_field_type_t;
 
 typedef struct {
@@ -559,6 +596,7 @@ extern const nvmeadm_log_field_info_t ocp_vul_smart_field_info;
 extern const nvmeadm_log_field_info_t ocp_vul_errrec_field_info;
 extern const nvmeadm_log_field_info_t ocp_vul_devcap_field_info;
 extern const nvmeadm_log_field_info_t ocp_vul_unsup_field_info;
+extern const nvmeadm_log_field_info_t ocp_vul_hw_comp_field_info;
 extern const nvmeadm_log_field_info_t ocp_vul_telstr_field_info;
 extern const nvmeadm_log_field_info_t solidigm_vul_power_field_info;
 extern const nvmeadm_log_field_info_t solidigm_vul_temp_field_info;

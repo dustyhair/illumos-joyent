@@ -25,7 +25,7 @@
  * Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved.
  * Copyright 2016 Joyent, Inc.
  * Copyright (c) 2018, Joyent, Inc.
- * Copyright 2024 Oxide Computer Company
+ * Copyright 2026 Oxide Computer Company
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -71,6 +71,7 @@ int	chown(char *, uid_t, gid_t);
 int	chroot(char *);
 int	cladm(int, int, void *);
 int	close(int);
+int	close_range(uint_t, uint_t, int);
 int	exece(const char *, const char **, const char **, int);
 int	faccessat(int, char *, int, int);
 int	fchmodat(int, char *, int, int);
@@ -78,6 +79,7 @@ int	fchownat(int, char *, uid_t, gid_t, int);
 int	fcntl(int, int, intptr_t, intptr_t);
 int64_t	vfork();
 int64_t	forksys(int, int);
+int64_t	spawn(void *, void *, uint32_t, void *, uint32_t);
 int	fstat(int, struct stat *);
 int	fdsync(int, uint32_t);
 int64_t	getgid();
@@ -483,7 +485,7 @@ struct sysent sysent[NSYSCALL] =
 			SYSENT_CI("fstatfs",	fstatfs32,	4)),
 	/* 39 */ SYSENT_CI("setpgrp",		setpgrp,	3),
 	/* 40 */ SYSENT_CI("uucopystr",		uucopystr,	3),
-	/* 41 */ SYSENT_LOADABLE(),			/* (was dup) */
+	/* 41 */ SYSENT_CI("close_range",	close_range,	3),
 	/* 42 */ SYSENT_LOADABLE(),			/* pipe */
 	/* 43 */ SYSENT_CL("times",		times,		1),
 	/* 44 */ SYSENT_CI("prof",		profil,		4),
@@ -603,7 +605,7 @@ struct sysent sysent[NSYSCALL] =
 	/* 140 */ SYSENT_LOADABLE(),		/* sharefs */
 	/* 141 */ SYSENT_CI("seteuid",		seteuid,	1),
 	/* 142 */ SYSENT_2CI("forksys",		forksys,	2),
-	/* 143 */ SYSENT_LOADABLE(),			/* (was fork1) */
+	/* 143 */ SYSENT_2CI("spawn",		spawn,		5),
 	/* 144 */ SYSENT_CI("sigtimedwait",	sigtimedwait,	3),
 	/* 145 */ SYSENT_CI("lwp_info",		lwp_info,	1),
 	/* 146 */ SYSENT_CI("yield",		yield,		0),
@@ -858,7 +860,7 @@ struct sysent sysent32[NSYSCALL] =
 	/* 38 */ SYSENT_CI("fstatfs",		fstatfs32,	4),
 	/* 39 */ SYSENT_CI("setpgrp",		setpgrp,	3),
 	/* 40 */ SYSENT_CI("uucopystr",		uucopystr,	3),
-	/* 41 */ SYSENT_LOADABLE32(),			/* (was dup) */
+	/* 41 */ SYSENT_CI("close_range",	close_range,	3),
 	/* 42 */ SYSENT_LOADABLE32(),			/* pipe */
 	/* 43 */ SYSENT_CI("times",		times32,	1),
 	/* 44 */ SYSENT_CI("prof",		profil,		4),
@@ -964,7 +966,7 @@ struct sysent sysent32[NSYSCALL] =
 	/* 140 */ SYSENT_LOADABLE32(),		/* sharefs */
 	/* 141 */ SYSENT_CI("seteuid",		seteuid,	1),
 	/* 142 */ SYSENT_2CI("forksys",		forksys,	2),
-	/* 143 */ SYSENT_LOADABLE32(),			/* (was fork1) */
+	/* 143 */ SYSENT_2CI("spawn",		spawn,		5),
 	/* 144 */ SYSENT_CI("sigtimedwait",	sigtimedwait,	3),
 	/* 145 */ SYSENT_CI("lwp_info",		lwp_info,	1),
 	/* 146 */ SYSENT_CI("yield",		yield,		0),

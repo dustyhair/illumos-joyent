@@ -22,6 +22,7 @@
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2015 by Delphix. All rights reserved.
  * Copyright (c) 2014 Integros [integros.com]
+ * Copyright 2026 Oxide Computer Company
  */
 
 #include <sys/types.h>
@@ -128,9 +129,11 @@ zfs_log_xvattr(lr_attr_t *lrattr, xvattr_t *xvap)
 
 	/* Now pack the attributes up in a single uint64_t */
 	attrs = (uint64_t *)bitmap;
-	crtime = attrs + 1;
-	scanstamp = (caddr_t)(crtime + 2);
 	*attrs = 0;
+	crtime = attrs + 1;
+	bzero(crtime, 2 * sizeof (uint64_t));
+	scanstamp = (caddr_t)(crtime + 2);
+	bzero(scanstamp, AV_SCANSTAMP_SZ);
 	if (XVA_ISSET_REQ(xvap, XAT_READONLY))
 		*attrs |= (xoap->xoa_readonly == 0) ? 0 :
 		    XAT0_READONLY;
@@ -523,7 +526,7 @@ zfs_log_write(zilog_t *zilog, dmu_tx_t *tx, int txtype,
 		lr->lr_foid = zp->z_id;
 		lr->lr_offset = off;
 		lr->lr_length = len;
-		lr->lr_blkoff = 0;
+		lr->lr_flags = 0;
 		BP_ZERO(&lr->lr_blkptr);
 
 		itx->itx_private = zp->z_zfsvfs;

@@ -406,7 +406,7 @@ extern void	putchar(int);
 extern int	devopen(struct open_file *, const char *, const char **);
 extern int	devclose(struct open_file *f);
 extern void	panic(const char *, ...) __dead2 __printflike(1, 2);
-extern void	panic_action(void) __weak_symbol __dead2;
+extern void	panic_action(void) __dead2;
 extern time_t	getsecs(void);
 extern struct fs_ops	*file_system[];
 extern struct fs_ops	*exclusive_file_system;
@@ -438,7 +438,14 @@ void *Realloc(void *, size_t, const char *, int);
 void *Reallocf(void *, size_t, const char *, int);
 void Free(void *, const char *, int);
 
-#if DEBUG_MALLOC
+#if defined(USER_MALLOC)
+extern void *malloc(size_t);
+extern void *memalign(size_t, size_t);
+extern void *calloc(size_t, size_t);
+extern void free(void *);
+extern void *realloc(void *, size_t);
+extern void *reallocf(void *, size_t);
+#elif DEBUG_MALLOC
 #define	malloc(x)	Malloc(x, __FILE__, __LINE__)
 #define	memalign(x, y)	Memalign(x, y, __FILE__, __LINE__)
 #define	calloc(x, y)	Calloc(x, y, __FILE__, __LINE__)
@@ -458,5 +465,6 @@ void Free(void *, const char *, int);
  * va <-> pa routines. MD code must supply.
  */
 caddr_t ptov(uintptr_t);
+uintptr_t vtop(caddr_t);
 
 #endif	/* STAND_H */

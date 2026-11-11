@@ -440,17 +440,18 @@ natinfo_t *ni;
 				port = np->in_pnext;
 			} else {
 				port = ipf_random() % (ntohs(np->in_pmax) -
-						       ntohs(np->in_pmin));
+						       ntohs(np->in_pmin) + 1);
 				port += ntohs(np->in_pmin);
 			}
 			port = htons(port);
-			np->in_pnext++;
 
-			if (np->in_pnext > ntohs(np->in_pmax)) {
+			if (np->in_pnext >= ntohs(np->in_pmax)) {
 				np->in_pnext = ntohs(np->in_pmin);
 				if (!IP6_ISONES(&np->in_out[1])) {
 					IP6_INC(&np->in_next6);
 				}
+			} else {
+				np->in_pnext++;
 			}
 		}
 
@@ -2580,7 +2581,7 @@ u_32_t nflags;
 		 * See IP_CKSUM_RECV().
 		 * Adjustment data should be the inverse of the IP address
 		 * changes, because db_cksum16 is supposed to be the complement
-		 * of the pesudo header.
+		 * of the pseudo header.
 		 */
 		csump = &fin->fin_m->b_datap->db_cksum16;
 		if (nat->nat_dir == NAT_OUTBOUND)

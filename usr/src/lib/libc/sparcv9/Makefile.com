@@ -28,6 +28,7 @@
 # Copyright 2019 Joyent, Inc.
 # Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 # Copyright 2019 Peter Tribble.
+# Copyright 2026 Oxide Computer Company
 #
 
 LIBCDIR=	$(SRC)/lib/libc
@@ -181,6 +182,7 @@ COMSYSOBJS=			\
 	__rusagesys.o		\
 	__signotify.o		\
 	__sigrt.o		\
+	__spawn.o		\
 	__time.o		\
 	_lgrp_home_fast.o	\
 	_lgrpsys.o		\
@@ -216,6 +218,7 @@ COMSYSOBJS=			\
 	chroot.o		\
 	cladm.o			\
 	close.o			\
+	close_range.o		\
 	execvex.o		\
 	exit.o			\
 	facl.o			\

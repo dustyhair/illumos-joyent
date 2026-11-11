@@ -35,7 +35,7 @@
  *
  * Copyright 2015 Pluribus Networks Inc.
  * Copyright 2019 Joyent, Inc.
- * Copyright 2025 Oxide Computer Company
+ * Copyright 2026 Oxide Computer Company
  */
 
 
@@ -46,6 +46,7 @@
 #include <sys/pattr.h>
 #include <sys/dlpi.h>
 #include <inet/ip.h>
+#include <inet/ip6.h>
 #include <inet/ip_impl.h>
 
 #include "viona_impl.h"
@@ -61,6 +62,12 @@ boolean_t viona_default_tx_copy = B_TRUE;
  * Tunable for maximum configured TX header padding.
  */
 uint_t viona_max_header_pad = 256;
+
+/*
+ * Tunable to control the number of consecutive TX packets to send
+ * before pausing transmission to check for other ring events.
+ */
+uint_t viona_tx_burst_thresh = 32;
 
 /*
  * copy tx mbufs from virtio ring to avoid necessitating a wait for packet
@@ -199,12 +206,10 @@ static void
 viona_tx_done(viona_vring_t *ring, uint32_t len, uint16_t cookie)
 {
 	vq_pushchain(ring, len, cookie);
-
-	membar_enter();
-	viona_intr_ring(ring, B_FALSE);
+	if (viona_ring_need_intr(ring)) {
+		viona_ring_intr(ring);
+	}
 }
-
-#define	TX_BURST_THRESH	32
 
 void
 viona_worker_tx(viona_vring_t *ring, viona_link_t *link)
@@ -222,6 +227,7 @@ viona_worker_tx(viona_vring_t *ring, viona_link_t *link)
 		uint_t burst = 0;
 
 		viona_ring_disable_notify(ring);
+
 		while (viona_ring_num_avail(ring) != 0) {
 			const size_t size_sent = viona_tx(link, ring);
 			if (size_sent != 0) {
@@ -236,7 +242,7 @@ viona_worker_tx(viona_vring_t *ring, viona_link_t *link)
 			 * transmission loop tight, but periodic breaks to
 			 * check for other events are of value too.
 			 */
-			if (burst >= TX_BURST_THRESH) {
+			if (burst >= viona_tx_burst_thresh) {
 				mutex_enter(&ring->vr_lock);
 				const bool need_bail = vring_need_bail(ring);
 				mutex_exit(&ring->vr_lock);
@@ -254,22 +260,27 @@ viona_worker_tx(viona_vring_t *ring, viona_link_t *link)
 		}
 
 		/*
-		 * Check for available descriptors on the ring once more in
-		 * case a late addition raced with the NO_NOTIFY flag toggle.
-		 *
-		 * The barrier ensures that visibility of the no-notify
-		 * store does not cross the viona_ring_num_avail() check below.
+		 * Before going to sleep we must first check for
+		 * available descriptors on the ring once more in case
+		 * a guest addition to the available ring races with
+		 * the notification enablement happening here. The
+		 * barrier ensures the notification enablement write
+		 * to the guest memory is visible before the
+		 * viona_ring_num_avail() read below (just before we
+		 * go to sleep).
 		 */
 		viona_ring_enable_notify(ring);
 		membar_enter();
 
+		/*
+		 * A feature leftover from the legacy interface
+		 * definition. Transitional devices MAY offer it. The
+		 * interrupt is sent regardless of the driver's
+		 * interrupt disposition.
+		 */
 		if (viona_ring_num_avail(ring) == 0 &&
 		    (link->l_features & VIRTIO_F_RING_NOTIFY_ON_EMPTY) != 0) {
-			/*
-			 * The NOTIFY_ON_EMPTY interrupt should not pay heed to
-			 * the presence of AVAIL_NO_INTERRUPT.
-			 */
-			viona_intr_ring(ring, B_TRUE);
+			viona_ring_intr(ring);
 		}
 
 		mutex_enter(&ring->vr_lock);
@@ -443,12 +454,23 @@ viona_tx_offloads(viona_vring_t *ring, const struct virtio_net_mrgrxhdr *hdr,
 		return (B_FALSE);
 	}
 
-	/* Configure TCPv4 LSO when requested */
-	if ((hdr->vrh_gso_type & VIRTIO_NET_HDR_GSO_TCPV4) != 0 &&
-	    ftype == ETHERTYPE_IP) {
-		if ((link->l_features & VIRTIO_NET_F_HOST_TSO4) == 0) {
-			VIONA_PROBE2(tx_gso_fail, viona_link_t *, link,
-			    mblk_t *, mp);
+	/* Configure LSO when requested */
+	const uint8_t gso_type = hdr->vrh_gso_type &
+	    ~VIRTIO_NET_HDR_GSO_AUX_FLAGS;
+	if ((gso_type == VIRTIO_NET_HDR_GSO_TCPV4 && ftype == ETHERTYPE_IP) ||
+	    (gso_type == VIRTIO_NET_HDR_GSO_TCPV6 && ftype == ETHERTYPE_IPV6)) {
+		const bool is_v4 = gso_type == VIRTIO_NET_HDR_GSO_TCPV4;
+		const uint32_t full_csum_flag = is_v4 ? HCKSUM_INET_FULL_V4 :
+		    HCKSUM_INET_FULL_V6;
+		const uint32_t dev_feature = is_v4 ? VIRTIO_NET_F_HOST_TSO4 :
+		    VIRTIO_NET_F_HOST_TSO6;
+		const mac_ether_offload_flags_t all_valid = MEOI_L2INFO_SET |
+		    MEOI_L3INFO_SET | MEOI_L4INFO_SET;
+
+		if ((link->l_features & dev_feature) == 0 ||
+		    (meoi->meoi_flags & all_valid) != all_valid) {
+			VIONA_PROBE3(tx_gso_fail, viona_link_t *, link,
+			    mblk_t *, mp, uint8_t, gso_type);
 			VIONA_RING_STAT_INCR(ring, tx_gso_fail);
 			return (B_FALSE);
 		}
@@ -457,12 +479,12 @@ viona_tx_offloads(viona_vring_t *ring, const struct virtio_net_mrgrxhdr *hdr,
 
 		/*
 		 * We should have already verified that an adequate form of
-		 * hardware checksum offload is present for TSOv4
+		 * hardware checksum offload is present for TSO.
 		 */
 		ASSERT3U(cap_csum &
-		    (HCKSUM_INET_PARTIAL | HCKSUM_INET_FULL_V4), !=, 0);
+		    (HCKSUM_INET_PARTIAL | full_csum_flag), !=, 0);
 
-		if ((cap_csum & HCKSUM_INET_FULL_V4) != 0) {
+		if ((cap_csum & full_csum_flag) != 0) {
 			viona_tx_hcksum_full(mp, hdr, meoi, HW_LSO);
 		} else if ((cap_csum & HCKSUM_INET_PARTIAL) != 0) {
 			/*
@@ -481,14 +503,27 @@ viona_tx_offloads(viona_vring_t *ring, const struct virtio_net_mrgrxhdr *hdr,
 			 */
 			ipha_t *ipha =
 			    (ipha_t *)(mp->b_rptr + meoi->meoi_l2hlen);
+			const ip6_t *ip6h = (ip6_t *)ipha;
 			uint16_t *cksump =
-			    IPH_TCPH_CHECKSUMP(ipha, IPH_HDR_LENGTH(ipha));
+			    (uint16_t *)(mp->b_rptr + meoi->meoi_l2hlen +
+			    meoi->meoi_l3hlen + TCP_CHECKSUM_OFFSET);
 
 			uint32_t cksum = IP_TCP_CSUM_COMP;
-			const ipaddr_t src = ipha->ipha_src;
-			const ipaddr_t dst = ipha->ipha_dst;
-			cksum += (dst >> 16) + (dst & 0xffff) +
-			    (src >> 16) + (src & 0xffff);
+			if (is_v4) {
+				const uint16_t *src =
+				    (const uint16_t *)(&ipha->ipha_src);
+				const uint16_t *dst =
+				    (const uint16_t *)(&ipha->ipha_dst);
+				cksum += src[0] + src[1] + dst[0] + dst[1];
+			} else {
+				const uint16_t *src = ip6h->ip6_src.s6_addr16;
+				const uint16_t *dst = ip6h->ip6_dst.s6_addr16;
+				cksum += src[0] + src[1] + src[2] + src[3] +
+				    src[4] + src[5] + src[6] + src[7];
+				cksum += dst[0] + dst[1] + dst[2] + dst[3] +
+				    dst[4] + dst[5] + dst[6] + dst[7];
+			}
+
 			cksum = (cksum & 0xffff) + (cksum >> 16);
 			*cksump = (cksum & 0xffff) + (cksum >> 16);
 
@@ -497,7 +532,7 @@ viona_tx_offloads(viona_vring_t *ring, const struct virtio_net_mrgrxhdr *hdr,
 			 * also be enabled when performing LSO.
 			 */
 			uint32_t v4csum = 0;
-			if ((cap_csum & HCKSUM_IPHDRCKSUM) != 0) {
+			if (is_v4 && (cap_csum & HCKSUM_IPHDRCKSUM) != 0) {
 				v4csum = HCK_IPV4_HDRCKSUM;
 				ipha->ipha_hdr_checksum = 0;
 			}
@@ -508,13 +543,19 @@ viona_tx_offloads(viona_vring_t *ring, const struct virtio_net_mrgrxhdr *hdr,
 			 * This should be unreachable: We do not permit LSO
 			 * without adequate checksum offload capability.
 			 */
-			VIONA_PROBE2(tx_gso_fail, viona_link_t *, link,
-			    mblk_t *, mp);
+			VIONA_PROBE3(tx_gso_fail, viona_link_t *, link,
+			    mblk_t *, mp, uint8_t, gso_type);
 			VIONA_RING_STAT_INCR(ring, tx_gso_fail);
 			return (B_FALSE);
 		}
 
 		return (B_TRUE);
+	} else if (gso_type != VIRTIO_NET_HDR_GSO_NONE) {
+		/* We only support TCP large send offloads today. */
+		VIONA_PROBE3(tx_gso_fail, viona_link_t *, link, mblk_t *, mp,
+		    uint8_t, gso_type);
+		VIONA_RING_STAT_INCR(ring, tx_gso_fail);
+		return (B_FALSE);
 	}
 
 	/*

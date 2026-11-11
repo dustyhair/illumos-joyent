@@ -43,6 +43,7 @@
 #include <sys/types.h>
 #include <sys/strsubr.h>
 
+#include <sys/atomic.h>
 #include <sys/dlpi.h>
 #include <sys/pattr.h>
 #include <sys/vlan.h>
@@ -126,17 +127,19 @@ viona_worker_rx(viona_vring_t *ring, viona_link_t *link)
 	ring->vr_state = VRS_STOP;
 
 	/*
-	 * The RX ring is stopping, before we start tearing it down it
-	 * is imperative that we perform an RX barrier so that
-	 * incoming packets are dropped at viona_rx_classified().
+	 * The RX ring is stopping. Before tearing it down we use the
+	 * mac RX barrier to finish delivery of any in-flight packets.
+	 * Packets arriving after the barrier are dropped upon entry
+	 * into viona (as the ring is now in a stopped state).
 	 */
 	mutex_exit(&ring->vr_lock);
 	mac_rx_barrier(link->l_mch);
 	mutex_enter(&ring->vr_lock);
 
 	/*
-	 * If we bailed while renewing the ring lease, we cannot reset
-	 * USED_NO_NOTIFY, since we lack a valid mapping to do so.
+	 * If we bailed while renewing the ring lease, we cannot
+	 * enable notifications, since we lack a valid mapping to
+	 * do so.
 	 */
 	if (ring->vr_lease != NULL) {
 		viona_ring_enable_notify(ring);
@@ -202,7 +205,8 @@ viona_copy_mblk(const mblk_t *mp, size_t seek, caddr_t buf, size_t len,
 }
 
 static int
-viona_recv_plain(viona_vring_t *ring, const mblk_t *mp, size_t msz)
+viona_recv_plain(viona_vring_t *ring, const mblk_t *mp, size_t msz,
+    uint8_t gro_type, uint_t *pushed_cnt)
 {
 	struct iovec iov[VTNET_MAXSEGS];
 	uint16_t cookie;
@@ -273,18 +277,15 @@ viona_recv_plain(viona_vring_t *ring, const mblk_t *mp, size_t msz)
 	bzero(hdr, hdr_sz);
 	if (hdr_sz > offsetof(struct virtio_net_mrgrxhdr, vrh_bufs))
 		hdr->vrh_bufs = 1;
+	hdr->vrh_gso_type = gro_type;
+	if (gro_type != VIRTIO_NET_HDR_GSO_NONE) {
+		hdr->vrh_gso_size = DB_LSOMSS(mp);
+	}
 	copied += hdr_sz;
 
 	/* Add chksum bits, if needed */
 	if ((features & VIRTIO_NET_F_GUEST_CSUM) != 0) {
 		uint32_t cksum_flags;
-
-		if (((features & VIRTIO_NET_F_GUEST_TSO4) != 0) &&
-		    ((DB_CKSUMFLAGS(mp) & HW_LSO) != 0)) {
-			hdr->vrh_gso_type |= VIRTIO_NET_HDR_GSO_TCPV4;
-			hdr->vrh_gso_size = DB_LSOMSS(mp);
-		}
-
 		mac_hcksum_get((mblk_t *)mp, NULL, NULL, NULL, NULL,
 		    &cksum_flags);
 		if ((cksum_flags & HCK_FULLCKSUM_OK) != 0) {
@@ -295,6 +296,7 @@ viona_recv_plain(viona_vring_t *ring, const mblk_t *mp, size_t msz)
 	/* Release this chain */
 	vmm_drv_page_release_chain(pages);
 	vq_pushchain(ring, copied, cookie);
+	*pushed_cnt += 1;
 	return (0);
 
 bad_frame:
@@ -304,11 +306,13 @@ bad_frame:
 
 	vmm_drv_page_release_chain(pages);
 	vq_pushchain(ring, MAX(copied, MIN_BUF_SIZE + hdr_sz), cookie);
+	*pushed_cnt += 1;
 	return (EINVAL);
 }
 
 static int
-viona_recv_merged(viona_vring_t *ring, const mblk_t *mp, size_t msz)
+viona_recv_merged(viona_vring_t *ring, const mblk_t *mp, size_t msz,
+    uint8_t gro_type, uint_t *pushed_cnt)
 {
 	struct iovec iov[VTNET_MAXSEGS];
 	used_elem_t uelem[VTNET_MAXSEGS];
@@ -348,6 +352,10 @@ viona_recv_merged(viona_vring_t *ring, const mblk_t *mp, size_t msz)
 	hdr = (struct virtio_net_mrgrxhdr *)iov[0].iov_base;
 	bzero(hdr, hdr_sz);
 	hdr->vrh_bufs = 1;
+	hdr->vrh_gso_type = gro_type;
+	if (gro_type != VIRTIO_NET_HDR_GSO_NONE) {
+		hdr->vrh_gso_size = DB_LSOMSS(mp);
+	}
 
 	/*
 	 * If there is any space remaining in the first buffer after writing
@@ -438,13 +446,6 @@ viona_recv_merged(viona_vring_t *ring, const mblk_t *mp, size_t msz)
 	/* Add chksum bits, if needed */
 	if ((features & VIRTIO_NET_F_GUEST_CSUM) != 0) {
 		uint32_t cksum_flags;
-
-		if (((features & VIRTIO_NET_F_GUEST_TSO4) != 0) &&
-		    ((DB_CKSUMFLAGS(mp) & HW_LSO) != 0)) {
-			hdr->vrh_gso_type |= VIRTIO_NET_HDR_GSO_TCPV4;
-			hdr->vrh_gso_size = DB_LSOMSS(mp);
-		}
-
 		mac_hcksum_get((mblk_t *)mp, NULL, NULL, NULL, NULL,
 		    &cksum_flags);
 		if ((cksum_flags & HCK_FULLCKSUM_OK) != 0) {
@@ -483,8 +484,15 @@ done:
 		vmm_drv_page_release_chain(pages);
 	}
 	vq_pushchain_many(ring, buf_idx + 1, uelem);
+	*pushed_cnt += buf_idx + 1;
 	return (err);
 }
+
+/*
+ * The number of entries to push to the used queue before checking to
+ * see if the guest requires an interrupt.
+ */
+uint_t viona_rx_batch_thresh = 32;
 
 static void
 viona_rx_common(viona_vring_t *ring, mblk_t *mp, boolean_t is_loopback)
@@ -494,10 +502,13 @@ viona_rx_common(viona_vring_t *ring, mblk_t *mp, boolean_t is_loopback)
 	mblk_t *mpdrop = NULL, **mpdrop_prevp = &mpdrop;
 	const boolean_t do_merge =
 	    (link->l_features & VIRTIO_NET_F_MRG_RXBUF) != 0;
-	const boolean_t allow_gro =
-	    (link->l_features & VIRTIO_NET_F_GUEST_TSO4) != 0;
 
 	size_t cnt_accept = 0, size_accept = 0, cnt_drop = 0;
+	/*
+	 * The number of used entries pushed since we last checked for
+	 * guest notification.
+	 */
+	uint_t pushed_cnt = 0;
 
 	while (mp != NULL) {
 		mblk_t *next = mp->b_next;
@@ -532,73 +543,147 @@ viona_rx_common(viona_vring_t *ring, mblk_t *mp, boolean_t is_loopback)
 		}
 
 		/*
-		 * Virtio devices are prohibited from passing on packets larger
-		 * than the MTU + Eth if the guest has not negotiated GRO flags
-		 * (e.g., GUEST_TSO*). This occurs irrespective of `do_merge`.
+		 * If we see `HW_LSO` on a packet then it has either been
+		 * created by performing GRO elsewhere in the stack, or it has
+		 * arrived on a loopback path from a client which expected to
+		 * make use of LSO but MAC has not emulated it. The latter case
+		 * is a performance optimisation which some out-of-tree MAC
+		 * providers use, and are aware of any resulting edge cases in
+		 * eliding emulation. The MAC loopback path may also make this
+		 * determination in limited cases in the future.
+		 *
+		 * For such packets we need to inform the guest about the
+		 * packet's type, and to check that it is willing to receive
+		 * coalesced packets on that protocol.
 		 */
-		if (size > sizeof (struct ether_header) + link->l_mtu) {
-			const boolean_t can_emu_lso = DB_LSOMSS(mp) != 0;
-			const boolean_t attempt_emu =
-			    !allow_gro || size > VIONA_GRO_MAX_PACKET_SIZE;
+		uint8_t gro_type = VIRTIO_NET_HDR_GSO_NONE;
+		if ((DB_CKSUMFLAGS(mp) & HW_LSO) != 0) {
+			mac_ether_offload_info_t meoi;
+			mac_ether_offload_info(mp, &meoi);
+			const mac_ether_offload_flags_t needed =
+			    MEOI_L2INFO_SET | MEOI_L3INFO_SET | MEOI_L4INFO_SET;
 
-			if ((DB_CKSUMFLAGS(mp) & HW_LSO) == 0 ||
-			    (attempt_emu && !can_emu_lso)) {
-				VIONA_PROBE3(rx_drop_over_mtu, viona_vring_t *,
+			/*
+			 * Any large send/receive offloads require a valid MSS
+			 * tag for placing in gso_size, and possibly for
+			 * emulation. We also need to pull out the L3/L4 types.
+			 */
+			if (DB_LSOMSS(mp) == 0 || (meoi.meoi_flags & needed) !=
+			    needed) {
+				VIONA_PROBE3(rx_gro_malformed, viona_vring_t *,
 				    ring, mblk_t *, mp, size_t, size);
-				VIONA_RING_STAT_INCR(ring, rx_drop_over_mtu);
-				err = E2BIG;
+				VIONA_RING_STAT_INCR(ring, rx_gro_malformed);
+				err = EINVAL;
 				goto pad_drop;
 			}
 
-			/*
-			 * If the packet has come from another device or viona
-			 * which expected to make use of LSO, we can split the
-			 * packet on its behalf.
-			 */
-			if (attempt_emu) {
-				mblk_t *tail = NULL;
-				uint_t n_pkts = 0;
-
-				/*
-				 * Emulation of LSO requires that cksum offload
-				 * be enabled on the mblk.
-				 */
-				if ((DB_CKSUMFLAGS(mp) &
-				    (HCK_FULLCKSUM | HCK_PARTIALCKSUM)) == 0) {
-					DB_CKSUMFLAGS(mp) |= HCK_FULLCKSUM;
+			/* We only support TCP large send/receive today. */
+			if (meoi.meoi_l4proto == IPPROTO_TCP) {
+				switch (meoi.meoi_l3proto) {
+				case ETHERTYPE_IP:
+					gro_type = VIRTIO_NET_HDR_GSO_TCPV4;
+					break;
+				case ETHERTYPE_IPV6:
+					gro_type = VIRTIO_NET_HDR_GSO_TCPV6;
+					break;
+				default:
+					break;
 				}
-
-				/*
-				 * IPv4 packets should have the offload enabled
-				 * for the IPv4 header checksum.
-				 */
-				mac_ether_offload_info_t meoi;
-				mac_ether_offload_info(mp, &meoi);
-				if ((meoi.meoi_flags & MEOI_L2INFO_SET) != 0 &&
-				    meoi.meoi_l3proto == ETHERTYPE_IP) {
-					DB_CKSUMFLAGS(mp) |= HCK_IPV4_HDRCKSUM;
-				}
-
-				mac_hw_emul(&mp, &tail, &n_pkts, MAC_ALL_EMULS);
-				if (mp == NULL) {
-					VIONA_RING_STAT_INCR(ring,
-					    rx_gro_fallback_fail);
-					viona_ring_stat_error(ring);
-					mp = next;
-					continue;
-				}
-				VIONA_PROBE4(rx_gro_fallback, viona_vring_t *,
-				    ring, mblk_t *, mp, size_t, size,
-				    uint_t, n_pkts);
-				VIONA_RING_STAT_INCR(ring, rx_gro_fallback);
-				ASSERT3P(tail, !=, NULL);
-				if (tail != mp) {
-					tail->b_next = next;
-					next = mp->b_next;
-					mp->b_next = NULL;
-				}
-				size = msgsize(mp);
 			}
+
+			/*
+			 * We don't yet negotiate `VIRTIO_NET_F_GUEST_HDRLEN`.
+			 * When we do, we'll need to use meoi's length fields to
+			 * populate `vrh_hdr_len`. This is mandatory for GRO
+			 * packets when this feature is negotiated.
+			 */
+		}
+
+		/*
+		 * We need to check that the packet is compatible with what
+		 * the guest advertises support for.
+		 */
+		uint64_t gro_feature_flag = 0;
+		switch (gro_type) {
+		case VIRTIO_NET_HDR_GSO_TCPV4:
+			gro_feature_flag = VIRTIO_NET_F_GUEST_TSO4;
+			break;
+		case VIRTIO_NET_HDR_GSO_TCPV6:
+			gro_feature_flag = VIRTIO_NET_F_GUEST_TSO6;
+			break;
+		default:
+			break;
+		}
+
+		/*
+		 * The virtio spec requires that we MUST NOT:
+		 *
+		 * - set vrh_gso_type to a value corresponding to a feature flag
+		 *   we don't have.
+		 *
+		 * - pass any VIRTIO_NET_HDR_GSO_NONE packets larger than the
+		 *   negotiated MTU.
+		 *
+		 * In the first case we can split the packet on the guest's
+		 * behalf to avoid dropping such traffic. We also need to do so
+		 * if the packet is larger than the maximum stated in §5.1.6.3.
+		 */
+		const boolean_t supported_type =
+		    gro_type == VIRTIO_NET_HDR_GSO_NONE ||
+		    (link->l_features & gro_feature_flag) != 0;
+		const boolean_t oversize_gro =
+		    gro_type != VIRTIO_NET_HDR_GSO_NONE &&
+		    size > VIONA_GRO_MAX_PACKET_SIZE;
+		if (!supported_type || oversize_gro) {
+			mblk_t *tail = NULL;
+			uint_t n_pkts = 0;
+
+			/*
+			 * Emulation of LSO requires that cksum offload
+			 * be enabled on the mblk.
+			 */
+			if ((DB_CKSUMFLAGS(mp) &
+			    (HCK_FULLCKSUM | HCK_PARTIALCKSUM)) == 0) {
+				DB_CKSUMFLAGS(mp) |= HCK_FULLCKSUM;
+			}
+
+			/*
+			 * IPv4 packets should have the offload enabled
+			 * for the IPv4 header checksum.
+			 */
+			if (gro_type == VIRTIO_NET_HDR_GSO_TCPV4) {
+				DB_CKSUMFLAGS(mp) |= HCK_IPV4_HDRCKSUM;
+			}
+
+			mac_hw_emul(&mp, &tail, &n_pkts, MAC_ALL_EMULS);
+			if (mp == NULL) {
+				VIONA_RING_STAT_INCR(ring,
+				    rx_gro_fallback_fail);
+				viona_ring_stat_error(ring);
+				mp = next;
+				continue;
+			}
+			VIONA_PROBE4(rx_gro_fallback, viona_vring_t *,
+			    ring, mblk_t *, mp, size_t, size,
+			    uint_t, n_pkts);
+			VIONA_RING_STAT_INCR(ring, rx_gro_fallback);
+			ASSERT3P(tail, !=, NULL);
+			if (tail != mp) {
+				tail->b_next = next;
+				next = mp->b_next;
+				mp->b_next = NULL;
+			}
+			size = msgsize(mp);
+			gro_type = VIRTIO_NET_HDR_GSO_NONE;
+		}
+
+		if (gro_type == VIRTIO_NET_HDR_GSO_NONE &&
+		    size > sizeof (struct ether_header) + link->l_mtu) {
+			VIONA_PROBE3(rx_drop_over_mtu, viona_vring_t *,
+			    ring, mblk_t *, mp, size_t, size);
+			VIONA_RING_STAT_INCR(ring, rx_drop_over_mtu);
+			err = E2BIG;
+			goto pad_drop;
 		}
 
 		/*
@@ -642,9 +727,23 @@ viona_rx_common(viona_vring_t *ring, mblk_t *mp, boolean_t is_loopback)
 		}
 
 		if (do_merge) {
-			err = viona_recv_merged(ring, mp, size);
+			err = viona_recv_merged(ring, mp, size, gro_type,
+			    &pushed_cnt);
 		} else {
-			err = viona_recv_plain(ring, mp, size);
+			err = viona_recv_plain(ring, mp, size, gro_type,
+			    &pushed_cnt);
+		}
+
+		/*
+		 * We have reached the batch threshold; check if the
+		 * guest requires notification.
+		 */
+		if (pushed_cnt >= viona_rx_batch_thresh) {
+			pushed_cnt = 0;
+
+			if (viona_ring_need_intr(ring)) {
+				viona_ring_intr(ring);
+			}
 		}
 
 		/*
@@ -700,8 +799,22 @@ pad_drop:
 		mp = next;
 	}
 
-	membar_enter();
-	viona_intr_ring(ring, B_FALSE);
+	/*
+	 * Notify the guest only if we have published new descriptors
+	 * to the used ring.
+	 */
+	if (pushed_cnt > 0 && viona_ring_need_intr(ring)) {
+		viona_ring_intr(ring);
+	}
+
+	/*
+	 * We currently have no use for notification from the guest as
+	 * it makes Rx buffers available. Delivery is driven purely by
+	 * mac processing (interrupt/softring). When buffers are not
+	 * available we drop packets rather than wait for more to
+	 * become available.
+	 */
+	viona_ring_disable_notify(ring);
 
 	/* Free successfully received frames */
 	if (mprx != NULL) {
@@ -808,121 +921,263 @@ viona_rx_split_deliver(viona_link_t *link, mblk_t *head,
 	viona_rx_ring_deliver(ring, head, is_loopback);
 }
 
-static void
-viona_rx_classified(void *arg, mac_resource_handle_t mrh __unused, mblk_t *mp,
-    boolean_t is_loopback)
+/*
+ * Determine whether the destination of a packet is a (non-broadcast)
+ * multicast group address, according to the MAC plugin.  If the leading
+ * mblk_t is too short for the plugin to examine the header, retry after a
+ * pull-up.  A packet whose header cannot be examined is reported as
+ * non-multicast.
+ */
+static boolean_t
+viona_rx_pkt_is_mcast(viona_link_t *link, mblk_t *mp)
 {
-	viona_link_t *link = (viona_link_t *)arg;
-	viona_rx_split_deliver(link, mp, is_loopback);
+	mac_header_info_t mhi;
+	int err;
+
+	err = mac_vlan_header_info(link->l_mh, mp, &mhi);
+	if (err != 0) {
+		mblk_t *pull;
+
+		pull = msgpullup(mp, sizeof (struct ether_vlan_header));
+		if (pull == NULL) {
+			err = ENOMEM;
+		} else {
+			err = mac_vlan_header_info(link->l_mh, pull, &mhi);
+			freemsg(pull);
+		}
+		if (err != 0) {
+			viona_vring_t *my_ring =
+			    viona_rx_pick_ring(link, mp);
+			VIONA_RING_STAT_INCR(my_ring, rx_mcast_check);
+			return (B_FALSE);
+		}
+	}
+
+	return (mhi.mhi_dsttype == MAC_ADDRTYPE_MULTICAST);
 }
 
-static void
-viona_rx_mcast(void *arg, mac_resource_handle_t mrh, mblk_t *mp,
-    boolean_t is_loopback)
+/*
+ * Filter a packet chain on the multicast destination.  With keep_mcast set,
+ * only multicast packets survive; otherwise, multicast packets are dropped.
+ * Since a packet whose header cannot be examined counts as non-multicast, such
+ * packets are dropped by the promiscuous-multicast path and delivered by the
+ * classified path.
+ */
+static mblk_t *
+viona_rx_filter_mcast(viona_link_t *link, mblk_t *mp,
+    const boolean_t keep_mcast)
 {
-	viona_link_t *link = (viona_link_t *)arg;
-	mac_handle_t mh = link->l_mh;
-	mblk_t *mp_mcast_only = NULL;
-	mblk_t **mpp = &mp_mcast_only;
+	mblk_t *head = NULL;
+	mblk_t **mpp = &head;
 
-	/*
-	 * In addition to multicast traffic, broadcast packets will also arrive
-	 * via the MAC_CLIENT_PROMISC_MULTI handler. The mac_rx_set() callback
-	 * for fully-classified traffic has already delivered that broadcast
-	 * traffic, so it should be suppressed here, rather than duplicating it
-	 * to the guest.
-	 */
 	while (mp != NULL) {
-		mblk_t *mp_next;
-		mac_header_info_t mhi;
-		int err;
+		mblk_t *mp_next = mp->b_next;
 
-		mp_next = mp->b_next;
 		mp->b_next = NULL;
-
-		/* Determine the packet type */
-		err = mac_vlan_header_info(mh, mp, &mhi);
-		if (err != 0) {
-			mblk_t *pull;
-
-			/*
-			 * It is possible that gathering of the header
-			 * information was impeded by a leading mblk_t which
-			 * was of inadequate length to reference the needed
-			 * fields.  Try again, in case that could be solved
-			 * with a pull-up.
-			 */
-			pull = msgpullup(mp, sizeof (struct ether_vlan_header));
-			if (pull == NULL) {
-				err = ENOMEM;
-			} else {
-				err = mac_vlan_header_info(mh, pull, &mhi);
-				freemsg(pull);
-			}
-
-			if (err != 0) {
-				viona_vring_t *my_ring =
-				    viona_rx_pick_ring(link, mp);
-				VIONA_RING_STAT_INCR(my_ring, rx_mcast_check);
-			}
-		}
-
-		/* Chain up matching packets while discarding others */
-		if (err == 0 && mhi.mhi_dsttype == MAC_ADDRTYPE_MULTICAST) {
+		if (viona_rx_pkt_is_mcast(link, mp) == keep_mcast) {
 			*mpp = mp;
 			mpp = &mp->b_next;
 		} else {
 			freemsg(mp);
 		}
-
 		mp = mp_next;
 	}
 
-	if (mp_mcast_only != NULL) {
-		viona_rx_split_deliver(link, mp_mcast_only, is_loopback);
+	return (head);
+}
+
+/*
+ * Classified receive callback, which is installed once and left in place across
+ * reception-mode transitions.  The filtering behavior follows l_rx_mode,
+ * which viona_rx_set() publishes after the new promiscuous callback is
+ * installed and before the old one is removed.  Delivery paths therefore
+ * overlap during a transition, leaving no gap for new arrivals.  Packets
+ * already queued here at the transition are filtered under the new mode.
+ */
+static void
+viona_rx_classified(void *arg, mac_resource_handle_t mrh __unused, mblk_t *mp,
+    boolean_t is_loopback)
+{
+	viona_link_t *link = (viona_link_t *)arg;
+
+	switch (link->l_rx_mode) {
+	case VIONA_PROMISC_MULTI:
+		/*
+		 * The promiscuous callback owns multicast delivery in this
+		 * mode.  MAC may also send the same packet through this
+		 * classified callback, either because its destination is
+		 * installed on the client or because the provider directs
+		 * multicast into the client's ring group.  Drop that copy so
+		 * the guest receives the packet only once.  Broadcast remains
+		 * on this path because viona_rx_mcast() suppresses its
+		 * promiscuous copy.
+		 *
+		 * MAC_CLIENT_PROMISC_MULTI withholds multicast whose VID
+		 * does not match the client's flows.  Such a frame does not
+		 * need its classified copy preserved: classified SRS fanout
+		 * applies the same VID check before invoking this callback.
+		 * Since viona has only a VLAN_ID_NONE flow, nonzero-VID
+		 * multicast is rejected before reaching either callback.
+		 */
+		mp = viona_rx_filter_mcast(link, mp, B_FALSE);
+		break;
+	case VIONA_PROMISC_ALL:
+		/*
+		 * The promiscuous callback carries the entire inbound stream,
+		 * classified traffic included.  Drop the classified copies.
+		 */
+		freemsgchain(mp);
+		return;
+	default:
+		break;
+	}
+
+	if (mp != NULL) {
+		viona_rx_split_deliver(link, mp, is_loopback);
+	}
+}
+
+static void
+viona_rx_promisc(void *arg, mac_resource_handle_t mrh __unused, mblk_t *mp,
+    boolean_t is_loopback)
+{
+	viona_link_t *link = (viona_link_t *)arg;
+
+	viona_rx_split_deliver(link, mp, is_loopback);
+}
+
+static void
+viona_rx_mcast(void *arg, mac_resource_handle_t mrh __unused, mblk_t *mp,
+    boolean_t is_loopback)
+{
+	viona_link_t *link = (viona_link_t *)arg;
+
+	/*
+	 * In addition to multicast traffic, broadcast packets will also arrive
+	 * via the MAC_CLIENT_PROMISC_MULTI handler. The classified callback
+	 * has already delivered that broadcast traffic, so it should be
+	 * suppressed here, rather than duplicating it to the guest.
+	 */
+	mp = viona_rx_filter_mcast(link, mp, B_TRUE);
+	if (mp != NULL) {
+		viona_rx_split_deliver(link, mp, is_loopback);
 	}
 }
 
 int
 viona_rx_set(viona_link_t *link, viona_promisc_t mode)
 {
+	mac_promisc_handle_t old_mph = link->l_mph;
+	mac_promisc_handle_t new_mph = NULL;
 	int err = 0;
 
-	if (link->l_mph != NULL) {
-		mac_promisc_remove(link->l_mph);
-		link->l_mph = NULL;
+	/*
+	 * The classified callback is left in place across mode transitions;
+	 * otherwise, changing its mode-dependent filtering would require
+	 * replacing it through mac_rx_set(), which quiesces the receive
+	 * datapath and can drop packets arriving during that quiescence.  The
+	 * installed callback instead filters based on l_rx_mode.  It is
+	 * removed only by viona_rx_clear(), during ring reallocation or link
+	 * teardown.
+	 *
+	 * Installation precedes the promiscuous work below so that a failure
+	 * there cannot leave the link without any receive callback, as during
+	 * ring reallocation, where viona_rx_clear() has already torn both
+	 * down.  On failure, an existing handler and active mode remain in
+	 * place.  After such a teardown, the active mode remains
+	 * VIONA_PROMISC_NONE while l_promisc retains the mode being restored
+	 * for a retry.
+	 */
+	if (!link->l_rx_classified) {
+		mac_rx_set(link->l_mch, viona_rx_classified, link);
+		link->l_rx_classified = true;
 	}
 
 	switch (mode) {
 	case VIONA_PROMISC_MULTI:
-		mac_rx_set(link->l_mch, viona_rx_classified, link);
+		/*
+		 * Even with VNA_IOC_SET_MAC_FILTERS available, multicast
+		 * promiscuity remains in use for guests which do not negotiate
+		 * VIRTIO_NET_F_CTRL_RX, request all-multicast reception, or
+		 * overflow the filter tables.  While it is active, multicast
+		 * flows through the promiscuous callback, with
+		 * viona_rx_classified() dropping its classified copies.
+		 *
+		 * Installed filters are retained because receive-mode and
+		 * table state are independent: only VNA_IOC_SET_MAC_FILTERS
+		 * and link teardown alter the table.  Leaving the
+		 * all-multicast mode must resume table-filtered delivery
+		 * without requiring another VIRTIO_NET_CTRL_MAC_TABLE_SET
+		 * from the guest.
+		 */
 		err = mac_promisc_add(link->l_mch, MAC_CLIENT_PROMISC_MULTI,
-		    viona_rx_mcast, link, &link->l_mph,
+		    viona_rx_mcast, link, &new_mph,
 		    MAC_PROMISC_FLAGS_NO_TX_LOOP |
 		    MAC_PROMISC_FLAGS_VLAN_TAG_STRIP);
 		break;
 	case VIONA_PROMISC_ALL:
-		mac_rx_clear(link->l_mch);
 		err = mac_promisc_add(link->l_mch, MAC_CLIENT_PROMISC_ALL,
-		    viona_rx_classified, link, &link->l_mph,
+		    viona_rx_promisc, link, &new_mph,
 		    MAC_PROMISC_FLAGS_NO_TX_LOOP |
 		    MAC_PROMISC_FLAGS_VLAN_TAG_STRIP);
-		/*
-		 * In case adding the promisc handler failed, restore the
-		 * generic classified callback so that packets continue to
-		 * flow to the guest.
-		 */
-		if (err != 0) {
-			mac_rx_set(link->l_mch, viona_rx_classified, link);
-		}
 		break;
 	case VIONA_PROMISC_NONE:
 	default:
-		mac_rx_set(link->l_mch, viona_rx_classified, link);
 		break;
 	}
 
-	return (err);
+	if (err != 0) {
+		/*
+		 * With an existing promiscuous handler in place, the active
+		 * mode remains backed by it and the failed transition is
+		 * abandoned.  Without one, the active mode is already
+		 * VIONA_PROMISC_NONE: initial state and viona_rx_clear()
+		 * establish it, and a live transition without a handler starts
+		 * there.  l_promisc remains unchanged.  During callback
+		 * restoration, it retains the requested mode so a retry
+		 * reattempts the missing handler.
+		 */
+		IMPLY(old_mph == NULL, link->l_rx_mode == VIONA_PROMISC_NONE);
+		return (err);
+	}
+
+	/*
+	 * The new mode is published after the new promiscuous callback is in
+	 * place and before the old one is removed, so the delivery paths
+	 * overlap during a transition rather than leaving a gap.  The overlap
+	 * can briefly duplicate delivery, which is preferred to loss.
+	 *
+	 * One narrow loss window remains for packets already queued for
+	 * classified delivery.  For example, a unicast packet destined for
+	 * the client's primary address can be queued before a NONE-to-ALL
+	 * transition installs the ALL handler, and therefore receive no
+	 * promiscuous copy at ingress.  If it drains after the new mode is
+	 * published, the classified callback discards it even though both
+	 * modes accept it.  A NONE-to-MULTI transition has the equivalent
+	 * case for multicast matching an installed filter.  MAC offers no
+	 * way to drain the client's soft ring set without also dropping new
+	 * arrivals for the duration.
+	 *
+	 * mac_promisc_add() installs a new handler before returning.  A packet
+	 * which passes ingress before that installation is visible, but later
+	 * observes the new mode in the classified callback, falls within the
+	 * same window described above.  A producer barrier after the mode
+	 * store orders it ahead of retiring the old handler.  The removal path
+	 * takes locks whose ordering would cover this, but the barrier states
+	 * the requirement here rather than leaning on MAC's internal locking.
+	 * This is a writer-side ordering requirement, i.e., it does not
+	 * require readers to observe the new mode immediately.  The classified
+	 * callback loads the mode and branches, with no later protected-data
+	 * load for a consumer barrier to order.
+	 */
+	link->l_rx_mode = mode;
+	membar_producer();
+	link->l_mph = new_mph;
+	if (old_mph != NULL)
+		mac_promisc_remove(old_mph);
+	link->l_promisc = mode;
+
+	return (0);
 }
 
 void
@@ -933,4 +1188,6 @@ viona_rx_clear(viona_link_t *link)
 		link->l_mph = NULL;
 	}
 	mac_rx_clear(link->l_mch);
+	link->l_rx_classified = false;
+	link->l_rx_mode = VIONA_PROMISC_NONE;
 }

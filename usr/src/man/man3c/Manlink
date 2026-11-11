@@ -10,7 +10,7 @@
 #
 
 #
-# Copyright 2025 Oxide Computer Company
+# Copyright 2026 Oxide Computer Company
 #
 
 __fbufsize.3c
@@ -164,7 +164,11 @@ byteorder.3c
 	ntohll.3c
 	ntohs.3c
 c16rtomb.3c
+	c8rtomb.3c
+	c8rtomb_l.3c
+	c16rtomb_l.3c
 	c32rtomb.3c
+	c32rtomb_l.3c
 	wcrtomb.3c
 	wcrtomb_l.3c
 catopen.3c
@@ -248,6 +252,8 @@ dlopen.3c
 	dlmopen.3c
 door_bind.3c
 	door_unbind.3c
+door_create.3c
+	door_xcreate.3c
 door_getparam.3c
 	door_setparam.3c
 drand48.3c
@@ -593,7 +599,11 @@ mblen.3c
 mbrlen.3c
 	mbrlen_l.3c
 mbrtoc16.3c
+	mbrtoc8.3c
+	mbrtoc8_l.3c
+	mbrtoc16_l.3c
 	mbrtoc32.3c
+	mbrtoc32_l.3c
 	mbrtowc.3c
 	mbrtowc_l.3c
 mbsinit.3c
@@ -649,6 +659,8 @@ mtx.3c
 mutex_init.3c
 	mutex_consistent.3c
 	mutex_destroy.3c
+	mutex_enter.3c
+	mutex_exit.3c
 	mutex_lock.3c
 	mutex_trylock.3c
 	mutex_unlock.3c

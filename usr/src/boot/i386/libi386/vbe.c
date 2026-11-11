@@ -43,6 +43,9 @@
 #include <sys/vgareg.h>
 #include <sys/vgasubr.h>
 
+/* This code always fills gfx_fb. */
+bool has_framebuffer = true;
+
 multiboot_tag_vbe_t vbestate;
 static struct vbeinfoblock *vbe =
 	(struct vbeinfoblock *)&vbestate.vbe_control_info;
@@ -463,6 +466,7 @@ vbe_set_mode(int modenum)
 	case 0x4:
 		gfx_fb.framebuffer_common.framebuffer_type =
 		    MULTIBOOT_FRAMEBUFFER_TYPE_INDEXED;
+		gfx_fb.u.fb1.framebuffer_palette_num_colors = CMAP_SIZE;
 		break;
 	case 0x6:
 		gfx_fb.framebuffer_common.framebuffer_type =

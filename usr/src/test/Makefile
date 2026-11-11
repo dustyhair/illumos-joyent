@@ -23,6 +23,7 @@ SUBDIRS = \
 	bhyve-tests \
 	crypto-tests \
 	elf-tests \
+	header-tests \
 	i2c-tests \
 	libc-tests \
 	libmlrpc-tests \
@@ -38,5 +39,7 @@ SUBDIRS = \
 	tz-tests \
 	util-tests \
 	zfs-tests
+
+CHKSUBDIRS = $(SUBDIRS)
 
 include Makefile.com

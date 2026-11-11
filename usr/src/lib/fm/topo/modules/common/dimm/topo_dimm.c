@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright 2024 Oxide Computer Company
+ * Copyright 2026 Oxide Computer Company
  */
 
 /*
@@ -165,6 +165,8 @@ topo_dimm_rcd2str(uint32_t val)
 		return ("DDR5RCD04");
 	case SPD_RCD_T_DDR5RCD05:
 		return ("DDR5RCD05");
+	case SPD_RCD_T_DDR5RCD06:
+		return ("DDR5RCD06");
 	default:
 		return ("unknown");
 	}
@@ -197,6 +199,8 @@ topo_dimm_mrcd2str(uint32_t val)
 		return ("DDR5MRCD01");
 	case SPD_MRCD_T_DDR5MRCD02:
 		return ("DDR5MRCD02");
+	case SPD_MRCD_T_DDR5MRCD03:
+		return ("DDR5MRCD03");
 	default:
 		return ("unknown");
 	}
@@ -210,6 +214,8 @@ topo_dimm_mdb2str(uint32_t val)
 		return ("DDR5MDB01");
 	case SPD_MDB_T_DDR5MDB02:
 		return ("DDR5MDB02");
+	case SPD_MDB_T_DDR5MDB03:
+		return ("DDR5MDB03");
 	default:
 		return ("unknown");
 	}
@@ -301,6 +307,8 @@ topo_dimm_mod_type2str(spd_module_type_t type)
 		return ("CSODIMM");
 	case SPD_MOD_TYPE_CAMM2:
 		return ("CAMM2");
+	case SPD_MOD_TYPE_SOCAMM2:
+		return ("SOCAMM2");
 	case SPD_MOD_TYPE_LPDIMM:
 		return ("LP-DIMM");
 	case SPD_MOD_TYPE_MICRO_DIMM:
@@ -504,6 +512,21 @@ topo_dimm_add_props(topo_mod_t *mod, tnode_t *dimm, const spd_cache_t *cache)
 		topo_mod_dprintf(mod, "failed to set basic DIMM properties: %s",
 		    topo_mod_errmsg(mod));
 		return (false);
+	}
+
+	if (cache->sc_pkg_sl[0] == SPD_SL_3DS) {
+		uint32_t height = cache->sc_pkg_ndie[0];
+		uint32_t lranks = cache->sc_pkg_ndie[0] * cache->sc_nranks;
+
+		if (topo_create_props(mod, dimm, TOPO_PROP_IMMUTABLE,
+		    &topo_dimm_pgroup,
+		    TOPO_PROP_DIMM_LRANKS, TOPO_TYPE_UINT32, lranks,
+		    TOPO_PROP_DIMM_STACK, TOPO_TYPE_UINT32, height,
+		    NULL) != 0) {
+			topo_mod_dprintf(mod, "failed to set 3DS DIMM "
+			    "properties: %s", topo_mod_errmsg(mod));
+			return (false);
+		}
 	}
 
 	return (true);

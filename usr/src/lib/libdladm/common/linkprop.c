@@ -24,6 +24,7 @@
  * Copyright 2015 Garrett D'Amore <garrett@damore.org>
  * Copyright 2020 RackTop Systems, Inc.
  * Copyright 2023 Oxide Computer Company
+ * Copyright 2026 Edgecast Cloud LLC.
  */
 
 #include <stdlib.h>
@@ -234,8 +235,6 @@ struct prop_desc {
 	 */
 	datalink_media_t	pd_dmedia;
 };
-
-#define	MAC_PROP_BUFSIZE(v)	sizeof (dld_ioc_macprop_t) + (v) - 1
 
 /*
  * Supported link properties enumerated in the prop_table[] array are
@@ -623,6 +622,8 @@ static	val_desc_t	dladm_ether_media_vals[] = {
 	{ "400GBASE-FR8",	ETHER_MEDIA_400GBASE_FR8 },
 	{ "400GBASE-LR8",	ETHER_MEDIA_400GBASE_LR8 },
 	{ "400GBASE-ER8",	ETHER_MEDIA_400GBASE_ER8 },
+	{ "400GBASE-CR8",	ETHER_MEDIA_400GBASE_CR8 },
+	{ "400GBASE-SR8",	ETHER_MEDIA_400GBASE_SR8 },
 	{ "400GAUI-4",		ETHER_MEDIA_400GAUI_4 },
 	{ "400GBASE-KR4",	ETHER_MEDIA_400GBASE_KR4 },
 	{ "400GBASE-CR4",	ETHER_MEDIA_400GBASE_CR4 },
@@ -4017,7 +4018,7 @@ i_dladm_buf_alloc_impl(size_t valsize, datalink_id_t linkid,
 	dld_ioc_macprop_t *dip;
 
 	*status = DLADM_STATUS_OK;
-	dsize = MAC_PROP_BUFSIZE(valsize);
+	dsize = DLD_MACPROP_BUFSIZE(valsize);
 	dip = malloc(dsize);
 	if (dip == NULL) {
 		*status = DLADM_STATUS_NOMEM;

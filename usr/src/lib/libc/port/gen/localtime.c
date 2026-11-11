@@ -21,7 +21,7 @@
 
 /*
  * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
- * Copyright 2025 Oxide Computer Company
+ * Copyright 2026 Oxide Computer Company
  * Copyright 2025 MNX Cloud, Inc.
  */
 
@@ -115,6 +115,14 @@
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <stdbool.h>
+#include <sys/debug.h>
+#include <tzint.h>
+
+/*
+ * A context's private abbreviation storage must be able to hold any
+ * abbreviation drawn from a zone's character buffer.
+ */
+CTASSERT(TZC_ABBR_MAX >= TZ_MAX_CHARS);
 
 /* JAN_01_1902 cast to (int) - negative number of seconds from 1970 */
 #define	JAN_01_1902		(int)0x8017E880
@@ -1025,9 +1033,10 @@ out:
 }
 
 /*
- * Sets timezone, altzone, tzname[], extern globals, to represent
+ * Get timezone, altzone, tzname[], extern globals, to represent
  * disposition of t with respect to TZ; See ctime(3C). is_in_dst,
- * internal global is also set.  daylight is set at zone load time.
+ * internal global is also set.  daylight is set at zone load time;
+ * so we copy its value into this.
  *
  * Issues:
  *
@@ -1043,28 +1052,35 @@ out:
  *	until time known, and not knowing time until DST known, at
  *	least uses the same algorithm for 64-bit time as 32-bit.
  *
- *	The fact that zoneinfo files only contain transistions for 32-bit
+ *	The fact that zoneinfo files only contain transitions for 32-bit
  *	time space is a well known problem, as yet unresolved.
  *	Without an official standard for coping with out-of-range
  *	zoneinfo times,  assumptions must be made.  For now
- *	the assumption is:   If t exceeds 32-bit boundries and local zone
+ *	the assumption is:   If t exceeds 32-bit boundaries and local zone
  *	is zoneinfo type, is_in_dst is set to to 0 for negative values
  *	of t, and set to the same DST state as the highest ordered
  *	transition in cache for positive values of t.
  */
 static void
-set_zone_default_context(void)
+get_zone_default_context(tzinfo_ctx_t *ctx)
 {
-	const char	*newtzname[2];
+	if (lclzonep == NULL) {
+		ctx->tzc_timezone = 0;
+		ctx->tzc_altzone = 0;
+		ctx->tzc_tzname[0] = _tz_gmt;
+		ctx->tzc_tzname[1] = _tz_spaces;
+		ctx->tzc_daylight = 0;
+		ctx->tzc_is_in_dst = 0;
+		return;
+	}
 
 	/* Retrieve suitable defaults for this zone */
-	altzone = lclzonep->default_altzone;
-	timezone = lclzonep->default_timezone;
-	newtzname[0] = (char *)lclzonep->default_tzname0;
-	newtzname[1] = (char *)lclzonep->default_tzname1;
-	is_in_dst = 0;
-
-	set_tzname(newtzname);
+	ctx->tzc_altzone = lclzonep->default_altzone;
+	ctx->tzc_timezone = lclzonep->default_timezone;
+	ctx->tzc_tzname[0] = lclzonep->default_tzname0;
+	ctx->tzc_tzname[1] = lclzonep->default_tzname1;
+	ctx->tzc_daylight = lclzonep->daylight;
+	ctx->tzc_is_in_dst = 0;
 }
 
 static bool
@@ -1074,26 +1090,45 @@ state_is_posix(const state_t *state)
 }
 
 static void
-set_zone_context(time_t t)
+get_zone_context(time_t t, tzinfo_ctx_t *ctx)
 {
 	prev_t		*prevp;
 	int		lo, hi, tidx, lidx;
 	ttinfo_t	*ttisp, *std, *alt;
-	const char	*newtzname[2];
 
-	/* If state data not loaded or TZ busted, just use GMT */
-	if (lclzonep == NULL || curr_zonerules == ZONERULES_INVALID) {
-		timezone = altzone = 0;
-		daylight = is_in_dst = 0;
-		newtzname[0] = (char *)_tz_gmt;
-		newtzname[1] = (char *)_tz_spaces;
-		set_tzname(newtzname);
+	/*
+	 * With no zone state loaded there is nothing to search; defer to the
+	 * default context handling, which produces a suitable GMT context for
+	 * a NULL zone.
+	 */
+	if (lclzonep == NULL) {
+		get_zone_default_context(ctx);
+		return;
+	}
+
+	/*
+	 * In general the 'daylight' global is expected to have been set prior
+	 * to a call to get the context. This is potentially overridden if there
+	 * is no timezone pointer. As such, we always set this based on the
+	 * current settings to start with.
+	 */
+	(void) memset(ctx, 0, sizeof (tzinfo_ctx_t));
+	ctx->tzc_tzname[0] = _tz_gmt;
+	ctx->tzc_tzname[1] = _tz_spaces;
+	ctx->tzc_daylight = daylight;
+
+	/* If the TZ is invalid, just use GMT */
+	if (curr_zonerules == ZONERULES_INVALID) {
+		ctx->tzc_timezone = 0;
+		ctx->tzc_altzone = 0;
+		ctx->tzc_daylight = 0;
+		ctx->tzc_is_in_dst = 0;
 		return;
 	}
 
 	if (lclzonep->timecnt <= 0 || lclzonep->typecnt < 2) {
 		/* Loaded zone incapable of transitioning. */
-		set_zone_default_context();
+		get_zone_default_context(ctx);
 		return;
 	}
 
@@ -1112,13 +1147,13 @@ set_zone_context(time_t t)
 		if (lclzonep->zonerules == POSIX_USA ||
 		    lclzonep->zonerules == POSIX) {
 			/* Must invoke calculations to determine DST */
-			set_zone_default_context();
-			is_in_dst = (daylight) ?
+			get_zone_default_context(ctx);
+			ctx->tzc_is_in_dst = ctx->tzc_daylight ?
 			    posix_check_dst(t, lclzonep) : 0;
 			return;
 		} else if (t < lclzonep->ats[0]) {   /* zoneinfo... */
 			/* t precedes 1st transition.  Use defaults */
-			set_zone_default_context();
+			get_zone_default_context(ctx);
 			return;
 		} else	{    /* zoneinfo */
 			/* t follows final transistion.  Use final */
@@ -1157,30 +1192,143 @@ set_zone_context(time_t t)
 	prevp = &lclzonep->prev[tidx];
 	bool posix = state_is_posix(lclzonep);
 
-	if ((is_in_dst = ttisp->tt_isdst) == 0) { /* std. time */
-		timezone = -ttisp->tt_gmtoff;
-		newtzname[0] = &lclzonep->chars[ttisp->tt_abbrind];
+	if ((ctx->tzc_is_in_dst = ttisp->tt_isdst) == 0) { /* std. time */
+		ctx->tzc_timezone = -ttisp->tt_gmtoff;
+		ctx->tzc_tzname[0] = &lclzonep->chars[ttisp->tt_abbrind];
 		if (!posix && (alt = prevp->alt) != NULL) {
-			altzone = -alt->tt_gmtoff;
-			newtzname[1] = &lclzonep->chars[alt->tt_abbrind];
+			ctx->tzc_altzone = -alt->tt_gmtoff;
+			ctx->tzc_tzname[1] = &lclzonep->chars[alt->tt_abbrind];
 		} else {
-			altzone = lclzonep->default_altzone;
-			newtzname[1] = (char *)lclzonep->default_tzname1;
+			ctx->tzc_altzone = lclzonep->default_altzone;
+			ctx->tzc_tzname[1] = (char *)lclzonep->default_tzname1;
 		}
 	} else { /* alt. time */
-		altzone = -ttisp->tt_gmtoff;
-		newtzname[1] = &lclzonep->chars[ttisp->tt_abbrind];
+		ctx->tzc_altzone = -ttisp->tt_gmtoff;
+		ctx->tzc_tzname[1] = &lclzonep->chars[ttisp->tt_abbrind];
 		if (!posix && (std = prevp->std) != NULL) {
-			timezone = -std->tt_gmtoff;
-			newtzname[0] = &lclzonep->chars[std->tt_abbrind];
+			ctx->tzc_timezone = -std->tt_gmtoff;
+			ctx->tzc_tzname[0] = &lclzonep->chars[std->tt_abbrind];
 		} else {
-			timezone = lclzonep->default_timezone;
-			newtzname[0] = (char *)lclzonep->default_tzname0;
+			ctx->tzc_timezone = lclzonep->default_timezone;
+			ctx->tzc_tzname[0] = (char *)lclzonep->default_tzname0;
 		}
 	}
 
 	lclzonep->last_ats_idx = tidx;
-	set_tzname(newtzname);
+}
+
+static void
+set_zone_context(time_t t)
+{
+	tzinfo_ctx_t ctx;
+
+	get_zone_context(t, &ctx);
+	timezone = ctx.tzc_timezone;
+	altzone = ctx.tzc_altzone;
+	daylight = ctx.tzc_daylight;
+	is_in_dst = ctx.tzc_is_in_dst;
+	set_tzname(ctx.tzc_tzname);
+}
+
+/*
+ * This is used in the context of strfime(3C) and similar. The time zone
+ * information that is potentially set globally is set with a call to tzset() or
+ * similar which constructs it based upon the current time. The timezone names
+ * and similar metadata that should be used can vary based upon the time in
+ * question that one is using. This function takes the struct tm, converts it to
+ * a time_t that we can use to search the database, and fills in information
+ * about what should be printed.
+ *
+ * If the struct tm contains something which doesn't fit in a time_t then we
+ * just fall back on the defaults. This should not be used by other functions in
+ * localtime.c currently as we assume that we need to take _time_lock.
+ */
+void
+tzinfo_tm_to_ctx(const struct tm *tmp, tzinfo_ctx_t *ctx)
+{
+	long long t;
+	struct tm tm = *tmp;
+	void *defer_free;
+
+	lmutex_lock(&_time_lock);
+
+	/*
+	 * This is the same logic as mktime1(), but we don't want to actually
+	 * set any times. In addition, while mktime() normalizes the struct tm,
+	 * we do not want to touch our argument.
+	 */
+	t = tm.tm_sec + SECSPERMIN * tm.tm_min +
+	    SECSPERHOUR * tm.tm_hour +
+	    SECSPERDAY * (tm.tm_mday - 1);
+
+	if (tm.tm_mon >= 12) {
+		tm.tm_year += tm.tm_mon / 12;
+		tm.tm_mon %= 12;
+	} else if (tm.tm_mon < 0) {
+		int temp = -tm.tm_mon;
+		tm.tm_mon = 0;
+		tm.tm_year -= (temp / 12);
+		if (temp %= 12) {
+			tm.tm_year--;
+			tm.tm_mon = 12 - temp;
+		}
+	}
+
+	if (!year_is_cached || (cached_year != tm.tm_year)) {
+		cached_year = tm.tm_year;
+		year_is_cached = TRUE;
+		cached_secs_since_1970 =
+		    (long long)SECSPERDAY * DAYS_SINCE_70(cached_year);
+	}
+	t += cached_secs_since_1970;
+
+	if (isleap(tm.tm_year + TM_YEAR_BASE))
+		t += SECSPERDAY * __lyday_to_month[tm.tm_mon];
+	else
+		t += SECSPERDAY * __yday_to_month[tm.tm_mon];
+
+	/*
+	 * Ensure that the local zone data is current before we use it.
+	 * ltzset_u() checks the reload counter and rebuilds lclzonep if
+	 * necessary; _time_lock must be held until we have finished
+	 * consuming lclzonep below.
+	 *
+	 * The time_t we pass only determines to which time the global zone
+	 * state is refreshed as a side effect and does not affect the
+	 * context we're computing. We pass the current time so that the
+	 * global state stays consistent with an ordinary tzset() rather
+	 * than whatever time we're dealing with here.
+	 */
+	defer_free = ltzset_u(time(NULL));
+
+	/*
+	 * See if this fits in a time_t for this data model. If not, just use
+	 * the zone defaults.
+	 */
+	if (t > LONG_MAX)
+		get_zone_default_context(ctx);
+	else
+		get_zone_context(t, ctx);
+
+	/*
+	 * The above may have pointed tzc_tzname[] at abbreviations owned by
+	 * lclzonep, whose storage can be freed by a subsequent zone reload.
+	 * Our caller consumes the context without _time_lock held, so copy
+	 * any such names into the context's own storage now, while lclzonep
+	 * is still valid.
+	 */
+	for (uint_t i = 0; i < 2; i++) {
+		const char *nm = ctx->tzc_tzname[i];
+
+		if (nm != _tz_gmt && nm != _tz_spaces) {
+			(void) strlcpy(ctx->tzc_namebuf[i], nm,
+			    sizeof (ctx->tzc_namebuf[i]));
+			ctx->tzc_tzname[i] = ctx->tzc_namebuf[i];
+		}
+	}
+
+	lmutex_unlock(&_time_lock);
+	free(defer_free);
 }
 
 /*
@@ -2388,6 +2536,15 @@ purge_zone_cache(void)
 
 	/* We'll reload system TZ as well */
 	systemTZ = NULL;
+
+	/*
+	 * lclzonep refers to one of the state_t's we are about to free. Drop
+	 * the reference (and invalidate the zone) before we release the lock
+	 * so that a consumer which acquires _time_lock during the free below
+	 * can't de-reference freed memory.
+	 */
+	lclzonep = NULL;
+	curr_zonerules = ZONERULES_INVALID;
 
 	/*
 	 * Hash table has been cleared, and all elements are detached from

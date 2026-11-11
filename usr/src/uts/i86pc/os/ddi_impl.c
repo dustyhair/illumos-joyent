@@ -25,6 +25,7 @@
  * Copyright 2014 Pluribus Networks, Inc.
  * Copyright 2016 Nexenta Systems, Inc.
  * Copyright 2018 Joyent, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
 /*
@@ -2083,7 +2084,7 @@ get_console_font(void)
  *
  * Trying to assemble root file system drivers as we are booting from
  * devconf will fail if the kernel driver is basing its name_addr's on the
- * psuedo-node device info while the bootpath passed up from bootconf is using
+ * pseudo-node device info while the bootpath passed up from bootconf is using
  * reality-based name_addrs.  We help the boot along in this case by
  * looking at the pre-bootconf bootpath and determining if we would have
  * successfully matched if that had been the bootpath we had chosen.
@@ -2600,7 +2601,7 @@ impl_setup_ddi(void)
 	ramdisk_end -= ONE_GIG;
 #endif
 	rd_mem_prop.phys = ramdisk_start;
-	rd_mem_prop.size = ramdisk_end - ramdisk_start + 1;
+	rd_mem_prop.size = ramdisk_end - ramdisk_start;
 
 	(void) ndi_prop_update_byte_array(DDI_DEV_T_NONE, xdip,
 	    RD_EXISTING_PROP_NAME, (uchar_t *)&rd_mem_prop,

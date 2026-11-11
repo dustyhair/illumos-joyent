@@ -250,6 +250,7 @@ static void	rfs4_op_setclientid_confirm(nfs_argop4 *, nfs_resop4 *,
 static void	rfs4_op_secinfo(nfs_argop4 *, nfs_resop4 *, struct svc_req *,
 		    struct compound_state *);
 static void	rfs4_op_secinfo_free(nfs_resop4 *);
+static void	rfs4_op_test_stateid_free(nfs_resop4 *);
 
 void rfs4x_op_exchange_id(nfs_argop4 *argop, nfs_resop4 *resop,
     struct svc_req *req, struct compound_state *cs);
@@ -276,6 +277,10 @@ void rfs4x_op_bind_conn_to_session(nfs_argop4 *argop, nfs_resop4 *resop,
 void rfs4x_op_secinfo_noname(nfs_argop4 *argop, nfs_resop4 *resop,
     struct svc_req *req, compound_state_t *cs);
 void rfs4x_op_free_stateid(nfs_argop4 *argop, nfs_resop4 *resop,
+    struct svc_req *req, compound_state_t *cs);
+void rfs4x_op_backchannel_ctl(nfs_argop4 *argop, nfs_resop4 *resop,
+    struct svc_req *req, compound_state_t *cs);
+void rfs4x_op_test_stateid(nfs_argop4 *argop, nfs_resop4 *resop,
     struct svc_req *req, compound_state_t *cs);
 
 static nfsstat4 check_open_access(uint32_t, struct compound_state *,
@@ -323,233 +328,382 @@ static struct rfsv4disp rfsv4disptab[] = {
 	/*
 	 * NFS VERSION 4
 	 */
-
 	/* RFS_NULL = 0 */
-	{rfs4_op_illegal, nullfree, 0},
-
+	[0] = {
+		.dis_proc = rfs4_op_illegal,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
 	/* UNUSED = 1 */
-	{rfs4_op_illegal, nullfree, 0},
-
+	[1] = {
+		.dis_proc = rfs4_op_illegal,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
 	/* UNUSED = 2 */
-	{rfs4_op_illegal, nullfree, 0},
-
-	/* OP_ACCESS = 3 */
-	{rfs4_op_access, nullfree, OP_IDEMPOTENT},
-
-	/* OP_CLOSE = 4 */
-	{rfs4_op_close, nullfree, OP_CLEAR_STATEID},
-
-	/* OP_COMMIT = 5 */
-	{rfs4_op_commit, nullfree, OP_IDEMPOTENT},
-
-	/* OP_CREATE = 6 */
-	{rfs4_op_create, nullfree, OP_CLEAR_STATEID},
-
-	/* OP_DELEGPURGE = 7 */
-	{rfs4_op_delegpurge, nullfree, 0},
-
-	/* OP_DELEGRETURN = 8 */
-	{rfs4_op_delegreturn, nullfree, 0},
-
-	/* OP_GETATTR = 9 */
-	{rfs4_op_getattr, rfs4_op_getattr_free, OP_IDEMPOTENT},
-
-	/* OP_GETFH = 10 */
-	{rfs4_op_getfh, rfs4_op_getfh_free, OP_IDEMPOTENT},
-
-	/* OP_LINK = 11 */
-	{rfs4_op_link, nullfree, 0},
-
-	/* OP_LOCK = 12 */
-	{rfs4_op_lock, lock_denied_free, 0},
-
-	/* OP_LOCKT = 13 */
-	{rfs4_op_lockt, lock_denied_free, 0},
-
-	/* OP_LOCKU = 14 */
-	{rfs4_op_locku, nullfree, 0},
-
-	/* OP_LOOKUP = 15 */
-	{rfs4_op_lookup, nullfree, (OP_IDEMPOTENT | OP_CLEAR_STATEID)},
-
-	/* OP_LOOKUPP = 16 */
-	{rfs4_op_lookupp, nullfree, (OP_IDEMPOTENT | OP_CLEAR_STATEID)},
-
-	/* OP_NVERIFY = 17 */
-	{rfs4_op_nverify, nullfree, OP_IDEMPOTENT},
-
-	/* OP_OPEN = 18 */
-	{rfs4_op_open, rfs4_free_reply, 0},
-
-	/* OP_OPENATTR = 19 */
-	{rfs4_op_openattr, nullfree, 0},
-
-	/* OP_OPEN_CONFIRM = 20 */
-	{rfs4_op_open_confirm, nullfree, 0},
-
-	/* OP_OPEN_DOWNGRADE = 21 */
-	{rfs4_op_open_downgrade, nullfree, 0},
-
-	/* OP_OPEN_PUTFH = 22 */
-	{rfs4_op_putfh, nullfree, (OP_IDEMPOTENT | OP_CLEAR_STATEID)},
-
-	/* OP_PUTPUBFH = 23 */
-	{rfs4_op_putpubfh, nullfree, OP_IDEMPOTENT},
-
-	/* OP_PUTROOTFH = 24 */
-	{rfs4_op_putrootfh, nullfree, (OP_IDEMPOTENT | OP_CLEAR_STATEID)},
-
-	/* OP_READ = 25 */
-	{rfs4_op_read, rfs4_op_read_free, OP_IDEMPOTENT},
-
-	/* OP_READDIR = 26 */
-	{rfs4_op_readdir, rfs4_op_readdir_free, OP_IDEMPOTENT},
-
-	/* OP_READLINK = 27 */
-	{rfs4_op_readlink, rfs4_op_readlink_free, OP_IDEMPOTENT},
-
-	/* OP_REMOVE = 28 */
-	{rfs4_op_remove, nullfree, 0},
-
-	/* OP_RENAME = 29 */
-	{rfs4_op_rename, nullfree, 0},
-
-	/* OP_RENEW = 30 */
-	{rfs4_op_renew, nullfree, 0},
-
-	/* OP_RESTOREFH = 31 */
-	{rfs4_op_restorefh, nullfree, OP_IDEMPOTENT},
-
-	/* OP_SAVEFH = 32 */
-	{rfs4_op_savefh, nullfree, OP_IDEMPOTENT},
-
-	/* OP_SECINFO = 33 */
-	{rfs4_op_secinfo, rfs4_op_secinfo_free, 0},
-
-	/* OP_SETATTR = 34 */
-	{rfs4_op_setattr, nullfree, 0},
-
-	/* OP_SETCLIENTID = 35 */
-	{rfs4_op_setclientid, nullfree, 0},
-
-	/* OP_SETCLIENTID_CONFIRM = 36 */
-	{rfs4_op_setclientid_confirm, nullfree, 0},
-
-	/* OP_VERIFY = 37 */
-	{rfs4_op_verify, nullfree, OP_IDEMPOTENT},
-
-	/* OP_WRITE = 38 */
-	{rfs4_op_write, nullfree, 0},
-
-	/* OP_RELEASE_LOCKOWNER = 39 */
-	{rfs4_op_release_lockowner, nullfree, 0},
+	[2] = {
+		.dis_proc = rfs4_op_illegal,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_ACCESS] = {
+		.dis_proc = rfs4_op_access,
+		.dis_resfree = nullfree,
+		.dis_flags = OP_IDEMPOTENT
+	},
+	[OP_CLOSE] = {
+		.dis_proc = rfs4_op_close,
+		.dis_resfree = nullfree,
+		.dis_flags = OP_CLEAR_STATEID
+	},
+	[OP_COMMIT] = {
+		.dis_proc = rfs4_op_commit,
+		.dis_resfree = nullfree,
+		.dis_flags = OP_IDEMPOTENT
+	},
+	[OP_CREATE] = {
+		.dis_proc = rfs4_op_create,
+		.dis_resfree = nullfree,
+		.dis_flags = OP_CLEAR_STATEID
+	},
+	[OP_DELEGPURGE] = {
+		.dis_proc = rfs4_op_delegpurge,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_DELEGRETURN] = {
+		.dis_proc = rfs4_op_delegreturn,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_GETATTR] = {
+		.dis_proc = rfs4_op_getattr,
+		.dis_resfree = rfs4_op_getattr_free,
+		.dis_flags = OP_IDEMPOTENT
+	},
+	[OP_GETFH] = {
+		.dis_proc = rfs4_op_getfh,
+		.dis_resfree = rfs4_op_getfh_free,
+		.dis_flags = OP_IDEMPOTENT
+	},
+	[OP_LINK] = {
+		.dis_proc = rfs4_op_link,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_LOCK] = {
+		.dis_proc = rfs4_op_lock,
+		.dis_resfree = lock_denied_free,
+		.dis_flags = 0
+	},
+	[OP_LOCKT] = {
+		.dis_proc = rfs4_op_lockt,
+		.dis_resfree = lock_denied_free,
+		.dis_flags = 0
+	},
+	[OP_LOCKU] = {
+		.dis_proc = rfs4_op_locku,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_LOOKUP] = {
+		.dis_proc = rfs4_op_lookup,
+		.dis_resfree = nullfree,
+		.dis_flags = (OP_IDEMPOTENT | OP_CLEAR_STATEID)
+	},
+	[OP_LOOKUPP] = {
+		.dis_proc = rfs4_op_lookupp,
+		.dis_resfree = nullfree,
+		.dis_flags = (OP_IDEMPOTENT | OP_CLEAR_STATEID)
+	},
+	[OP_NVERIFY] = {
+		.dis_proc = rfs4_op_nverify,
+		.dis_resfree = nullfree,
+		.dis_flags = OP_IDEMPOTENT
+	},
+	[OP_OPEN] = {
+		.dis_proc = rfs4_op_open,
+		.dis_resfree = rfs4_free_reply,
+		.dis_flags = 0
+	},
+	[OP_OPENATTR] = {
+		.dis_proc = rfs4_op_openattr,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_OPEN_CONFIRM] = {
+		.dis_proc = rfs4_op_open_confirm,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_OPEN_DOWNGRADE] = {
+		.dis_proc = rfs4_op_open_downgrade,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_PUTFH] = {
+		.dis_proc = rfs4_op_putfh,
+		.dis_resfree = nullfree,
+		.dis_flags = (OP_IDEMPOTENT | OP_CLEAR_STATEID)
+	},
+	[OP_PUTPUBFH] = {
+		.dis_proc = rfs4_op_putpubfh,
+		.dis_resfree = nullfree,
+		.dis_flags = OP_IDEMPOTENT
+	},
+	[OP_PUTROOTFH] = {
+		.dis_proc = rfs4_op_putrootfh,
+		.dis_resfree = nullfree,
+		.dis_flags = (OP_IDEMPOTENT | OP_CLEAR_STATEID)
+	},
+	[OP_READ] = {
+		.dis_proc = rfs4_op_read,
+		.dis_resfree = rfs4_op_read_free,
+		.dis_flags = OP_IDEMPOTENT
+	},
+	[OP_READDIR] = {
+		.dis_proc = rfs4_op_readdir,
+		.dis_resfree = rfs4_op_readdir_free,
+		.dis_flags = OP_IDEMPOTENT
+	},
+	[OP_READLINK] = {
+		.dis_proc = rfs4_op_readlink,
+		.dis_resfree = rfs4_op_readlink_free,
+		.dis_flags = OP_IDEMPOTENT
+	},
+	[OP_REMOVE] = {
+		.dis_proc = rfs4_op_remove,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_RENAME] = {
+		.dis_proc = rfs4_op_rename,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_RENEW] = {
+		.dis_proc = rfs4_op_renew,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_RESTOREFH] = {
+		.dis_proc = rfs4_op_restorefh,
+		.dis_resfree = nullfree,
+		.dis_flags = OP_IDEMPOTENT
+	},
+	[OP_SAVEFH] = {
+		.dis_proc = rfs4_op_savefh,
+		.dis_resfree = nullfree,
+		.dis_flags = OP_IDEMPOTENT
+	},
+	[OP_SECINFO] = {
+		.dis_proc = rfs4_op_secinfo,
+		.dis_resfree = rfs4_op_secinfo_free,
+		.dis_flags = 0
+	},
+	[OP_SETATTR] = {
+		.dis_proc = rfs4_op_setattr,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_SETCLIENTID] = {
+		.dis_proc = rfs4_op_setclientid,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_SETCLIENTID_CONFIRM] = {
+		.dis_proc = rfs4_op_setclientid_confirm,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_VERIFY] = {
+		.dis_proc = rfs4_op_verify,
+		.dis_resfree = nullfree,
+		.dis_flags = OP_IDEMPOTENT
+	},
+	[OP_WRITE] = {
+		.dis_proc = rfs4_op_write,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_RELEASE_LOCKOWNER] = {
+		.dis_proc = rfs4_op_release_lockowner,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
 
 	/*
 	 * NFSv4.1 operations
 	 */
-
-	/* OP_BACKCHANNEL_CTL = 40 */
-	{rfs4_op_notsup,  nullfree,  0},
-
-	/*  OP_BIND_CONN_TO_SESSION = 41 */
-	{rfs4x_op_bind_conn_to_session,  nullfree,  0},
-
-	/* OP_EXCHANGE_ID  = 42 */
-	{rfs4x_op_exchange_id,  rfs4x_exchange_id_free,  0},
-
-	/* OP_CREATE_SESSION = 43 */
-	{rfs4x_op_create_session,  nullfree,  0},
-
-	/* OP_DESTROY_SESSION = 44 */
-	{rfs4x_op_destroy_session,  nullfree,  0},
-
-	/* OP_FREE_STATEID = 45 */
-	{rfs4x_op_free_stateid,  nullfree,  0},
-
-	/* OP_GET_DIR_DELEGATION = 46 */
-	{rfs4_op_notsup,  nullfree,  0},
-
-	/* OP_GETDEVICEINFO = 47 */
-	{rfs4_op_notsup,  nullfree,  0},
-
-	/* OP_GETDEVICELIST = 48 */
-	{rfs4_op_notsup,  nullfree,  0},
-
-	/* OP_LAYOUTCOMMIT = 49 */
-	{rfs4_op_notsup,  nullfree,  0},
-
-	/* OP_LAYOUTGET = 50 */
-	{rfs4_op_notsup,  nullfree,  0},
-
-	/* OP_LAYOUTRETURN = 51 */
-	{rfs4_op_notsup,  nullfree,  0},
-
-	/* OP_SECINFO_NO_NAME = 52 */
-	{rfs4x_op_secinfo_noname, rfs4_op_secinfo_free, 0},
-
-	/* OP_SEQUENCE = 53 */
-	{rfs4x_op_sequence,  nullfree,  0},
-
-	/* OP_SET_SSV = 54 */
-	{rfs4_op_notsup,  nullfree,  0},
-
-	/* OP_TEST_STATEID = 55 */
-	{rfs4_op_notsup,  nullfree,  0},
-
-	/* OP_WANT_DELEGATION = 56 */
-	{rfs4_op_notsup,  nullfree,  0},
-
-	/* OP_DESTROY_CLIENTID = 57 */
-	{rfs4x_op_destroy_clientid,  nullfree,  0},
-
-	/* OP_RECLAIM_COMPLETE = 58 */
-	{rfs4x_op_reclaim_complete,  nullfree,  0},
+	[OP_BACKCHANNEL_CTL] = {
+		.dis_proc = rfs4x_op_backchannel_ctl,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_BIND_CONN_TO_SESSION] = {
+		.dis_proc = rfs4x_op_bind_conn_to_session,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_EXCHANGE_ID] = {
+		.dis_proc = rfs4x_op_exchange_id,
+		.dis_resfree = rfs4x_exchange_id_free,
+		.dis_flags = 0
+	},
+	[OP_CREATE_SESSION] = {
+		.dis_proc = rfs4x_op_create_session,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_DESTROY_SESSION] = {
+		.dis_proc = rfs4x_op_destroy_session,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_FREE_STATEID] = {
+		.dis_proc = rfs4x_op_free_stateid,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_GET_DIR_DELEGATION] = {
+		.dis_proc = rfs4_op_notsup,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_GETDEVICEINFO] = {
+		.dis_proc = rfs4_op_notsup,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_GETDEVICELIST] = {
+		.dis_proc = rfs4_op_notsup,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_LAYOUTCOMMIT] = {
+		.dis_proc = rfs4_op_notsup,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_LAYOUTGET] = {
+		.dis_proc = rfs4_op_notsup,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_LAYOUTRETURN] = {
+		.dis_proc = rfs4_op_notsup,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_SECINFO_NO_NAME] = {
+		.dis_proc = rfs4x_op_secinfo_noname,
+		.dis_resfree = rfs4_op_secinfo_free,
+		.dis_flags = 0
+	},
+	[OP_SEQUENCE] = {
+		.dis_proc = rfs4x_op_sequence,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_SET_SSV] = {
+		.dis_proc = rfs4_op_notsup,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_TEST_STATEID] = {
+		.dis_proc = rfs4x_op_test_stateid,
+		.dis_resfree = rfs4_op_test_stateid_free,
+		.dis_flags = 0
+	},
+	[OP_WANT_DELEGATION] = {
+		.dis_proc = rfs4_op_notsup,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_DESTROY_CLIENTID] = {
+		.dis_proc = rfs4x_op_destroy_clientid,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_RECLAIM_COMPLETE] = {
+		.dis_proc = rfs4x_op_reclaim_complete,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
 
 	/*
 	 * NFSv4.2 operations
 	 */
-	/* OP_ALLOCATE = 59 */
-	{rfs4_op_notsup,  nullfree,  0},
-
-	/* OP_COPY = 60 */
-	{rfs4_op_notsup,  nullfree,  0},
-
-	/* OP_COPY_NOTIFY = 61 */
-	{rfs4_op_notsup,  nullfree,  0},
-
-	/* OP_DEALLOCATE = 62 */
-	{rfs4_op_notsup,  nullfree,  0},
-
-	/* OP_IO_ADVISE = 63 */
-	{rfs4_op_notsup,  nullfree,  0},
-
-	/* OP_LAYOUTERROR = 64 */
-	{rfs4_op_notsup,  nullfree,  0},
-
-	/* OP_LAYOUTSTATS = 65 */
-	{rfs4_op_notsup,  nullfree,  0},
-
-	/* OP_OFFLOAD_CANCEL = 66 */
-	{rfs4_op_notsup,  nullfree,  0},
-
-	/* OP_OFFLOAD_STATUS = 67 */
-	{rfs4_op_notsup,  nullfree,  0},
-
-	/* OP_READ_PLUS = 68 */
-	{rfs4_op_notsup,  nullfree,  0},
-
-	/* OP_SEEK = 69 */
-	{rfs4_op_notsup,  nullfree,  0},
-
-	/* OP_WRITE_SAME = 70 */
-	{rfs4_op_notsup,  nullfree,  0},
-
-	/* OP_CLONE = 71 */
-	{rfs4_op_notsup,  nullfree,  0},
-
+	[OP_ALLOCATE] = {
+		.dis_proc = rfs4_op_notsup,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_COPY] = {
+		.dis_proc = rfs4_op_notsup,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_COPY_NOTIFY] = {
+		.dis_proc = rfs4_op_notsup,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_DEALLOCATE] = {
+		.dis_proc = rfs4_op_notsup,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_IO_ADVISE] = {
+		.dis_proc = rfs4_op_notsup,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_LAYOUTERROR] = {
+		.dis_proc = rfs4_op_notsup,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_LAYOUTSTATS] = {
+		.dis_proc = rfs4_op_notsup,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_OFFLOAD_CANCEL] = {
+		.dis_proc = rfs4_op_notsup,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_OFFLOAD_STATUS] = {
+		.dis_proc = rfs4_op_notsup,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_READ_PLUS] = {
+		.dis_proc = rfs4_op_notsup,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_SEEK] = {
+		.dis_proc = rfs4_op_notsup,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_WRITE_SAME] = {
+		.dis_proc = rfs4_op_notsup,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
+	[OP_CLONE] = {
+		.dis_proc = rfs4_op_notsup,
+		.dis_resfree = nullfree,
+		.dis_flags = 0
+	},
 };
 
-static uint_t rfsv4disp_cnt = sizeof (rfsv4disptab) / sizeof (rfsv4disptab[0]);
+#define	rfsv4disp_cnt	ARRAY_SIZE(rfsv4disptab)
+
+CTASSERT(rfsv4disp_cnt == LAST_NFS4_OP + 1);
 
 #define	OP_ILLEGAL_IDX (rfsv4disp_cnt)
 
@@ -752,6 +906,14 @@ void
 rfs4_srvrinit(void)
 {
 	extern void rfs4_attr_init();
+	uint_t i;
+
+	/*
+	 * All entries in rfsv4disptab must be initialised.
+	 */
+	for (i = 0; i < rfsv4disp_cnt; i++) {
+		VERIFY(rfsv4disptab[i].dis_proc && rfsv4disptab[i].dis_resfree);
+	}
 
 	rfs4_attr_init();
 
@@ -1118,19 +1280,27 @@ rfs4_servinst(rfs4_client_t *cp)
 	return (cp->rc_server_instance);
 }
 
-/* ARGSUSED */
+/*
+ * rfs4_cbcheck: verify callback path to nfs40 client is up
+ * called via nfs_serv_instance.deleg_cbcheck
+ */
+rfs4_cbstate_t
+rfs4_cbcheck(rfs4_state_t *sp)
+{
+	return (sp->rs_owner->ro_client->rc_cbinfo.cb_state);
+}
+
 static void
-nullfree(caddr_t resop)
+nullfree(caddr_t resop __unused)
 {
 }
 
 /*
  * This is a fall-through for invalid or not implemented (yet) ops
  */
-/* ARGSUSED */
 static void
-rfs4_op_inval(nfs_argop4 *argop, nfs_resop4 *resop, struct svc_req *req,
-    struct compound_state *cs)
+rfs4_op_inval(nfs_argop4 *argop __unused, nfs_resop4 *resop,
+    struct svc_req *req __unused, struct compound_state *cs)
 {
 	*cs->statusp = *((nfsstat4 *)&(resop)->nfs_resop4_u) = NFS4ERR_INVAL;
 }
@@ -1542,6 +1712,21 @@ rfs4_op_secinfo_free(nfs_resop4 *resop)
 	kmem_free(resok_val, count * sizeof (secinfo4));
 	resp->SECINFO4resok_len = 0;
 	resp->SECINFO4resok_val = NULL;
+}
+
+static void
+rfs4_op_test_stateid_free(nfs_resop4 *resop)
+{
+	TEST_STATEID4res	*resp = &resop->nfs_resop4_u.optest_stateid;
+	TEST_STATEID4resok	*rok  = &resp->TEST_STATEID4res_u.tsr_resok4;
+
+	if (resp->tsr_status == NFS4_OK) {
+		uint_t    len = rok->tsr_status_codes.tsr_status_codes_len;
+		nfsstat4 *val = rok->tsr_status_codes.tsr_status_codes_val;
+		if (len > 0 && val != NULL) {
+			kmem_free(val, len * sizeof (nfsstat4));
+		}
+	}
 }
 
 /* ARGSUSED */
@@ -2571,6 +2756,33 @@ do_rfs4_op_getattr(bitmap4 breq, fattr4 *fattrp,
 				    NFS4ATTR_GETIT, sargp, na);
 			}
 			break;
+		}
+	}
+
+	/*
+	 * If CHANGE or SIZE were requested and the file has a write delegation,
+	 * the holder (C1) is authoritative for those attributes
+	 * (RFC 7530 §10.4.3, RFC 5661 §20.1).  Compute direct pointers into
+	 * the ntov array so rfs4_cb_getattr() can overwrite them in place.
+	 * On any failure the VOP_GETATTR-derived values remain.
+	 * Note: this call may block on a network round-trip.
+	 */
+	if (breq & (FATTR4_CHANGE_MASK | FATTR4_SIZE_MASK)) {
+		rfs4_deleg_state_t	*dsp;
+
+		if (rfs4_find_write_deleg(sargp->cs->vp, &dsp)) {
+			fattr4_change	*change_p = NULL;
+			fattr4_size	*size_p = NULL;
+			int		j;
+
+			for (j = 0; j < ntov.attrcnt; j++) {
+				if (ntov.amap[j] == FATTR4_CHANGE)
+					change_p = &ntov.na[j].change;
+				if (ntov.amap[j] == FATTR4_SIZE)
+					size_p = &ntov.na[j].size;
+			}
+			rfs4_cb_getattr(dsp, change_p, size_p);
+			rfs4_deleg_state_rele(dsp);
 		}
 	}
 
@@ -7029,14 +7241,12 @@ close_expired_state(rfs4_entry_t u_entry)
 	rfs4_dbe_invalidate(sp->rs_dbe);
 }
 
-/*ARGSUSED*/
 static void
-rfs4_do_open(struct compound_state *cs, struct svc_req *req,
-    rfs4_openowner_t *oo, delegreq_t deleg,
+rfs4_do_open(struct compound_state *cs, struct svc_req *req __unused,
+    rfs4_openowner_t *oo, delegreq_t dreq,
     uint32_t access, uint32_t deny,
-    OPEN4res *resp, int deleg_cur)
+    OPEN4res *resp, int deleg_cur, bool_t has_session, bool_t is_reclaim)
 {
-	/* XXX Currently not using req  */
 	rfs4_state_t *sp;
 	rfs4_file_t *fp;
 	bool_t screate = TRUE;
@@ -7255,13 +7465,13 @@ again:
 	fp->rf_share_access |= access;
 
 	/*
-	 * Check for delegation here. if the deleg argument is not
-	 * DELEG_ANY, then this is a reclaim from a client and
-	 * we must honor the delegation requested. If necessary we can
-	 * set the recall flag.
+	 * Check for delegation here. For CLAIM_PREVIOUS reclaim opens,
+	 * is_reclaim=TRUE so rfs4_grant_delegation() will skip callback
+	 * and policy checks, and grant with recall=TRUE on vnode conflict
+	 * as required by RFC 7530 §16.16.3 / RFC 5661 §18.16.3.
 	 */
 
-	dsp = rfs4_grant_delegation(deleg, sp, &recall);
+	dsp = rfs4_grant_delegation(dreq, sp, cs->sp, &recall, is_reclaim);
 
 	cs->deleg = (fp->rf_dinfo.rd_dtype == OPEN_DELEGATE_WRITE);
 
@@ -7274,7 +7484,50 @@ again:
 
 	if (dsp) {
 		rfs4_set_deleg_response(dsp, &resp->delegation, NULL, recall);
+		if (has_session) {
+			rfs4x_rs_record(cs, dsp);
+		}
 		rfs4_deleg_state_rele(dsp);
+	} else if (has_session && dreq != DELEG_DISABLE) {
+		/*
+		 * RFC 5661 §18.16.3: when the client sent WANT flags and no
+		 * delegation was granted, respond with OPEN_DELEGATE_NONE_EXT
+		 * and an appropriate ond_why code.
+		 */
+		open_delegation4 *delegation = &resp->delegation;
+		why_no_delegation4 why;
+
+		switch (dreq) {
+		case DELEG_WANT_NONE:
+			why = WND4_NOT_WANTED;
+			break;
+		case DELEG_WANT_CANCEL:
+			why = WND4_CANCELLED;
+			break;
+		case DELEG_WANT_READ:
+		case DELEG_WANT_WRITE:
+		case DELEG_WANT_ANY:
+			why = WND4_CONTENTION;
+			break;
+		default:	/* DELEG_WANT_NO_PREF */
+			why = WND4_RESOURCE;
+			break;
+		}
+		delegation->delegation_type = OPEN_DELEGATE_NONE_EXT;
+		delegation->open_delegation4_u.od_whynone.ond_why = why;
+	} else {
+		/*
+		 * No delegation granted and no extended response needed.
+		 * Two cases reach here:
+		 * - v4.0 client (!has_session): OPEN_DELEGATE_NONE_EXT does
+		 *   not exist in RFC 7530; plain OPEN_DELEGATE_NONE is
+		 *   correct.
+		 * - Session client with DELEG_DISABLE: the server suppressed
+		 *   delegation as a policy decision (e.g. CLAIM_DELEGATE_CUR,
+		 *   unconfirmed open owner), not in response to a client hint,
+		 *   so no ond_why explanation is expected.
+		 */
+		resp->delegation.delegation_type = OPEN_DELEGATE_NONE;
 	}
 
 	rfs4_file_rele(fp);
@@ -7283,23 +7536,40 @@ again:
 	resp->status = NFS4_OK;
 }
 
-/*ARGSUSED*/
 static void
 rfs4_do_openfh(struct compound_state *cs, struct svc_req *req, OPEN4args *args,
     rfs4_openowner_t *oo, OPEN4res *resp)
 {
+	bool_t has_session;
+	delegreq_t dreq;
+
 	/* cs->vp and cs->fh have been updated by putfh. */
-	rfs4_do_open(cs, req, oo, DELEG_ANY,
-	    (args->share_access & 0xff), args->share_deny, resp, 0);
+	has_session = rfs4_has_session(cs);
+	if (!has_session) {
+		/*
+		 * Non-session (v4.0) client: suppress delegation if the
+		 * open owner is unconfirmed (server policy), otherwise
+		 * no preference. Using DELEG_DISABLE to indicate this
+		 * is a server decision, where DELEG_WANT_NONE would
+		 * indicate the client request.
+		 */
+		dreq = oo->ro_need_confirm ? DELEG_DISABLE : DELEG_WANT_NO_PREF;
+	} else {
+		dreq = nfs4x_share_to_delegreq(args->deleg_want);
+	}
+	rfs4_do_open(cs, req, oo, dreq,
+	    (args->share_access & 0xff), args->share_deny, resp, 0,
+	    rfs4_has_session(cs), B_FALSE);
 }
 
-/*ARGSUSED*/
 static void
 rfs4_do_opennull(struct compound_state *cs, struct svc_req *req,
     OPEN4args *args, rfs4_openowner_t *oo, OPEN4res *resp)
 {
 	change_info4 *cinfo = &resp->cinfo;
 	bitmap4 *attrset = &resp->attrset;
+	bool_t has_session;
+	delegreq_t dreq;
 
 	if (args->opentype == OPEN4_NOCREATE)
 		resp->status = rfs4_lookupfile(&args->claim.open_claim4_u.file,
@@ -7318,9 +7588,23 @@ rfs4_do_opennull(struct compound_state *cs, struct svc_req *req,
 
 		/* cs->vp cs->fh now reference the desired file */
 
-		rfs4_do_open(cs, req, oo,
-		    oo->ro_need_confirm ? DELEG_NONE : DELEG_ANY,
-		    args->share_access, args->share_deny, resp, 0);
+		has_session = rfs4_has_session(cs);
+		if (!has_session) {
+			/*
+			 * Non-session (v4.0) client: suppress delegation
+			 * if the open owner is unconfirmed (server policy),
+			 * otherwise no preference.  DELEG_DISABLE rather than
+			 * DELEG_WANT_NONE because this is a server decision,
+			 * not based on the client request.
+			 */
+			dreq = oo->ro_need_confirm ? DELEG_DISABLE :
+			    DELEG_WANT_NO_PREF;
+		} else {
+			dreq = nfs4x_share_to_delegreq(args->deleg_want);
+		}
+		rfs4_do_open(cs, req, oo, dreq,
+		    args->share_access,
+		    args->share_deny, resp, 0, has_session, B_FALSE);
 
 		/*
 		 * If rfs4_createfile set attrset, we must
@@ -7337,7 +7621,17 @@ rfs4_do_opennull(struct compound_state *cs, struct svc_req *req,
 		rfs4_enable_delegation();
 }
 
-/*ARGSUSED*/
+/*
+ * Handle OPEN with CLAIM_PREVIOUS (RFC 7530 §16.16.3 / RFC 5661 §18.16.3).
+ *
+ * The delegate_type field describes what delegation the client held before
+ * the server restarted.  When it is READ or WRITE, the server must re-grant
+ * that delegation; is_reclaim=TRUE causes rfs4_grant_delegation() to skip
+ * the normal cb/recall/policy checks and set recall=TRUE on vnode conflict.
+ * When delegate_type is OPEN_DELEGATE_NONE the client held no prior
+ * delegation; DELEG_WANT_NONE causes rfs4_grant_delegation() to exit early
+ * and no delegation is offered.
+ */
 static void
 rfs4_do_openprev(struct compound_state *cs, struct svc_req *req,
     OPEN4args *args, rfs4_openowner_t *oo, OPEN4res *resp)
@@ -7345,6 +7639,8 @@ rfs4_do_openprev(struct compound_state *cs, struct svc_req *req,
 	change_info4 *cinfo = &resp->cinfo;
 	vattr_t va;
 	vtype_t v_type = cs->vp->v_type;
+	open_delegation_type4 dt;
+	delegreq_t dreq;
 	int error = 0;
 
 	/* Verify that we have a regular file */
@@ -7388,11 +7684,40 @@ rfs4_do_openprev(struct compound_state *cs, struct svc_req *req,
 	cinfo->after = 0;
 	cinfo->atomic = FALSE;
 
-	rfs4_do_open(cs, req, oo,
-	    NFS4_DELEG4TYPE2REQTYPE(args->claim.open_claim4_u.delegate_type),
-	    args->share_access, args->share_deny, resp, 0);
+	/*
+	 * See above re. delegation and is_reclaim = B_TRUE
+	 */
+	dt = args->claim.open_claim4_u.delegate_type;
+	switch (dt) {
+	case OPEN_DELEGATE_READ:
+		dreq = DELEG_WANT_READ;
+		break;
+	case OPEN_DELEGATE_WRITE:
+		dreq = DELEG_WANT_WRITE;
+		break;
+	default:
+		dreq = DELEG_WANT_NONE;
+		break;
+	}
+	rfs4_do_open(cs, req, oo, dreq,
+	    args->share_access, args->share_deny, resp, 0,
+	    rfs4_has_session(cs), B_TRUE);
 }
 
+/*
+ * Handle OPEN with CLAIM_DELEGATE_CUR (RFC 7530 §16.16.3).
+ *
+ * This claim type is used when the client already holds a delegation on the
+ * file and needs to obtain a formal open stateid — most commonly in response
+ * to a CB_RECALL, where the client must establish an open before it can
+ * return the delegation.  The client presents its current delegation stateid
+ * as proof of access.
+ *
+ * Because the client is in the process of converting delegation-based access
+ * to open-stateid-based access (and the delegation is expected to be returned
+ * afterward), we pass DELEG_DISABLE to rfs4_do_open().  Granting a new
+ * delegation here would be circular and is not expected by the client.
+ */
 static void
 rfs4_do_opendelcur(struct compound_state *cs, struct svc_req *req,
     OPEN4args *args, rfs4_openowner_t *oo, OPEN4res *resp)
@@ -7424,11 +7749,6 @@ rfs4_do_opendelcur(struct compound_state *cs, struct svc_req *req,
 
 	ASSERT(dsp->rds_finfo->rf_dinfo.rd_dtype != OPEN_DELEGATE_NONE);
 
-	/*
-	 * New lock owner, create state. Since this was probably called
-	 * in response to a CB_RECALL we set deleg to DELEG_NONE
-	 */
-
 	ASSERT(cs->vp != NULL);
 	VN_RELE(cs->vp);
 	VN_HOLD(dsp->rds_finfo->rf_vp);
@@ -7444,11 +7764,11 @@ rfs4_do_opendelcur(struct compound_state *cs, struct svc_req *req,
 	/* Mark progress for delegation returns */
 	dsp->rds_finfo->rf_dinfo.rd_time_lastwrite = gethrestime_sec();
 	rfs4_deleg_state_rele(dsp);
-	rfs4_do_open(cs, req, oo, DELEG_NONE,
-	    args->share_access, args->share_deny, resp, 1);
+	rfs4_do_open(cs, req, oo, DELEG_DISABLE,
+	    args->share_access, args->share_deny, resp, 1,
+	    rfs4_has_session(cs), B_FALSE);
 }
 
-/*ARGSUSED*/
 static void
 rfs4_do_opendelprev(struct compound_state *cs, struct svc_req *req,
     OPEN4args *args, rfs4_openowner_t *oo, OPEN4res *resp)
@@ -8472,6 +8792,8 @@ retry:
 			res->SETCLIENTID4res_u.client_using.r_netid = netid;
 
 			rfs4_client_rele(cp_confirmed);
+			cp_confirmed = NULL;
+			goto out;
 		}
 
 		/*
@@ -8620,6 +8942,7 @@ rfs4_op_setclientid_confirm(nfs_argop4 *argop, nfs_resop4 *resop,
 
 	rfs4_dbe_lock(cp->rc_dbe);
 	cp->rc_need_confirm = FALSE;
+	cp->rc_minorversion = 0;	/* NFSv4.0 client */
 	if (cp->rc_cp_confirmed) {
 		cptoclose = cp->rc_cp_confirmed;
 		cptoclose->rc_ss_remove = 1;
@@ -8913,9 +9236,14 @@ lock_denied(LOCK4denied *dp, struct flock64 *flk)
 	lo = rfs4_findlockowner_by_pid(flk->l_pid);
 	if (lo != NULL) {
 		cp = lo->rl_client;
+		/*
+		 * Hold cp before releasing lo because cp is "borrowed"
+		 * from lo->rl_client and rfs4_lockowner_rele() might
+		 * destroy lo->rl_client before we can hold it.
+		 */
+		rfs4_dbe_hold(cp->rc_dbe);
 		if (rfs4_lease_expired(cp)) {
 			rfs4_lockowner_rele(lo);
-			rfs4_dbe_hold(cp->rc_dbe);
 			rfs4_client_close(cp);
 			return (NFS4ERR_EXPIRED);
 		}
@@ -8925,6 +9253,7 @@ lock_denied(LOCK4denied *dp, struct flock64 *flk)
 		bcopy(lo->rl_owner.owner_val, dp->owner.owner_val, len);
 		dp->owner.owner_len = len;
 		rfs4_lockowner_rele(lo);
+		rfs4_client_rele(cp);
 		goto finish;
 	}
 

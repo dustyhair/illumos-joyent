@@ -619,7 +619,7 @@ pcieadm_bar_read(pcieadm_t *pcip, int argc, char *argv[])
 		(void) printf("0x%x\n", *(uint32_t *)buf);
 		break;
 	case 8:
-		(void) printf("0x%x\n", *(uint64_t *)buf);
+		(void) printf("0x%" PRIx64 "\n", *(uint64_t *)buf);
 		break;
 	default:
 		abort();
@@ -789,7 +789,7 @@ pcieadm_bar_write(pcieadm_t *pcip, int argc, char *argv[])
 }
 
 
-static const pcieadm_cmdtab_t pcieadm_cmds_dev[] = {
+static const pcieadm_cmdtab_t pcieadm_cmds_bar[] = {
 	{ "list", pcieadm_bar_list, pcieadm_bar_list_usage },
 	{ "read", pcieadm_bar_read, pcieadm_bar_read_usage },
 	{ "write", pcieadm_bar_write, pcieadm_bar_write_usage },
@@ -799,11 +799,11 @@ static const pcieadm_cmdtab_t pcieadm_cmds_dev[] = {
 int
 pcieadm_bar(pcieadm_t *pcip, int argc, char *argv[])
 {
-	return (pcieadm_walk_tab(pcip, pcieadm_cmds_dev, argc, argv));
+	return (pcieadm_walk_tab(pcip, pcieadm_cmds_bar, argc, argv));
 }
 
 void
 pcieadm_bar_usage(FILE *f)
 {
-	pcieadm_walk_usage(pcieadm_cmds_dev, f);
+	pcieadm_walk_usage(pcieadm_cmds_bar, f);
 }

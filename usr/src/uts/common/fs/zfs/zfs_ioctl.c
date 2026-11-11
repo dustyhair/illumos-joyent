@@ -4176,6 +4176,56 @@ zfs_ioc_pool_trim(const char *poolname, nvlist_t *innvl, nvlist_t *outnvl)
 }
 
 /*
+ * This ioctl waits for activity of a particular type to complete. If there is
+ * no activity of that type in progress, it returns immediately, and the
+ * returned value "waited" is false. If there is activity in progress, and no
+ * tag is passed in, the ioctl blocks until all activity of that type is
+ * complete, and then returns with "waited" set to true.
+ *
+ * If a tag is provided, it identifies a particular instance of an activity to
+ * wait for. Currently, this is only valid for use with 'initialize', because
+ * that is the only activity for which there can be multiple instances running
+ * concurrently. In the case of 'initialize', the tag corresponds to the guid of
+ * the vdev on which to wait.
+ *
+ * If a thread waiting in the ioctl receives a signal, the call will return
+ * immediately, and the return value will be EINTR.
+ *
+ * innvl: {
+ *     "wait_activity" -> int32_t
+ *     (optional) "wait_tag" -> uint64_t
+ * }
+ *
+ * outnvl: "waited" -> boolean_t
+ */
+static const zfs_ioc_key_t zfs_keys_pool_wait[] = {
+	{ZPOOL_WAIT_ACTIVITY,	DATA_TYPE_INT32,		0},
+	{ZPOOL_WAIT_TAG,	DATA_TYPE_UINT64,		ZK_OPTIONAL},
+};
+
+static int
+zfs_ioc_wait(const char *name, nvlist_t *innvl, nvlist_t *outnvl)
+{
+	int32_t activity;
+	uint64_t tag;
+	boolean_t waited;
+	int error;
+
+	if (nvlist_lookup_int32(innvl, ZPOOL_WAIT_ACTIVITY, &activity) != 0)
+		return (EINVAL);
+
+	if (nvlist_lookup_uint64(innvl, ZPOOL_WAIT_TAG, &tag) == 0)
+		error = spa_wait_tag(name, activity, tag, &waited);
+	else
+		error = spa_wait(name, activity, &waited);
+
+	if (error == 0)
+		fnvlist_add_boolean_value(outnvl, ZPOOL_WAIT_WAITED, waited);
+
+	return (error);
+}
+
+/*
  * fsname is name of dataset to rollback (to most recent snapshot)
  *
  * innvl may contain name of expected target snapshot
@@ -5597,21 +5647,27 @@ zfs_ioc_userspace_one(zfs_cmd_t *zc)
  * outputs:
  * zc_nvlist_dst[_size]	data buffer (array of zfs_useracct_t)
  * zc_cookie	zap cursor
+ *
+ * The zc_nvlist_dst output array is limited to 1000 entries.
  */
 static int
 zfs_ioc_userspace_many(zfs_cmd_t *zc)
 {
+	const size_t batch_limit = 1000 * sizeof (zfs_useracct_t);
+	uint64_t bufsize = MIN(zc->zc_nvlist_dst_size, batch_limit);
 	zfsvfs_t *zfsvfs;
-	int bufsize = zc->zc_nvlist_dst_size;
 
-	if (bufsize <= 0)
+	if (bufsize < sizeof (zfs_useracct_t)) {
+		zc->zc_nvlist_dst_size = sizeof (zfs_useracct_t);
 		return (SET_ERROR(ENOMEM));
+	}
 
 	int error = zfsvfs_hold(zc->zc_name, FTAG, &zfsvfs, B_FALSE);
 	if (error != 0)
 		return (error);
 
 	void *buf = kmem_alloc(bufsize, KM_SLEEP);
+	zc->zc_nvlist_dst_size = bufsize;
 
 	error = zfs_userspace_many(zfsvfs, zc->zc_objset_type, &zc->zc_cookie,
 	    buf, &zc->zc_nvlist_dst_size);
@@ -5637,7 +5693,6 @@ zfs_ioc_userspace_many(zfs_cmd_t *zc)
 static int
 zfs_ioc_userspace_upgrade(zfs_cmd_t *zc)
 {
-	objset_t *os;
 	int error = 0;
 	zfsvfs_t *zfsvfs;
 
@@ -5658,17 +5713,53 @@ zfs_ioc_userspace_upgrade(zfs_cmd_t *zc)
 				error = zfs_resume_fs(zfsvfs, newds);
 			}
 		}
-		if (error == 0)
-			error = dmu_objset_userspace_upgrade(zfsvfs->z_os);
+		if (error == 0) {
+			mutex_enter(&zfsvfs->z_os->os_upgrade_lock);
+			if (zfsvfs->z_os->os_upgrade_id == 0) {
+				/* clear potential error code and retry */
+				zfsvfs->z_os->os_upgrade_status = 0;
+				mutex_exit(&zfsvfs->z_os->os_upgrade_lock);
+
+				dsl_pool_config_enter(
+				    dmu_objset_pool(zfsvfs->z_os), FTAG);
+				dmu_objset_userspace_upgrade(zfsvfs->z_os);
+				dsl_pool_config_exit(
+				    dmu_objset_pool(zfsvfs->z_os), FTAG);
+			} else {
+				mutex_exit(&zfsvfs->z_os->os_upgrade_lock);
+			}
+
+			taskq_wait_id(zfsvfs->z_os->os_spa->spa_upgrade_taskq,
+			    zfsvfs->z_os->os_upgrade_id);
+			error = zfsvfs->z_os->os_upgrade_status;
+		}
 		VFS_RELE(zfsvfs->z_vfs);
 	} else {
+		objset_t *os;
+
 		/* XXX kind of reading contents without owning */
 		error = dmu_objset_hold_flags(zc->zc_name, B_TRUE, FTAG, &os);
 		if (error != 0)
 			return (error);
 
-		error = dmu_objset_userspace_upgrade(os);
-		dmu_objset_rele_flags(os, B_TRUE, FTAG);
+		mutex_enter(&os->os_upgrade_lock);
+		if (os->os_upgrade_id == 0) {
+			/* clear potential error code and retry */
+			os->os_upgrade_status = 0;
+			mutex_exit(&os->os_upgrade_lock);
+
+			dmu_objset_userspace_upgrade(os);
+		} else {
+			mutex_exit(&os->os_upgrade_lock);
+		}
+
+		dsl_pool_rele(dmu_objset_pool(os), FTAG);
+
+		taskq_wait_id(os->os_spa->spa_upgrade_taskq, os->os_upgrade_id);
+		error = os->os_upgrade_status;
+
+		dsl_dataset_rele_flags(dmu_objset_ds(os), DS_HOLD_FLAG_DECRYPT,
+		    FTAG);
 	}
 
 	return (error);
@@ -6895,6 +6986,11 @@ zfs_ioctl_init(void)
 	    zfs_ioc_get_bootenv, zfs_secpolicy_none, POOL_NAME,
 	    POOL_CHECK_SUSPENDED, B_FALSE, B_TRUE,
 	    zfs_keys_get_bootenv, ARRAY_SIZE(zfs_keys_get_bootenv));
+
+	zfs_ioctl_register("wait", ZFS_IOC_WAIT,
+	    zfs_ioc_wait, zfs_secpolicy_none, POOL_NAME,
+	    POOL_CHECK_SUSPENDED | POOL_CHECK_READONLY, B_FALSE, B_FALSE,
+	    zfs_keys_pool_wait, ARRAY_SIZE(zfs_keys_pool_wait));
 
 	/* IOCTLS that use the legacy function signature */
 

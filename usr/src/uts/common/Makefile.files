@@ -66,6 +66,7 @@ COMMON_CORE_OBJS +=			\
 		kstat_fr.o		\
 		lgrp.o			\
 		lgrp_topo.o		\
+		memlist_new.o		\
 		mmapobj.o		\
 		mutex.o			\
 		page_lock.o		\
@@ -336,6 +337,7 @@ GENUNIX_OBJS +=	\
 		sigsuspend.o	\
 		sigtimedwait.o	\
 		sleepq.o	\
+		spawn.o		\
 		sock_conf.o	\
 		space.o		\
 		sscanf.o	\
@@ -1078,7 +1080,7 @@ RTLS_OBJS +=	rtls.o
 #
 AOUTEXEC_OBJS +=aout.o
 
-ELFEXEC_OBJS +=	elf.o elf_notes.o old_notes.o core_shstrtab.o
+ELFEXEC_OBJS +=	elf.o elf_notes.o core_shstrtab.o
 
 INTPEXEC_OBJS +=intp.o
 
@@ -1136,7 +1138,7 @@ NFS_OBJS +=	nfs_client.o	nfs_common.o	nfs_dump.o \
 		nfs4_callback.o	nfs4_recovery.o nfs4_client_secinfo.o \
 		nfs4_client_debug.o	nfs_stats.o \
 		nfs4_acl.o	nfs4_stub_vnops.o	nfs_cmd.o \
-		nfs4x_xdr.o
+		nfs4x_xdr.o	nfs4x_slrc.o
 
 NFSSRV_OBJS +=	nfs_server.o	nfs_srv.o	nfs3_srv.o \
 		nfs_acl_srv.o	nfs_auth.o	nfs_auth_xdr.o \
@@ -1321,12 +1323,13 @@ UFS_OBJS +=	ufs_alloc.o	ufs_bmap.o	ufs_dir.o	ufs_xattr.o \
 		lufs_log.o	lufs_map.o	lufs_top.o	lufs_debug.o
 VSCAN_OBJS +=	vscan_drv.o	vscan_svc.o vscan_door.o
 
-NSMB_OBJS +=	nsmb_crypt_kcf.o	nsmb_kdf.o	nsmb_sign_kcf.o \
+NSMB_OBJS +=	nsmb_crypt_kcf.o	nsmb_kdf.o	\
+		nsmb_preauth.o	nsmb_sign_kcf.o		\
 		smb_conn.o	smb_dev.o	smb_iod.o	smb_pass.o \
 		smb_rq.o	smb_sign.o	smb_smb.o	smb_subrs.o \
 		smb_time.o	smb_tran.o	smb_trantcp.o	smb_usr.o \
 		smb2_rq.o	smb2_sign.o	smb2_smb.o	smb3_crypt.o \
-		subr_mchain.o
+		smb3_negctx.o	subr_mchain.o
 
 SMBFS_COMMON_OBJS += smbfs_ntacl.o
 SMBFS_OBJS +=	smbfs_vfsops.o	smbfs_vnops.o	smbfs_node.o	\
@@ -1558,7 +1561,7 @@ RPCMOD_OBJS +=	rpcmod.o	clnt_cots.o	clnt_clts.o \
 		rpc_prot.o	rpc_sztypes.o	rpc_subr.o	rpcb_prot.o \
 		svc.o		svc_clts.o	svc_gen.o	svc_cots.o \
 		rpcsys.o	xdr_sizeof.o	clnt_rdma.o	svc_rdma.o \
-		xdr_rdma.o	rdma_subr.o	xdrrdma_sizeof.o
+		xdr_rdma.o	rdma_subr.o	xdrrdma_sizeof.o rpc_tags.o
 
 KLMMOD_OBJS +=	klmmod.o \
 		nlm_impl.o \
@@ -2154,7 +2157,7 @@ VIRTIO_OBJS = virtio_main.o virtio_legacy.o virtio_modern.o virtio_dma.o
 VIOBLK_OBJS = vioblk.o
 
 # Virtio network driver
-VIOIF_OBJS = vioif.o
+VIOIF_OBJS = vioif.o vioif_rx.o vioif_tx.o
 
 # Virtio SCSI driver
 VIOSCSI_OBJS = vioscsi.o
@@ -2401,6 +2404,8 @@ MAC_KTEST_OBJS += mac_ktest.o
 KTEST_KTEST_OBJS += ktest_selftest.o
 STREAM_KTEST_OBJS += stream_ktest.o
 LX_SECCOMP_KTEST_OBJS += lx_seccomp_ktest.o
+
+SHA2_KTEST_OBJS += sha2_ktest.o
 
 #
 # EEPROM framework driver

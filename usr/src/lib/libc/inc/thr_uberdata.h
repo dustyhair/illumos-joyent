@@ -26,6 +26,7 @@
 /*
  * Copyright 2016 Joyent, Inc.
  * Copyright 2018 Nexenta Systems, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
 #ifndef _THR_UBERDATA_H
@@ -1327,6 +1328,7 @@ extern	void	_flush_windows(void);
 #endif
 extern	void	set_curthread(void *);
 extern	void	ssp_init(void);
+extern	locale_t __curlocale(void);
 
 extern	int	sema_relclockwait(sema_t *, clockid_t, const timespec_t *);
 extern	int	sema_clockwait(sema_t *, clockid_t, const timespec_t *);
@@ -1520,6 +1522,8 @@ extern	const thrattr_t *def_thrattr(void);
 extern	id_t	setparam(idtype_t, id_t, int, int);
 extern	id_t	setprio(idtype_t, id_t, int, int *);
 extern	id_t	getparam(idtype_t, id_t, int *, struct sched_param *);
+struct kspawn_sched;
+extern	int	spawn_sched_resolve(int, int, int, struct kspawn_sched *);
 
 /*
  * System call wrappers (direct interfaces to the kernel)

@@ -12,7 +12,7 @@
 /*
  * Copyright 2019 Joyent, Inc.
  * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
- * Copyright 2024 Oxide Computer Company
+ * Copyright 2026 Oxide Computer Company
  */
 
 #include <sys/cpuvar.h>
@@ -96,6 +96,13 @@ typedef struct hma_svm_cpu {
 
 /*
  * Combined per-CPU state data
+ *
+ * This is indexed by CPU ID, and not by CPU sequence ID. Although the two
+ * are usually the same, they diverge if a CPU fails to start during boot.
+ * In that case, the failed CPU's sequence ID is released for re-use by the
+ * next CPU to start, but its CPU ID is not. The CPU ID is also the
+ * convention for identifying target CPUs in a cross-call, and is the ID
+ * which is passed to registered CPU setup functions.
  *
  * The bulk of HMA state (VMX & SVM) is protected by cpu_lock, rather than a
  * mutex specific to the module.  It (cpu_lock) is already required for the
@@ -262,13 +269,6 @@ hma_svm_cpu(processorid_t id)
 	return (&hma_cpu[id].hc_u.svm);
 }
 
-/*
- * VPID 0 is reserved for instances where VPID is disabled.  Some hypervisors
- * (read: bhyve) reserve lower-order VPIDs for use in fallback behavior if
- * unique VPIDs could not be allocated for all the vCPUs belonging to a VM.
- */
-#define	HMA_VPID_RESERVED	NCPU
-
 uint16_t
 hma_vmx_vpid_alloc(void)
 {
@@ -283,7 +283,7 @@ hma_vmx_vpid_alloc(void)
 	if (res == -1) {
 		return (0);
 	} else {
-		ASSERT(res > HMA_VPID_RESERVED && res <= UINT16_MAX);
+		ASSERT(res > HMA_VMX_VPID_RESERVED && res <= UINT16_MAX);
 		return (res);
 	}
 }
@@ -291,7 +291,7 @@ hma_vmx_vpid_alloc(void)
 void
 hma_vmx_vpid_free(uint16_t vpid)
 {
-	VERIFY(vpid > HMA_VPID_RESERVED);
+	VERIFY(vpid > HMA_VMX_VPID_RESERVED);
 	id_free(hma_vmx_vpid, (id_t)vpid);
 }
 
@@ -340,7 +340,7 @@ hma_vmx_cpu_vmxon(xc_arg_t arg1 __unused, xc_arg_t arg2 __unused,
     xc_arg_t arg3 __unused)
 {
 	uint64_t fctrl;
-	const processorid_t id = CPU->cpu_seqid;
+	const processorid_t id = CPU->cpu_id;
 	hma_vmx_cpu_t *vmx_cpu = hma_vmx_cpu(id);
 
 	VERIFY(vmx_cpu->hvc_vmxon_page != NULL);
@@ -546,7 +546,7 @@ hma_vmx_init(void)
 	/* Perform VMX configuration for already-online CPUs. */
 	cp = cpu_active;
 	do {
-		err = hma_vmx_cpu_setup(CPU_ON, cp->cpu_seqid, NULL);
+		err = hma_vmx_cpu_setup(CPU_ON, cp->cpu_id, NULL);
 		if (err != 0) {
 			msg = "failure during VMXON setup";
 			mutex_exit(&cpu_lock);
@@ -561,8 +561,8 @@ hma_vmx_init(void)
 	register_cpu_setup_func(hma_vmx_cpu_setup, NULL);
 	mutex_exit(&cpu_lock);
 
-	hma_vmx_vpid = id_space_create("hma_vmx_vpid", HMA_VPID_RESERVED + 1,
-	    UINT16_MAX);
+	hma_vmx_vpid = id_space_create("hma_vmx_vpid",
+	    HMA_VMX_VPID_RESERVED + 1, UINT16_MAX);
 	hma_vmx_ready = B_TRUE;
 
 	return (0);
@@ -594,13 +594,13 @@ hma_svm_asid_update(hma_svm_asid_t *vcp, boolean_t flush_by_asid,
     boolean_t npt_flush)
 {
 	/*
-	 * Most ASID resource updates are expected to be performed as part of
-	 * VMM entry into guest context, where interrupts would be disabled for
-	 * the sake of state consistency.
-	 *
-	 * We demand this be the case, even though other situations which might
-	 * incur an ASID update, such as userspace manipulation of guest vCPU
-	 * state, may not require such consistency.
+	 * ASID resource updates are performed only as part of VMM entry into
+	 * guest context, via check_asid(), with interrupts disabled and on
+	 * the CPU which is about to run the vcpu. The per-CPU ASID state
+	 * consulted here is meaningful only on that CPU. Any other event
+	 * which requires a TLB flush for a vcpu must defer it to the next
+	 * guest entry (see flush_asid() in svm.c) rather than calling this
+	 * function directly.
 	 */
 	ASSERT(!interrupts_enabled());
 
@@ -612,7 +612,7 @@ hma_svm_asid_update(hma_svm_asid_t *vcp, boolean_t flush_by_asid,
 		vcp->hsa_gen = 0;
 	}
 
-	hma_svm_asid_t *hcp = &(hma_svm_cpu(CPU->cpu_seqid)->hsc_asid);
+	hma_svm_asid_t *hcp = &(hma_svm_cpu(CPU->cpu_id)->hsc_asid);
 	if (vcp->hsa_gen != hcp->hsa_gen) {
 		hcp->hsa_asid++;
 
@@ -656,7 +656,7 @@ hma_svm_gif_disable(void)
 	 */
 	__asm__ __volatile__("clgi");
 
-	hma_svm_cpu_t *svm_cpu = hma_svm_cpu(CPU->cpu_seqid);
+	hma_svm_cpu_t *svm_cpu = hma_svm_cpu(CPU->cpu_id);
 	const uint_t old_gif = atomic_swap_uint(&svm_cpu->hsc_gif_disabled, 1);
 
 	if (old_gif != 0) {
@@ -667,7 +667,7 @@ hma_svm_gif_disable(void)
 void
 hma_svm_gif_enable(void)
 {
-	hma_svm_cpu_t *svm_cpu = hma_svm_cpu(CPU->cpu_seqid);
+	hma_svm_cpu_t *svm_cpu = hma_svm_cpu(CPU->cpu_id);
 	const uint_t old_gif = atomic_swap_uint(&svm_cpu->hsc_gif_disabled, 0);
 
 	if (old_gif == 0) {
@@ -684,7 +684,7 @@ hma_svm_gif_enable(void)
 boolean_t
 hma_svm_gif_is_disabled(void)
 {
-	hma_svm_cpu_t *svm_cpu = hma_svm_cpu(CPU->cpu_seqid);
+	hma_svm_cpu_t *svm_cpu = hma_svm_cpu(CPU->cpu_id);
 
 	/*
 	 * At the time of this writing, there exists no mechanism by which the
@@ -714,7 +714,7 @@ hma_svm_gif_is_disabled(void)
 hma_svm_cpc_res_t
 hma_svm_cpc_enter(struct hma_svm_cpc_state *cpc_state)
 {
-	hma_svm_cpu_t *svm_cpu = hma_svm_cpu(CPU->cpu_seqid);
+	hma_svm_cpu_t *svm_cpu = hma_svm_cpu(CPU->cpu_id);
 
 	ASSERT(!interrupts_enabled());
 
@@ -767,13 +767,13 @@ hma_svm_cpc_enter(struct hma_svm_cpc_state *cpc_state)
 			 * the guest, so just leave everything in place.
 			 */
 			DTRACE_PROBE2(hma_svm__guest_deferred,
-			    processorid_t, CPU->cpu_seqid,
+			    processorid_t, CPU->cpu_id,
 			    uint_t, guest_active);
 			return (HSCR_EMPTY);
 		}
 
 		DTRACE_PROBE2(hma_svm__host_deferred,
-		    processorid_t, CPU->cpu_seqid, uint_t, host_active);
+		    processorid_t, CPU->cpu_id, uint_t, host_active);
 
 		/*
 		 * Disable any active host counters, trying to do so in as
@@ -825,7 +825,7 @@ hma_svm_cpc_exit(struct hma_svm_cpc_state *cpc_state)
 {
 	ASSERT(!interrupts_enabled());
 
-	hma_svm_cpu_t *svm_cpu = hma_svm_cpu(CPU->cpu_seqid);
+	hma_svm_cpu_t *svm_cpu = hma_svm_cpu(CPU->cpu_id);
 
 	const hma_cpc_flags_t saved_flags = svm_cpu->hsc_cpc_saved_flags;
 	if (saved_flags == HCF_DISABLED) {
@@ -872,7 +872,7 @@ static int
 hma_svm_cpu_activate(xc_arg_t arg1 __unused, xc_arg_t arg2 __unused,
     xc_arg_t arg3 __unused)
 {
-	const processorid_t id = CPU->cpu_seqid;
+	const processorid_t id = CPU->cpu_id;
 	const uintptr_t hsave_pa = hma_svm_cpu(id)->hsc_hsave_pa;
 	uint64_t efer;
 
@@ -941,7 +941,7 @@ hma_svm_cpu_setup(cpu_setup_t what, int id, void *arg __unused)
 	}
 
 	kpreempt_disable();
-	if (CPU->cpu_seqid == id) {
+	if (CPU->cpu_id == id) {
 		/* Perform svm setup directly if this CPU is the target */
 		(void) hma_svm_cpu_activate(0, 0, 0);
 		kpreempt_enable();
@@ -1002,7 +1002,7 @@ hma_svm_init(void)
 	/* Perform SVM configuration for already-online CPUs. */
 	cp = cpu_active;
 	do {
-		int err = hma_svm_cpu_setup(CPU_ON, cp->cpu_seqid, NULL);
+		int err = hma_svm_cpu_setup(CPU_ON, cp->cpu_id, NULL);
 		if (err != 0) {
 			msg = "failure during SVM setup";
 			mutex_exit(&cpu_lock);

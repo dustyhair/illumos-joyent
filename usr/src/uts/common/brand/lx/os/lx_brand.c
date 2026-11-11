@@ -26,10 +26,11 @@
 
 /*
  * Copyright 2020 Joyent, Inc.
- * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2026 OmniOS Community Edition (OmniOSce) Association.
  * Copyright 2024 MNX Cloud, Inc.
  * Copyright 2025 Edgecast Cloud LLC.
  * Copyright 2026 Jonathan Wagner.
+ * Copyright 2026 Oxide Computer Company
  */
 
 /*
@@ -384,6 +385,13 @@ lx_proc_exit(proc_t *p)
 	lx_pidns_t *pidns;
 	boolean_t deathsig;
 
+	/*
+	 * This runs down the last LWP of the exiting process. That LWP is
+	 * still attached here (b_proc_exit fires before the final LWP is
+	 * detached) so the process still has an LWP of its own and no_lwps
+	 * is false. This matches the other single-LWP caller, the successful
+	 * native exec path through brand_clearbrand().
+	 */
 	lx_clone_grp_exit(p, B_FALSE);
 	/* Cleanup any outstanding aio contexts */
 	lx_io_cleanup(p);
@@ -682,7 +690,7 @@ lx_pagefault(proc_t *p, klwp_t *lwp, caddr_t addr, enum fault_type type,
 #endif
 
 static void
-lx_clearbrand(proc_t *p, boolean_t lwps_ok)
+lx_clearbrand(proc_t *p, boolean_t no_lwps)
 {
 	struct lx_seccomp_filter *filter;
 	lx_userns_t *memory;
@@ -692,7 +700,7 @@ lx_clearbrand(proc_t *p, boolean_t lwps_ok)
 	lx_pidns_map_t *pgidmap, *sidmap;
 	lx_pidns_t *children;
 
-	lx_clone_grp_exit(p, lwps_ok);
+	lx_clone_grp_exit(p, no_lwps);
 	mutex_enter(&p->p_lock);
 	filter = ptolxproc(p)->l_seccomp;
 	ptolxproc(p)->l_seccomp = NULL;
@@ -1523,7 +1531,7 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		VERIFY(p->p_zone->zone_brand == &lx_brand);
 		return (exec_common(
 		    (char *)arg1, (const char **)arg2, (const char **)arg3,
-		    NULL, EBA_BRAND));
+		    NULL, EBA_BRAND, UIO_USERSPACE));
 	}
 
 	/* For all other operations this must be a branded process. */
@@ -1658,7 +1666,7 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 
 	case B_EXEC_NATIVE:
 		return (exec_common((char *)arg1, (const char **)arg2,
-		    (const char **)arg3, NULL, EBA_NATIVE));
+		    (const char **)arg3, NULL, EBA_NATIVE, UIO_USERSPACE));
 
 	/*
 	 * The B_TRUSS_POINT subcommand is used so that we can make a no-op
@@ -1686,7 +1694,7 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 				return (ESRCH);
 		} else if (lpid == 1) {
 			s_pid = p->p_zone->zone_proc_initpid;
-			/* handle the dead/missing init(1M) case */
+			/* handle the dead/missing init(8) case */
 			if (s_pid == -1)
 				s_pid = 1;
 			s_tid = 1;

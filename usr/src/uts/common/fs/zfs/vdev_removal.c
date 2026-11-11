@@ -671,7 +671,7 @@ spa_finish_removal(spa_t *spa, dsl_scan_state_t state, dmu_tx_t *tx)
 		vdev_t *vd = vdev_lookup_top(spa, svr->svr_vdev_id);
 		vdev_indirect_config_t *vic = &vd->vdev_indirect_config;
 
-		if (srp->sr_prev_indirect_vdev != UINT64_MAX) {
+		if (srp->sr_prev_indirect_vdev != -1) {
 			vdev_t *pvd = vdev_lookup_top(spa,
 			    srp->sr_prev_indirect_vdev);
 			ASSERT3P(pvd->vdev_ops, ==, &vdev_indirect_ops);
@@ -687,6 +687,7 @@ spa_finish_removal(spa_t *spa, dsl_scan_state_t state, dmu_tx_t *tx)
 	spa_vdev_removal_destroy(svr);
 
 	spa_sync_removing_state(spa, tx);
+	spa_notify_waiters(spa);
 
 	vdev_config_dirty(spa->spa_root_vdev);
 }
@@ -2171,13 +2172,6 @@ spa_removal_get_stats(spa_t *spa, pool_removal_stat_t *prs)
 	prs->prs_end_time = spa->spa_removing_phys.sr_end_time;
 	prs->prs_to_copy = spa->spa_removing_phys.sr_to_copy;
 	prs->prs_copied = spa->spa_removing_phys.sr_copied;
-
-	if (spa->spa_vdev_removal != NULL) {
-		for (int i = 0; i < TXG_SIZE; i++) {
-			prs->prs_copied +=
-			    spa->spa_vdev_removal->svr_bytes_done[i];
-		}
-	}
 
 	prs->prs_mapping_memory = 0;
 	uint64_t indirect_vdev_id =

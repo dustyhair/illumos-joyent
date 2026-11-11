@@ -29,7 +29,7 @@
 # Copyright 2016 Hans Rosenfeld <rosenfeld@grumpf.hope-2000.org>
 # Copyright 2019 Peter Tribble.
 # Copyright 2015, Joyent, Inc. All rights reserved.
-# Copyright 2025 Oxide Computer Company
+# Copyright 2026 Oxide Computer Company
 #
 
 include $(SRC)/uts/Makefile.uts
@@ -214,6 +214,7 @@ CHKHDRS=			\
 	dumphdr.h		\
 	edonr.h			\
 	efi_partition.h		\
+	efiio.h			\
 	elf.h			\
 	elf_386.h		\
 	elf_SPARC.h		\
@@ -463,6 +464,7 @@ CHKHDRS=			\
 	pfmod.h			\
 	pg.h			\
 	pghw.h			\
+	pgrpsys.h		\
 	physmem.h		\
 	pkp_hash.h		\
 	pm.h			\
@@ -548,6 +550,8 @@ CHKHDRS=			\
 	sockfilter.h		\
 	sockio.h		\
 	soundcard.h		\
+	spawn.h			\
+	spawn_impl.h		\
 	squeue.h		\
 	squeue_impl.h		\
 	srn.h			\
@@ -915,6 +919,7 @@ NVMEHDRS=		\
 	micron.h		\
 	micron_7300.h		\
 	micron_74x0.h		\
+	micron_7600.h		\
 	micron_x500.h		\
 	micron_9550.h		\
 	ocp.h			\

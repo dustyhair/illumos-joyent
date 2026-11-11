@@ -10,17 +10,19 @@
 #
 
 #
-# Copyright 2025 Oxide Computer Company
+# Copyright 2026 Oxide Computer Company
 #
 
 include $(SRC)/Makefile.master
 
 RUNFILES = \
 	destruct.run \
+	destruct-ocp.run \
 	non-destruct.run \
 	unit.run
 
-ROOTOPTPKG = $(ROOT)/opt/nvme-tests
+OPTPKG = opt/nvme-tests
+ROOTOPTPKG = $(ROOT)/$(OPTPKG)
 ROOTRUNDIR = $(ROOTOPTPKG)/runfiles
 
 ROOTRUNFILES = $(RUNFILES:%=$(ROOTRUNDIR)/%)
@@ -29,6 +31,9 @@ $(ROOTRUNFILES) := FILEMODE = 0444
 all: $(SRCS)
 
 install: $(ROOTRUNFILES)
+
+check:
+	$(CHECK_TEST_RUNFILES) -T $(OPTPKG) $(RUNFILES)
 
 clean:
 

@@ -24,7 +24,8 @@
  * Copyright 2018 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2018, Joyent, Inc.
  * Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
- * Copyright 2021 RackTop Systems, Inc.
+ * Copyright 2026 RackTop Systems, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
 /*
@@ -2121,14 +2122,14 @@ ahci_claim_free_slot(ahci_ctl_t *ahci_ctlp, ahci_port_t *ahci_portp,
 	 * for that command must be 5.
 	 */
 	if (command_type == AHCI_NCQ_CMD) {
-		ahci_portp->ahciport_pending_ncq_tags |= (0x1 << slot);
+		SET_BIT(ahci_portp->ahciport_pending_ncq_tags, slot);
 		if (AHCI_ADDR_IS_PMPORT(addrp)) {
 			ASSERT(ahci_portp->ahciport_pmult_info != NULL);
 			AHCIPORT_NCQ_PMPORT(ahci_portp) = addrp->aa_pmport;
 		}
 	}
 
-	ahci_portp->ahciport_pending_tags |= (0x1 << slot);
+	SET_BIT(ahci_portp->ahciport_pending_tags, slot);
 
 out:
 	AHCIDBG(AHCIDBG_VERBOSE, ahci_ctlp,
@@ -8895,7 +8896,22 @@ ahci_mop_commands(ahci_ctl_t *ahci_ctlp,
 	    "unfinished_tags 0x%x", finished_tags, unfinished_tags);
 #endif
 
-	/* Send up finished packets with SATA_PKT_COMPLETED */
+	/*
+	 * Some emulated AHCI devices (e.g. at least certain versions of
+	 * qemu) can mark a failed command as complete in the PxCI register
+	 * (the value of which is passed to us in slot_status). The AHCI
+	 * spec implies but doesn't explicitly state this should not happen
+	 * (so arguably controllers that do this are buggy). They also appear
+	 * to update the PxCI register after issuing an interrupt in these
+	 * instances, also arguably incorrect. This means that when a command
+	 * fails on these adapters, sometimes the failed tag will appear in
+	 * finished_tags and sometimes it won't. In either instance, we
+	 * don't want to handle any failed commands as finished, so we
+	 * mask off any of the failed tags from finished_tags to ensure
+	 * they're handled as failed commands.
+	 */
+	finished_tags &= ~failed_tags;
+
 	while (finished_tags) {
 		tmp_slot = ddi_ffs(finished_tags) - 1;
 		if (tmp_slot == -1) {
@@ -8916,7 +8932,7 @@ ahci_mop_commands(ahci_ctl_t *ahci_ctlp,
 		 */
 		if (satapkt->satapkt_cmd.satacmd_flags.sata_special_regs) {
 			CLEAR_BIT(finished_tags, tmp_slot);
-			aborted_tags |= tmp_slot;
+			SET_BIT(aborted_tags, tmp_slot);
 			continue;
 		}
 
@@ -9474,9 +9490,13 @@ ahci_fatal_error_recovery_handler(ahci_ctl_t *ahci_ctlp,
 			ahci_copy_err_cnxt(sata_cmd, ahci_rcvd_fisp);
 		}
 
-		/* The failed command must be one of the outstanding commands */
+		/*
+		 * While the AHCI spec implies a failed command should be
+		 * amongst the outstanding commands, at least some emulated
+		 * AHCI controllers (e.g. qemu) do not do this.
+		 * ahci_mop_commands will handle either situation.
+		 */
 		failed_tags = 0x1 << failed_slot;
-		ASSERT(failed_tags & slot_status);
 
 		/* Update the sata registers, especially PxSERR register */
 		ahci_update_sata_registers(ahci_ctlp, port,
@@ -9947,7 +9967,7 @@ ahci_watchdog_handler(ahci_ctl_t *ahci_ctlp)
 					ahci_portp->ahciport_slot_timeout \
 					    [tmp_slot] = spkt->satapkt_time;
 				} else {
-					timeout_tags |= (0x1 << tmp_slot);
+					SET_BIT(timeout_tags, tmp_slot);
 					cmn_err(CE_WARN, "!ahci%d: watchdog "
 					    "port %d satapkt 0x%p timed out\n",
 					    instance, port, (void *)spkt);

@@ -59,10 +59,8 @@
  * was previously global.  We still have global data because some applications
  * have had those global objects compiled into them.  (Such applications will
  * be unable to benefit from uselocale(), btw.)  The legacy routines are
- * reimplemented as wrappers that use the appropriate locale object by
- * calling uselocale().  uselocale() when passed a NULL pointer returns the
- * thread-specific locale object if one is present, or the global locale
- * object otherwise.  Note that once the TSD data is set, the only way
+ * reimplemented as wrappers that retrieve the appropriate locale object by
+ * calling __curlocale().  Note that once the TSD data is set, the only way
  * to revert to the global locale is to pass the global locale LC_GLOBAL_LOCALE
  * to uselocale().
  *
@@ -80,6 +78,10 @@
  * Locale objects (global locales) established by setlocale() are also
  * never freed (for MT safety), but we will save previous locale objects
  * and reuse them when we can.
+ *
+ * We once used the tsdalloc() destructor callback to free
+ * thread-specific locales on thread exit, but that is at odds with
+ * both the POSIX spec and the behavior of other implementations.
  */
 
 typedef struct locdata *(*loadfn_t)(const char *);
@@ -427,15 +429,6 @@ locdata_get(int category, const char *locname)
 	return (locdata_get_cache(category, locname));
 }
 
-/* tsd destructor */
-static void
-freelocptr(void *arg)
-{
-	locale_t *locptr = arg;
-	if (*locptr != NULL)
-		freelocale(*locptr);
-}
-
 static const char *
 get_locale_env(int category)
 {
@@ -474,15 +467,15 @@ __mb_cur_max_l(locale_t loc)
 unsigned char
 __mb_cur_max(void)
 {
-	return (__mb_cur_max_l(uselocale(NULL)));
+	return (__mb_cur_max_l(__curlocale()));
 }
 
 /*
- * Public interfaces.
+ * Do everything but set locname; used by duplocale and
+ * newlocale.
  */
-
-locale_t
-duplocale(locale_t src)
+static locale_t
+duplocale_noname(locale_t src)
 {
 	locale_t	loc;
 	int		i;
@@ -507,6 +500,18 @@ duplocale(locale_t src)
 	loc->numeric = loc->locdata[LC_NUMERIC]->l_data[0];
 	loc->time = loc->locdata[LC_TIME]->l_data[0];
 	return (loc);
+}
+
+/*
+ * Public interfaces.
+ */
+locale_t
+duplocale(locale_t src)
+{
+	locale_t loc = duplocale_noname(src);
+	if (loc == NULL)
+		return (NULL);
+	return (mklocname(loc));
 }
 
 void
@@ -537,9 +542,9 @@ newlocale(int catmask, const char *locname, locale_t base)
 	 * but we allow it.
 	 */
 	if (base == NULL || base == ___global_locale) {
-		loc = duplocale(___global_locale);
+		loc = duplocale_noname(___global_locale);
 	} else {
-		loc = duplocale(base);
+		loc = duplocale_noname(base);
 	}
 	if (loc == NULL) {
 		return (NULL);
@@ -573,13 +578,38 @@ newlocale(int catmask, const char *locname, locale_t base)
 	return (mklocname(loc));
 }
 
+/*
+ * Transitional implementation of __curlocale() based on code from uselocale().
+ * This is a placeholder to introduce this interface into libc.
+ *
+ * A future change will move the locale pointer into the ulwp_t structure and
+ * make __curlocale() an inline function.
+ */
+locale_t
+__curlocale(void)
+{
+	locale_t *locptr;
+
+	locptr = tsdalloc(_T_SETLOCALE, sizeof (locale_t), NULL);
+	/* Should never occur */
+	if (locptr == NULL) {
+		errno = EINVAL;
+		return (NULL);
+	}
+
+	if (*locptr != NULL)
+		return (*locptr);
+
+	return (___global_locale);
+}
+
 locale_t
 uselocale(locale_t loc)
 {
 	locale_t lastloc = ___global_locale;
 	locale_t *locptr;
 
-	locptr = tsdalloc(_T_SETLOCALE, sizeof (locale_t), freelocptr);
+	locptr = tsdalloc(_T_SETLOCALE, sizeof (locale_t), NULL);
 	/* Should never occur */
 	if (locptr == NULL) {
 		errno = EINVAL;

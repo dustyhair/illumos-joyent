@@ -15,6 +15,8 @@
 # Copyright 2014 Nexenta Systems, Inc. All rights reserved.
 # Copyright 2020 Joyent, Inc.
 # Copyright 2022 OmniOS Community Edition (OmniOSce) Association.
+# Copyright 2026 Hans Rosenfeld
+# Copyright 2026 Jason King
 #
 
 [DEFAULT]
@@ -30,16 +32,23 @@ outputdir = /var/tmp/test_results
 [/opt/util-tests/tests/iconv_test]
 [/opt/util-tests/tests/printf_test]
 
-[/opt/util-tests/tests/allowed-ips]
+[/opt/util-tests/tests/dladm/allowed-ips]
 user = root
 
-[/opt/util-tests/tests/set-linkprop]
+[/opt/util-tests/tests/dladm/create-vnic]
 user = root
 
-[/opt/util-tests/tests/show-overlay-exit]
-[/opt/util-tests/tests/vnic-mtu]
 [/opt/util-tests/tests/bunyan/bunyan]
-[/opt/util-tests/tests/show-class-confusion]
+[/opt/util-tests/tests/dladm/set-linkprop]
+user = root
+
+[/opt/util-tests/tests/dladm/show-class-confusion]
+user = root
+
+[/opt/util-tests/tests/dladm/show-overlay-exit]
+user = root
+
+[/opt/util-tests/tests/dladm/vnic-mtu]
 user = root
 
 [/opt/util-tests/tests/libsff/libsff]
@@ -51,10 +60,10 @@ user = root
 [/opt/util-tests/tests/libjedec_temp.64]
 [/opt/util-tests/tests/libjedec_spd.64]
 [/opt/util-tests/tests/libjedec_hex2spd.64]
+[/opt/util-tests/tests/libofmt_print.32]
+[/opt/util-tests/tests/libofmt_print.64]
 [/opt/util-tests/tests/smbios.32]
 [/opt/util-tests/tests/smbios.64]
-
-user = root
 
 #
 # The sleep tests require destructive DTrace. Therefore they must be run
@@ -74,6 +83,9 @@ user = root
 tests = ['json_00_blank', 'json_01_boolean', 'json_02_numbers',
     'json_03_empty_arrays', 'json_04_number_arrays', 'json_05_strings',
     'json_06_nested', 'json_07_nested_arrays']
+
+[/opt/util-tests/tests/libdhcputil.32]
+[/opt/util-tests/tests/libdhcputil.64]
 
 #
 # The awk tests have a number of individual tests which can take several

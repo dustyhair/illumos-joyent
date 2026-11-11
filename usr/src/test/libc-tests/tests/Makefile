@@ -13,9 +13,9 @@
 # Copyright (c) 2012 by Delphix. All rights reserved.
 # Copyright 2015 Garrett D'Amore <garrett@damore.org>
 # Copyright 2019 Joyent, Inc.
-# Copyright 2022 OmniOS Community Edition (OmniOSce) Association.
+# Copyright 2026 OmniOS Community Edition (OmniOSce) Association.
 # Copyright 2023 Bill Sommerfeld <sommerfeld@alum.mit.edu>
-# Copyright 2025 Oxide Computer Company
+# Copyright 2026 Oxide Computer Company
 #
 
 SUBDIRS = \
@@ -35,13 +35,13 @@ SUBDIRS = \
 	regex \
 	select \
 	stdio \
-	symbols \
 	threads \
 	wcsrtombs \
 	wctype
 
 PROGS = \
 	env-OS-4089 \
+	aio_cancel \
 	aligned_alloc \
 	ascftime \
 	asprintf-14933 \
@@ -49,6 +49,7 @@ PROGS = \
 	c11_tss \
 	call_once \
 	closefrom \
+	crypt_bsdbf \
 	dprintf \
 	endian \
 	env-7076 \
@@ -73,6 +74,7 @@ PROGS = \
 	strerror \
 	strtonum \
 	strtox \
+	swprintf-17781 \
 	timespec_get \
 	timespec_getres \
 	wcslcat \
@@ -97,6 +99,11 @@ PROGS64 = \
 	$(PROGS:%=%.64) \
 	printf-6961.64
 
+aio_cancel.32 :=	CSTD=$(CSTD_GNU17)
+aio_cancel.64 :=	CSTD=$(CSTD_GNU17)
+aio_cancel.32 :=	LDLIBS += -lproc
+aio_cancel.64 :=	LDLIBS64 += -lproc
+
 aligned_alloc.32 :=	CSTD=$(CSTD_GNU17)
 aligned_alloc.64 :=	CSTD=$(CSTD_GNU17)
 aligned_alloc.32 :=	LDLIBS += -lproc
@@ -106,6 +113,9 @@ posix_memalign.64 :=	LDLIBS64 += -lproc
 
 asprintf-14933.32 :=	CSTD=$(CSTD_GNU17)
 asprintf-14933.64 :=	CSTD=$(CSTD_GNU17)
+
+crypt_bsdbf.32 :=	CSTD=$(CSTD_GNU17)
+crypt_bsdbf.64 :=	CSTD=$(CSTD_GNU17)
 
 dprintf.32 :=	CSTD=$(CSTD_GNU17)
 dprintf.64 :=	CSTD=$(CSTD_GNU17)
@@ -149,6 +159,9 @@ timespec_get.32 :=	CSTD=$(CSTD_GNU17)
 timespec_get.64 :=	CSTD=$(CSTD_GNU17)
 timespec_getres.32 :=	CSTD=$(CSTD_GNU17)
 timespec_getres.64 :=	CSTD=$(CSTD_GNU17)
+
+uchar.32 :=		CSTD=$(CSTD_GNU17)
+uchar.64 :=		CSTD=$(CSTD_GNU17)
 
 wcsftime.32 :=		CSTD=$(CSTD_GNU17)
 wcsftime.64 :=		CSTD=$(CSTD_GNU17)

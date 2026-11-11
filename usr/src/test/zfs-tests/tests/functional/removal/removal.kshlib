@@ -28,9 +28,7 @@ function wait_for_removal # pool
 	typeset pool=$1
 	typeset callback=$2
 
-	while is_pool_removing $pool; do
-		sleep 1
-	done
+	log_must zpool wait -t remove $pool
 
 	#
 	# The pool state changes before the TXG finishes syncing; wait for
@@ -119,6 +117,13 @@ function start_random_writer # file
 		done
 		log_note "Stopping writer for $file"
 	) &
+}
+
+function test_removal_with_operation_kill
+{
+	kill $killpid
+	wait $killpid
+	return 0
 }
 
 function test_removal_with_operation # callback [args]

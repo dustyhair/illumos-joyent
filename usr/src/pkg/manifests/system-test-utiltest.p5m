@@ -14,9 +14,10 @@
 # Copyright 2014, OmniTI Computer Consulting, Inc. All rights reserved.
 # Copyright 2014 Nexenta Systems, Inc. All rights reserved.
 # Copyright 2020 Joyent, Inc.
-# Copyright 2017 Jason King.
+# Copyright 2026 Jason King
 # Copyright 2022 OmniOS Community Edition (OmniOSce) Association.
 # Copyright 2026 Oxide Computer Company
+# Copyright 2026 Hans Rosenfeld
 #
 
 set name=pkg.fmri value=pkg:/system/test/utiltest@$(PKGVERS)
@@ -34,7 +35,6 @@ file path=opt/util-tests/bin/utiltest mode=0555
 dir  path=opt/util-tests/runfiles
 file path=opt/util-tests/runfiles/default.run mode=0444
 dir  path=opt/util-tests/tests
-file path=opt/util-tests/tests/allowed-ips mode=0555
 dir  path=opt/util-tests/tests/ar
 file path=opt/util-tests/tests/ar/ar_test0.o mode=0444
 file path=opt/util-tests/tests/ar/ar_test1.o mode=0444
@@ -1252,6 +1252,8 @@ file path=opt/util-tests/tests/dis/i386/64.avx2.out mode=0444
 file path=opt/util-tests/tests/dis/i386/64.avx2.s mode=0444
 file path=opt/util-tests/tests/dis/i386/64.avx512.out mode=0444
 file path=opt/util-tests/tests/dis/i386/64.avx512.s mode=0444
+file path=opt/util-tests/tests/dis/i386/64.avx512_fp16.out mode=0444
+file path=opt/util-tests/tests/dis/i386/64.avx512_fp16.s mode=0444
 file path=opt/util-tests/tests/dis/i386/64.avx512_vnni.out mode=0444
 file path=opt/util-tests/tests/dis/i386/64.avx512_vnni.s mode=0444
 file path=opt/util-tests/tests/dis/i386/64.avx512_vpclmulqdq.out mode=0444
@@ -1306,6 +1308,8 @@ file path=opt/util-tests/tests/dis/i386/64.random.out mode=0444
 file path=opt/util-tests/tests/dis/i386/64.random.s mode=0444
 file path=opt/util-tests/tests/dis/i386/64.sha.out mode=0444
 file path=opt/util-tests/tests/dis/i386/64.sha.s mode=0444
+file path=opt/util-tests/tests/dis/i386/64.sib.out mode=0444
+file path=opt/util-tests/tests/dis/i386/64.sib.s mode=0444
 file path=opt/util-tests/tests/dis/i386/64.sse-3.out mode=0444
 file path=opt/util-tests/tests/dis/i386/64.sse-3.s mode=0444
 file path=opt/util-tests/tests/dis/i386/64.sse-4.1.out mode=0444
@@ -1389,6 +1393,13 @@ file path=opt/util-tests/tests/dis/risc-v/tst.supervisor.s mode=0444
 dir  path=opt/util-tests/tests/dis/sparc
 file path=opt/util-tests/tests/dis/sparc/tst.regs.out mode=0444
 file path=opt/util-tests/tests/dis/sparc/tst.regs.s mode=0444
+dir  path=opt/util-tests/tests/dladm
+file path=opt/util-tests/tests/dladm/allowed-ips mode=0555
+file path=opt/util-tests/tests/dladm/create-vnic mode=0555
+file path=opt/util-tests/tests/dladm/set-linkprop mode=0555
+file path=opt/util-tests/tests/dladm/show-class-confusion mode=0555
+file path=opt/util-tests/tests/dladm/show-overlay-exit mode=0555
+file path=opt/util-tests/tests/dladm/vnic-mtu mode=0555
 dir  path=opt/util-tests/tests/du
 file path=opt/util-tests/tests/du/du.kshlib mode=0555
 file path=opt/util-tests/tests/du/dutest mode=0555
@@ -1619,10 +1630,13 @@ file path=opt/util-tests/tests/hex2spd/lpddr4/MT53D1024M32D4.spd mode=0444
 dir  path=opt/util-tests/tests/hex2spd/lpddr5
 file path=opt/util-tests/tests/hex2spd/lpddr5/CAMM2.spd mode=0444
 file path=opt/util-tests/tests/hex2spd/lpddr5/MT62F4G32D8DV-023.spd mode=0444
+file path=opt/util-tests/tests/hex2spd/lpddr5/SOCAMM2.spd mode=0444
 file path=opt/util-tests/tests/iconv_test mode=0555
 dir  path=opt/util-tests/tests/libcustr
 file path=opt/util-tests/tests/libcustr/custr_remove mode=0555
 file path=opt/util-tests/tests/libcustr/custr_trunc mode=0555
+file path=opt/util-tests/tests/libdhcputil.32 mode=0555
+file path=opt/util-tests/tests/libdhcputil.64 mode=0555
 file path=opt/util-tests/tests/libjedec_hex2spd.32 mode=0555
 file path=opt/util-tests/tests/libjedec_hex2spd.64 mode=0555
 file path=opt/util-tests/tests/libjedec_spd.32 mode=0555
@@ -1641,6 +1655,8 @@ file path=opt/util-tests/tests/libnvpair_json/json_05_strings mode=0555
 file path=opt/util-tests/tests/libnvpair_json/json_06_nested mode=0555
 file path=opt/util-tests/tests/libnvpair_json/json_07_nested_arrays mode=0555
 file path=opt/util-tests/tests/libnvpair_json/json_common mode=0555
+file path=opt/util-tests/tests/libofmt_print.32 mode=0555
+file path=opt/util-tests/tests/libofmt_print.64 mode=0555
 dir  path=opt/util-tests/tests/libsff
 file path=opt/util-tests/tests/libsff/libsff mode=0555
 file path=opt/util-tests/tests/libsff/libsff_8472 mode=0555
@@ -1722,6 +1738,15 @@ dir  path=opt/util-tests/tests/mdb/progs
 file path=opt/util-tests/tests/mdb/progs/anon mode=0555
 file path=opt/util-tests/tests/mdb/progs/bitfields mode=0555
 file path=opt/util-tests/tests/mdb/progs/number_symbol mode=0555
+dir  path=opt/util-tests/tests/mdb/shell
+file path=opt/util-tests/tests/mdb/shell/err.bangpipe.ksh mode=0444
+file path=opt/util-tests/tests/mdb/shell/err.unterminated.ksh mode=0444
+file path=opt/util-tests/tests/mdb/shell/tst.escape.ksh mode=0444
+file path=opt/util-tests/tests/mdb/shell/tst.exec.ksh mode=0444
+file path=opt/util-tests/tests/mdb/shell/tst.filter.ksh mode=0444
+file path=opt/util-tests/tests/mdb/shell/tst.head.ksh mode=0444
+file path=opt/util-tests/tests/mdb/shell/tst.pipe.ksh mode=0444
+file path=opt/util-tests/tests/mdb/shell/tst.source.ksh mode=0444
 dir  path=opt/util-tests/tests/mdb/sou
 file path=opt/util-tests/tests/mdb/sou/tst.anon.ksh mode=0444
 file path=opt/util-tests/tests/mdb/sou/tst.anon.ksh.out mode=0444
@@ -1944,9 +1969,6 @@ file path=opt/util-tests/tests/sed/regress.multitest.out/9.7 mode=0444
 file path=opt/util-tests/tests/sed/regress.multitest.out/9.8 mode=0444
 file path=opt/util-tests/tests/sed/regress.multitest.out/9.9 mode=0444
 file path=opt/util-tests/tests/sed/sed_addr mode=0555
-file path=opt/util-tests/tests/set-linkprop mode=0555
-file path=opt/util-tests/tests/show-class-confusion mode=0555
-file path=opt/util-tests/tests/show-overlay-exit mode=0555
 dir  path=opt/util-tests/tests/sleep
 file path=opt/util-tests/tests/sleep/sleep.awk mode=0444
 file path=opt/util-tests/tests/sleep/sleep.d mode=0444
@@ -1954,7 +1976,6 @@ file path=opt/util-tests/tests/sleep/sleeptest mode=0555
 file path=opt/util-tests/tests/smbios.32 mode=0555
 file path=opt/util-tests/tests/smbios.64 mode=0555
 file path=opt/util-tests/tests/svr4pkg_test mode=0555
-file path=opt/util-tests/tests/vnic-mtu mode=0555
 file path=opt/util-tests/tests/xargs_test mode=0555
 license lic_CDDL license=lic_CDDL
 license usr/src/lib/libdemangle/THIRDPARTYLICENSE \

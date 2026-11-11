@@ -111,7 +111,7 @@ int
 do_scan(int flags, int mode)
 {
 	diskaddr_t	start, end, curnt;
-	int	pass, needinit, data;
+	int	pass, needinit, data = alpha_pattern;
 	uint_t	size;
 	int	status, founderr, i, j;
 	int	error = 0;
@@ -133,6 +133,7 @@ do_scan(int flags, int mode)
 	 */
 	if (scan_entire) {
 		start = 0;
+		end = 0;
 		if (cur_label == L_TYPE_SOLARIS) {
 			if (cur_ctype->ctype_flags & CF_SCSI)
 				end = datasects() - 1;
@@ -541,8 +542,10 @@ scan_repair(diskaddr_t bn, int mode)
 		 */
 		} else if (cur_ctype->ctype_flags & CF_WLIST) {
 			kill_deflist(&cur_list);
-			(*cur_ops->op_ex_cur)(&cur_list);
-			fmt_print("Current list updated\n");
+			if (*cur_ops->op_ex_cur != NULL) {
+				(void) (*cur_ops->op_ex_cur)(&cur_list);
+				fmt_print("Current list updated\n");
+			}
 		} else {
 			add_ldef(bn, &cur_list);
 			write_deflist(&cur_list);
@@ -679,7 +682,8 @@ bad:
 	if (corrupt) {
 		if ((*cur_ops->op_rdwr)(DIR_WRITE, cur_file, blkno,
 		    blkcnt, (caddr_t)cur_buf, F_NORMAL, xfercntp))
-		err_print("Warning: unable to restore original data.\n");
+			err_print(
+			    "Warning: unable to restore original data.\n");
 	}
 	exit_critical();
 	/*

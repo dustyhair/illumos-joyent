@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!@PYTHON@
 
 #
 # This file and its contents are supplied under the terms of the
@@ -17,11 +17,9 @@
 # Copyright 2019 Joyent, Inc.
 # Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
 # Copyright 2022 MNX Cloud, Inc.
+# Copyright 2026 Gordon W. Ross
+# Copyright 2026 Edgecast Cloud LLC.
 #
-
-# NOTE:  For SmartOS, the @PYTHON@ macro defaults to /opt/local, which is
-# not the case for the SmartOS global zone's pkgsrc installation (/opt/tools).
-# So use /usr/bin/env because the smartos-test script sets PATH appropriately.
 
 from __future__ import print_function
 import sys
@@ -65,6 +63,20 @@ else:
     SUDO = '/opt/tools/bin/sudo'
 
 
+# Exit codes as defined in stf/include/stf.shlib
+STF_PASS        = 0
+STF_FAIL        = 1
+STF_UNRESOLVED  = 2
+STF_NOTINUSE    = 3
+STF_UNSUPPORTED = 4
+STF_UNTESTED    = 5
+STF_UNINITIATED = 6
+STF_NORESULT    = 7
+STF_WARNING     = 8
+STF_TIMED_OUT   = 9
+STF_ABORTED     = 10
+STF_OTHER       = 11
+
 retcode = 0
 
 # Custom class to reopen the log file in case it is forcibly closed by a test.
@@ -94,6 +106,11 @@ class WatchedFileHandlerClosed(WatchedFileHandler):
                 self.stream = self._open()
                 self.tries += 1
 
+
+class RunAborted(Exception):
+    pass
+
+
 class Result(object):
     total = 0
     runresults = {'PASS': 0, 'FAIL': 0, 'SKIP': 0, 'KILLED': 0}
@@ -108,9 +125,9 @@ class Result(object):
 
     def done(self, proc, killed):
         """
-        Finalize the results of this Cmd.
-        Report SKIP for return codes 3,4 (NOTINUSE, UNSUPPORTED)
-        as defined in ../stf/include/stf.shlib
+        Finalize the results of this Cmd, mapping exit codes to a
+        result code, one of: (PASS, FAIL, SKIP, KILLED, ABORTED)
+        and increment one of the four runresults[] counters.
         """
         global retcode
 
@@ -125,9 +142,13 @@ class Result(object):
         elif self.returncode == 0:
             self.result = 'PASS'
             Result.runresults['PASS'] += 1
-        elif self.returncode == 3 or self.returncode == 4:
+        elif self.returncode in (STF_NOTINUSE, STF_UNSUPPORTED):
             self.result = 'SKIP'
             Result.runresults['SKIP'] += 1
+        elif self.returncode == STF_ABORTED:
+            self.result = 'ABORTED'
+            Result.runresults['FAIL'] += 1
+            retcode = 1
         elif self.returncode != 0:
             self.result = 'FAIL'
             Result.runresults['FAIL'] += 1
@@ -203,10 +224,22 @@ Timeout: %d
 User: %s
 ''' % (self.pathname, self.identifier, self.outputdir, self.timeout, self.user)
 
+    def ensure_outputdir(self):
+        try:
+            old = os.umask(0)
+            if not os.path.isdir(self.outputdir):
+                os.makedirs(self.outputdir, mode=0o777)
+            os.umask(old)
+        except OSError as e:
+            fail('%s' % e)
+
     def kill_cmd(self, proc):
         """
         Kill a running command due to timeout, or ^C from the keyboard. If
-        sudo is required, this user was verified previously.
+        sudo is required, this user was verified previously. We kill the
+        entire process group so that SIGTERM reaches the test script and
+        its children (e.g. when launched via sudo), allowing EXIT traps
+        and cleanup functions to run.
         """
         self.killed = True
         cur_user = getpwuid(os.getuid()).pw_name
@@ -226,7 +259,8 @@ User: %s
 
         signal = '-TERM'
 
-        cmd = [SUDO, KILL, signal, str(proc.pid)]
+        # Negative PID sends signal to the entire process group.
+        cmd = [SUDO, KILL, signal, '-%s' % str(proc.pid)]
         if not do_sudo:
             del cmd[0]
 
@@ -288,18 +322,12 @@ User: %s
             return
 
         privcmd = self.update_cmd_privs(self.pathname, self.user)
-        try:
-            old = os.umask(0)
-            if not os.path.isdir(self.outputdir):
-                os.makedirs(self.outputdir, mode=0o777)
-            os.umask(old)
-        except OSError as e:
-            fail('%s' % e)
+        self.ensure_outputdir()
 
         try:
             self.result.starttime = time()
             proc = Popen(privcmd, stdout=PIPE, stderr=PIPE, stdin=PIPE,
-                         universal_newlines=True)
+                         universal_newlines=True, start_new_session=True)
             proc.stdin.close()
 
             # Allow a special timeout value of 0 to mean infinity
@@ -310,7 +338,7 @@ User: %s
             self.result.stdout, self.result.stderr = self.collect_output(proc)
         except KeyboardInterrupt:
             self.kill_cmd(proc)
-            fail('\nRun terminated at user request.')
+            raise
         finally:
             t.cancel()
 
@@ -328,6 +356,25 @@ User: %s
         m, s = divmod(time() - self.result.starttime, 60)
         self.result.runtime = '%02d:%02d' % (m, s)
         self.result.result = 'SKIP'
+
+    def not_found(self, kind='test'):
+        """
+        Initialize enough of the test result that we can log a test whose
+        file was not found on disk. Reported as a failure.
+        """
+        global retcode
+        self.ensure_outputdir()
+        Result.total += 1
+        Result.runresults['FAIL'] += 1
+        retcode = 1
+        self.result.stdout = []
+        self.result.stderr = [(datetime.now(),
+                               '%s file not found: %s' %
+                               (kind, self.pathname))]
+        self.result.starttime = time()
+        m, s = divmod(time() - self.result.starttime, 60)
+        self.result.runtime = '%02d:%02d' % (m, s)
+        self.result.result = 'FAIL'
 
     def log(self, logger, options):
         """
@@ -400,6 +447,8 @@ class Test(Cmd):
         self.post = post or ''
         self.post_user = post_user or ''
         self.tags = tags or []
+        self.missing_pre = False
+        self.missing_post = False
 
     def __str__(self):
         post_user = pre_user = ''
@@ -424,14 +473,24 @@ Tags: %s
         Check the pre/post scripts, user and Test. Omit the Test from this
         run if there are any problems.
         """
-        files = [self.pre, self.pathname, self.post]
         users = [self.pre_user, self.user, self.post_user]
 
-        for f in [f for f in files if len(f)]:
-            if not verify_file(f):
-                logger.info("Warning: Test '%s' not added to this run because"
-                            " it failed verification." % f)
-                return False
+        if len(self.pre) and not verify_file(self.pre):
+            logger.warning("pre script '%s' for test '%s' failed "
+                           "verification; tests will be skipped." %
+                           (self.pre, self.pathname))
+            self.missing_pre = True
+
+        if not verify_file(self.pathname):
+            logger.warning("Test '%s' not added to this run because"
+                           " it failed verification." % self.pathname)
+            return False
+
+        if len(self.post) and not verify_file(self.post):
+            logger.warning("post script '%s' for test '%s' failed "
+                           "verification; tests will be skipped.." %
+                           (self.post, self.pathname))
+            self.missing_post = True
 
         for user in [user for user in users if len(user)]:
             if not verify_user(user, logger):
@@ -443,8 +502,11 @@ Tags: %s
 
     def run(self, logger, options):
         """
-        Create Cmd instances for the pre/post scripts. If the pre script
-        doesn't pass, skip this Test. Run the post script regardless.
+        Create Cmd instances for the pre/post scripts. If the post script
+        is missing, refuse to run and report a FAIL for post. If the pre
+        script is missing, report a FAIL for pre and skip this test and
+        post. If the pre script exists but fails, skip this test. Run the
+        post script if pre passed or failed (but not if pre was missing).
         """
         odir = os.path.join(self.outputdir, os.path.basename(self.pre))
         pretest = Cmd(self.pre, identifier=self.identifier, outputdir=odir,
@@ -457,7 +519,17 @@ Tags: %s
                        timeout=self.timeout, user=self.post_user)
 
         cont = True
-        if len(pretest.pathname):
+        if self.missing_post:
+            # post script is missing: refuse to run, report FAIL for post.
+            posttest.not_found('post')
+            posttest.log(logger, options)
+            cont = False
+        elif self.missing_pre:
+            # pre script is missing: report FAIL for pre, skip the test.
+            pretest.not_found('pre')
+            pretest.log(logger, options)
+            cont = False
+        elif len(pretest.pathname):
             pretest.run(options)
             cont = pretest.result.result == 'PASS'
             pretest.log(logger, options)
@@ -468,10 +540,20 @@ Tags: %s
             test.skip()
 
         test.log(logger, options)
+        if test.result.result == 'ABORTED':
+            raise RunAborted('test %s' % test.pathname)
 
-        if len(posttest.pathname):
-            posttest.run(options)
-            posttest.log(logger, options)
+        if not self.missing_post and len(posttest.pathname):
+            if self.missing_pre:
+                posttest.skip()
+                posttest.log(logger, options)
+            else:
+                logger.debug('Running post cleanup: %s' % posttest.pathname)
+                posttest.run(options)
+                posttest.log(logger, options)
+                if posttest.result.result == 'ABORTED':
+                    raise RunAborted(
+                        'post cleanup for %s' % self.pathname)
 
 
 class TestGroup(Test):
@@ -480,6 +562,7 @@ class TestGroup(Test):
     def __init__(self, pathname, tests=None, **kwargs):
         super(TestGroup, self).__init__(pathname, **kwargs)
         self.tests = tests or []
+        self.missing_tests = set()
 
     def __str__(self):
         post_user = pre_user = ''
@@ -517,21 +600,18 @@ Tags: %s
         if len(self.post) and not os.path.isabs(self.post):
             self.post = os.path.join(self.pathname, self.post)
 
-        auxfiles = [self.pre, self.post]
         users = [self.pre_user, self.user, self.post_user]
 
-        for f in [f for f in auxfiles if len(f)]:
-            if self.pathname != os.path.dirname(f):
-                logger.info("Warning: TestGroup '%s' not added to this run. "
-                            "Auxiliary script '%s' exists in a different "
-                            "directory." % (self.pathname, f))
-                return False
+        if len(self.pre) and not verify_file(self.pre):
+            logger.warning("pre script '%s' for TestGroup '%s' failed "
+                           "verification; tests will be skipped." %
+                           (self.pre, self.pathname))
+            self.missing_pre = True
 
-            if not verify_file(f):
-                logger.info("Warning: TestGroup '%s' not added to this run. "
-                            "Auxiliary script '%s' failed verification." %
-                            (self.pathname, f))
-                return False
+        if len(self.post) and not verify_file(self.post):
+            logger.warning("post script '%s' for TestGroup '%s' failed "
+                           "verification." % (self.post, self.pathname))
+            self.missing_post = True
 
         for user in [user for user in users if len(user)]:
             if not verify_user(user, logger):
@@ -539,17 +619,21 @@ Tags: %s
                             self.pathname)
                 return False
 
-        # If one of the tests is invalid, delete it, log it, and drive on.
-        self.tests[:] = [f for f in self.tests if
-          verify_file(os.path.join(self.pathname, f))]
+        # If one of the tests is invalid, record it as missing so it can be
+        # reported as a failure, rather than silently dropping it.
+        self.missing_tests = set(f for f in self.tests
+                                 if not verify_file(os.path.join(self.pathname,
+                                                                 f)))
 
         return len(self.tests) != 0
 
     def run(self, logger, options):
         """
-        Create Cmd instances for the pre/post scripts. If the pre script
-        doesn't pass, skip all the tests in this TestGroup. Run the post
-        script regardless.
+        Create Cmd instances for the pre/post scripts. If the post script
+        is missing, refuse to run and report a FAIL for post. If the pre
+        script is missing, report a FAIL for pre and skip all tests and
+        post. If the pre script exists but fails, skip all tests. Run the
+        post script if pre passed or failed (but not if pre was missing).
         """
         # tags assigned to this test group also include the test names
         if options.tags and not set(self.tags).intersection(set(options.tags)):
@@ -563,26 +647,58 @@ Tags: %s
                        user=self.post_user, identifier=self.identifier)
 
         cont = True
-        if len(pretest.pathname):
+        if self.missing_post:
+            # post script is missing: refuse to run, report FAIL for post.
+            posttest.not_found('post')
+            posttest.log(logger, options)
+            cont = False
+        elif self.missing_pre:
+            # pre script is missing: report FAIL for pre, skip all tests.
+            pretest.not_found('pre')
+            pretest.log(logger, options)
+            cont = False
+        elif len(pretest.pathname):
             pretest.run(options)
             cont = pretest.result.result == 'PASS'
             pretest.log(logger, options)
 
-        for fname in self.tests:
-            test = Cmd(os.path.join(self.pathname, fname),
-                       outputdir=os.path.join(self.outputdir, fname),
-                       timeout=self.timeout, user=self.user,
-                       identifier=self.identifier)
-            if cont:
-                test.run(options)
+        try:
+            for fname in self.tests:
+                test = Cmd(os.path.join(self.pathname, fname),
+                           outputdir=os.path.join(self.outputdir, fname),
+                           timeout=self.timeout, user=self.user,
+                           identifier=self.identifier)
+                if fname in self.missing_tests:
+                    test.not_found()
+                elif cont:
+                    test.run(options)
+                else:
+                    test.skip()
+
+                test.log(logger, options)
+                if test.result.result == 'ABORTED':
+                    raise RunAborted('test %s' % test.pathname)
+        except KeyboardInterrupt:
+            # Run the post (cleanup) script even when interrupted, in case
+            # the test's own EXIT trap did not clean up (e.g. pools, zinject).
+            if not self.missing_post and len(posttest.pathname):
+                print('\nInterrupted, running cleanup...',
+                      flush=True)
+                posttest.run(options)
+                posttest.log(logger, options)
+            raise
+
+        if not self.missing_post and len(posttest.pathname):
+            if self.missing_pre:
+                posttest.skip()
+                posttest.log(logger, options)
             else:
-                test.skip()
-
-            test.log(logger, options)
-
-        if len(posttest.pathname):
-            posttest.run(options)
-            posttest.log(logger, options)
+                logger.debug('Running post cleanup: %s' % posttest.pathname)
+                posttest.run(options)
+                posttest.log(logger, options)
+                if posttest.result.result == 'ABORTED':
+                    raise RunAborted(
+                        'post cleanup for %s' % self.pathname)
 
 
 class TestRun(object):
@@ -688,7 +804,8 @@ class TestRun(object):
         for opt in TestRun.props:
             if config.has_option('DEFAULT', opt):
                 setattr(self, opt, config.get('DEFAULT', opt))
-        self.outputdir = os.path.join(self.outputdir, self.timestamp)
+                if opt == 'outputdir':
+                    self.outputdir = os.path.join(self.outputdir, self.timestamp)
 
         testdir = options.testdir
 
@@ -730,11 +847,18 @@ class TestRun(object):
                 for prop in TestGroup.props:
                     for sect in ['DEFAULT', section]:
                         if config.has_option(sect, prop):
-                            setattr(testgroup, prop, config.get(sect, prop))
+                            if prop == 'tags':
+                                setattr(testgroup, prop,
+                                        eval(config.get(sect, prop)))
+                            else:
+                                setattr(testgroup, prop,
+                                        config.get(sect, prop))
 
                 filenames = os.listdir(pathname)
-                # only files starting with "tst." are considered tests
-                filenames = [f for f in filenames if f.startswith("tst.")]
+                # Only executable files starting with "tst." are tests.
+                # data files might have that prefix but are not tests.
+                filenames = [f for f in filenames if f.startswith("tst.") and
+                             verify_file(os.path.join(pathname, f))]
                 testgroup.tests = sorted(filenames)
 
                 if testgroup.verify(logger):
@@ -859,13 +983,27 @@ class TestRun(object):
         """
         if not options.dryrun:
             try:
+                old = os.umask(0)
+                os.makedirs(self.outputdir, mode=0o777, exist_ok=True)
+                os.umask(old)
                 os.chdir(self.outputdir)
             except OSError:
                 fail('Could not change to directory %s' % self.outputdir)
+
+            uname = Popen(['uname', '-a'], stdout=PIPE, stderr=PIPE,
+                          universal_newlines=True)
+            out, _ = uname.communicate()
+            self.logger.debug('Test system: %s' % out.strip())
+
         for test in sorted(self.tests.keys()):
             self.tests[test].run(self.logger, options)
-        for testgroup in sorted(self.testgroups.keys()):
-            self.testgroups[testgroup].run(self.logger, options)
+        try:
+            for testgroup in sorted(self.testgroups.keys()):
+                self.testgroups[testgroup].run(self.logger, options)
+        except KeyboardInterrupt:
+            fail('\nRun terminated at user request.')
+        except RunAborted as e:
+            fail('\nRun aborted: %s' % e)
 
     def summary(self):
         if Result.total == 0:
@@ -925,13 +1063,13 @@ def verify_user(user, logger):
     try:
         _ = getpwnam(user)
     except KeyError:
-        logger.info("Warning: user '%s' does not exist.", user)
+        logger.warning("user '%s' does not exist.", user)
         return False
 
     p = Popen(testcmd)
     p.wait()
     if p.returncode != 0:
-        logger.info("Warning: user '%s' cannot use passwordless sudo.", user)
+        logger.warning("user '%s' cannot use passwordless sudo.", user)
         return False
     else:
         Cmd.verified_users.append(user)

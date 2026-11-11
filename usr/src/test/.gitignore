@@ -46,11 +46,13 @@ bhyve-tests/tests/inst_emul/payload_imul
 bhyve-tests/tests/inst_emul/payload_inout
 bhyve-tests/tests/inst_emul/payload_page_dirty
 bhyve-tests/tests/inst_emul/payload_rdmsr
+bhyve-tests/tests/inst_emul/payload_rep_instrs
 bhyve-tests/tests/inst_emul/payload_suspend_info
 bhyve-tests/tests/inst_emul/payload_triple_fault
 bhyve-tests/tests/inst_emul/payload_vcpu_barrier
 bhyve-tests/tests/inst_emul/payload_wrmsr
 bhyve-tests/tests/inst_emul/rdmsr
+bhyve-tests/tests/inst_emul/rep_instrs
 bhyve-tests/tests/inst_emul/suspend_info
 bhyve-tests/tests/inst_emul/triple_fault
 bhyve-tests/tests/inst_emul/vcpu_barrier
@@ -84,6 +86,9 @@ bhyve-tests/tests/perf/payload_entry_exit
 bhyve-tests/tests/viona/create_delete
 bhyve-tests/tests/viona/interface_version
 bhyve-tests/tests/viona/link_params
+bhyve-tests/tests/viona/mac_addr
+bhyve-tests/tests/viona/mac_filters
+bhyve-tests/tests/viona/rx_delivery
 bhyve-tests/tests/vmm/auto_destruct
 bhyve-tests/tests/vmm/check_iommu
 bhyve-tests/tests/vmm/cpuid_ioctl
@@ -121,6 +126,9 @@ elf-tests/tests/string-merge/simple
 elf-tests/tests/tls/amd64/ie/amd64-ie-test
 elf-tests/tests/tls/amd64/ld/amd64-ld-test
 elf-tests/tests/tls/i386/ld/i386-ld-test
+
+header-tests/tests/c-symbols/setup
+header-tests/tests/cxx-symbols/setup
 
 i2c-tests/i2csimd/i2csimd
 
@@ -194,6 +202,7 @@ os-tests/tests/pf_key/eacq-enabler
 os-tests/tests/pf_key/kmc-update
 os-tests/tests/pf_key/kmc-updater
 os-tests/tests/poll/epoll_test
+os-tests/tests/poll/poll_close_test
 os-tests/tests/poll/poll_test
 os-tests/tests/regression/illumos-15031
 os-tests/tests/regression/illumos-15036
@@ -206,6 +215,7 @@ os-tests/tests/saveargs/functional/small-struct-ret
 os-tests/tests/saveargs/functional/small-struct-ret-and-spill
 os-tests/tests/saveargs/functional/stack-spill
 os-tests/tests/saveargs/testmatch/testmatch
+os-tests/tests/sockopt/v4mapped
 os-tests/tests/sdevfs/sdevfs_eisdir
 os-tests/tests/secflags/addrs-32
 os-tests/tests/secflags/addrs-64

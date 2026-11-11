@@ -12,7 +12,7 @@
 /*
  * Copyright 2019 Joyent, Inc.
  * Copyright 2022 OmniOS Community Edition (OmniOSce) Association.
- * Copyright 2025 Oxide Computer Company
+ * Copyright 2026 Oxide Computer Company
  * Copyright 2026 Hans Rosenfeld
  */
 
@@ -89,6 +89,7 @@ static int virtio_interrupts_setup(virtio_t *, int);
 static void virtio_interrupts_teardown(virtio_t *);
 static void virtio_interrupts_disable_locked(virtio_t *);
 static void virtio_queue_free(virtio_queue_t *);
+static virtio_queue_t *virtio_queue_intr_owner(virtio_queue_t *);
 static int virtio_bar_to_rnumber(virtio_t *, uint8_t);
 
 /*
@@ -377,6 +378,13 @@ virtio_init_features(virtio_t *vio, uint64_t driver_features,
 	if (virtio_modern(vio))
 		driver_features |= VIRTIO_F_VERSION_1;
 
+	/*
+	 * The ring event index mechanism is implemented entirely within the
+	 * framework so negotiate it on behalf of every client driver whenever
+	 * the device offers it.
+	 */
+	driver_features |= VIRTIO_F_RING_EVENT_IDX;
+
 	vio->vio_features &= driver_features;
 
 	if (!vio->vio_ops->vop_device_set_features(vio, vio->vio_features)) {
@@ -517,21 +525,11 @@ virtio_unmap_cap(virtio_t *vio, virtio_pci_cap_t *cap)
 static boolean_t
 virtio_map_cap(virtio_t *vio, virtio_pci_cap_t *cap)
 {
-	static uint8_t baridx = UINT8_MAX;
-	static int rnumber = -1;
+	int rnumber;
 
 	VERIFY(cap->vpc_type);
 
-	/*
-	 * With most hypervisors all of the capabilities point to the same BAR
-	 * so we can cache and re-use the corresponding register number.
-	 * This function is only called serially from `virtio_init` during
-	 * driver attach so it is safe to use static locals.
-	 */
-	if (baridx != cap->vpc_baridx) {
-		baridx = cap->vpc_baridx;
-		rnumber = virtio_bar_to_rnumber(vio, baridx);
-	}
+	rnumber = virtio_bar_to_rnumber(vio, cap->vpc_baridx);
 
 	if (rnumber == -1 || ddi_regs_map_setup(vio->vio_dip, rnumber,
 	    (caddr_t *)&cap->vpc_bar, cap->vpc_offset, cap->vpc_size,
@@ -861,6 +859,7 @@ virtio_queue_alloc(virtio_t *vio, uint16_t qidx, const char *name,
 			    "for notify region of size 0x%" PRIx64,
 			    name, (uint_t)qidx,
 			    noff, vio->vio_cap_notify.vpc_size);
+			mutex_exit(&vio->vio_mutex);
 			return (NULL);
 		}
 	}
@@ -878,6 +877,8 @@ virtio_queue_alloc(virtio_t *vio, uint16_t qidx, const char *name,
 	viq->viq_max_segs = max_segs;
 	avl_create(&viq->viq_inflight, virtio_inflight_compar,
 	    sizeof (virtio_chain_t), offsetof(virtio_chain_t, vic_node));
+	list_create(&viq->viq_intr_sharers, sizeof (virtio_queue_t),
+	    offsetof(virtio_queue_t, viq_intr_sharers_link));
 
 	/*
 	 * Allocate the mutex without an interrupt priority for now, as we do
@@ -896,6 +897,9 @@ virtio_queue_alloc(virtio_t *vio, uint16_t qidx, const char *name,
 		 */
 		viq->viq_indirect = B_TRUE;
 	}
+
+	if (virtio_features_present(vio, VIRTIO_F_RING_EVENT_IDX))
+		viq->viq_event_idx = B_TRUE;
 
 	/*
 	 * Track descriptor usage in an identifier space.
@@ -919,13 +923,21 @@ virtio_queue_alloc(virtio_t *vio, uint16_t qidx, const char *name,
 	const uint_t align = virtio_modern(vio) ? MODERN_VQ_ALIGN :
 	    VIRTIO_PAGE_SIZE;
 
+	/*
+	 * The driver and device areas are each followed by a single 16-bit
+	 * value holding, respectively, the "used_event" and "avail_event"
+	 * values for the ring event index mechanism. The layout includes them
+	 * whether or not the feature was negotiated. They are only written or
+	 * read when it was.
+	 */
 	const size_t sz_descs = sizeof (virtio_vq_desc_t) * qsz;
 	const size_t sz_driver = P2ROUNDUP_TYPED(sz_descs +
 	    sizeof (virtio_vq_driver_t) +
-	    sizeof (uint16_t) * qsz,
+	    sizeof (uint16_t) * (qsz + 1u),
 	    align, size_t);
 	const size_t sz_device = P2ROUNDUP_TYPED(sizeof (virtio_vq_device_t) +
-	    sizeof (virtio_vq_elem_t) * qsz,
+	    sizeof (virtio_vq_elem_t) * qsz +
+	    sizeof (uint16_t),
 	    align, size_t);
 
 	if (virtio_dma_init(vio, &viq->viq_dma, sz_driver + sz_device,
@@ -984,12 +996,26 @@ static void
 virtio_queue_free(virtio_queue_t *viq)
 {
 	virtio_t *vio = viq->viq_virtio;
+	virtio_queue_t *sharer;
 
 	/*
 	 * We are going to destroy the queue mutex.  Make sure we've already
 	 * removed the interrupt handlers.
 	 */
 	VERIFY(!(vio->vio_initlevel & VIRTIO_INITLEVEL_INT_ADDED));
+
+	/*
+	 * Remove any vector sharing relationships in both directions. Queues
+	 * are freed one at a time and in no particular order, so whichever
+	 * end of a relationship is freed first detaches the other.
+	 */
+	if (viq->viq_intr_owner != NULL) {
+		list_remove(&viq->viq_intr_owner->viq_intr_sharers, viq);
+		viq->viq_intr_owner = NULL;
+	}
+	while ((sharer = list_remove_head(&viq->viq_intr_sharers)) != NULL)
+		sharer->viq_intr_owner = NULL;
+	list_destroy(&viq->viq_intr_sharers);
 
 	mutex_enter(&viq->viq_mutex);
 
@@ -1016,12 +1042,134 @@ virtio_queue_free(virtio_queue_t *viq)
 	kmem_free(viq, sizeof (*viq));
 }
 
+/*
+ * Direct the queue "viq" to share the interrupt vector that will be assigned
+ * to the queue "owner", rather than receiving a vector of its own. When an
+ * interrupt arrives on the shared vector, the handlers of both queues are
+ * called and so a queue handler must tolerate being called when its own
+ * queue has no work. This should already be the case since the same thing
+ * happens with the shared fixed interrupt fallback. Any number of queues may
+ * share the vector of one owning queue, but sharing relationships must not be
+ * chained. This function may only be called during the initialisation phase,
+ * and both queues must have been configured with handler functions.
+ */
+void
+virtio_queue_share_interrupt(virtio_queue_t *viq, virtio_queue_t *owner)
+{
+	virtio_t *vio = viq->viq_virtio;
+
+	VERIFY3P(vio, ==, owner->viq_virtio);
+	VERIFY3P(viq, !=, owner);
+	VERIFY3P(viq->viq_func, !=, NULL);
+	VERIFY3P(owner->viq_func, !=, NULL);
+
+	mutex_enter(&vio->vio_mutex);
+	VERIFY(!(vio->vio_initlevel & VIRTIO_INITLEVEL_PROVIDER));
+
+	/*
+	 * Sharing relationships cannot be chained. The owning queue must
+	 * hold its own vector, and a queue that itself has sharers cannot
+	 * also share the vector of another queue.
+	 */
+	VERIFY3P(owner->viq_intr_owner, ==, NULL);
+	VERIFY3P(viq->viq_intr_owner, ==, NULL);
+	VERIFY(list_is_empty(&viq->viq_intr_sharers));
+
+	viq->viq_intr_owner = owner;
+	list_insert_tail(&owner->viq_intr_sharers, viq);
+	mutex_exit(&vio->vio_mutex);
+}
+
+static inline uint16_t *
+virtio_queue_used_event(virtio_queue_t *viq)
+{
+	const uintptr_t used_event =
+	    (uintptr_t)&viq->viq_dma_driver->vqdr_ring[viq->viq_size];
+
+	return ((uint16_t *)used_event);
+}
+
+static inline const uint16_t *
+virtio_queue_avail_event(const virtio_queue_t *viq)
+{
+	const uintptr_t avail_event =
+	    (uintptr_t)&viq->viq_dma_device->vqde_ring[viq->viq_size];
+
+	return ((const uint16_t *)avail_event);
+}
+
+/*
+ * Decide whether an update that advances the published ring index from
+ * "old_idx" to "new_idx" must generate an event, given that an event was
+ * requested for the entry with index "event_idx". This is the code form
+ * given in the specification (version 1.3, section 2.7.11, "Helpers for
+ * Operating Virtqueues"). It is true when event_idx lies within the
+ * half-open window [old_idx, new_idx) in 16-bit modular arithmetic. That
+ * is, when this update publishes the entry for which the event was
+ * requested. It is equivalent to the perhaps more intuitive
+ *
+ *	(uint16_t)(event_idx - old_idx) < (uint16_t)(new_idx - old_idx)
+ *
+ * which asks whether the distance forward from old_idx to event_idx is
+ * smaller than the distance forward to new_idx. Comparing distances rather
+ * than the indices themselves is what makes wrapping safe - a window that
+ * straddles the 16-bit wrap remains contiguous because both distances wrap
+ * by the same amount.
+ */
+static inline boolean_t
+virtio_need_event(uint16_t event_idx, uint16_t new_idx, uint16_t old_idx)
+{
+	return ((uint16_t)(new_idx - event_idx - 1) <
+	    (uint16_t)(new_idx - old_idx));
+}
+
 void
 virtio_queue_no_interrupt(virtio_queue_t *viq, boolean_t stop_interrupts)
 {
 	mutex_enter(&viq->viq_mutex);
 
-	if (stop_interrupts) {
+	viq->viq_no_interrupt = stop_interrupts;
+
+	if (viq->viq_event_idx) {
+		uint16_t *used_event = virtio_queue_used_event(viq);
+
+		/*
+		 * Base the value on the index the device has most recently
+		 * published, which may be ahead of the index we have
+		 * collected up to.
+		 */
+		VIRTQ_DMA_SYNC_FORKERNEL(viq);
+		const uint16_t dindex = viq_htog16(viq,
+		    viq->viq_dma_device->vqde_index);
+
+		if (stop_interrupts) {
+			/*
+			 * The event index mechanism has no way to directly
+			 * suppress interrupts. Request an event for the index
+			 * the device has just moved past, which the
+			 * free-running index cannot reach again until it has
+			 * completed a full lap. The value is refreshed
+			 * whenever virtio_queue_poll() observes the queue
+			 * empty, so a lap, and the one spurious interrupt it
+			 * costs, requires a full ring's worth of chains to be
+			 * returned without the queue ever appearing empty.
+			 */
+			*used_event = viq_gtoh16(viq, dindex - 1);
+		} else {
+			/*
+			 * Request an event for the next chain the device
+			 * returns. This store races the device - a chain may
+			 * be returned, and the index moved past the value
+			 * written here, while this runs. Chains that have
+			 * already been returned raise no interrupt either
+			 * way, so enabling interrupts guarantees nothing
+			 * about chains returned up to and around this point,
+			 * and the caller must poll for and collect them
+			 * itself regardless.
+			 */
+			*used_event = viq_gtoh16(viq, dindex);
+		}
+	} else if (stop_interrupts) {
 		viq->viq_dma_driver->vqdr_flags |=
 		    viq_gtoh16(viq, VIRTQ_AVAIL_F_NO_INTERRUPT);
 	} else {
@@ -1068,6 +1216,59 @@ virtio_queue_nactive(virtio_queue_t *viq)
 	return (r);
 }
 
+/*
+ * Check whether the device has returned descriptor chains that have not yet
+ * been collected with virtio_queue_poll(). The device decides whether to send
+ * an interrupt only at the moment it returns a chain, so no interrupt is
+ * generated for chains returned while interrupts were suppressed and
+ * re-enabling them is not retroactive. A driver that re-enables interrupts
+ * should use this to discover outstanding work and process the queue itself.
+ */
+boolean_t
+virtio_queue_pending(virtio_queue_t *viq)
+{
+	boolean_t pending = B_FALSE;
+
+	mutex_enter(&viq->viq_mutex);
+	if (!viq->viq_shutdown) {
+		/*
+		 * Taking the queue mutex provides the store-load barrier
+		 * needed when the caller has just re-enabled interrupts.
+		 * That update is globally visible before we read the device
+		 * index, so a chain that the check misses was returned after
+		 * interrupts were re-enabled and will have raised one.
+		 */
+		VIRTQ_DMA_SYNC_FORKERNEL(viq);
+		pending = (viq_htog16(viq, viq->viq_dma_device->vqde_index) !=
+		    viq->viq_device_index);
+	}
+	mutex_exit(&viq->viq_mutex);
+
+	return (pending);
+}
+
+/*
+ * Return the interrupt handle for the MSI-X vector assigned to a queue, or
+ * NULL if the queue has no vector. This is the case when the framework fell
+ * back to a shared fixed interrupt, or when the queue was configured without
+ * a handler. Queues that share a vector return the same handle.
+ */
+ddi_intr_handle_t
+virtio_queue_intr_handle(virtio_queue_t *viq)
+{
+	virtio_t *vio = viq->viq_virtio;
+	virtio_queue_t *owner = virtio_queue_intr_owner(viq);
+
+	VERIFY(vio->vio_initlevel & VIRTIO_INITLEVEL_INT_ADDED);
+
+	if (vio->vio_interrupt_type != DDI_INTR_TYPE_MSIX ||
+	    !owner->viq_handler_added) {
+		return (NULL);
+	}
+
+	return (vio->vio_interrupts[owner->viq_handler_index]);
+}
+
 virtio_chain_t *
 virtio_queue_poll(virtio_queue_t *viq)
 {
@@ -1084,6 +1285,43 @@ virtio_queue_poll(virtio_queue_t *viq)
 
 	VIRTQ_DMA_SYNC_FORKERNEL(viq);
 	uint16_t dindex = viq_htog16(viq, viq->viq_dma_device->vqde_index);
+
+	if (viq->viq_event_idx && viq->viq_device_index == dindex) {
+		/*
+		 * The queue appears to be empty. Update the used event entry:
+		 * while interrupts are enabled, request an event for the next
+		 * chain the device returns beyond those already collected;
+		 * while they are suppressed, park the value one behind the
+		 * device index. A queue that is polled without ever appearing
+		 * empty can see the free-running index lap the parked value,
+		 * at a cost of one spurious interrupt per lap.
+		 */
+		*virtio_queue_used_event(viq) = viq_gtoh16(viq,
+		    viq->viq_no_interrupt ?
+		    (uint16_t)(dindex - 1) : dindex);
+		VIRTQ_DMA_SYNC_FORDEV(viq);
+
+		/*
+		 * When interrupts are enabled, the store above must be
+		 * globally visible before the device index is loaded again.
+		 * Without the barrier, that store and the device's next index
+		 * update could each miss the other, and the chain the device
+		 * returned would neither raise an interrupt nor be visible to
+		 * the re-read below.
+		 */
+		if (!viq->viq_no_interrupt)
+			membar_enter();
+
+		/*
+		 * Re-read the device index. A chain that the device returned
+		 * before it could observe the updated event entry raises no
+		 * interrupt, and must be collected now rather than left for
+		 * an interrupt that will never arrive.
+		 */
+		VIRTQ_DMA_SYNC_FORKERNEL(viq);
+		dindex = viq_htog16(viq, viq->viq_dma_device->vqde_index);
+	}
+
 	if (viq->viq_device_index == dindex) {
 		/*
 		 * If the device index has not changed since the last poll,
@@ -1438,8 +1676,16 @@ static void
 virtio_queue_flush_locked(virtio_queue_t *viq)
 {
 	virtio_t *vio = viq->viq_virtio;
+	boolean_t notify;
 
 	VERIFY(MUTEX_HELD(&viq->viq_mutex));
+
+	/*
+	 * The ring index value most recently made visible to the device,
+	 * needed below for the event index comparison.
+	 */
+	const uint16_t old_index = viq_htog16(viq,
+	    viq->viq_dma_driver->vqdr_index);
 
 	/*
 	 * Make sure any writes we have just made to the descriptors
@@ -1453,13 +1699,27 @@ virtio_queue_flush_locked(virtio_queue_t *viq)
 
 	/*
 	 * Determine whether the device expects us to notify it of new
-	 * descriptors.
+	 * descriptors. For either mechanism this requires store-load
+	 * ordering. The store publishing the new ring index above must be
+	 * globally visible before the load of the suppression state that the
+	 * device maintains, or each side could see a stale view of the other
+	 * and a notification the device is relying on would never be sent.
 	 */
+	membar_enter();
 	VIRTQ_DMA_SYNC_FORKERNEL(viq);
-	if (!(viq->viq_dma_device->vqde_flags &
-	    viq_gtoh16(viq, VIRTQ_USED_F_NO_NOTIFY))) {
-		vio->vio_ops->vop_queue_notify(viq);
+	if (viq->viq_event_idx) {
+		const uint16_t avail_event = viq_htog16(viq,
+		    *virtio_queue_avail_event(viq));
+
+		notify = virtio_need_event(avail_event,
+		    viq->viq_driver_index, old_index);
+	} else {
+		notify = (viq->viq_dma_device->vqde_flags &
+		    viq_gtoh16(viq, VIRTQ_USED_F_NO_NOTIFY)) == 0;
 	}
+
+	if (notify)
+		vio->vio_ops->vop_queue_notify(viq);
 }
 
 void
@@ -1584,6 +1844,35 @@ virtio_interrupts_alloc(virtio_t *vio, int type, int nrequired)
 	return (DDI_SUCCESS);
 }
 
+/*
+ * The queue whose vector this queue's interrupts arrive on.
+ */
+static virtio_queue_t *
+virtio_queue_intr_owner(virtio_queue_t *viq)
+{
+	return (viq->viq_intr_owner != NULL ? viq->viq_intr_owner : viq);
+}
+
+/*
+ * The interrupt handler installed for an MSI-X vector that is shared between
+ * queues. The device gives no indication of which queue an interrupt was for,
+ * so the handler of every queue on the vector is called.
+ */
+static uint_t
+virtio_shared_vector_isr(caddr_t arg0, caddr_t arg1)
+{
+	virtio_queue_t *viq = (virtio_queue_t *)arg0;
+
+	(void) viq->viq_func(viq->viq_funcarg, arg1);
+	for (virtio_queue_t *sharer = list_head(&viq->viq_intr_sharers);
+	    sharer != NULL;
+	    sharer = list_next(&viq->viq_intr_sharers, sharer)) {
+		(void) sharer->viq_func(sharer->viq_funcarg, arg1);
+	}
+
+	return (DDI_INTR_CLAIMED);
+}
+
 static uint_t
 virtio_shared_isr(caddr_t arg0, caddr_t arg1)
 {
@@ -1651,11 +1940,12 @@ virtio_interrupts_setup(virtio_t *vio, int allow_types)
 
 	/*
 	 * Determine the number of interrupts we'd like based on the number of
-	 * virtqueues.
+	 * virtqueues, not counting queues that will share the vector assigned
+	 * to another queue.
 	 */
 	for (virtio_queue_t *viq = list_head(&vio->vio_queues); viq != NULL;
 	    viq = list_next(&vio->vio_queues, viq)) {
-		if (viq->viq_func != NULL) {
+		if (viq->viq_func != NULL && viq->viq_intr_owner == NULL) {
 			count++;
 		}
 	}
@@ -1786,13 +2076,28 @@ add_handlers:
 
 	for (virtio_queue_t *viq = list_head(&vio->vio_queues); viq != NULL;
 	    viq = list_next(&vio->vio_queues, viq)) {
-		if (viq->viq_func == NULL) {
+		if (viq->viq_func == NULL || viq->viq_intr_owner != NULL) {
 			continue;
 		}
 
+		/*
+		 * A queue whose vector is shared with other queues needs a
+		 * handler that multiplexes across all of them. Otherwise the
+		 * queue's own handler is installed directly.
+		 */
+		ddi_intr_handler_t *func;
+		caddr_t funcarg;
+
+		if (list_is_empty(&viq->viq_intr_sharers)) {
+			func = viq->viq_func;
+			funcarg = (caddr_t)viq->viq_funcarg;
+		} else {
+			func = virtio_shared_vector_isr;
+			funcarg = (caddr_t)viq;
+		}
+
 		if (ddi_intr_add_handler(vio->vio_interrupts[n],
-		    viq->viq_func, (caddr_t)viq->viq_funcarg,
-		    (caddr_t)vio) != DDI_SUCCESS) {
+		    func, funcarg, (caddr_t)vio) != DDI_SUCCESS) {
 			dev_err(dip, CE_WARN, "adding interrupt %u (%s) failed",
 			    n, viq->viq_name);
 			goto fail;
@@ -1903,7 +2208,7 @@ virtio_interrupts_unwind(virtio_t *vio)
 	if (vio->vio_interrupt_type == DDI_INTR_TYPE_MSIX) {
 		for (virtio_queue_t *viq = list_head(&vio->vio_queues);
 		    viq != NULL; viq = list_next(&vio->vio_queues, viq)) {
-			if (!viq->viq_handler_added) {
+			if (!virtio_queue_intr_owner(viq)->viq_handler_added) {
 				continue;
 			}
 
@@ -1932,6 +2237,20 @@ virtio_interrupts_unwind(virtio_t *vio)
 	 */
 	if (!virtio_modern(vio))
 		vio->vio_legacy_cfg_offset = VIRTIO_LEGACY_CFG_OFFSET;
+}
+
+/*
+ * Return the interrupt type that was allocated for this device, as one of the
+ * DDI_INTR_TYPE_* constants. A driver that sized its queue configuration
+ * around per-queue MSI-X vectors can use this to discover whether the
+ * framework instead had to fall back to a single shared fixed interrupt.
+ */
+int
+virtio_interrupts_type(virtio_t *vio)
+{
+	VERIFY(vio->vio_initlevel & VIRTIO_INITLEVEL_INT_ADDED);
+
+	return (vio->vio_interrupt_type);
 }
 
 int
@@ -1984,16 +2303,19 @@ virtio_interrupts_enable(virtio_t *vio)
 
 		for (virtio_queue_t *viq = list_head(&vio->vio_queues);
 		    viq != NULL; viq = list_next(&vio->vio_queues, viq)) {
-			if (!viq->viq_handler_added) {
+			virtio_queue_t *owner = virtio_queue_intr_owner(viq);
+
+			if (!owner->viq_handler_added) {
 				continue;
 			}
 
 			uint16_t qi = viq->viq_index;
-			uint16_t msi = viq->viq_handler_index;
+			uint16_t msi = owner->viq_handler_index;
 
 			/*
 			 * Route interrupts for this queue to the assigned
-			 * MSI-X vector number.
+			 * MSI-X vector number, which is that of the owning
+			 * queue when the vector is shared.
 			 */
 			vio->vio_ops->vop_msix_queue_set(vio, qi, msi);
 

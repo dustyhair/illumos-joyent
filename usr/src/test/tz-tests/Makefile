@@ -10,11 +10,12 @@
 #
 
 #
-# Copyright 2025 Oxide Computer Company
+# Copyright 2026 Oxide Computer Company
 #
 
 .PARALLEL: $(SUBDIRS)
 
-SUBDIRS = doc tests
+SUBDIRS = cmd doc runfiles tests
+CHKSUBDIRS = runfiles
 
 include $(SRC)/test/Makefile.com

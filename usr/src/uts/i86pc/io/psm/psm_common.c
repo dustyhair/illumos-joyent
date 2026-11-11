@@ -19,6 +19,9 @@
  * CDDL HEADER END
  */
 /*
+ * Copyright 2026 Shardul Bankar
+ */
+/*
  * Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2016, Joyent, Inc.
  */
@@ -779,7 +782,7 @@ acpi_get_possible_irq_resources(acpi_psm_lnk_t *acpipsmlnkp,
 	/*
 	 * Scan the resources looking for an interrupt resource
 	 */
-	*irqlistp = 0;
+	*irqlistp = NULL;
 	for (resp = rsb.Pointer; resp->Type != ACPI_RESOURCE_TYPE_END_TAG;
 	    resp = ACPI_NEXT_RESOURCE(resp)) {
 		switch (resp->Type) {
@@ -820,7 +823,7 @@ acpi_get_possible_irq_resources(acpi_psm_lnk_t *acpipsmlnkp,
 	}
 
 	AcpiOsFree(rsb.Pointer);
-	return (irqlistp == NULL ? ACPI_PSM_FAILURE : ACPI_PSM_SUCCESS);
+	return (*irqlistp == NULL ? ACPI_PSM_FAILURE : ACPI_PSM_SUCCESS);
 }
 
 /*

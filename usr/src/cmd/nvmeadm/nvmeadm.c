@@ -47,6 +47,9 @@
 #include <sys/sysmacros.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
+#include <sys/fm/protocol.h>
+#include <fm/topo_hc.h>
+#include <getopt.h>
 
 #include <sys/nvme.h>
 
@@ -98,6 +101,7 @@ static boolean_t do_get_feat_intr_vect(const nvme_process_arg_t *,
 static boolean_t do_get_feat_temp_thresh(const nvme_process_arg_t *,
     const nvme_feat_disc_t *, const nvmeadm_feature_t *);
 static int do_get_features(const nvme_process_arg_t *);
+static int do_set_feature(const nvme_process_arg_t *);
 static int do_format(const nvme_process_arg_t *);
 static int do_secure_erase(const nvme_process_arg_t *);
 static int do_attach_bd(const nvme_process_arg_t *);
@@ -114,6 +118,7 @@ static void optparse_list_logs(nvme_process_arg_t *);
 static void optparse_get_logpage(nvme_process_arg_t *);
 static void optparse_print_logpage(nvme_process_arg_t *);
 static void optparse_list_features(nvme_process_arg_t *);
+static void optparse_set_feature(nvme_process_arg_t *);
 static void optparse_secure_erase(nvme_process_arg_t *);
 
 static void usage_list(const char *);
@@ -125,6 +130,7 @@ static void usage_get_logpage(const char *);
 static void usage_print_logpage(const char *);
 static void usage_list_features(const char *);
 static void usage_get_features(const char *);
+static void usage_set_feature(const char *);
 static void usage_format(const char *);
 static void usage_secure_erase(const char *);
 static void usage_attach_detach_bd(const char *);
@@ -150,11 +156,6 @@ int debug;
 #define	NVMEADM_O_ID_DESC_LIST	0x00000040
 #define	NVMEADM_O_ID_ALLOC_NS	0x00000080
 
-/*
- * nvmeadm List specific options
- */
-#define	NVMEADM_O_LS_CTRL	0x00000100
-
 static int exitcode;
 
 /*
@@ -169,6 +170,7 @@ static const nvmeadm_cmd_t nvmeadm_cmds[] = {
 		"list",
 		"list controllers and namespaces",
 		"  -c\t\tlist only controllers\n"
+		"  -L\t\tlist controller location\n"
 		"  -p\t\tprint parsable output\n"
 		"  -o field\tselect a field for parsable output\n",
 		"  model\t\tthe controller's model name\n"
@@ -187,7 +189,9 @@ static const nvmeadm_cmd_t nvmeadm_cmds[] = {
 		"  format\ta description of the namespace's format\n"
 		"  fmtid\t\tthe numerical id of the namespace's format\n"
 		"  fmtds\t\tthe data size of the namespace's format\n"
-		"  fmtms\t\tthe metadata size of the namespace's format\n",
+		"  fmtms\t\tthe metadata size of the namespace's format\n"
+		"  location\tcontroller location (-L)\n"
+		"  ctlap\t\tcontrolling attachment point (-L)\n",
 		do_list, usage_list, optparse_list,
 		NVMEADM_C_MULTI
 	},
@@ -334,6 +338,22 @@ static const nvmeadm_cmd_t nvmeadm_cmds[] = {
 		NULL,
 		do_get_features, usage_get_features, NULL,
 		NVMEADM_C_MULTI
+	},
+	{
+		.c_name = "set-feature",
+		.c_desc = "set a feature on a controller and/or namespace",
+		.c_flagdesc = "  -s\t\tsave the setting persistently\n"
+		    "  -v value\tset the primary (cdw11) feature value\n"
+		    "  --cdw12 cdw12\tset the cdw12 32-bit value\n"
+		    "  --cdw13 cdw13\tset the cdw13 32-bit value\n"
+		    "  --cdw15 cdw15\tset the cdw15 32-bit value\n"
+		    "  -i input\tthe command input data file\n"
+		    "  -l length\tthe command input data size in bytes\n"
+		    "  -I impact\trequest impact on the system\n",
+		.c_func = do_set_feature,
+		.c_usage = usage_set_feature,
+		.c_optparse = optparse_set_feature,
+		.c_flags = NVMEADM_C_EXCL
 	},
 	{
 		"format",
@@ -485,6 +505,18 @@ static const nvmeadm_cmd_t nvmeadm_cmds[] = {
 		.c_optparse = optparse_vendor_cmd
 	},
 	{
+		.c_name = "ocp/error-inject",
+		.c_desc = "inject errors onto an NVMe controller",
+		.c_flagdesc = "  -l lat_us\tset latency duration to lat_us "
+		    "microseconds\n"
+		    "  -n nreads\tdelay error injection until nreads read "
+		    "commands complete\n",
+		.c_func = do_ocp_errinj,
+		.c_usage = usage_ocp_errinj,
+		.c_optparse = optparse_ocp_errinj,
+		.c_flags = NVMEADM_C_EXCL
+	},
+	{
 		.c_name = "sandisk/hwrev",
 		.c_desc = "obtain device hardware revision",
 		.c_func = do_sandisk_hwrev,
@@ -544,49 +576,58 @@ static const nvmeadm_cmd_t nvmeadm_cmds[] = {
 
 static const nvmeadm_feature_t features[] = {
 	{
-		.f_feature = NVME_FEAT_ARBITRATION,
+		.f_feature = "arb",
 		.f_print = nvme_print_feat_arbitration
 	}, {
-		.f_feature = NVME_FEAT_POWER_MGMT,
+		.f_feature = "pm",
 		.f_print = nvme_print_feat_power_mgmt
 	}, {
-		.f_feature = NVME_FEAT_LBA_RANGE,
+		.f_feature = "range",
 		.f_print = nvme_print_feat_lba_range
 	}, {
-		.f_feature = NVME_FEAT_TEMPERATURE,
+		.f_feature = "temp",
 		.f_get = do_get_feat_temp_thresh,
 		.f_print = nvme_print_feat_temperature
 	}, {
-		.f_feature = NVME_FEAT_ERROR,
+		.f_feature = "errrec",
 		.f_print = nvme_print_feat_error
 	}, {
-		.f_feature = NVME_FEAT_WRITE_CACHE,
+		.f_feature = "cache",
 		.f_print = nvme_print_feat_write_cache
 	}, {
-		.f_feature = NVME_FEAT_NQUEUES,
+		.f_feature = "queues",
 		.f_print = nvme_print_feat_nqueues
 	}, {
-		.f_feature = NVME_FEAT_INTR_COAL,
+		.f_feature = "coalescing",
 		.f_print = nvme_print_feat_intr_coal
 	}, {
-		.f_feature = NVME_FEAT_INTR_VECT,
+		.f_feature = "vector",
 		.f_get = do_get_feat_intr_vect,
 		.f_print = nvme_print_feat_intr_vect
 	}, {
-		.f_feature = NVME_FEAT_WRITE_ATOM,
+		.f_feature = "atomicity",
 		.f_print = nvme_print_feat_write_atom
 	}, {
-		.f_feature = NVME_FEAT_ASYNC_EVENT,
+		.f_feature = "event",
 		.f_print = nvme_print_feat_async_event
 	}, {
-		.f_feature = NVME_FEAT_AUTO_PST,
+		.f_feature = "apst",
 		.f_print = nvme_print_feat_auto_pst
 	}, {
-		.f_feature = NVME_FEAT_PROGRESS,
+		.f_feature = "progress",
 		.f_print = nvme_print_feat_progress
 	}, {
-		.f_feature = NVME_FEAT_HOST_BEHAVE,
+		.f_feature = "hostsup",
 		.f_print = nvme_print_feat_host_behavior
+	}, {
+		.f_feature = "ocp/errinj",
+		.f_print = nvme_print_feat_ocp_err_inj
+	}, {
+		.f_feature = "ocp/plpfail",
+		.f_print = nvme_print_feat_ocp_plp_fail
+	}, {
+		.f_feature = "ocp/plphealth",
+		.f_print = nvme_print_feat_ocp_plp_health
 	}
 };
 
@@ -698,6 +739,43 @@ boolean_t
 nvme_version_check(const nvme_process_arg_t *npa, const nvme_version_t *vers)
 {
 	return (nvme_vers_atleast(npa->npa_version, vers) ? B_TRUE : B_FALSE);
+}
+
+long long
+optparse_ui_range(const char *raw, const char *field, uint64_t min,
+    uint64_t max)
+{
+	const char *errstr;
+	long long l;
+
+	l = strtonumx(raw, min, max, &errstr, 0);
+	if (errstr != NULL) {
+		errx(-1, "failed to parse %s: value %s is %s: valid values "
+		    "are in the range [0x%" PRIx64 ", 0x%" PRIx64 "]", field,
+		    raw, errstr, min, max);
+	}
+
+	return (l);
+}
+
+nvme_disc_impact_t
+optparse_impact(char *raw)
+{
+	nvme_disc_impact_t impact = 0;
+	char *last;
+
+	for (char *s = strtok_r(raw, ",", &last); s != NULL;
+	    s = strtok_r(NULL, ",", &last)) {
+		if (strcmp(s, "data") == 0) {
+			impact |= NVME_DISC_IMPACT_DATA;
+		} else if (strcmp(s, "namespace") == 0) {
+			impact |= NVME_DISC_IMPACT_NS;
+		} else {
+			errx(-1, "invalid impact string: %s", s);
+		}
+	}
+
+	return (impact);
 }
 
 /*
@@ -1133,7 +1211,7 @@ static void
 usage_list(const char *c_name)
 {
 	(void) fprintf(stderr, "%s "
-	    "[-c] [-p -o field[,...]] [<ctl>[/<ns>][,...]\n\n"
+	    "[-c | -L] [-p -o field[,...]] [<ctl>[/<ns>][,...]\n\n"
 	    "  List NVMe controllers and their namespaces. If no "
 	    "controllers and/or name-\n  spaces are specified, all "
 	    "controllers and namespaces in the system will be\n  "
@@ -1145,15 +1223,27 @@ optparse_list(nvme_process_arg_t *npa)
 {
 	int c;
 	uint_t oflags = 0;
-	boolean_t parse = B_FALSE;
+	boolean_t parse = B_FALSE, cflag = B_FALSE, Lflag = B_FALSE;
 	const char *fields = NULL;
 	const ofmt_field_t *ofmt = nvmeadm_list_nsid_ofmt;
+	nvmeadm_list_t *list = NULL;
 
-	while ((c = getopt(npa->npa_argc, npa->npa_argv, ":co:p")) != -1) {
+	if ((list = calloc(1, sizeof (nvmeadm_list_t))) == NULL) {
+		err(-1, "failed to allocate memory for argument tracking");
+	}
+	list->list_mode = NVMEADM_LIST_DEFAULT;
+
+	while ((c = getopt(npa->npa_argc, npa->npa_argv, ":cLo:p")) != -1) {
 		switch (c) {
 		case 'c':
-			npa->npa_cmdflags |= NVMEADM_O_LS_CTRL;
+			cflag = B_TRUE;
+			list->list_mode = NVMEADM_LIST_CTRL;
 			ofmt = nvmeadm_list_ctrl_ofmt;
+			break;
+		case 'L':
+			Lflag = B_TRUE;
+			list->list_mode = NVMEADM_LIST_LOC;
+			ofmt = nvmeadm_list_loc_ofmt;
 			break;
 		case 'o':
 			fields = optarg;
@@ -1172,8 +1262,19 @@ optparse_list(nvme_process_arg_t *npa)
 		}
 	}
 
+	if (cflag && Lflag) {
+		errx(-1, "only one of -c and -L may be selected");
+	}
+
 	if (fields != NULL && !parse) {
 		errx(-1, "-o can only be used when in parsable mode (-p)");
+	}
+
+	/*
+	 * We use ofmt by default with -L.
+	 */
+	if (fields == NULL && Lflag) {
+		fields = "instance,model,location,ctlap";
 	}
 
 	if (parse && fields == NULL) {
@@ -1181,13 +1282,31 @@ optparse_list(nvme_process_arg_t *npa)
 		    "fields with -o");
 	}
 
-	if (parse) {
+	if (parse || Lflag) {
 		ofmt_status_t oferr;
 
 		oferr = ofmt_open(fields, ofmt, oflags, 0,
 		    &npa->npa_ofmt);
 		ofmt_check(oferr, B_TRUE, npa->npa_ofmt, nvme_oferr, warnx);
 	}
+
+	if (Lflag) {
+		int e;
+
+		list->list_topo = topo_open(TOPO_VERSION, NULL, &e);
+		if (list->list_topo == NULL) {
+			errx(-1, "location information unavailable: unable to "
+			    "obtain topo handle: %s", topo_strerror(e));
+		}
+
+		(void) topo_snap_hold(list->list_topo, NULL, &e);
+		if (e != 0) {
+			errx(-1, "location information unavailable: unable to "
+			    "obtain topo snapshot: %s", topo_strerror(e));
+		}
+	}
+
+	npa->npa_cmd_arg = list;
 }
 
 static void
@@ -1252,6 +1371,133 @@ do_list_nsid(const nvme_process_arg_t *npa, nvme_ctrl_info_t *ctrl,
 	free(disk_path);
 }
 
+/*
+ * Determine a device's controlling AP. As most NVMe devices are PCIe devices
+ * (except when virtualized) we look at the parent pcieb instance and look for
+ * its ap-names and slot-names properties.
+ */
+static void
+do_list_phys_map_ctlap(nvmeadm_list_ofmt_arg_t *oarg)
+{
+	di_node_t pdip;
+	int *ap_names, *slot_names;
+
+	pdip = di_parent_node(oarg->nloa_dip);
+	if (pdip == DI_NODE_NIL) {
+		return;
+	}
+
+	/*
+	 * This probably will need to change a bit when we understand the exact
+	 * shape AP's take when ACPI-based PCI hotplug is supported for virtual
+	 * machines. In that world, it's not clear where the AP will live.
+	 */
+	const char *drv = di_driver_name(pdip);
+	if (drv == NULL || strcmp(drv, "pcieb") != 0) {
+		return;
+	}
+
+	/*
+	 * The AP names property is a bitfield that indicates which entry in the
+	 * slot-names. A given device can in theory support multiple slots, but
+	 * PCIe is always going to be a value of 1.
+	 */
+	if (di_prop_lookup_ints(DDI_DEV_T_ANY, pdip, "ap-names", &ap_names) !=
+	    1 || *ap_names != 1) {
+		return;
+	}
+
+	/*
+	 * The slot-names property is structured with the first word as a
+	 * bitfield mask and then a series of names which are guaranteed to be
+	 * NULL terminated.
+	 */
+	int nu32 = di_prop_lookup_ints(DDI_DEV_T_ANY, pdip, "slot-names",
+	    &slot_names);
+	if (nu32 <= 1 || slot_names[0] != 1) {
+		return;
+	}
+
+	oarg->nloa_ap = calloc(nu32 - 1, sizeof (uint32_t));
+	if (oarg->nloa_ap == NULL) {
+		err(-1, "failed to allocate memory for attachment point name");
+	}
+
+	(void) memcpy(oarg->nloa_ap, &slot_names[1], sizeof (uint32_t) *
+	    (nu32 - 1));
+}
+
+/*
+ * NVMe devices are always enumerated with an 'nvme' node. See if we can find
+ * that.
+ */
+static int
+do_list_phys_map_loc_cb(topo_hdl_t *hp, tnode_t *tn, void *arg)
+{
+	nvmeadm_list_ofmt_arg_t *oarg = arg;
+	char *label = NULL;
+	uint32_t tinst;
+	int err;
+
+	if (strcmp(topo_node_name(tn), NVME) != 0) {
+		return (TOPO_WALK_NEXT);
+	}
+
+	if (topo_prop_get_uint32(tn, TOPO_PGROUP_IO, TOPO_IO_INSTANCE, &tinst,
+	    &err) != 0) {
+		return (TOPO_WALK_NEXT);
+	}
+
+	if (tinst != (uint32_t)di_instance(oarg->nloa_dip)) {
+		return (TOPO_WALK_NEXT);
+	}
+
+	/*
+	 * Walk the node hierarchy looking for something that has a label. We
+	 * basically only consider ourselves and our immediate parent if that
+	 * parent is a bay or slot. If we go too far then we may end up finding
+	 * a label for a device that has no relationship to us.
+	 */
+	if (topo_prop_get_string(tn, TOPO_PGROUP_PROTOCOL, TOPO_PROP_LABEL,
+	    &label, &err) != 0) {
+		tnode_t *pn = topo_node_parent(tn);
+		const char *pname = topo_node_name(pn);
+		if (strcmp(pname, BAY) == 0 || strcmp(pname, SLOT) == 0) {
+			if (topo_prop_get_string(pn, TOPO_PGROUP_PROTOCOL,
+			    TOPO_PROP_LABEL, &label, &err) != 0) {
+				label = NULL;
+			}
+		}
+	}
+
+	oarg->nloa_loc = label;
+	return (TOPO_WALK_TERMINATE);
+}
+
+static void
+do_list_phys_map_loc(nvmeadm_list_t *list, nvmeadm_list_ofmt_arg_t *oarg)
+{
+	topo_walk_t *wp;
+	int err;
+
+	wp = topo_walk_init(list->list_topo, FM_FMRI_SCHEME_HC,
+	    do_list_phys_map_loc_cb, oarg, &err);
+	if (wp == NULL) {
+		warnx("location information not available: failed to "
+		    "initialize topo walk: %s", topo_strerror(err));
+		exitcode = -1;
+		return;
+	}
+
+	err = topo_walk_step(wp, TOPO_WALK_SIBLING);
+	if (err == TOPO_WALK_ERR) {
+		warnx("location information not available: topo walk failed");
+		exitcode = -1;
+	}
+
+	topo_walk_fini(wp);
+}
+
 static int
 do_list(const nvme_process_arg_t *npa)
 {
@@ -1261,6 +1507,7 @@ do_list(const nvme_process_arg_t *npa)
 	const nvme_ns_disc_t *disc;
 	nvme_ns_disc_level_t level;
 	int rv = -1;
+	nvmeadm_list_t *list = npa->npa_cmd_arg;
 
 	if (npa->npa_argc > 0) {
 		errx(-1, "%s passed extraneous arguments starting with %s",
@@ -1276,17 +1523,26 @@ do_list(const nvme_process_arg_t *npa)
 	if (npa->npa_ofmt == NULL) {
 		(void) printf("%s: ", npa->npa_ctrl_name);
 		nvme_print_ctrl_summary(info);
-	} else if ((npa->npa_cmdflags & NVMEADM_O_LS_CTRL) != 0) {
+	} else if (list->list_mode != NVMEADM_LIST_DEFAULT) {
 		nvmeadm_list_ofmt_arg_t oarg = { 0 };
 		oarg.nloa_name = npa->npa_ctrl_name;
 		oarg.nloa_ctrl = info;
 		if (!nvme_ctrl_devi(npa->npa_ctrl, &oarg.nloa_dip))
 			oarg.nloa_dip = DI_NODE_NIL;
 
+		if (list->list_mode == NVMEADM_LIST_LOC) {
+			do_list_phys_map_ctlap(&oarg);
+			do_list_phys_map_loc(list, &oarg);
+		}
+
 		ofmt_print(npa->npa_ofmt, &oarg);
+		free(oarg.nloa_ap);
+		if (list->list_topo != NULL) {
+			topo_hdl_strfree(list->list_topo, oarg.nloa_loc);
+		}
 	}
 
-	if ((npa->npa_cmdflags & NVMEADM_O_LS_CTRL) != 0) {
+	if (list->list_mode != NVMEADM_LIST_DEFAULT) {
 		rv = 0;
 		goto out;
 	}
@@ -2676,7 +2932,7 @@ do_features(const nvme_process_arg_t *npa, nvmeadm_features_t *nf,
 	if (npa->npa_ns != NULL) {
 		scope = NVME_FEAT_SCOPE_NS;
 	} else {
-		scope = NVME_FEAT_SCOPE_CTRL;
+		scope = NVME_FEAT_SCOPE_CTRL | NVME_FEAT_SCOPE_NVM;
 	}
 
 	if (!nvme_feat_discover_init(npa->npa_ctrl, scope, 0, &iter)) {
@@ -3088,14 +3344,14 @@ static void
 do_get_features_cb(const nvme_process_arg_t *npa, const nvme_feat_disc_t *disc)
 {
 	const nvmeadm_feature_t *feat = NULL;
-	uint32_t fid = nvme_feat_disc_fid(disc);
+	const char *name = nvme_feat_disc_short(disc);
 	nvme_get_feat_fields_t fields;
 	void *data = NULL;
 	size_t datalen = 0;
 	uint32_t cdw0;
 
 	for (size_t i = 0; i < ARRAY_SIZE(features); i++) {
-		if (features[i].f_feature == fid) {
+		if (strcmp(features[i].f_feature, name) == 0) {
 			feat = &features[i];
 			break;
 		}
@@ -3231,6 +3487,269 @@ do_get_features(const nvme_process_arg_t *npa)
 	free(filts);
 	free(used);
 	return (ret);
+}
+
+typedef struct nvmeadm_set_feat {
+	bool nsf_save;
+	bool nsf_hcdw11;
+	bool nsf_hcdw12;
+	bool nsf_hcdw13;
+	bool nsf_hcdw15;
+	uint32_t nsf_cdw11;
+	uint32_t nsf_cdw12;
+	uint32_t nsf_cdw13;
+	uint32_t nsf_cdw15;
+	uint32_t nsf_dlen;
+	const char *nsf_input;
+	nvme_disc_impact_t nsf_impact;
+} nvmeadm_set_feat_t;
+
+/*
+ * Like with vendor-specific commands, we opt to allow long options for this
+ * sub-command so that way the --cdwXX arguments are a little more manageable.
+ * Traditionally cdw11 was the only field set for a feature aside from data. As
+ * such, we use -v as the short value here to allow folks that are used to other
+ * tooling.
+ */
+static const struct option set_feat_lopts[] = {
+	{ "save",	no_argument,		NULL,	's' },
+	{ "cdw11",	required_argument,	NULL,	'v' },
+	{ "cdw12",	required_argument,	NULL,	'2' },
+	{ "cdw13",	required_argument,	NULL,	'3' },
+	{ "cdw15",	required_argument,	NULL,	'5' },
+	{ "input",	required_argument,	NULL,	'i' },
+	{ "length",	required_argument,	NULL,	'l' },
+	{ "impact",	required_argument,	NULL,	'I' },
+	{ NULL, 0, NULL, 0 }
+};
+
+/*
+ * Use a limit that's a bit larger than the kernels in case someone tries to
+ * adjust the tunable or we increase it in the future. This would be a good
+ * thing to ask the kernel about instead.
+ */
+#define	NVMEADM_SET_FEAT_LEN_MAX	(4 * 1024 * 1024)
+
+static void
+optparse_set_feature(nvme_process_arg_t *npa)
+{
+	int c;
+	nvmeadm_set_feat_t *feat;
+
+	if ((feat = calloc(1, sizeof (nvmeadm_set_feat_t))) == NULL) {
+		err(-1, "failed to allocate memory for option tracking");
+	}
+
+	/*
+	 * Work around getopt_long treating optind=0 as a request to restart
+	 * option processing and setting optind = optreset = 1.
+	 */
+	optind++;
+	while ((c = getopt_long(npa->npa_argc + 1, npa->npa_argv - 1,
+	    ":sv:2:3:5:i:l:I:", set_feat_lopts, NULL)) != -1) {
+		switch (c) {
+		case 's':
+			feat->nsf_save = true;
+			break;
+		case 'v':
+			feat->nsf_cdw11 = (uint32_t)optparse_ui_range(optarg,
+			    "cdw11", 0, UINT32_MAX);
+			feat->nsf_hcdw11 = true;
+			break;
+		case '2':
+			feat->nsf_cdw12 = (uint32_t)optparse_ui_range(optarg,
+			    "cdw12", 0, UINT32_MAX);
+			feat->nsf_hcdw12 = true;
+			break;
+		case '3':
+			feat->nsf_cdw13 = (uint32_t)optparse_ui_range(optarg,
+			    "cdw13", 0, UINT32_MAX);
+			feat->nsf_hcdw13 = true;
+			break;
+		case '5':
+			feat->nsf_cdw15 = (uint32_t)optparse_ui_range(optarg,
+			    "cdw15", 0, UINT32_MAX);
+			feat->nsf_hcdw15 = true;
+			break;
+		case 'i':
+			feat->nsf_input = optarg;
+			break;
+		case 'l':
+			feat->nsf_dlen = (uint32_t)optparse_ui_range(optarg,
+			    "length", 0, NVMEADM_SET_FEAT_LEN_MAX);
+			break;
+		case 'I':
+			feat->nsf_impact = optparse_impact(optarg);
+			break;
+		case '?':
+			errx(-1, "unknown option: -%c", optopt);
+		case ':':
+			errx(-1, "option -%c requires an argument", optopt);
+		}
+	}
+
+	/*
+	 * Undo our lies.
+	 */
+	optind--;
+
+	if (feat->nsf_input != NULL && feat->nsf_dlen == 0) {
+		errx(-1, "specified data input file (-i) but missing required "
+		    "data length (-l)");
+	}
+
+	if (feat->nsf_input == NULL && feat->nsf_dlen != 0) {
+		errx(-1, "%u bytes of data transfer requested (-l), but no "
+		    "input (-i) specified", feat->nsf_dlen);
+	}
+
+	npa->npa_cmd_arg = feat;
+}
+
+static void
+usage_set_feature(const char *c_name)
+{
+	(void) fprintf(stderr, "%s [-s] [-v value] [--cdw12 cdw12] "
+	    "[--cdw13 cdw13]\n\t  [--cdw15 cdw15] [-l length -i input] "
+	    "[-I impact] <ctl>[/<ns>]\n\n", c_name);
+	(void) fprintf(stderr, "  set a feature on a controller and/or "
+	    "namespace\n");
+
+}
+
+/*
+ * Read up to len bytes from file. If file hits EOF before len bytes are read,
+ * len will be zero-filled.
+ */
+void *
+nvmeadm_fill_from_file(const char *file, size_t len)
+{
+	void *buf = calloc(len, sizeof (uint8_t));
+	if (buf == NULL) {
+		err(-1, "failed to allocate 0x%zx byte request data buffer",
+		    len);
+	}
+
+	int ifd = open(file, O_RDONLY);
+	if (ifd < 0) {
+		err(-1, "failed to open input file %s", file);
+	}
+
+	size_t rem = len, off = 0;
+	while (rem > 0) {
+		size_t toread = MIN(16 * 1024, rem);
+		ssize_t ret = read(ifd, buf + off, toread);
+		if (ret < 0) {
+			errx(-1, "failed to read %zu bytes at offset %zu from "
+			    "%s", toread, off, file);
+		} else if (ret == 0) {
+			break;
+		}
+
+		rem -= (size_t)ret;
+		off += (size_t)ret;
+	}
+
+	VERIFY0(close(ifd));
+	return (buf);
+}
+
+static int
+do_set_feature(const nvme_process_arg_t *npa)
+{
+	nvmeadm_set_feat_t *feat = npa->npa_cmd_arg;
+	nvme_feat_disc_t *disc = NULL;
+	nvme_set_feat_req_t *req;
+	nvme_ctrl_t *ctrl = npa->npa_ctrl;
+	uint8_t *buf = NULL;
+
+	if (npa->npa_argc < 1) {
+		errx(-1, "missing required feature to set");
+	} else if (npa->npa_argc > 1) {
+		errx(-1, "%s passed extraneous arguments starting with %s",
+		    npa->npa_cmd->c_name, npa->npa_argv[1]);
+	}
+
+	if (npa->npa_ns != NULL) {
+		errx(-1, "features may only bet set on a controller, not a "
+		    "namespace");
+	}
+
+	const char *name = npa->npa_argv[0];
+
+	/*
+	 * First try to parse by name. Otherwise, try to see if this is a
+	 * feature identifier we can parse. If it's not a known name, see if
+	 * it's a valid feature identifier. If it isn't, we use the original
+	 * error message from libnvme.
+	 */
+	if (!nvme_set_feat_req_init_by_name(ctrl, name, 0, &disc,
+	    &req)) {
+		if (nvme_ctrl_err(ctrl) != NVME_ERR_FEAT_NAME_UNKNOWN) {
+			nvmeadm_fatal(npa, "failed to initialize set feature "
+			    "request for %s", name);
+		}
+
+		const char *errstr;
+		uint8_t fid = strtonumx(name, 0, NVME_FEAT_MAX_FID, &errstr, 0);
+		if (errstr != NULL) {
+			nvmeadm_fatal(npa, "failed to initialize set feature "
+			    "request for %s", name);
+		}
+
+		if (!nvme_set_feat_req_init(ctrl, &req)) {
+			nvmeadm_fatal(npa, "failed to initialize set feature "
+			    "request for %s", name);
+		}
+
+		if (!nvme_set_feat_req_set_fid(req, fid)) {
+			nvmeadm_fatal(npa, "failed to set feature id to 0x%x",
+			    fid);
+		}
+	}
+
+	if (npa->npa_ns != NULL) {
+		uint32_t nsid = nvme_ns_info_nsid(npa->npa_ns_info);
+
+		if (!nvme_set_feat_req_set_nsid(req, nsid)) {
+			nvmeadm_fatal(npa, "failed to set feature request "
+			    "namespace ID to 0x%x", nsid);
+		}
+	}
+
+	if (!nvme_set_feat_req_set_save(req, feat->nsf_save) ||
+	    (feat->nsf_hcdw11 && !nvme_set_feat_req_set_cdw11(req,
+	    feat->nsf_cdw11)) ||
+	    (feat->nsf_hcdw12 && !nvme_set_feat_req_set_cdw12(req,
+	    feat->nsf_cdw12)) ||
+	    (feat->nsf_hcdw13 && !nvme_set_feat_req_set_cdw13(req,
+	    feat->nsf_cdw13)) ||
+	    (feat->nsf_hcdw15 && !nvme_set_feat_req_set_cdw15(req,
+	    feat->nsf_cdw15)) ||
+	    !nvme_set_feat_req_set_impact(req, feat->nsf_impact)) {
+		nvmeadm_fatal(npa, "failed to set request fields");
+	}
+
+	if (feat->nsf_dlen > 0) {
+		buf = nvmeadm_fill_from_file(feat->nsf_input, feat->nsf_dlen);
+		if (!nvme_set_feat_req_set_input(req, buf, feat->nsf_dlen)) {
+			nvmeadm_fatal(npa, "failed to set input data buffer");
+		}
+	}
+
+	if (!nvme_set_feat_req_exec(req)) {
+		nvmeadm_fatal(npa, "failed to execute set feature request");
+	}
+
+	uint32_t cdw0;
+	if (nvme_set_feat_req_get_cdw0(req, &cdw0)) {
+		(void) printf("Set Feature cdw0: 0x%x\n", cdw0);
+	}
+
+	nvme_set_feat_req_fini(req);
+	free(buf);
+
+	return (0);
 }
 
 static int

@@ -14,7 +14,7 @@
 # Copyright 2020 Joyent, Inc.
 # Copyright 2021 Tintri by DDN, Inc. All rights reserved.
 # Copyright 2021 OmniOS Community Edition (OmniOSce) Association.
-# Copyright 2025 Oxide Computer Company
+# Copyright 2026 Oxide Computer Company
 #
 
 SUBDIRS_i386 =		\
@@ -38,8 +38,10 @@ SUBDIRS =       \
 		ksensor \
 		ksid \
 		ktest \
+		libsocket \
 		libtopo \
 		mac \
+		memlist \
 		minttl \
 		oclo \
 		pf_key \
@@ -52,6 +54,8 @@ SUBDIRS =       \
 		signalfd \
 		sigqueue \
 		sockfs \
+		sockopt \
+		spawn \
 		spoof-ras \
 		stackalign \
 		stress \
@@ -65,6 +69,7 @@ SUBDIRS =       \
 
 PROGS = \
 	clock_gettime \
+	close_range \
 	eventfd \
 	fifo-tvnsec \
 	odirectory \
@@ -92,6 +97,9 @@ clock_gettime.32 :=	LDLIBS += -lproc
 clock_gettime.32 :=	CSTD = $(CSTD_GNU99)
 clock_gettime.64 :=	LDLIBS64 += -lproc
 clock_gettime.64 :=	CSTD = $(CSTD_GNU99)
+
+close_range.32 :=	CSTD = $(CSTD_GNU17)
+close_range.64 :=	CSTD = $(CSTD_GNU17)
 
 fifo-tvnsec.32 :=	CSTD = $(CSTD_GNU99)
 fifo-tvnsec.64 :=	CSTD = $(CSTD_GNU99)

@@ -16,7 +16,7 @@
 include $(SRC)/Makefile.master
 include $(SRC)/cmd/Makefile.cmd
 
-SUBDIRS = forwarding ipv6
+SUBDIRS = forwarding ipv6 simnet
 SCRIPTS = net_common
 ROOTOPTPKG = $(ROOT)/opt/net-tests
 TESTDIR = $(ROOTOPTPKG)/tests

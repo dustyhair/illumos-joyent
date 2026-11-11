@@ -11,7 +11,7 @@
 
 /*
  * Copyright 2019, Joyent, Inc.
- * Copyright 2025 Oxide Computer Company
+ * Copyright 2026 Oxide Computer Company
  */
 
 /*
@@ -1120,7 +1120,9 @@ amdzen_determine_fabric_decomp(amdzen_t *azn, amdzen_df_t *df)
 		    DF_FIDMASK0_V3P5_GET_COMP_MASK(df->adf_mask0);
 		decomp->dfd_comp_shift = 0;
 
-		df->adf_nodeid = DF_SYSCFG_V4_GET_NODE_ID(df->adf_syscfg);
+		df->adf_nodeid = (df->adf_rev == DF_REV_4) ?
+		    DF_SYSCFG_V4_GET_NODE_ID(df->adf_syscfg) :
+		    DF_SYSCFG_V4D2_GET_NODE_ID(df->adf_syscfg);
 		break;
 	default:
 		panic("encountered suspicious, previously rejected DF "
@@ -1318,9 +1320,12 @@ amdzen_setup_df(amdzen_t *azn, amdzen_df_t *df)
 			    DF_FBIINFO3_V3P5_GET_BLOCKID(dfe->adfe_info3);
 			break;
 		case DF_REV_4:
-		case DF_REV_4D2:
 			dfe->adfe_fabric_id =
 			    DF_FBIINFO3_V4_GET_BLOCKID(dfe->adfe_info3);
+			break;
+		case DF_REV_4D2:
+			dfe->adfe_fabric_id =
+			    DF_FBIINFO3_V4D2_GET_BLOCKID(dfe->adfe_info3);
 			break;
 		default:
 			panic("encountered suspicious, previously rejected DF "
@@ -1338,6 +1343,21 @@ amdzen_setup_df(amdzen_t *azn, amdzen_df_t *df)
 			df->adf_nccm++;
 		}
 	}
+
+	/*
+	 * Determine the number of physical CCD sites on this node. Physical
+	 * CCD numbers are assigned from the CCM number and the SDP port (see
+	 * amdzen_setup_df_ccm()). Prior to DFv4 each CCM supports a single
+	 * CCD, while from DFv4 onwards each CCM has two SDP ports and can
+	 * support two. This is an upper bound on the physical CCD numbers in
+	 * use. Not every site can be populated on every package, in
+	 * particular when a CCM operates in wide mode both of its ports
+	 * connect to a single CCD which takes on the lower number.
+	 */
+	if (df->adf_rev >= DF_REV_4)
+		df->adf_nphys_ccds = df->adf_nccm * DF_MAX_CCDS_PER_CCM;
+	else
+		df->adf_nphys_ccds = df->adf_nccm;
 
 	/*
 	 * Now that we have filled in all of our info, attempt to fill in
@@ -1926,16 +1946,6 @@ amdzen_ccd_fill_topo(amdzen_t *azn, amdzen_df_t *df, amdzen_df_ent_t *ent,
 	core_en = amdzen_ccd_core_en(azn, df, ccdno);
 	thread_en = amdzen_ccd_thread_en(azn, df, ccdno);
 
-	/*
-	 * The BSP is never enabled in a conventional sense and therefore the
-	 * bit is reserved and left as 0. As the BSP should be in the first CCD,
-	 * we go through and OR back in the bit lest we think the thread isn't
-	 * enabled.
-	 */
-	if (ccdno == 0) {
-		thread_en |= 1;
-	}
-
 	ccd->atccd_phys_no = ccdno;
 	if (uarch >= X86_UARCH_AMD_ZEN3) {
 		pkg0_ids = B_TRUE;
@@ -2041,13 +2051,28 @@ amdzen_ccd_fill_topo(amdzen_t *azn, amdzen_df_t *df, amdzen_df_ent_t *ent,
 #endif
 			for (uint32_t thrno = 0; thrno < core->atcore_nthreads;
 			    thrno++) {
-				ASSERT3U(core->atcore_thr_en[thrno], !=, 0);
-
 				zen_apic_id_compose(&azn->azn_apic_decomp,
 				    sockid, dieid, ccd->atccd_log_no,
 				    ccx->atccx_log_no, core->atcore_log_no,
 				    thrno, &core->atcore_apicids[thrno]);
 
+				/*
+				 * The BSP is never enabled in a conventional
+				 * sense and therefore its bit in
+				 * SMU::PWR::THREAD_ENABLE is reserved and
+				 * reads as zero. The BSP is the thread with
+				 * APIC ID 0 and it is not always found in
+				 * physical CCD 0. Some packages have physical
+				 * CCD 0 fused off entirely, in which case the
+				 * BSP lives in the lowest-numbered CCD that
+				 * is present. Mark the BSP enabled here so
+				 * that it is not mistaken for a disabled
+				 * thread.
+				 */
+				if (core->atcore_apicids[thrno] == 0)
+					core->atcore_thr_en[thrno] = 1;
+
+				ASSERT3U(core->atcore_thr_en[thrno], !=, 0);
 			}
 		}
 
@@ -2549,6 +2574,9 @@ amdzen_topo_ioctl_df(amdzen_t *azn, intptr_t arg, int mode)
 	topo_df.atd_df_act_nents = df->adf_nents;
 	max_ents = MIN(topo_df.atd_df_buf_nents, df->adf_nents);
 
+	topo_df.atd_nb_busno = df->adf_nb_busno;
+	topo_df.atd_nphys_ccds = df->adf_nphys_ccds;
+
 	if (topo_df.atd_df_ents == NULL) {
 		topo_df.atd_df_buf_nvalid = 0;
 		mutex_exit(&azn->azn_mutex);
@@ -2602,6 +2630,8 @@ copyout:
 		topo_df32.atd_minor = topo_df.atd_minor;
 		topo_df32.atd_df_buf_nvalid = topo_df.atd_df_buf_nvalid;
 		topo_df32.atd_df_act_nents = topo_df.atd_df_act_nents;
+		topo_df32.atd_nb_busno = topo_df.atd_nb_busno;
+		topo_df32.atd_nphys_ccds = topo_df.atd_nphys_ccds;
 
 		if (ddi_copyout(&topo_df32, (void *)(uintptr_t)arg,
 		    sizeof (topo_df32), mode & FKIOCTL) != 0) {
