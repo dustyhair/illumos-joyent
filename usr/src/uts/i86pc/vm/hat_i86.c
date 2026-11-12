@@ -18,6 +18,7 @@
  *
  * CDDL HEADER END
  */
+/* Copyright 2026 Edgecast Cloud LLC. */
 /*
  * Copyright (c) 1992, 2010, Oracle and/or its affiliates. All rights reserved.
  */
@@ -272,6 +273,7 @@
 #include <vm/seg_spt.h>
 
 #include <sys/cmn_err.h>
+#include <sys/errno.h>
 
 /*
  * Basic parameters for hat operation.
@@ -4811,6 +4813,158 @@ hat_kpm_pfn2va(pfn_t pfn)
 
 	ASSERT(!pfn_is_foreign(pfn));
 	return ((caddr_t)vaddr);
+}
+
+/*
+ * Validate before shifting a PFN or adding the KPM base.  pf_is_memory()
+ * consults phys_install; callers must stabilize RAM against removal.  These
+ * checks establish neither page ownership nor exclusion of other aliases.
+ */
+int
+hat_kpm_cache_va(pfn_t pfn, uintptr_t *vap)
+{
+#if defined(__xpv) || !defined(__amd64)
+	(void) pfn;
+	(void) vap;
+	return (ENOTSUP);
+#else
+	uintptr_t base = (uintptr_t)kpm_vbase;
+	uintptr_t offset;
+
+	if (!kpm_enable || kpm_vbase == NULL)
+		return (ENOTSUP);
+	if (vap == NULL || kpm_size < MMU_PAGESIZE ||
+	    (base & MMU_PAGEOFFSET) != 0 ||
+	    (kpm_size & MMU_PAGEOFFSET) != 0 ||
+	    kpm_size - 1 > UINTPTR_MAX - base)
+		return (EINVAL);
+	if (pfn == PFN_INVALID || pfn_is_foreign(pfn) ||
+	    pfn > mmu.highest_pfn || pfn > physmax ||
+	    pfn > mmu_btop(PT_PADDR) || pfn > mmu_btop(UINTPTR_MAX))
+		return (EINVAL);
+	offset = (uintptr_t)mmu_ptob(pfn);
+	if (offset > kpm_size - MMU_PAGESIZE ||
+	    offset > UINTPTR_MAX - base || !pf_is_memory(pfn))
+		return (EINVAL);
+	*vap = base + offset;
+	return (0);
+#endif
+}
+
+/*
+ * Prepare topology only.  Completed demotions are not undone on error.
+ * The caller owns stable RAM and excludes unload/remap, other cache writers
+ * and all conflicting aliases/users.  Neither this API nor ht_lock_cnt can
+ * establish those conditions.  htable_alloc may reap/steal or wait forever
+ * under pressure: this is not an interrupt or bounded-latency interface.
+ */
+int
+hat_kpm_prepare_cache(pfn_t pfn)
+{
+#if defined(__xpv) || !defined(__amd64)
+	(void) pfn;
+	return (ENOTSUP);
+#else
+	uintptr_t va;
+	htable_t *ht;
+	uint_t entry;
+	x86pte_t pte;
+	int error, tries;
+
+	error = hat_kpm_cache_va(pfn, &va);
+	if (error != 0)
+		return (error);
+	for (tries = 0; tries < 8; tries++) {
+		ht = htable_getpage(kas.a_hat, va, &entry);
+		if (ht == NULL)
+			return (ENOENT);
+		if (ht->ht_level == 0) {
+			pte = x86pte_get(ht, entry);
+			error = (ht->ht_flags == 0 &&
+			    PTE_ISVALID(pte) && PTE2PFN(pte, 0) == pfn &&
+			    PTE_GET(pte, PT_SOFTWARE) == PT_NOCONSIST) ?
+			    0 : EBUSY;
+			htable_release(ht);
+			return (error);
+		}
+		htable_release(ht);
+		error = htable_demote_kpm(va);
+		if (error != 0 && error != EAGAIN)
+			return (error);
+	}
+	return (EBUSY);
+#endif
+}
+
+/*
+ * Per-PFN expected-policy CAS, not a multi-page transaction.  Error does not
+ * change policy by this call; another cache writer is outside the caller's
+ * exclusion contract.  Preserve every unrelated bit from the latest PTE.
+ * The caller must perform the required cache maintenance on all participating
+ * CPUs before/after changes and exclude GPU/DMA/users/aliases.  A TLB shootdown
+ * is not cache writeback or GPU completion.  No-op still checks the policy.
+ */
+int
+hat_kpm_set_cache(pfn_t pfn, uint_t expected, uint_t desired)
+{
+#if defined(__xpv) || !defined(__amd64)
+	(void) pfn;
+	(void) expected;
+	(void) desired;
+	return (ENOTSUP);
+#else
+	htable_t *ht;
+	uintptr_t va;
+	x86pte_t old, new, found;
+	x86pte_t mask = PT_WRITETHRU | PT_NOCACHE | PT_PAT_4K;
+	x86pte_t from, to;
+	uint_t entry;
+	int error;
+
+	if ((expected != HAT_STORECACHING_OK &&
+	    expected != HAT_MERGING_OK) ||
+	    (desired != HAT_STORECACHING_OK && desired != HAT_MERGING_OK))
+		return (EINVAL);
+	error = hat_kpm_cache_va(pfn, &va);
+	if (error != 0)
+		return (error);
+	if ((expected == HAT_MERGING_OK || desired == HAT_MERGING_OK) &&
+	    !is_x86_feature(x86_featureset, X86FSET_PAT))
+		return (ENOTSUP);
+	from = hati_mkpte(pfn, PROT_READ | PROT_WRITE | expected, 0,
+	    HAT_LOAD_NOCONSIST) & mask;
+	to = hati_mkpte(pfn, PROT_READ | PROT_WRITE | desired, 0,
+	    HAT_LOAD_NOCONSIST) & mask;
+	ht = htable_getpte(kas.a_hat, va, &entry, &old, 0);
+	if (ht == NULL)
+		return (hat_getpagesize(kas.a_hat, (caddr_t)va) >
+		    MMU_PAGESIZE ? ENOTSUP : ENOENT);
+	if (ht->ht_flags != 0) {
+		htable_release(ht);
+		return (ENOTSUP);
+	}
+	for (;;) {
+		if (!PTE_ISVALID(old)) {
+			error = ENOENT;
+			break;
+		}
+		if (PTE2PFN(old, 0) != pfn ||
+		    PTE_GET(old, PT_SOFTWARE) != PT_NOCONSIST ||
+		    (old & mask) != from) {
+			error = EBUSY;
+			break;
+		}
+		if (from == to)
+			break;
+		new = (old & ~mask) | to;
+		found = x86pte_update(ht, entry, old, new);
+		if (found == old)
+			break;
+		old = found;
+	}
+	htable_release(ht);
+	return (error);
+#endif
 }
 
 /*

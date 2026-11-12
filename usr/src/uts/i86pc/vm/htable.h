@@ -18,6 +18,7 @@
  *
  * CDDL HEADER END
  */
+/* Copyright 2026 Edgecast Cloud LLC. */
 /*
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
@@ -205,6 +206,7 @@ extern htable_t *htable_getpte(struct hat *, uintptr_t, uint_t *, x86pte_t *,
  * page mapping is present.
  */
 extern htable_t *htable_getpage(struct hat *hat, uintptr_t va, uint_t *entry);
+extern int htable_demote_kpm(uintptr_t);
 
 /*
  * Called to allocate initial/additional htables for reserve.
