@@ -80,7 +80,8 @@ check_uevent_action(const char *path, int flags, const char *action,
 	int error;
 	int fd;
 
-	fd = open(path, flags);
+	fd = (flags & O_CREAT) != 0 ? open(path, flags, 0600) :
+	    open(path, flags);
 	if (fd < 0)
 		fail(path);
 	errno = 0;
@@ -105,7 +106,8 @@ check_readonly_open(const char *path, int flags)
 	int fd;
 
 	errno = 0;
-	fd = open(path, flags);
+	fd = (flags & O_CREAT) != 0 ? open(path, flags, 0600) :
+	    open(path, flags);
 	error = errno;
 	if (fd >= 0)
 		(void) close(fd);
