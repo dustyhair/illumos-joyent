@@ -63,6 +63,8 @@ static int lxsys_getattr(vnode_t *, vattr_t *, int, cred_t *,
 static int lxsys_setattr(vnode_t *, vattr_t *, int, cred_t *,
     caller_context_t *);
 static int lxsys_access(vnode_t *, int, int, cred_t *, caller_context_t *);
+static int lxsys_create(vnode_t *, char *, vattr_t *, enum vcexcl, int,
+    vnode_t **, cred_t *, int, caller_context_t *, vsecattr_t *);
 static int lxsys_lookup(vnode_t *, char *, vnode_t **,
     pathname_t *, int, vnode_t *, cred_t *, caller_context_t *, int *,
     pathname_t *);
@@ -129,6 +131,7 @@ const fs_operation_def_t lxsys_vnodeops_template[] = {
 	VOPNAME_SETATTR,	{ .vop_setattr = lxsys_setattr },
 	VOPNAME_ACCESS,		{ .vop_access = lxsys_access },
 	VOPNAME_LOOKUP,		{ .vop_lookup = lxsys_lookup },
+	VOPNAME_CREATE,		{ .vop_create = lxsys_create },
 	VOPNAME_READDIR,	{ .vop_readdir = lxsys_readdir },
 	VOPNAME_READLINK,	{ .vop_readlink = lxsys_readlink },
 	VOPNAME_FSYNC,		{ .error = lxsys_sync },
@@ -854,6 +857,48 @@ lxsys_access(vnode_t *vp, int mode, int flags, cred_t *cr, caller_context_t *ct)
 		return (0);
 
 	return (EACCES);
+}
+
+/*
+ * The native open path issues VOP_CREATE for O_CREAT even when the named
+ * attribute already exists.  Linux permits that open for an existing sysfs
+ * attribute, but sysfs must never create a new synthetic node here.
+ */
+/* ARGSUSED */
+static int
+lxsys_create(vnode_t *dvp, char *name, vattr_t *vap, enum vcexcl exclusive,
+    int mode, vnode_t **vpp, cred_t *cr, int flag, caller_context_t *ct,
+    vsecattr_t *vsecp)
+{
+	vnode_t *vp = NULL;
+	int error;
+
+	if (*name == '\0')
+		return (ENOENT);
+	if (dvp->v_type != VDIR)
+		return (ENOTDIR);
+
+	error = lxsys_lookup(dvp, name, &vp, NULL, 0, NULL, cr, ct, NULL,
+	    NULL);
+	if (error != 0)
+		return (error);
+
+	if (exclusive == EXCL) {
+		error = EEXIST;
+	} else if (vp->v_type == VDIR && (mode & VWRITE) != 0) {
+		error = EISDIR;
+	} else if ((error = lxsys_access(vp, mode, 0, cr, ct)) == 0 &&
+	    (mode & VWRITE) != 0 && !lxsys_is_uevent_node(VTOLXS(vp))) {
+		error = EROFS;
+	}
+
+	if (error != 0) {
+		VN_RELE(vp);
+		return (error);
+	}
+
+	*vpp = vp;
+	return (0);
 }
 
 /*

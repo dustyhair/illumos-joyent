@@ -32,6 +32,15 @@
 
 #define	EVENT_LIMIT	64
 
+typedef struct attribute_snapshot {
+	ino_t as_ino;
+	mode_t as_mode;
+	uid_t as_uid;
+	gid_t as_gid;
+	ssize_t as_size;
+	char as_content[1024];
+} attribute_snapshot_t;
+
 static int uinput_fd = -1;
 static bool device_created;
 
@@ -105,6 +114,46 @@ check_readonly_open(const char *path, int flags)
 }
 
 static void
+snapshot_attribute(const char *path, attribute_snapshot_t *snapshot)
+{
+	struct stat st;
+	int fd;
+
+	if (stat(path, &st) != 0)
+		fail(path);
+	fd = open(path, O_RDONLY);
+	if (fd < 0)
+		fail(path);
+	snapshot->as_size = read(fd, snapshot->as_content,
+	    sizeof (snapshot->as_content));
+	if (snapshot->as_size < 0)
+		fail("read sysfs attribute");
+	if (close(fd) != 0)
+		fail("close sysfs attribute");
+	snapshot->as_ino = st.st_ino;
+	snapshot->as_mode = st.st_mode;
+	snapshot->as_uid = st.st_uid;
+	snapshot->as_gid = st.st_gid;
+}
+
+static void
+check_attribute_unchanged(const attribute_snapshot_t *before,
+    const attribute_snapshot_t *after)
+{
+	check(before->as_ino == after->as_ino,
+	    "sysfs O_CREAT replaced the existing inode");
+	check(before->as_mode == after->as_mode,
+	    "sysfs O_CREAT changed the existing mode");
+	check(before->as_uid == after->as_uid &&
+	    before->as_gid == after->as_gid,
+	    "sysfs O_CREAT changed attribute ownership");
+	check(before->as_size == after->as_size &&
+	    memcmp(before->as_content, after->as_content,
+	    (size_t)before->as_size) == 0,
+	    "sysfs O_CREAT changed synthetic attribute content");
+}
+
+static void
 check_shell_redirect(const char *path)
 {
 	int status;
@@ -122,6 +171,32 @@ check_shell_redirect(const char *path)
 		fail("waitpid sysfs shell redirect");
 	check(WIFEXITED(status) && WEXITSTATUS(status) == 0,
 	    "shell redirect to sysfs uevent failed");
+}
+
+static void
+check_absent_create(const char *existing_path)
+{
+	char absent_path[256];
+	char *base;
+	struct stat st;
+	int error;
+	int fd;
+
+	(void) snprintf(absent_path, sizeof (absent_path), "%s", existing_path);
+	base = strrchr(absent_path, '/');
+	check(base != NULL, "sysfs attribute path has no parent");
+	(void) snprintf(base + 1, sizeof (absent_path) -
+	    (size_t)(base + 1 - absent_path), "lx-no-such-attribute");
+	errno = 0;
+	fd = open(absent_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	error = errno;
+	if (fd >= 0)
+		(void) close(fd);
+	check(fd < 0 && error == ENOENT,
+	    "sysfs created an absent synthetic attribute");
+	errno = 0;
+	check(lstat(absent_path, &st) < 0 && errno == ENOENT,
+	    "absent sysfs attribute appeared after O_CREAT");
 }
 
 static void
@@ -236,6 +311,8 @@ main(void)
 	char readonly_path[256];
 	char devchar_name[32];
 	struct uinput_setup setup;
+	attribute_snapshot_t before;
+	attribute_snapshot_t after;
 	struct stat event_stat;
 	const char *base;
 	int event_fd;
@@ -311,16 +388,25 @@ main(void)
 
 	(void) snprintf(uevent_path, sizeof (uevent_path),
 	    "/sys/class/input/%s/uevent", event_name);
+	snapshot_attribute(uevent_path, &before);
 	check_uevent_action(uevent_path, O_WRONLY, "change\n", 0);
 	check_uevent_action(uevent_path, O_WRONLY | O_TRUNC, "change\n", 0);
-	check_uevent_action(uevent_path, O_WRONLY | O_TRUNC, "invalid\n",
-	    EINVAL);
+	check_uevent_action(uevent_path, O_WRONLY | O_CREAT, "change\n", 0);
+	check_uevent_action(uevent_path, O_WRONLY | O_CREAT | O_TRUNC,
+	    "change\n", 0);
+	check_uevent_action(uevent_path, O_WRONLY | O_CREAT | O_TRUNC,
+	    "invalid\n", EINVAL);
 	check_shell_redirect(uevent_path);
+	check_absent_create(uevent_path);
+	snapshot_attribute(uevent_path, &after);
+	check_attribute_unchanged(&before, &after);
 
 	(void) snprintf(readonly_path, sizeof (readonly_path),
 	    "/sys/class/input/%s/name", sysname);
 	check_readonly_open(readonly_path, O_WRONLY);
 	check_readonly_open(readonly_path, O_WRONLY | O_TRUNC);
+	check_readonly_open(readonly_path, O_WRONLY | O_CREAT);
+	check_readonly_open(readonly_path, O_WRONLY | O_CREAT | O_TRUNC);
 
 	if (ioctl(uinput_fd, UI_DEV_DESTROY) != 0)
 		fail("UI_DEV_DESTROY");
