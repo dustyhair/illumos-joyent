@@ -4903,6 +4903,8 @@ hat_kpm_prepare_cache(pfn_t pfn)
  * The caller must perform the required cache maintenance on all participating
  * CPUs before/after changes and exclude GPU/DMA/users/aliases.  A TLB shootdown
  * is not cache writeback or GPU completion.  No-op still checks the policy.
+ * HAT_STRICTORDER uses the same native uncached encoding as i_ddi_mem_alloc();
+ * accepting it here does not coordinate or validate any primary KVA alias.
  */
 int
 hat_kpm_set_cache(pfn_t pfn, uint_t expected, uint_t desired)
@@ -4921,9 +4923,11 @@ hat_kpm_set_cache(pfn_t pfn, uint_t expected, uint_t desired)
 	uint_t entry;
 	int error;
 
-	if ((expected != HAT_STORECACHING_OK &&
+	if ((expected != HAT_STRICTORDER &&
+	    expected != HAT_STORECACHING_OK &&
 	    expected != HAT_MERGING_OK) ||
-	    (desired != HAT_STORECACHING_OK && desired != HAT_MERGING_OK))
+	    (desired != HAT_STRICTORDER && desired != HAT_STORECACHING_OK &&
+	    desired != HAT_MERGING_OK))
 		return (EINVAL);
 	error = hat_kpm_cache_va(pfn, &va);
 	if (error != 0)
@@ -4950,6 +4954,87 @@ hat_kpm_set_cache(pfn_t pfn, uint_t expected, uint_t desired)
 		}
 		if (PTE2PFN(old, 0) != pfn ||
 		    PTE_GET(old, PT_SOFTWARE) != PT_NOCONSIST ||
+		    (old & mask) != from) {
+			error = EBUSY;
+			break;
+		}
+		if (from == to)
+			break;
+		new = (old & ~mask) | to;
+		found = x86pte_update(ht, entry, old, new);
+		if (found == old)
+			break;
+		old = found;
+	}
+	htable_release(ht);
+	return (error);
+#endif
+}
+
+/*
+ * Change only the cache bits of an existing, private 4K kernel mapping.
+ * This does not unload/reload the mapping or allocate replacement tables.
+ * The caller owns the backing and the KVA, stabilizes RAM and CPU topology,
+ * excludes every other alias user/cache writer and performs cache maintenance
+ * before/after coordinating all aliases.  No ownership or GPU/DMA exclusion
+ * is established here.  NOSYNC/NOCONSIST is a supported mapping shape, not
+ * evidence that the caller owns it.  KPM mappings use hat_kpm_set_cache().
+ */
+int
+hat_kva_set_cache(uintptr_t va, pfn_t pfn, uint_t expected, uint_t desired)
+{
+#if defined(__xpv) || !defined(__amd64)
+	(void) va;
+	(void) pfn;
+	(void) expected;
+	(void) desired;
+	return (ENOTSUP);
+#else
+	htable_t *ht;
+	uintptr_t kpm_va;
+	x86pte_t old, new, found;
+	x86pte_t mask = PT_WRITETHRU | PT_NOCACHE | PT_PAT_4K;
+	x86pte_t from, to, sw;
+	uint_t entry;
+	int error;
+
+	if ((va & MMU_PAGEOFFSET) != 0 || va < kernelbase ||
+	    IN_VA_HOLE(va))
+		return (EINVAL);
+	if ((expected != HAT_STRICTORDER &&
+	    expected != HAT_STORECACHING_OK && expected != HAT_MERGING_OK) ||
+	    (desired != HAT_STRICTORDER &&
+	    desired != HAT_STORECACHING_OK && desired != HAT_MERGING_OK))
+		return (EINVAL);
+	error = hat_kpm_cache_va(pfn, &kpm_va);
+	if (error != 0)
+		return (error);
+	if (va >= (uintptr_t)kpm_vbase &&
+	    va - (uintptr_t)kpm_vbase < kpm_size)
+		return (EINVAL);
+	if ((expected == HAT_MERGING_OK || desired == HAT_MERGING_OK) &&
+	    !is_x86_feature(x86_featureset, X86FSET_PAT))
+		return (ENOTSUP);
+	from = hati_mkpte(pfn, PROT_READ | PROT_WRITE | expected, 0,
+	    HAT_LOAD_NOCONSIST) & mask;
+	to = hati_mkpte(pfn, PROT_READ | PROT_WRITE | desired, 0,
+	    HAT_LOAD_NOCONSIST) & mask;
+	ht = htable_getpte(kas.a_hat, va, &entry, &old, 0);
+	if (ht == NULL)
+		return (hat_getpagesize(kas.a_hat, (caddr_t)va) >
+		    MMU_PAGESIZE ? ENOTSUP : ENOENT);
+	if (ht->ht_flags != 0) {
+		htable_release(ht);
+		return (ENOTSUP);
+	}
+	for (;;) {
+		if (!PTE_ISVALID(old)) {
+			error = ENOENT;
+			break;
+		}
+		sw = PTE_GET(old, PT_SOFTWARE);
+		if (PTE2PFN(old, 0) != pfn || PTE_GET(old, PT_USER) != 0 ||
+		    (sw != PT_NOSYNC && sw != PT_NOCONSIST) ||
 		    (old & mask) != from) {
 			error = EBUSY;
 			break;

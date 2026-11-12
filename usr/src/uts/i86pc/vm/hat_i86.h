@@ -255,6 +255,7 @@ extern caddr_t hat_kpm_pfn2va(pfn_t pfn);
 extern int hat_kpm_cache_va(pfn_t, uintptr_t *);
 extern int hat_kpm_prepare_cache(pfn_t);
 extern int hat_kpm_set_cache(pfn_t, uint_t, uint_t);
+extern int hat_kva_set_cache(uintptr_t, pfn_t, uint_t, uint_t);
 extern pfn_t hat_kpm_va2pfn(caddr_t);
 extern page_t *hat_kpm_vaddr2page(caddr_t);
 extern uintptr_t hat_kernelbase(uintptr_t);
